@@ -126,7 +126,7 @@ static_assert_size(XMP_SET_PLAYBACK_CONTROLLER, 0xC);
 struct XMP_GET_PLAYBACK_CONTROLLER {
   xe::be<uint32_t> xmp_client;
   xe::be<uint32_t> controller_ptr;
-  xe::be<uint32_t> locked_ptr;
+  xe::be<uint32_t> playback_client_ptr;
 };
 static_assert_size(XMP_GET_PLAYBACK_CONTROLLER, 0xC);
 
@@ -252,11 +252,12 @@ class XmpApp : public App {
   X_HRESULT XMPDeleteTitlePlaylist(uint32_t playlist_handle);
   X_HRESULT XMPPlayTitlePlaylist(uint32_t playlist_handle,
                                  uint32_t song_handle);
-  X_HRESULT XMPContinue();
-  X_HRESULT XMPStop(uint32_t unk);
-  X_HRESULT XMPPause();
-  X_HRESULT XMPNext();
-  X_HRESULT XMPPrevious();
+  X_HRESULT XMPAccessCheck(uint32_t xmp_client);
+  X_HRESULT XMPContinue(uint32_t xmp_client);
+  X_HRESULT XMPStop(uint32_t xmp_client, uint32_t unk);
+  X_HRESULT XMPPause(uint32_t xmp_client);
+  X_HRESULT XMPNext(uint32_t xmp_client);
+  X_HRESULT XMPPrevious(uint32_t xmp_client);
   X_HRESULT XMPGetTitlePlaylistBufferSize(uint32_t xmp_client,
                                           uint32_t song_count,
                                           uint32_t storage_ptr);

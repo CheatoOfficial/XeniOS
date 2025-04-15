@@ -117,35 +117,63 @@ X_HRESULT XmpApp::XMPPlayTitlePlaylist(uint32_t playlist_handle,
   return X_E_SUCCESS;
 }
 
-X_HRESULT XmpApp::XMPContinue() {
-  XELOGD("XMPContinue()");
+X_HRESULT XmpApp::XMPAccessCheck(uint32_t xmp_client) {
+  /* Notes:
+          - A shared function that checks xmp_client, which controller and
+     playback_client is currently in xmp thread, and two unk variables held by
+     xmp thread. If any fail it returns X_E_ACCESS_DENIED;
+          - Used by XMPContinue, XMPStop, XMPPause, XMPNext, XMPPrevious,
+     XMPPlayTitlePlaylistEx, XMPPlayUserContent, XMPPlayMediaContainer,
+     XMPRestartPlayback, XMPSetVolumeEx, and XMPSetPlaybackBehaviorEx
+      */
+  auto playback_client_ =
+      kernel_state_->emulator()->audio_media_player()->GetPlaybackClient();
+  auto controller_ =
+      kernel_state_->emulator()->audio_media_player()->GetPlaybackController();
+  if (xmp_client == 2 &&
+      (playback_client_ != XmpApp::PlaybackClient::kSystem || controller_)) {
+    return X_E_ACCESS_DENIED;
+  } else if (!controller_) {
+    return X_E_ACCESS_DENIED;
+  }
+  if (controller_ == 2 || controller_ == 3) {
+    return X_E_ACCESS_DENIED;
+  }
+  if (xmp_client == 3 && controller_ == 1) {
+    return X_E_ACCESS_DENIED;
+  }
+  return X_E_SUCCESS;
+}
+
+X_HRESULT XmpApp::XMPContinue(uint32_t xmp_client) {
+  XELOGD("XMPContinue(XMP Client: 0x{:08X})", xmp_client);
   kernel_state_->emulator()->audio_media_player()->Continue();
-  return X_E_SUCCESS;
+  return XMPAccessCheck(xmp_client);
 }
 
-X_HRESULT XmpApp::XMPStop(uint32_t unk) {
+X_HRESULT XmpApp::XMPStop(uint32_t xmp_client, uint32_t unk) {
   assert_zero(unk);
-  XELOGD("XMPStop({:08X})", unk);
+  XELOGD("XMPStop(XMP Client: 0x{:08X}, Unk: 0x{:08X})", xmp_client, unk);
   kernel_state_->emulator()->audio_media_player()->Stop(true, false);
-  return X_E_SUCCESS;
+  return XMPAccessCheck(xmp_client);
 }
 
-X_HRESULT XmpApp::XMPPause() {
-  XELOGD("XMPPause()");
+X_HRESULT XmpApp::XMPPause(uint32_t xmp_client) {
+  XELOGD("XMPPause(XMP Client: 0x{:08X})", xmp_client);
   kernel_state_->emulator()->audio_media_player()->Pause();
-  return X_E_SUCCESS;
+  return XMPAccessCheck(xmp_client);
 }
 
-X_HRESULT XmpApp::XMPNext() {
-  XELOGD("XMPNext()");
+X_HRESULT XmpApp::XMPNext(uint32_t xmp_client) {
+  XELOGD("XMPNext(XMP Client: 0x{:08X})", xmp_client);
   kernel_state_->emulator()->audio_media_player()->Next();
-  return X_E_SUCCESS;
+  return XMPAccessCheck(xmp_client);
 }
 
-X_HRESULT XmpApp::XMPPrevious() {
-  XELOGD("XMPPrevious()");
+X_HRESULT XmpApp::XMPPrevious(uint32_t xmp_client) {
+  XELOGD("XMPPrevious(XMP Client: 0x{:08X})", xmp_client);
   kernel_state_->emulator()->audio_media_player()->Previous();
-  return X_E_SUCCESS;
+  return XMPAccessCheck(xmp_client);
 }
 
 X_HRESULT XmpApp::XMPGetTitlePlaylistBufferSize(uint32_t xmp_client,
@@ -177,6 +205,7 @@ X_HRESULT XmpApp::XMPGetTitlePlaylistBufferSize(uint32_t xmp_client,
 X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                                       uint32_t buffer_length) {
   // NOTE: buffer_length may be zero or valid.
+  // TODO: Allow for message_ids to set extended error, only a few set length.
   auto buffer = memory_->TranslateVirtual(buffer_ptr);
   switch (message) {
     case 0x00070002: {
@@ -191,33 +220,28 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
     }
     case 0x00070003: {
       assert_true(!buffer_length || buffer_length == 4);
-      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer + 0);
-      assert_true(xmp_client == 0x00000002);
-      return XMPContinue();
+      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer);
+      return XMPContinue(xmp_client);
     }
     case 0x00070004: {
       assert_true(!buffer_length || buffer_length == sizeof(XMP_STOP));
       XMP_STOP* args = reinterpret_cast<XMP_STOP*>(buffer);
-      assert_true(args->xmp_client == 0x00000002);
-      return XMPStop(args->unk);
+      return XMPStop(args->xmp_client, args->unk);
     }
     case 0x00070005: {
       assert_true(!buffer_length || buffer_length == 4);
-      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer + 0);
-      assert_true(xmp_client == 0x00000002);
-      return XMPPause();
+      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer);
+      return XMPPause(xmp_client);
     }
     case 0x00070006: {
       assert_true(!buffer_length || buffer_length == 4);
-      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer + 0);
-      assert_true(xmp_client == 0x00000002);
-      return XMPNext();
+      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer);
+      return XMPNext(xmp_client);
     }
     case 0x00070007: {
       assert_true(!buffer_length || buffer_length == 4);
-      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer + 0);
-      assert_true(xmp_client == 0x00000002);
-      return XMPPrevious();
+      uint32_t xmp_client = xe::load_and_swap<uint32_t>(buffer);
+      return XMPPrevious(xmp_client);
     }
     case 0x00070008: {
       /* Notes:
@@ -346,7 +370,10 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return XMPDeleteTitlePlaylist(playlist_handle);
     }
     case 0x0007001A: {
-      // XMPSetPlaybackController
+      /* XMPSetPlaybackController Notes:
+          - if controller is equal to 4 then is uses a backup value stored at a
+         seperate location for both controller and playback client
+      */
       assert_true(!buffer_length ||
                   buffer_length == sizeof(XMP_SET_PLAYBACK_CONTROLLER));
       XMP_SET_PLAYBACK_CONTROLLER* args =
@@ -358,9 +385,14 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGD("XMPSetPlaybackController({:08X}, {:08X}, {:08X})",
              uint32_t(args->xmp_client), uint32_t(args->controller),
              uint32_t(args->playback_client));
+      if (args->controller > 4) {
+        return X_E_FUNCTION_FAILED;
+      }
 
       kernel_state_->emulator()->audio_media_player()->SetPlaybackClient(
           PlaybackClient(uint32_t(args->playback_client)));
+      kernel_state_->emulator()->audio_media_player()->SetPlaybackController(
+          uint32_t(args->controller));
 
       kernel_state_->BroadcastNotification(
           kXNotificationXmpPlaybackControllerChanged,
@@ -379,11 +411,16 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       assert_true(args->xmp_client == 0x00000002);
       XELOGD("XMPGetPlaybackController({:08X}, {:08X}, {:08X})",
              uint32_t(args->xmp_client), uint32_t(args->controller_ptr),
-             uint32_t(args->locked_ptr));
+             uint32_t(args->playback_client_ptr));
+
+      auto audio_media_player_ =
+          kernel_state_->emulator()->audio_media_player();
       xe::store_and_swap<uint32_t>(
-          memory_->TranslateVirtual(args->controller_ptr), 0);
-      xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->locked_ptr),
-                                   0);
+          memory_->TranslateVirtual(args->controller_ptr),
+          uint32_t(audio_media_player_->GetPlaybackController()));
+      xe::store_and_swap<uint32_t>(
+          memory_->TranslateVirtual(args->playback_client_ptr),
+          uint32_t(audio_media_player_->GetPlaybackClient()));
 
       if (!XThread::GetCurrentThread()->main_thread()) {
         // Atrain spawns a thread 82437FD0 to call this in a tight loop forever.
