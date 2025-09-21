@@ -16,8 +16,8 @@ drivers.
   * Ensure Python is in PATH.
 
 ```
-git clone https://github.com/xenia-canary/xenia-canary.git
-cd xenia-canary
+git clone https://github.com/has207/xenia-edge.git
+cd xenia-edge
 xb setup
 
 # Build on command line (add --config=release for release):

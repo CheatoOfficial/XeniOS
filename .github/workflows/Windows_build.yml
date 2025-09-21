@@ -75,31 +75,31 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          foreach ($file in 'build\bin\Windows\Release\xenia_canary.exe','build\bin\Windows\Release\xenia_canary.pdb') {
+          foreach ($file in 'build\bin\Windows\Release\xenia_edge.exe','build\bin\Windows\Release\xenia_edge.pdb') {
             if ((get-item $file).Length -le 100000) {
               echo "::error::$file is too small."
             }
           }
           robocopy . build\bin\Windows\Release                                                                LICENSE /r:0 /w:0
-          robocopy   build\bin\Windows\Release artifacts\xenia_canary   xenia_canary.exe   xenia_canary.pdb   LICENSE /r:0 /w:0
+          robocopy   build\bin\Windows\Release artifacts\xenia_edge   xenia_edge.exe   xenia_edge.pdb   LICENSE /r:0 /w:0
           If ($LastExitCode -le 7) { echo "LastExitCode = $LastExitCode";$LastExitCode = 0 }
-      - name: Upload xenia canary artifacts
+      - name: Upload xenia edge artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_canary_windows
-          path: artifacts\xenia_canary
+          name: xenia_edge_windows
+          path: artifacts\xenia_edge
           if-no-files-found: error
 
   create-release:
     name: Create release
     needs: [lint, build]
     if: |
-      github.repository == 'xenia-canary/xenia-canary' &&
+      github.repository == 'has207/xenia-edge' &&
       github.event.action != 'pull_request' &&
-      github.ref == 'refs/heads/canary_experimental'
+      github.ref == 'refs/heads/edge'
     uses: ./.github/workflows/Create_release.yml
     with:
       os: windows
     secrets:
-      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}

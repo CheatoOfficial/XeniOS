@@ -148,7 +148,7 @@ def main():
         print("WARNING: Visual Studio not found!"
               "\nBuilding for Windows will not be supported."
               " Please refer to the building guide:"
-              f"\nhttps://github.com/xenia-canary/xenia-canary/blob/{default_branch}/docs/building.md")
+              f"\nhttps://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
 
     # Setup main argument parser and common arguments.
     parser = ArgumentParser(prog="xenia-build.py")

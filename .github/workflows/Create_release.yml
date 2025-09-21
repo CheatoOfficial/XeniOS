@@ -17,21 +17,21 @@ jobs:
     steps:
       #- uses: actions/checkout@main
       #  with:
-      #    repository: ${{ github.repository_owner }}/xenia-canary-releases
+      #    repository: ${{ github.repository_owner }}/xenia-edge-releases
       - uses: actions/download-artifact@main
       - name: Release
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          GH_REPO: ${{ github.repository_owner }}/xenia-canary-releases
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           notes: ${{ github.event.head_commit.message }}
         run: |
           case ${{ inputs.os }} in
             windows)
-              asset=xenia_canary_${{ inputs.os }}.zip
+              asset=xenia_edge_${{ inputs.os }}.zip
               7z a $asset -xr!'*.pdb' -mx9 -bb3
               ;;
             linux)
-              asset=xenia_canary_${{ inputs.os }}.tar.xz
+              asset=xenia_edge_${{ inputs.os }}.tar.xz
               ;;
           esac
           if [ ! -f $asset ]; then
@@ -51,9 +51,8 @@ jobs:
               gh release edit $tag -t $title -n "$notes"
               gh release upload $tag $asset --clobber
             else
-              gh release create $tag $asset --target 925ed98d5dce604b651027c36fb522dc1ff0fa55 -t $title -n "$notes"
+              gh release create $tag $asset --target $GITHUB_SHA -t $title -n "$notes"
             fi
           }
           tag=${GITHUB_SHA::7}
-          create_or_edit_release $tag ${tag}_$GITHUB_REF_NAME
-          create_or_edit_release $GITHUB_REF_NAME $tag
+          create_or_edit_release $tag xenia_edge

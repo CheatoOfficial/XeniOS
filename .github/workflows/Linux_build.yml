@@ -103,18 +103,18 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          binary=build/bin/Linux/Release/xenia_canary
+          binary=build/bin/Linux/Release/xenia_edge
           if [ $(stat -c%s $binary) -le 100000 ]; then
             echo "::error::Binary is too small."
           fi
           chmod +x $binary
           mkdir -p artifacts
-          XZ_OPT=-e9 tar cJvpf artifacts/xenia_canary_linux.tar.xz $binary LICENSE
-      - name: Upload xenia canary artifacts
+          XZ_OPT=-e9 tar cJvpf artifacts/xenia_edge_linux.tar.xz $binary LICENSE
+      - name: Upload xenia edge artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_canary_linux
+          name: xenia_edge_linux
           path: artifacts
           if-no-files-found: error
 
@@ -144,16 +144,16 @@ jobs:
 #      - name: Prepare artifacts
 #        id: prepare_artifacts
 #        run: |
-#          if [ $(stat -c %s build/bin/Linux/Release/xenia_canary) -le 100000 ]; then
+#          if [ $(stat -c %s build/bin/Linux/Release/xenia_edge) -le 100000 ]; then
 #            echo "::error::Binary is too small."
 #          fi
 #          mkdir -p artifacts
-#          cp -r build/bin/Linux/Release/xenia_canary LICENSE artifacts
-#      - name: Upload xenia canary artifacts
+#          cp -r build/bin/Linux/Release/xenia_edge LICENSE artifacts
+#      - name: Upload xenia edge artifacts
 #        if: steps.prepare_artifacts.outcome == 'success'
 #        uses: actions/upload-artifact@main
 #        with:
-#          name: xenia_canary_linux_gcc
+#          name: xenia_edge_linux_gcc
 #          path: artifacts
 #          if-no-files-found: error
 
@@ -161,11 +161,11 @@ jobs:
     name: Create release
     needs: [lint, build-clang] #build-gcc
     if: |
-      github.repository == 'xenia-canary/xenia-canary' &&
+      github.repository == 'has207/xenia-edge' &&
       github.event.action != 'pull_request' &&
-      github.ref == 'refs/heads/canary_experimental'
+      github.ref == 'refs/heads/edge'
     uses: ./.github/workflows/Create_release.yml
     with:
       os: linux
     secrets:
-      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
