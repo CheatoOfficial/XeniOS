@@ -108,14 +108,15 @@ jobs:
             echo "::error::Binary is too small."
           fi
           chmod +x $binary
-          mkdir -p artifacts
-          XZ_OPT=-e9 tar cJvpf artifacts/xenia_edge_linux.tar.xz $binary LICENSE
+          mkdir -p artifacts/xenia_edge
+          cp $binary artifacts/xenia_edge/
+          cp LICENSE artifacts/xenia_edge/
       - name: Upload xenia edge artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
           name: xenia_edge_linux
-          path: artifacts
+          path: artifacts/xenia_edge
           if-no-files-found: error
 
 #  build-gcc:
