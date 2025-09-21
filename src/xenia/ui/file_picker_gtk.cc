@@ -71,6 +71,12 @@ bool GtkFilePicker::Show(Window* parent_window) {
       action, "_Cancel", GTK_RESPONSE_CANCEL, confirm_button.c_str(),
       GTK_RESPONSE_ACCEPT, NULL);
 
+  // Set initial directory if provided
+  if (!initial_directory().empty()) {
+    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog),
+                                        initial_directory().c_str());
+  }
+
   gint res = gtk_dialog_run(GTK_DIALOG(dialog));
   char* filename;
   if (res == GTK_RESPONSE_ACCEPT) {

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "third_party/fmt/include/fmt/format.h"
@@ -575,44 +576,100 @@ void ConfigDialog::OnDraw(ImGuiIO& io) {
             }
           } else if (dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
                          var_info->var)) {
-            // Path input with browse button
+            // Define path configuration mappings
+            struct PathConfig {
+              ui::FilePicker::Type type;
+              std::vector<std::pair<std::string, std::string>> extensions;
+            };
+
+            static const std::unordered_map<std::string, PathConfig>
+                path_configs = {
+                    // File pickers
+                    {"trace_function_data_path",
+                     {ui::FilePicker::Type::kFile, {}}},
+                    {"dump_shaders", {ui::FilePicker::Type::kFile, {}}},
+                    {"target_trace_file", {ui::FilePicker::Type::kFile, {}}},
+                    {"trace_dump_path", {ui::FilePicker::Type::kFile, {}}},
+                    {"custom_font_path", {ui::FilePicker::Type::kFile, {}}},
+                    {"log_file", {ui::FilePicker::Type::kFile, {}}},
+
+                    // Directory pickers
+                    {"content_root", {ui::FilePicker::Type::kDirectory, {}}},
+                    {"cache_root", {ui::FilePicker::Type::kDirectory, {}}},
+                };
+
+            // Check if this path should have a browse button
+            auto config_it = path_configs.find(var_info->name);
+            bool has_browse_button = (config_it != path_configs.end());
+
+            // Path input with optional browse button
             char value_buffer[1024];
             std::strncpy(value_buffer, var_info->pending_value.c_str(),
                          sizeof(value_buffer) - 1);
             value_buffer[sizeof(value_buffer) - 1] = '\0';
 
-            // Make the input field a bit narrower to fit the browse button
-            ImGui::SetNextItemWidth(250);
+            // Make the input field narrower if we have a browse button
+            if (has_browse_button) {
+              ImGui::SetNextItemWidth(250);
+            }
+
             if (ImGui::InputText("##value", value_buffer,
                                  sizeof(value_buffer))) {
               var_info->pending_value = value_buffer;
               value_changed = true;
             }
 
-            ImGui::SameLine();
-            if (ImGui::Button("Browse...")) {
-              auto file_picker = ui::FilePicker::Create();
-              if (file_picker) {
-                // Check description to determine if this is a file or directory
-                std::string desc_lower = var_info->description;
-                std::transform(desc_lower.begin(), desc_lower.end(),
-                               desc_lower.begin(),
-                               [](unsigned char c) { return std::tolower(c); });
-                bool is_file = (desc_lower.find("file") != std::string::npos);
+            if (has_browse_button) {
+              ImGui::SameLine();
+              if (ImGui::Button("Browse...")) {
+                auto file_picker = ui::FilePicker::Create();
+                if (file_picker) {
+                  const PathConfig& config = config_it->second;
 
-                file_picker->set_mode(ui::FilePicker::Mode::kOpen);
-                file_picker->set_type(is_file
-                                          ? ui::FilePicker::Type::kFile
-                                          : ui::FilePicker::Type::kDirectory);
-                file_picker->set_title(fmt::format(
-                    "Select {} for {}", is_file ? "File" : "Directory",
-                    var_info->name));
+                  file_picker->set_mode(ui::FilePicker::Mode::kOpen);
+                  file_picker->set_type(config.type);
+                  file_picker->set_title(fmt::format(
+                      "Select {} for {}",
+                      config.type == ui::FilePicker::Type::kFile ? "File"
+                                                                 : "Directory",
+                      var_info->name));
 
-                if (file_picker->Show(emulator_window_->window())) {
-                  auto files = file_picker->selected_files();
-                  if (!files.empty()) {
-                    var_info->pending_value = xe::path_to_utf8(files[0]);
-                    value_changed = true;
+                  // Set initial directory
+                  std::filesystem::path initial_dir;
+                  if (!var_info->pending_value.empty()) {
+                    std::filesystem::path current_path(var_info->pending_value);
+                    if (std::filesystem::exists(current_path)) {
+                      if (config.type == ui::FilePicker::Type::kFile) {
+                        // For files, use the parent directory
+                        initial_dir = current_path.parent_path();
+                      } else {
+                        // For directories, use the directory itself
+                        initial_dir = current_path;
+                      }
+                    }
+                  }
+
+                  // Fall back to content_root's parent if initial_dir is empty
+                  // or doesn't exist
+                  if (initial_dir.empty() ||
+                      !std::filesystem::exists(initial_dir)) {
+                    initial_dir = emulator_window_->emulator()
+                                      ->content_root()
+                                      .parent_path();
+                  }
+
+                  file_picker->set_initial_directory(initial_dir);
+
+                  if (!config.extensions.empty()) {
+                    file_picker->set_extensions(config.extensions);
+                  }
+
+                  if (file_picker->Show(emulator_window_->window())) {
+                    auto files = file_picker->selected_files();
+                    if (!files.empty()) {
+                      var_info->pending_value = xe::path_to_utf8(files[0]);
+                      value_changed = true;
+                    }
                   }
                 }
               }
