@@ -12,6 +12,7 @@
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
+#include "xenia/app/config_dialog.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -691,6 +692,9 @@ bool EmulatorWindow::Initialize() {
         std::bind(&EmulatorWindow::ShowContentDirectory, this)));
     file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
     file_menu->AddChild(
+        MenuItem::Create(MenuItem::Type::kString, "&Configuration Manager",
+                         std::bind(&EmulatorWindow::ShowConfigDialog, this)));
+    file_menu->AddChild(
         MenuItem::Create(MenuItem::Type::kString, "&Manage patches",
                          std::bind(&EmulatorWindow::ShowPatchesDialog, this)));
     file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
@@ -1095,6 +1099,12 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
 }
 
 void EmulatorWindow::ToggleFullscreenOnDoubleClick() {
+  // Don't toggle fullscreen if any ImGui dialogs are open
+  // This allows users to double-click to select text in dialog input fields
+  if (imgui_drawer_ && imgui_drawer_->HasOpenDialogs()) {
+    return;
+  }
+
   // this function tests if user has double clicked.
   // if double click was achieved the fullscreen gets toggled
   const auto now = steady_clock::now();  // current mouse event time
@@ -1398,6 +1408,15 @@ void EmulatorWindow::ShowPatchesDialog() {
   if (emulator_) {
     app_context_.CallInUIThread([this]() {
       auto dialog = new PatchesDialog(imgui_drawer_.get(), this);
+      imgui_drawer_->AddDialog(dialog);
+    });
+  }
+}
+
+void EmulatorWindow::ShowConfigDialog() {
+  if (emulator_) {
+    app_context_.CallInUIThread([this]() {
+      auto dialog = new ConfigDialog(imgui_drawer_.get(), this);
       imgui_drawer_->AddDialog(dialog);
     });
   }

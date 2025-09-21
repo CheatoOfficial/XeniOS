@@ -242,6 +242,7 @@ class EmulatorWindow {
   void ExtractZarchive();
   void CreateZarchive();
   void ShowContentDirectory();
+  void ShowConfigDialog();
   void ShowPatchesDialog();
   void CpuTimeScalarReset();
   void CpuTimeScalarSetHalf();

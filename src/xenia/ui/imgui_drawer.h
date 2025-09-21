@@ -89,6 +89,8 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
     return GetIO().Fonts->Fonts[1];
   }
 
+  bool HasOpenDialogs() const { return !dialogs_.empty(); }
+
  protected:
   void OnKeyDown(KeyEvent& e) override;
   void OnKeyUp(KeyEvent& e) override;
