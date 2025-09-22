@@ -1761,7 +1761,7 @@ void X64Emitter::PushStackpoint() {
 
   mov(qword[rbx + offsetof(X64BackendStackpoint, host_stack_)], rsp);
   mov(dword[rbx + offsetof(X64BackendStackpoint, guest_stack_)], r8d);
-  mov(r8d, qword[GetContextReg() + offsetof(ppc::PPCContext, lr)]);
+  mov(r8d, dword[GetContextReg() + offsetof(ppc::PPCContext, lr)]);
   mov(dword[rbx + offsetof(X64BackendStackpoint, guest_return_address_)], r8d);
 
   if (IsFeatureEnabled(kX64FlagsIndependentVars)) {
