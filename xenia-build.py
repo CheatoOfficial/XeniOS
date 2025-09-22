@@ -1080,7 +1080,7 @@ class BuildShadersCommand(Command):
                 spirv_file_path = f"{spirv_file_path_base}.spv"
                 if subprocess.call([
                        spirv_opt,
-                       "-O",
+                       "-O", "-O",
                        spirv_glslang_file_path,
                        "-o", spirv_file_path,
                        ]) != 0:
