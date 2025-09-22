@@ -13,6 +13,26 @@ project("xenia-ui-vulkan")
   includedirs({
     project_root.."/third_party/Vulkan-Headers/include",
   })
+
+  -- Include SPIRV-Tools from Vulkan SDK
+  filter("platforms:Windows")
+    includedirs({
+      "$(VULKAN_SDK)/Include",
+    })
+    libdirs({
+      "$(VULKAN_SDK)/Lib",
+    })
+    links({
+      "SPIRV-Tools-opt.lib",
+      "SPIRV-Tools.lib",
+    })
+
+  filter("platforms:Linux")
+    links({
+      "SPIRV-Tools-opt",
+      "SPIRV-Tools",
+    })
+  filter({})
   local_platform_files()
   local_platform_files("functions")
   files({

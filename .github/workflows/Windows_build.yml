@@ -69,7 +69,25 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup
-        run: git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = )(?!third_party\/(FidelityFX-(CAS|FSR)|premake-(androidndk|cmake|export-compile-commands))).+' .gitmodules).Matches.Value
+        run: |
+          # Install Vulkan SDK which includes spirv-tools
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "vulkan-sdk.exe"
+          Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait
+          $env:VULKAN_SDK = "C:\VulkanSDK\$(Get-ChildItem -Path 'C:\VulkanSDK' -Directory | Select-Object -First 1 -ExpandProperty Name)"
+          $env:PATH = "$env:VULKAN_SDK\Bin;$env:PATH"
+          echo "VULKAN_SDK=$env:VULKAN_SDK" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "$env:VULKAN_SDK\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          # Verify spirv-opt is available
+          $spirvOptPath = "$env:VULKAN_SDK\Bin\spirv-opt.exe"
+          if (Test-Path $spirvOptPath) {
+            & $spirvOptPath --version
+            echo "spirv-opt found at: $spirvOptPath"
+          } else {
+            echo "Warning: spirv-opt.exe not found at expected location"
+          }
+
+          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = )(?!third_party\/(FidelityFX-(CAS|FSR)|premake-(androidndk|cmake|export-compile-commands))).+' .gitmodules).Matches.Value
       - name: Build
         run: python xenia-build.py build --config=Release --target=src\xenia-app
       - name: Prepare artifacts

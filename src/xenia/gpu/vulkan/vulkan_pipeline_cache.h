@@ -30,6 +30,11 @@
 #include "xenia/ui/vulkan/vulkan_api.h"
 
 namespace xe {
+namespace ui {
+namespace vulkan {
+class SpirvToolsContext;
+}  // namespace vulkan
+}  // namespace ui
 namespace gpu {
 namespace vulkan {
 
@@ -285,6 +290,8 @@ class VulkanPipelineCache {
 
   // Temporary storage for AnalyzeUcode calls on the processor thread.
   StringBuffer ucode_disasm_buffer_;
+  // SPIRV-Tools context for optimizing shaders.
+  std::unique_ptr<ui::vulkan::SpirvToolsContext> spirv_tools_context_;
   // Reusable shader translator on the command processor thread.
   std::unique_ptr<SpirvShaderTranslator> shader_translator_;
 

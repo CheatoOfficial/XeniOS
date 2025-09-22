@@ -15,10 +15,13 @@
 #include <utility>
 #include <vector>
 
+#include "xenia/base/cvar.h"
 #include "xenia/gpu/shared_memory.h"
 #include "xenia/gpu/trace_writer.h"
 #include "xenia/memory.h"
 #include "xenia/ui/vulkan/vulkan_upload_buffer_pool.h"
+
+DECLARE_bool(vulkan_optimize_spirv);
 
 namespace xe {
 namespace gpu {

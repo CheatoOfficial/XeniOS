@@ -11,87 +11,41 @@
 
 #include <cstdlib>
 
+#include <spirv-tools/optimizer.hpp>
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
-
-#if XE_PLATFORM_LINUX
-#include <dlfcn.h>
-#elif XE_PLATFORM_WIN32
-#include "xenia/base/platform_win.h"
-#endif
 
 namespace xe {
 namespace ui {
 namespace vulkan {
 
 bool SpirvToolsContext::Initialize(unsigned int spirv_version) {
-  const char* vulkan_sdk_env = std::getenv("VULKAN_SDK");
-  if (!vulkan_sdk_env) {
-    XELOGE("SPIRV-Tools: Failed to get the VULKAN_SDK environment variable");
-    Shutdown();
-    return false;
-  }
-  std::filesystem::path vulkan_sdk_path(vulkan_sdk_env);
-#if XE_PLATFORM_LINUX
-  library_ = dlopen((vulkan_sdk_path / "bin/libSPIRV-Tools-shared.so").c_str(),
-                    RTLD_NOW | RTLD_LOCAL);
-  if (!library_) {
-    XELOGE(
-        "SPIRV-Tools: Failed to load $VULKAN_SDK/bin/libSPIRV-Tools-shared.so");
-    Shutdown();
-    return false;
-  }
-#elif XE_PLATFORM_WIN32
-  library_ = LoadLibraryW(
-      (vulkan_sdk_path / "Bin/SPIRV-Tools-shared.dll").wstring().c_str());
-  if (!library_) {
-    XELOGE(
-        "SPIRV-Tools: Failed to load %VULKAN_SDK%/Bin/SPIRV-Tools-shared.dll");
-    Shutdown();
-    return false;
-  }
-#else
-#error No SPIRV-Tools library loading provided for the target platform.
-#endif
-  if (!LoadLibraryFunction(fn_spvContextCreate_, "spvContextCreate") ||
-      !LoadLibraryFunction(fn_spvContextDestroy_, "spvContextDestroy") ||
-      !LoadLibraryFunction(fn_spvValidateBinary_, "spvValidateBinary") ||
-      !LoadLibraryFunction(fn_spvDiagnosticDestroy_, "spvDiagnosticDestroy")) {
-    XELOGE("SPIRV-Tools: Failed to get library function pointers");
-    Shutdown();
-    return false;
-  }
-  spv_target_env target_env;
+  // Determine target environment based on SPIR-V version
   if (spirv_version >= 0x10500) {
-    target_env = SPV_ENV_VULKAN_1_2;
+    target_env_ = SPV_ENV_VULKAN_1_2;
   } else if (spirv_version >= 0x10400) {
-    target_env = SPV_ENV_VULKAN_1_1_SPIRV_1_4;
+    target_env_ = SPV_ENV_VULKAN_1_1_SPIRV_1_4;
   } else if (spirv_version >= 0x10300) {
-    target_env = SPV_ENV_VULKAN_1_1;
+    target_env_ = SPV_ENV_VULKAN_1_1;
   } else {
-    target_env = SPV_ENV_VULKAN_1_0;
+    target_env_ = SPV_ENV_VULKAN_1_0;
   }
-  context_ = fn_spvContextCreate_(target_env);
+
+  // Create SPIR-V context
+  context_ = spvContextCreate(target_env_);
   if (!context_) {
-    XELOGE("SPIRV-Tools: Failed to create a Vulkan 1.0 context");
-    Shutdown();
+    XELOGE("SPIRV-Tools: Failed to create context for target environment");
     return false;
   }
+
+  XELOGI("SPIRV-Tools: Initialized successfully with static linking");
   return true;
 }
 
 void SpirvToolsContext::Shutdown() {
   if (context_) {
-    fn_spvContextDestroy_(context_);
+    spvContextDestroy(context_);
     context_ = nullptr;
-  }
-  if (library_) {
-#if XE_PLATFORM_LINUX
-    dlclose(library_);
-#elif XE_PLATFORM_WIN32
-    FreeLibrary(library_);
-#endif
-    library_ = nullptr;
   }
 }
 
@@ -106,14 +60,52 @@ spv_result_t SpirvToolsContext::Validate(const uint32_t* words,
   }
   spv_diagnostic diagnostic = nullptr;
   spv_result_t result =
-      fn_spvValidateBinary_(context_, words, num_words, &diagnostic);
+      spvValidateBinary(context_, words, num_words, &diagnostic);
   if (diagnostic) {
     if (error && diagnostic && diagnostic->error) {
       *error = diagnostic->error;
     }
-    fn_spvDiagnosticDestroy_(diagnostic);
+    spvDiagnosticDestroy(diagnostic);
   }
   return result;
+}
+
+spv_result_t SpirvToolsContext::Optimize(const uint32_t* words,
+                                         size_t num_words,
+                                         std::vector<uint32_t>& optimized_words,
+                                         bool performance_passes) {
+  optimized_words.clear();
+  if (!context_) {
+    return SPV_UNSUPPORTED;
+  }
+
+  // Use the C++ optimizer API for better integration
+  spvtools::Optimizer optimizer(target_env_);
+
+  // Set up message consumer for error reporting
+  optimizer.SetMessageConsumer([](spv_message_level_t level, const char* source,
+                                  const spv_position_t& position,
+                                  const char* message) {
+    if (level == SPV_MSG_ERROR || level == SPV_MSG_FATAL ||
+        level == SPV_MSG_INTERNAL_ERROR) {
+      XELOGE("SPIRV-Tools optimizer: {} {}", source ? source : "",
+             message ? message : "");
+    }
+  });
+
+  // Register optimization passes
+  if (performance_passes) {
+    optimizer.RegisterPerformancePasses();
+  } else {
+    optimizer.RegisterSizePasses();
+  }
+
+  // Run optimizer
+  if (!optimizer.Run(words, num_words, &optimized_words)) {
+    return SPV_ERROR_INVALID_BINARY;
+  }
+
+  return SPV_SUCCESS;
 }
 
 }  // namespace vulkan

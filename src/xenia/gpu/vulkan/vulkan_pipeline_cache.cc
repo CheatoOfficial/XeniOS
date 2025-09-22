@@ -26,7 +26,9 @@
 #include "xenia/gpu/spirv_shader_translator.h"
 #include "xenia/gpu/vulkan/vulkan_command_processor.h"
 #include "xenia/gpu/vulkan/vulkan_shader.h"
+#include "xenia/gpu/vulkan/vulkan_shared_memory.h"
 #include "xenia/gpu/xenos.h"
+#include "xenia/ui/vulkan/spirv_tools_context.h"
 #include "xenia/ui/vulkan/vulkan_util.h"
 
 namespace xe {
@@ -53,13 +55,29 @@ bool VulkanPipelineCache::Initialize() {
       render_target_cache_.GetPath() ==
       RenderTargetCache::Path::kPixelShaderInterlock;
 
+  // Initialize SPIRV-Tools for optimization (optional - will work without it)
+  if (cvars::vulkan_optimize_spirv) {
+    spirv_tools_context_ = std::make_unique<ui::vulkan::SpirvToolsContext>();
+    if (!spirv_tools_context_->Initialize(
+            SpirvShaderTranslator::Features(vulkan_device).spirv_version)) {
+      XELOGE("Failed to initialize SPIRV-Tools for shader optimization");
+      // Continue without optimization
+      spirv_tools_context_.reset();
+    } else {
+      XELOGI("SPIRV-Tools initialized successfully for shader optimization");
+    }
+  } else {
+    XELOGI("SPIRV shader optimization disabled by user");
+  }
+
   shader_translator_ = std::make_unique<SpirvShaderTranslator>(
       SpirvShaderTranslator::Features(vulkan_device),
       render_target_cache_.msaa_2x_attachments_supported(),
       render_target_cache_.msaa_2x_no_attachments_supported(),
       edram_fragment_shader_interlock,
       render_target_cache_.draw_resolution_scale_x(),
-      render_target_cache_.draw_resolution_scale_y());
+      render_target_cache_.draw_resolution_scale_y(),
+      spirv_tools_context_.get(), cvars::vulkan_optimize_spirv);
 
   if (edram_fragment_shader_interlock) {
     std::vector<uint8_t> depth_only_fragment_shader_code =

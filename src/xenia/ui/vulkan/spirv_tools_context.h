@@ -12,15 +12,11 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
-#include "third_party/SPIRV-Tools/include/spirv-tools/libspirv.h"
+#include <spirv-tools/libspirv.h>
+#include <spirv-tools/optimizer.hpp>
 #include "xenia/base/platform.h"
-
-#if XE_PLATFORM_LINUX
-#include <dlfcn.h>
-#elif XE_PLATFORM_WIN32
-#include "xenia/base/platform_win.h"
-#endif
 
 namespace xe {
 namespace ui {
@@ -38,31 +34,15 @@ class SpirvToolsContext {
   spv_result_t Validate(const uint32_t* words, size_t num_words,
                         std::string* error) const;
 
+  // Optimizes SPIR-V code. Returns SPV_SUCCESS on successful optimization.
+  // The optimized binary is returned in optimized_words.
+  spv_result_t Optimize(const uint32_t* words, size_t num_words,
+                        std::vector<uint32_t>& optimized_words,
+                        bool performance_passes = true);
+
  private:
-#if XE_PLATFORM_LINUX
-  void* library_ = nullptr;
-#elif XE_PLATFORM_WIN32
-  HMODULE library_ = nullptr;
-#endif
-
-  template <typename FunctionPointer>
-  bool LoadLibraryFunction(FunctionPointer& function, const char* name) {
-#if XE_PLATFORM_LINUX
-    function = reinterpret_cast<FunctionPointer>(dlsym(library_, name));
-#elif XE_PLATFORM_WIN32
-    function =
-        reinterpret_cast<FunctionPointer>(GetProcAddress(library_, name));
-#else
-#error No SPIRV-Tools LoadLibraryFunction provided for the target platform.
-#endif
-    return function != nullptr;
-  }
-  decltype(&spvContextCreate) fn_spvContextCreate_ = nullptr;
-  decltype(&spvContextDestroy) fn_spvContextDestroy_ = nullptr;
-  decltype(&spvValidateBinary) fn_spvValidateBinary_ = nullptr;
-  decltype(&spvDiagnosticDestroy) fn_spvDiagnosticDestroy_ = nullptr;
-
   spv_context context_ = nullptr;
+  spv_target_env target_env_ = SPV_ENV_UNIVERSAL_1_0;
 };
 
 }  // namespace vulkan

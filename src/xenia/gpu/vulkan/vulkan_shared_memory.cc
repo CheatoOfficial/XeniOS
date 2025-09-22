@@ -26,6 +26,12 @@ DEFINE_bool(vulkan_sparse_shared_memory, true,
             "work.",
             "Vulkan");
 
+DEFINE_bool(vulkan_optimize_spirv, true,
+            "Enable SPIR-V shader optimization. "
+            "Optimization reduces shader size and improves GPU performance "
+            "but may increase shader compilation time and CPU usage.",
+            "Vulkan");
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
