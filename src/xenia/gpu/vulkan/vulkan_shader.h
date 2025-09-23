@@ -10,7 +10,10 @@
 #ifndef XENIA_GPU_VULKAN_VULKAN_SHADER_H_
 #define XENIA_GPU_VULKAN_VULKAN_SHADER_H_
 
+#include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <vector>
 
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/xenos.h"
@@ -29,10 +32,41 @@ class VulkanShader : public SpirvShader {
     ~VulkanTranslation() override;
 
     VkShaderModule GetOrCreateShaderModule();
-    VkShaderModule shader_module() const { return shader_module_; }
+    VkShaderModule shader_module() const {
+      return shader_module_.load(std::memory_order_acquire);
+    }
+
+    // Background optimization support
+    bool IsOptimized() const {
+      return is_optimized_.load(std::memory_order_acquire);
+    }
+    void SetOptimizedBinary(const std::vector<uint8_t>& optimized_binary);
+    bool NeedsOptimization() const {
+      return !is_optimized_.load(std::memory_order_acquire) && is_valid();
+    }
+    const std::vector<uint8_t>& GetUnoptimizedBinary() const {
+      return unoptimized_binary_;
+    }
+    void StoreUnoptimizedBinary() { unoptimized_binary_ = translated_binary(); }
+
+    // Collect shader modules that need deferred destruction
+    std::vector<VkShaderModule> CollectPendingDestroyModules() {
+      std::lock_guard<std::mutex> lock(optimization_mutex_);
+      std::vector<VkShaderModule> modules = std::move(pending_destroy_modules_);
+      pending_destroy_modules_.clear();
+      return modules;
+    }
 
    private:
-    VkShaderModule shader_module_ = VK_NULL_HANDLE;
+    std::atomic<VkShaderModule> shader_module_{VK_NULL_HANDLE};
+    std::atomic<bool> is_optimized_{false};
+    std::vector<uint8_t> unoptimized_binary_;
+    std::vector<uint8_t> optimized_binary_;
+    std::mutex optimization_mutex_;
+
+    // Shader modules pending destruction (replaced by optimized versions)
+    // These will be destroyed when it's safe (handled by pipeline cache)
+    std::vector<VkShaderModule> pending_destroy_modules_;
   };
 
   explicit VulkanShader(const ui::vulkan::VulkanDevice* vulkan_device,

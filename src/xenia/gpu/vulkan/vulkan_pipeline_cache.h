@@ -366,6 +366,23 @@ class VulkanPipelineCache {
   std::condition_variable creation_request_cond_;
   std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
   std::atomic<bool> creation_completion_set_event_{false};
+
+  // Background SPIRV optimization
+  struct ShaderOptimizationRequest {
+    VulkanShader::VulkanTranslation* translation;
+  };
+  std::unique_ptr<xe::threading::Thread> optimization_thread_;
+  std::deque<ShaderOptimizationRequest> optimization_queue_;
+  std::mutex optimization_queue_lock_;
+  std::condition_variable optimization_queue_cond_;
+  std::atomic<bool> optimization_thread_shutdown_{false};
+  void OptimizationThread();
+  void QueueShaderForOptimization(VulkanShader::VulkanTranslation* translation);
+
+  // Deferred destruction of replaced shader modules
+  void ProcessDeferredModuleDestructions();
+  std::vector<VkShaderModule> deferred_destroy_shader_modules_;
+  std::mutex deferred_destroy_mutex_;
 };
 
 }  // namespace vulkan
