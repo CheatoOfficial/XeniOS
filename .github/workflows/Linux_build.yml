@@ -42,8 +42,23 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+    steps:
+    - uses: actions/checkout@main
+    - uses: dorny/paths-filter@v2
+      id: filter
+      with:
+        filters: |
+          src:
+            - 'src/**'
+
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-24.04
     outputs:
       #LLVM_VERSION: ${{ steps.setup.outputs.LLVM_VERSION }}
