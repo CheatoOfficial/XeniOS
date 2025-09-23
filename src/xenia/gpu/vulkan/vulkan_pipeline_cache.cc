@@ -31,6 +31,14 @@
 #include "xenia/ui/vulkan/spirv_tools_context.h"
 #include "xenia/ui/vulkan/vulkan_util.h"
 
+DEFINE_int32(
+    vulkan_pipeline_creation_threads, -1,
+    "Number of threads used for graphics pipeline creation. -1 to calculate "
+    "automatically (75% of logical CPU cores), a positive number to specify "
+    "the number of threads explicitly (up to the number of logical CPU cores), "
+    "0 to disable multithreaded pipeline creation.",
+    "Vulkan");
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -96,10 +104,53 @@ bool VulkanPipelineCache::Initialize() {
     }
   }
 
+  uint32_t logical_processor_count = xe::threading::logical_processor_count();
+  if (!logical_processor_count) {
+    // Pick some reasonable amount if couldn't determine the number of cores.
+    logical_processor_count = 6;
+  }
+  creation_completion_event_ =
+      xe::threading::Event::CreateManualResetEvent(true);
+  assert_not_null(creation_completion_event_);
+  if (cvars::vulkan_pipeline_creation_threads != 0) {
+    size_t creation_thread_count;
+    if (cvars::vulkan_pipeline_creation_threads < 0) {
+      creation_thread_count =
+          std::max(logical_processor_count * 3 / 4, uint32_t(1));
+    } else {
+      creation_thread_count =
+          std::min(uint32_t(cvars::vulkan_pipeline_creation_threads),
+                   logical_processor_count);
+    }
+    creation_threads_shutdown_ = false;
+    for (size_t i = 0; i < creation_thread_count; ++i) {
+      std::unique_ptr<xe::threading::Thread> creation_thread =
+          xe::threading::Thread::Create({}, [this]() { CreationThread(); });
+      assert_not_null(creation_thread);
+      creation_thread->set_name("Vulkan Pipelines");
+      creation_threads_.push_back(std::move(creation_thread));
+    }
+  }
+
   return true;
 }
 
 void VulkanPipelineCache::Shutdown() {
+  // Shut down all threads, before destroying the pipelines since they may be
+  // creating them.
+  if (!creation_threads_.empty()) {
+    {
+      std::lock_guard<std::mutex> lock(creation_request_lock_);
+      creation_threads_shutdown_ = true;
+    }
+    creation_request_cond_.notify_all();
+    for (size_t i = 0; i < creation_threads_.size(); ++i) {
+      xe::threading::Wait(creation_threads_[i].get(), false);
+    }
+    creation_threads_.clear();
+  }
+  creation_completion_event_.reset();
+
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
@@ -281,16 +332,10 @@ bool VulkanPipelineCache::ConfigurePipeline(
     reg::RB_DEPTHCONTROL normalized_depth_control,
     uint32_t normalized_color_mask,
     VulkanRenderTargetCache::RenderPassKey render_pass_key,
-    VkPipeline& pipeline_out,
-    const PipelineLayoutProvider*& pipeline_layout_out) {
+    VulkanPipelineCache::Pipeline** pipeline_out) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
-
-  // Ensure shaders are translated - needed now for GetCurrentStateDescription.
-  if (!EnsureShadersTranslated(vertex_shader, pixel_shader)) {
-    return false;
-  }
 
   PipelineDescription description;
   if (!GetCurrentStateDescription(
@@ -300,15 +345,13 @@ bool VulkanPipelineCache::ConfigurePipeline(
     return false;
   }
   if (last_pipeline_ && last_pipeline_->first == description) {
-    pipeline_out = last_pipeline_->second.pipeline;
-    pipeline_layout_out = last_pipeline_->second.pipeline_layout;
+    *pipeline_out = &last_pipeline_->second;
     return true;
   }
   auto it = pipelines_.find(description);
   if (it != pipelines_.end()) {
     last_pipeline_ = &*it;
-    pipeline_out = it->second.pipeline;
-    pipeline_layout_out = it->second.pipeline_layout;
+    *pipeline_out = &it->second;
     return true;
   }
 
@@ -334,19 +377,22 @@ bool VulkanPipelineCache::ConfigurePipeline(
   if (!pipeline_layout) {
     return false;
   }
+
   VkShaderModule geometry_shader = VK_NULL_HANDLE;
-  GeometryShaderKey geometry_shader_key;
-  if (GetGeometryShaderKey(
-          description.geometry_shader,
-          SpirvShaderTranslator::Modification(vertex_shader->modification()),
-          SpirvShaderTranslator::Modification(
-              pixel_shader ? pixel_shader->modification() : 0),
-          geometry_shader_key)) {
+  if (description.geometry_shader != PipelineGeometryShader::kNone) {
+    GeometryShaderKey geometry_shader_key;
+    GetGeometryShaderKey(
+        description.geometry_shader,
+        SpirvShaderTranslator::Modification(vertex_shader->modification()),
+        SpirvShaderTranslator::Modification(
+            pixel_shader ? pixel_shader->modification() : 0),
+        geometry_shader_key);
     geometry_shader = GetGeometryShader(geometry_shader_key);
     if (geometry_shader == VK_NULL_HANDLE) {
       return false;
     }
   }
+
   VkRenderPass render_pass =
       render_target_cache_.GetPath() ==
               RenderTargetCache::Path::kPixelShaderInterlock
@@ -356,20 +402,111 @@ bool VulkanPipelineCache::ConfigurePipeline(
   if (render_pass == VK_NULL_HANDLE) {
     return false;
   }
-  PipelineCreationArguments creation_arguments;
-  auto& pipeline =
+
+  auto& pipeline_pair =
       *pipelines_.emplace(description, Pipeline(pipeline_layout)).first;
-  creation_arguments.pipeline = &pipeline;
-  creation_arguments.vertex_shader = vertex_shader;
-  creation_arguments.pixel_shader = pixel_shader;
-  creation_arguments.geometry_shader = geometry_shader;
-  creation_arguments.render_pass = render_pass;
-  if (!EnsurePipelineCreated(creation_arguments)) {
+
+  if (!creation_threads_.empty()) {
+    // Submit the pipeline for creation to any available thread.
+    {
+      std::lock_guard<std::mutex> lock(creation_request_lock_);
+      creation_queue_.emplace_back();
+      PipelineCreationArguments& creation_arguments = creation_queue_.back();
+      creation_arguments.pipeline = &pipeline_pair;
+      creation_arguments.vertex_shader = vertex_shader;
+      creation_arguments.pixel_shader = pixel_shader;
+      creation_arguments.geometry_shader = geometry_shader;
+      creation_arguments.render_pass = render_pass;
+    }
+    creation_request_cond_.notify_one();
+  } else {
+    // Create the pipeline synchronously.
+    PipelineCreationArguments creation_arguments;
+    creation_arguments.pipeline = &pipeline_pair;
+    creation_arguments.vertex_shader = vertex_shader;
+    creation_arguments.pixel_shader = pixel_shader;
+    creation_arguments.geometry_shader = geometry_shader;
+    creation_arguments.render_pass = render_pass;
+    if (!EnsurePipelineCreated(creation_arguments)) {
+      return false;
+    }
+  }
+
+  last_pipeline_ = &pipeline_pair;
+  *pipeline_out = &pipeline_pair.second;
+  return true;
+}
+
+void VulkanPipelineCache::EndSubmission() {
+  if (creation_threads_.empty()) {
+    return;
+  }
+  // Await creation of all queued pipelines.
+  bool await_creation_completion_event;
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    // Assuming the creation queue is already empty (because the processor
+    // thread also worked on creating the leftover pipelines), so only check
+    // if there are threads with pipelines currently being created.
+    await_creation_completion_event =
+        !creation_queue_.empty() || creation_threads_busy_ != 0;
+    if (await_creation_completion_event) {
+      creation_completion_event_->Reset();
+      creation_completion_set_event_.store(true, std::memory_order_release);
+    }
+  }
+  if (await_creation_completion_event) {
+    creation_request_cond_.notify_one();
+    xe::threading::Wait(creation_completion_event_.get(), false);
+  }
+}
+
+bool VulkanPipelineCache::IsCreatingPipelines() {
+  if (creation_threads_.empty()) {
     return false;
   }
-  pipeline_out = pipeline.second.pipeline;
-  pipeline_layout_out = pipeline_layout;
-  return true;
+  std::lock_guard<std::mutex> lock(creation_request_lock_);
+  return !creation_queue_.empty() || creation_threads_busy_ != 0;
+}
+
+void VulkanPipelineCache::CreationThread() {
+  for (;;) {
+    PipelineCreationArguments creation_arguments;
+    {
+      std::unique_lock<std::mutex> lock(creation_request_lock_);
+      creation_request_cond_.wait(lock, [this]() {
+        return !creation_queue_.empty() || creation_threads_shutdown_;
+      });
+      if (creation_threads_shutdown_) {
+        break;
+      }
+      creation_arguments = creation_queue_.front();
+      creation_queue_.pop_front();
+      ++creation_threads_busy_;
+    }
+
+    if (!EnsureShadersTranslated(creation_arguments.vertex_shader,
+                                 creation_arguments.pixel_shader)) {
+      // Mark pipeline as failed by keeping it as VK_NULL_HANDLE.
+      // The pipeline will remain VK_NULL_HANDLE, indicating failure.
+      XELOGE("Failed to translate shaders for pipeline creation");
+    } else {
+      if (!EnsurePipelineCreated(creation_arguments)) {
+        // Pipeline creation failed - it will remain VK_NULL_HANDLE.
+        XELOGE("Failed to create Vulkan pipeline");
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(creation_request_lock_);
+      --creation_threads_busy_;
+      if (creation_completion_set_event_.load(std::memory_order_acquire) &&
+          creation_threads_busy_ == 0 && creation_queue_.empty()) {
+        creation_completion_set_event_.store(false, std::memory_order_release);
+        creation_completion_event_->Set();
+      }
+    }
+  }
 }
 
 bool VulkanPipelineCache::TranslateAnalyzedShader(
@@ -1787,7 +1924,8 @@ VkShaderModule VulkanPipelineCache::GetGeometryShader(GeometryShaderKey key) {
 
 bool VulkanPipelineCache::EnsurePipelineCreated(
     const PipelineCreationArguments& creation_arguments) {
-  if (creation_arguments.pipeline->second.pipeline != VK_NULL_HANDLE) {
+  if (creation_arguments.pipeline->second.pipeline.load(
+          std::memory_order_acquire) != VK_NULL_HANDLE) {
     return true;
   }
 
@@ -2195,7 +2333,8 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
     } */
     return false;
   }
-  creation_arguments.pipeline->second.pipeline = pipeline;
+  creation_arguments.pipeline->second.pipeline.store(pipeline,
+                                                     std::memory_order_release);
   return true;
 }
 
