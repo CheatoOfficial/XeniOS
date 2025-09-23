@@ -92,6 +92,17 @@ jobs:
       - uses: actions/checkout@main
         with:
           fetch-depth: 0
+      - name: Cache build directory
+        uses: actions/cache@v3
+        with:
+          path: build
+          key: build-linux-clang-${{ matrix.LLVM_VERSION }}-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            build-linux-clang-${{ matrix.LLVM_VERSION }}-${{ github.ref }}-
+
+      - name: Restore file modification times
+        uses: chetan/git-restore-mtime-action@v2
+
       - uses: actions/cache@main
         id: cache
         with:
