@@ -68,11 +68,31 @@ jobs:
       - uses: actions/checkout@main
         with:
           fetch-depth: 0
+      - name: Cache Vulkan SDK
+        id: cache-vulkan-sdk
+        uses: actions/cache@v3
+        with:
+          path: C:\VulkanSDK
+          key: ${{ runner.os }}-vulkan-sdk-${{ hashFiles('**/vulkan-sdk.exe') }}
+          restore-keys: |
+            ${{ runner.os }}-vulkan-sdk-
+
+      - name: Cache submodules
+        id: cache-submodules
+        uses: actions/cache@v3
+        with:
+          path: third_party
+          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
+
       - name: Setup
         run: |
           # Install Vulkan SDK which includes spirv-tools
-          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "vulkan-sdk.exe"
-          Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait
+          if (Test-Path -Path "C:\VulkanSDK") {
+            echo "Vulkan SDK found in cache."
+          } else {
+            Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "vulkan-sdk.exe"
+            Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait
+          }
           $env:VULKAN_SDK = "C:\VulkanSDK\$(Get-ChildItem -Path 'C:\VulkanSDK' -Directory | Select-Object -First 1 -ExpandProperty Name)"
           $env:PATH = "$env:VULKAN_SDK\Bin;$env:PATH"
           echo "VULKAN_SDK=$env:VULKAN_SDK" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -87,7 +107,11 @@ jobs:
             echo "Warning: spirv-opt.exe not found at expected location"
           }
 
-          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = )(?!third_party\/(FidelityFX-(CAS|FSR)|premake-(androidndk|cmake|export-compile-commands))).+' .gitmodules).Matches.Value
+          $cacheHit = '${{ steps.cache-submodules.outputs.cache-hit }}'
+          if ($cacheHit -ne 'true') {
+            git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = )(?!third_party\/(FidelityFX-(CAS|FSR)|premake-(androidndk|cmake|export-compile-commands))).+' .gitmodules).Matches.Value
+          }
+
       - name: Build
         run: python xenia-build.py build --config=Release --target=src\xenia-app
       - name: Prepare artifacts
