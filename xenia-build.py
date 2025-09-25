@@ -936,15 +936,19 @@ class BuildShadersCommand(Command):
 
         # Direct3D DXBC.
         if all_targets or "dxbc" in targets:
-            if sys.platform == "win32":
                 print("Building Direct3D 12 Shader Model 5.1 DXBC shaders...")
 
                 # Get the FXC path.
-                fxc = glob(os.path.join(os.environ["ProgramFiles(x86)"], "Windows Kits", "10", "bin", "*", "x64", "fxc.exe"))
+                fxc = os.environ.get("FXC_PATH")
                 if not fxc:
-                    print("ERROR: could not find fxc!")
-                    return 1
-                fxc = fxc[-1] # Highest version is last
+                    # Fall back to searching Windows Kits
+                    fxc = glob(os.path.join(os.environ["ProgramFiles(x86)"], "Windows Kits", "10", "bin", "*", "x64", "fxc.exe"))
+                    if not fxc:
+                        print("ERROR: could not find fxc! Set FXC_PATH environment variable or install Windows SDK.")
+                        return 1
+                    fxc = fxc[-1] # Highest version is last
+                else:
+                    print(f"Using FXC from environment variable: {fxc}")
 
                 # Build DXBC.
                 dxbc_stages = ["vs", "hs", "ds", "gs", "ps", "cs"]
@@ -971,25 +975,46 @@ class BuildShadersCommand(Command):
                     # FXC writes errors and warnings to stderr, not stdout, but
                     # stdout receives generic status messages that only add
                     # clutter in this case.
-                    if subprocess.call([
-                           fxc,
-                           "/D", "XESL_LANGUAGE_HLSL=1",
-                           "/Fh", f"{dxbc_file_path_base}.h",
-                           "/T", f"{dxbc_stage}_5_1",
-                           "/Vn", dxbc_identifier,
-                           "/nologo",
-                           src_path,
-                           ], stdout=subprocess.DEVNULL) != 0:
+                    # Check if using DXC or FXC based on executable name
+                    is_dxc = "dxc" in fxc.lower()
+
+                    # Start with base command - use wine on non-Windows platforms
+                    if sys.platform != "win32":
+                        compiler_args = ["wine", fxc]
+                    else:
+                        compiler_args = [fxc]
+
+                    if is_dxc:
+                        # DXC only supports SM 6.0+, cannot compile SM 5.1
+                        print("WARNING: DXC doesn't support SM 5.1, using SM 6.0")
+                        compiler_args.extend([
+                            "-T", f"{dxbc_stage}_6_0",
+                            "-HV", "2017",
+                            "-D", "XESL_LANGUAGE_HLSL=1",
+                            "-Fh", f"{dxbc_file_path_base}.h",
+                            "-Vn", dxbc_identifier,
+                            "-nologo",
+                            src_path,
+                        ])
+                    else:
+                        # FXC uses traditional syntax
+                        compiler_args.extend([
+                            "/D", "XESL_LANGUAGE_HLSL=1",
+                            "/Fh", f"{dxbc_file_path_base}.h",
+                            "/T", f"{dxbc_stage}_5_1",
+                            "/Vn", dxbc_identifier,
+                            "/O3",          # Maximum optimization level
+                            "/Qstrip_reflect",  # Strip reflection data (smaller output)
+                            "/Qstrip_debug",    # Strip debug information
+                            "/Qstrip_priv",     # Strip private data
+                            "/all_resources_bound",  # Assume all resources are bound (enables more optimizations)
+                            "/Gfp",         # Prefer flow control constructs (better for modern GPUs)
+                            "/nologo",
+                            src_path,
+                        ])
+                    if subprocess.call(compiler_args, stdout=subprocess.DEVNULL) != 0:
                         print("ERROR: failed to compile a DXBC shader")
                         return 1
-            else:
-                if all_targets:
-                    print("WARNING: Direct3D DXBC shader building is supported"
-                          " only on Windows")
-                else:
-                    print("ERROR: Direct3D DXBC shader building is supported"
-                          " only on Windows")
-                    return 1
 
         # Vulkan SPIR-V.
         if all_targets or "spirv" in targets:
