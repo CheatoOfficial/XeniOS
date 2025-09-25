@@ -523,8 +523,10 @@ void SpirvShaderTranslator::StartTranslation() {
         spv::NoPrecision, spv::StorageClassFunction, type_float3_,
         "xe_var_tfetch_gradients_v", const_float3_0_);
     if (register_count()) {
+      // Pass stride -1 to force creation of a new type without decoration
+      // to avoid reusing types with ArrayStride decorations
       spv::Id type_register_array = builder_->makeArrayType(
-          type_float4_, builder_->makeUintConstant(register_count()), 0);
+          type_float4_, builder_->makeUintConstant(register_count()), -1);
       var_main_registers_ =
           builder_->createVariable(spv::NoPrecision, spv::StorageClassFunction,
                                    type_register_array, "xe_var_registers");
