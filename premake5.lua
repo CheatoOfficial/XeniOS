@@ -62,6 +62,7 @@ filter("kind:StaticLib")
 filter("configurations:Checked")
   runtime("Debug")
   sanitize("Address")
+  inlining("Auto")  -- /Ob2 for Checked builds
   flags("NoIncrementalLink")
   editandcontinue("Off")
   staticruntime("Off")
@@ -86,6 +87,7 @@ filter({"configurations:Checked or Debug", "platforms:Windows"}) -- "toolset:msc
 filter("configurations:Debug")
   runtime("Release")
   optimize("Off")
+  inlining("Disabled")  -- No inlining for debug
   defines({
     "DEBUG",
     "_NO_DEBUG_HEAP=1",
@@ -101,7 +103,6 @@ filter("configurations:Release")
   flags({
     "NoBufferSecurityCheck"
   })
-  inlining("Auto")
   editandcontinue("Off")
   -- Not using floatingpoint("Fast") - NaN checks are used in some places
   -- (though rarely), overall preferable to avoid any functional differences
@@ -117,7 +118,7 @@ filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
   linktimeoptimization("On")
   buildoptions({
     "/Gw",
-    "/Ob3",
+    "/Ob3",  -- Aggressive inlining for maximum performance
 --    "/Qpar",   -- TODO: Test this.
   })
 
