@@ -334,6 +334,34 @@ workspace("xenia")
       "src/xenia/base/app_win32.manifest"
     })
     removefatalwarnings("All")
+
+    -- Suppress warnings for third_party modules on Windows
+    filter({"platforms:Windows"})
+      if string.startswith(prj.name, "third_party") or
+         prj.name == "aes_128" or
+         prj.name == "capstone" or
+         prj.name == "dxbc" or
+         prj.name == "discord-rpc" or
+         prj.name == "cxxopts" or
+         prj.name == "tomlplusplus" or
+         prj.name == "FFmpeg" or
+         prj.name == "fmt" or
+         prj.name == "glslang-spirv" or
+         prj.name == "imgui" or
+         prj.name == "mspack" or
+         prj.name == "snappy" or
+         prj.name == "xxhash" or
+         prj.name == "zarchive" or
+         prj.name == "zstd" or
+         prj.name == "zlib-ng" or
+         prj.name == "pugixml" or
+         prj.name == "libusb" or
+         prj.name == "SDL2" then
+        buildoptions({
+          "/W0",  -- Disable all warnings for third_party code
+        })
+      end
+    filter({})
   end
 
   include("src/xenia")
