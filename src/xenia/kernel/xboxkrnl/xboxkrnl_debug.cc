@@ -143,7 +143,7 @@ void RtlRaiseException_entry(pointer_t<X_EXCEPTION_RECORD> record) {
   // safe-ish
   XELOGE("Guest attempted to trigger a breakpoint!");
 }
-DECLARE_XBOXKRNL_EXPORT2(RtlRaiseException, kDebug, kStub, kImportant);
+DECLARE_XBOXKRNL_EXPORT1(RtlRaiseException, kDebug, kStub);
 
 void KeBugCheckEx_entry(dword_t code, dword_t param1, dword_t param2,
                         dword_t param3, dword_t param4) {

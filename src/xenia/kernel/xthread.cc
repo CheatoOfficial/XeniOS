@@ -354,7 +354,7 @@ X_STATUS XThread::Create() {
   // This is thread safe.
   thread_state_ = new cpu::ThreadState(kernel_state()->processor(), thread_id_,
                                        stack_base_, pcr_address_);
-  XELOGI("XThread{:08X} ({:X}) Stack: {:08X}-{:08X}", handle(), thread_id_,
+  XELOGD("XThread{:08X} ({:X}) Stack: {:08X}-{:08X}", handle(), thread_id_,
          stack_limit_, stack_base_);
 
   // Exports use this to get the kernel.
@@ -522,8 +522,8 @@ class reenter_exception {
 };
 
 void XThread::Execute() {
-  XELOGKERNEL("XThread::Execute thid {} (handle={:08X}, '{}', native={:08X})",
-              thread_id_, handle(), thread_name_, thread_->system_id());
+  XELOGD("XThread::Execute thid {} (handle={:08X}, '{}', native={:08X})",
+         thread_id_, handle(), thread_name_, thread_->system_id());
   // Let the kernel know we are starting.
   kernel_state()->OnThreadExecute(this);
 
@@ -1024,7 +1024,7 @@ XHostThread::XHostThread(KernelState* kernel_state, uint32_t stack_size,
 }
 
 void XHostThread::Execute() {
-  XELOGKERNEL(
+  XELOGD(
       "XThread::Execute thid {} (handle={:08X}, '{}', native={:08X}, <host>)",
       thread_id_, handle(), thread_name_, thread_->system_id());
   // Let the kernel know we are starting.
