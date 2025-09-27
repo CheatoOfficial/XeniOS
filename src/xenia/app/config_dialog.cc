@@ -53,9 +53,19 @@ bool MatchesAllTokens(const std::string& text_lower,
 // Known enum-like cvars with their valid options
 const std::map<std::string, std::vector<std::string>>& GetKnownEnumOptions() {
   static const std::map<std::string, std::vector<std::string>> options = {
+#if XE_PLATFORM_WIN32
       {"gpu", {"any", "d3d12", "vulkan", "null"}},
       {"apu", {"any", "nop", "sdl", "xaudio2"}},
       {"hid", {"any", "nop", "sdl", "winkey", "xinput"}},
+#elif XE_PLATFORM_LINUX
+      {"gpu", {"any", "vulkan", "null"}},
+      {"apu", {"any", "alsa", "nop", "sdl"}},
+      {"hid", {"any", "nop", "sdl"}},
+#else
+      {"gpu", {"any", "vulkan", "null"}},
+      {"apu", {"any", "nop", "sdl"}},
+      {"hid", {"any", "nop", "sdl"}},
+#endif
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
       {"render_target_path_d3d12", {"any", "rtvfull", "rtvsingle"}},
