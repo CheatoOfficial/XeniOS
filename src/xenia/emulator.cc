@@ -9,6 +9,7 @@
 
 #include "xenia/emulator.h"
 
+#include <algorithm>
 #include "config.h"
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/tabulate/single_include/tabulate/tabulate.hpp"
@@ -1389,7 +1390,12 @@ std::string Emulator::FindLaunchModule() {
       kernel_state_->file_system()->UnregisterSymbolicLink(
           kDefaultGameSymbolicLink);
 
-      file_path /= std::filesystem::path(xam->loader_data().launch_path);
+      std::string launch_path = xam->loader_data().launch_path;
+#if XE_PLATFORM_LINUX
+      // Convert backslashes to forward slashes for consistent paths on Linux
+      std::replace(launch_path.begin(), launch_path.end(), '\\', '/');
+#endif
+      file_path /= std::filesystem::path(launch_path);
 
       kernel_state_->file_system()->RegisterSymbolicLink(
           kDefaultPartitionSymbolicLink,
