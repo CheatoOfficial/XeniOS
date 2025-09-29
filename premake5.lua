@@ -78,7 +78,7 @@ filter({"configurations:Checked", "platforms:Windows"}) -- "toolset:msc"
 
 filter({"configurations:Checked or Debug", "platforms:Linux"})
   defines({
-    "_GLIBCXX_DEBUG",   -- libstdc++ debug mode
+    -- "_GLIBCXX_DEBUG",   -- libstdc++ debug mode (disabled - causes ABI issues with system libraries)
   })
 
 filter({"configurations:Checked or Debug", "platforms:Windows"}) -- "toolset:msc"
