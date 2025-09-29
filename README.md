@@ -7,7 +7,7 @@
 <h1 align="center">Xenia Edge - Xbox 360 Emulator</h1>
 
 Xenia Edge is yet another experimental fork of the Xenia emulator, mainly based on [Xenia Canary](https://github.com/xenia-canary/xenia-canary) but with the aim of
-bringing in bleeding edge changes from other Xenia forks in a single package.
+quicker iteration and improvements to Vulkan backend and Linux platform in particular. Windows of course remains fully supported as well and will benefit from changes made here especially with its Vulkan backend.
 
 ## Status
 
