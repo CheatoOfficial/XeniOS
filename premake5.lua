@@ -50,7 +50,7 @@ fatalwarnings("All")
 -- TODO(DrChat): Find a way to disable this on other architectures.
 if ARCH ~= "ppc64" then
   filter("architecture:x86_64")
-    vectorextensions("AVX")
+    vectorextensions("AVX2")
   filter({})
 end
 
@@ -112,7 +112,14 @@ filter("configurations:Release")
   -- including handling of specials since games make assumptions about them.
 
 filter({"configurations:Release", "platforms:not Windows"})
-  symbols("Off")
+  symbols("On")  -- Enable debug symbols for crash debugging
+  flags("LinkTimeOptimization")  -- Enable LTO for better performance
+  buildoptions({
+    "-O3",  -- Maximum optimization (premake's optimize("Speed") might only be -O2)
+    "-finline-functions",  -- Aggressive function inlining
+    "-funroll-loops",  -- Unroll loops where beneficial
+    "-fomit-frame-pointer",  -- Don't keep frame pointer for better performance
+  })
 
 filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
   linktimeoptimization("On")
@@ -125,10 +132,6 @@ filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
 filter("platforms:Linux")
   system("linux")
   toolset("clang")
-  vectorextensions("AVX2")
-  --buildoptions({
-  --    "-mlzcnt",   -- (don't) Assume lzcnt is supported.
-  --})
   pkg_config.all("gtk+-x11-3.0")
   links({
     "stdc++fs",
