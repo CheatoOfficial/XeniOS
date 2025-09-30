@@ -928,11 +928,11 @@ class BuildShadersCommand(Command):
         # well as to enable `#include` in GLSL, to include `xesl.xesli` itself,
         # without writing the same `#if` / `#extension` / `#endif` in every
         # shader). Also, not all shading languages provide a built-in
-        # preprocessor definition for identification of them, so XESL_LANGUAGE_*
-        # is also defined via the build arguments. XESL_LANGUAGE_* is set
-        # regardless of whether the file is XeSL or a raw source file in a
-        # specific language, as XeSL headers may be used in language-specific
-        # sources.
+        # preprocessor definition for identification of them, so
+        # `SHADING_LANGUAGE_*_XE` is also defined via the build arguments.
+        # `SHADING_LANGUAGE_*_XE` is set regardless of whether the file is XeSL
+        # or a raw source file in a specific language, as XeSL headers may be
+        # used in language-specific sources.
 
         # Direct3D DXBC.
         if all_targets or "dxbc" in targets:
@@ -990,7 +990,7 @@ class BuildShadersCommand(Command):
                         compiler_args.extend([
                             "-T", f"{dxbc_stage}_6_0",
                             "-HV", "2017",
-                            "-D", "XESL_LANGUAGE_HLSL=1",
+                            "-D", "SHADING_LANGUAGE_HLSL_XE=1",
                             "-Fh", f"{dxbc_file_path_base}.h",
                             "-Vn", dxbc_identifier,
                             "-nologo",
@@ -999,7 +999,7 @@ class BuildShadersCommand(Command):
                     else:
                         # FXC uses traditional syntax
                         compiler_args.extend([
-                            "/D", "XESL_LANGUAGE_HLSL=1",
+                            "/D", "SHADING_LANGUAGE_HLSL_XE=1",
                             "/Fh", f"{dxbc_file_path_base}.h",
                             "/T", f"{dxbc_stage}_5_1",
                             "/Vn", dxbc_identifier,
@@ -1086,7 +1086,7 @@ class BuildShadersCommand(Command):
                 # --stdin must be before -S for some reason.
                 glslang_arguments = [glslang,
                                      "--stdin" if src_is_xesl else src_path,
-                                     "-DXESL_LANGUAGE_GLSL=1",
+                                     "-DSHADING_LANGUAGE_GLSL_XE=1",
                                      "-S", spirv_stage,
                                      "-o", spirv_glslang_file_path,
                                      "-V"]

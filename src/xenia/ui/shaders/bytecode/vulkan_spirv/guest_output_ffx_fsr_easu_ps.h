@@ -31,7 +31,7 @@
      %v4uint = OpTypeVector %uint 4
 %_struct_1030 = OpTypeStruct %v2float %v2float
 %_ptr_PushConstant__struct_1030 = OpTypePointer PushConstant %_struct_1030
-       %4495 = OpVariable %_ptr_PushConstant__struct_1030 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1030 PushConstant
         %int = OpTypeInt 32 1
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_v2float = OpTypePointer PushConstant %v2float
@@ -85,7 +85,7 @@
         %325 = OpConstantComposite %v4float %float_0_5 %float_0_5 %float_0_5 %float_0_5
        %5663 = OpFunction %void None %1282
       %23915 = OpLabel
-       %8250 = OpAccessChain %_ptr_PushConstant_v2float %4495 %int_0
+       %8250 = OpAccessChain %_ptr_PushConstant_v2float %3305 %int_0
        %6959 = OpLoad %v2float %8250
       %13397 = OpBitcast %v2uint %6959
       %12762 = OpVectorTimesScalar %v2float %6959 %float_0_5
@@ -96,14 +96,14 @@
        %7641 = OpCompositeExtract %uint %17743 0
        %7529 = OpCompositeExtract %uint %17743 1
       %18241 = OpCompositeConstruct %v4uint %16707 %13283 %7641 %7529
-       %8922 = OpAccessChain %_ptr_PushConstant_v2float %4495 %int_1
+       %8922 = OpAccessChain %_ptr_PushConstant_v2float %3305 %int_1
        %7921 = OpLoad %v2float %8922
        %8543 = OpVectorShuffle %v4float %7921 %7921 0 1 0 1
       %11088 = OpFMul %v4float %1284 %8543
       %12841 = OpBitcast %v4uint %11088
       %16717 = OpFMul %v4float %2460 %8543
       %11573 = OpBitcast %v4uint %16717
-      %20359 = OpAccessChain %_ptr_PushConstant_float %4495 %int_1 %uint_1
+      %20359 = OpAccessChain %_ptr_PushConstant_float %3305 %int_1 %uint_1
       %20680 = OpLoad %float %20359
       %18089 = OpFMul %float %float_4 %20680
       %19210 = OpBitcast %uint %18089
@@ -822,7 +822,7 @@ const uint32_t guest_output_ffx_fsr_easu_ps[] = {
     0x0000000B, 0x00000020, 0x00000000, 0x00020014, 0x00000009, 0x00040017,
     0x00000011, 0x0000000B, 0x00000002, 0x00040017, 0x00000017, 0x0000000B,
     0x00000004, 0x0004001E, 0x00000406, 0x00000013, 0x00000013, 0x00040020,
-    0x00000683, 0x00000009, 0x00000406, 0x0004003B, 0x00000683, 0x0000118F,
+    0x00000683, 0x00000009, 0x00000406, 0x0004003B, 0x00000683, 0x00000CE9,
     0x00000009, 0x00040015, 0x0000000C, 0x00000020, 0x00000001, 0x0004002B,
     0x0000000C, 0x00000A0B, 0x00000000, 0x00040020, 0x00000290, 0x00000009,
     0x00000013, 0x0004002B, 0x0000000D, 0x000000FC, 0x3F000000, 0x0004002B,
@@ -862,7 +862,7 @@ const uint32_t guest_output_ffx_fsr_easu_ps[] = {
     0x0005002C, 0x00000013, 0x0000061E, 0x000000FC, 0x000000FC, 0x0007002C,
     0x0000001D, 0x00000145, 0x000000FC, 0x000000FC, 0x000000FC, 0x000000FC,
     0x00050036, 0x00000008, 0x0000161F, 0x00000000, 0x00000502, 0x000200F8,
-    0x00005D6B, 0x00050041, 0x00000290, 0x0000203A, 0x0000118F, 0x00000A0B,
+    0x00005D6B, 0x00050041, 0x00000290, 0x0000203A, 0x00000CE9, 0x00000A0B,
     0x0004003D, 0x00000013, 0x00001B2F, 0x0000203A, 0x0004007C, 0x00000011,
     0x00003455, 0x00001B2F, 0x0005008E, 0x00000013, 0x000031DA, 0x00001B2F,
     0x000000FC, 0x00050083, 0x00000013, 0x00006013, 0x000031DA, 0x0000061E,
@@ -871,13 +871,13 @@ const uint32_t guest_output_ffx_fsr_easu_ps[] = {
     0x00003455, 0x00000001, 0x00050051, 0x0000000B, 0x00001DD9, 0x0000454F,
     0x00000000, 0x00050051, 0x0000000B, 0x00001D69, 0x0000454F, 0x00000001,
     0x00070050, 0x00000017, 0x00004741, 0x00004143, 0x000033E3, 0x00001DD9,
-    0x00001D69, 0x00050041, 0x00000290, 0x000022DA, 0x0000118F, 0x00000A0E,
+    0x00001D69, 0x00050041, 0x00000290, 0x000022DA, 0x00000CE9, 0x00000A0E,
     0x0004003D, 0x00000013, 0x00001EF1, 0x000022DA, 0x0009004F, 0x0000001D,
     0x0000215F, 0x00001EF1, 0x00001EF1, 0x00000000, 0x00000001, 0x00000000,
     0x00000001, 0x00050085, 0x0000001D, 0x00002B50, 0x00000504, 0x0000215F,
     0x0004007C, 0x00000017, 0x00003229, 0x00002B50, 0x00050085, 0x0000001D,
     0x0000414D, 0x0000099C, 0x0000215F, 0x0004007C, 0x00000017, 0x00002D35,
-    0x0000414D, 0x00060041, 0x0000028A, 0x00004F87, 0x0000118F, 0x00000A0E,
+    0x0000414D, 0x00060041, 0x0000028A, 0x00004F87, 0x00000CE9, 0x00000A0E,
     0x00000A0D, 0x0004003D, 0x0000000D, 0x000050C8, 0x00004F87, 0x00050085,
     0x0000000D, 0x000046A9, 0x00000B69, 0x000050C8, 0x0004007C, 0x0000000B,
     0x00004B0A, 0x000046A9, 0x00070050, 0x00000017, 0x00002A70, 0x00000A0A,

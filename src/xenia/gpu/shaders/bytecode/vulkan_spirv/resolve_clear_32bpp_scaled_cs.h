@@ -42,7 +42,7 @@
   %uint_2048 = OpConstant %uint 2048
 %_struct_1014 = OpTypeStruct %v2uint %uint %uint
 %_ptr_PushConstant__struct_1014 = OpTypePointer PushConstant %_struct_1014
-       %4495 = OpVariable %_ptr_PushConstant__struct_1014 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1014 PushConstant
       %int_1 = OpConstant %int 1
 %_ptr_PushConstant_uint = OpTypePointer PushConstant %uint
       %int_2 = OpConstant %int 2
@@ -82,9 +82,9 @@
                OpSelectionMerge %19578 None
                OpSwitch %uint_0 %11880
       %11880 = OpLabel
-      %22245 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_1
+      %22245 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_1
       %15627 = OpLoad %uint %22245
-      %22700 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_2
+      %22700 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_2
       %20824 = OpLoad %uint %22700
       %20561 = OpBitwiseAnd %uint %15627 %uint_1023
       %20073 = OpShiftRightLogical %uint %15627 %uint_10
@@ -104,7 +104,7 @@
       %14785 = OpBitwiseAnd %uint %13123 %uint_2047
        %8858 = OpCompositeExtract %uint %24998 0
       %22993 = OpIMul %uint %14785 %8858
-      %20321 = OpAccessChain %_ptr_PushConstant_v2uint %4495 %int_0
+      %20321 = OpAccessChain %_ptr_PushConstant_v2uint %3305 %int_0
       %18180 = OpLoad %v2uint %20321
       %13183 = OpCompositeConstruct %v2uint %7177 %7177
       %21741 = OpUGreaterThanEqual %v2bool %13183 %1837
@@ -209,7 +209,7 @@ const uint32_t resolve_clear_32bpp_scaled_cs[] = {
     0x00000AFA, 0x00000A3A, 0x00040015, 0x0000000C, 0x00000020, 0x00000001,
     0x0004002B, 0x0000000B, 0x00000A84, 0x00000800, 0x0005001E, 0x000003F6,
     0x00000011, 0x0000000B, 0x0000000B, 0x00040020, 0x00000673, 0x00000009,
-    0x000003F6, 0x0004003B, 0x00000673, 0x0000118F, 0x00000009, 0x0004002B,
+    0x000003F6, 0x0004003B, 0x00000673, 0x00000CE9, 0x00000009, 0x0004002B,
     0x0000000C, 0x00000A0E, 0x00000001, 0x00040020, 0x00000288, 0x00000009,
     0x0000000B, 0x0004002B, 0x0000000C, 0x00000A11, 0x00000002, 0x0004002B,
     0x0000000C, 0x00000A0B, 0x00000000, 0x0004002B, 0x0000000B, 0x00000A44,
@@ -236,9 +236,9 @@ const uint32_t resolve_clear_32bpp_scaled_cs[] = {
     0x0000074E, 0x00000A13, 0x00000A13, 0x00050036, 0x00000008, 0x0000161F,
     0x00000000, 0x00000502, 0x000200F8, 0x00003B06, 0x000300F7, 0x00004C7A,
     0x00000000, 0x000300FB, 0x00000A0A, 0x00002E68, 0x000200F8, 0x00002E68,
-    0x00050041, 0x00000288, 0x000056E5, 0x0000118F, 0x00000A0E, 0x0004003D,
+    0x00050041, 0x00000288, 0x000056E5, 0x00000CE9, 0x00000A0E, 0x0004003D,
     0x0000000B, 0x00003D0B, 0x000056E5, 0x00050041, 0x00000288, 0x000058AC,
-    0x0000118F, 0x00000A11, 0x0004003D, 0x0000000B, 0x00005158, 0x000058AC,
+    0x00000CE9, 0x00000A11, 0x0004003D, 0x0000000B, 0x00005158, 0x000058AC,
     0x000500C7, 0x0000000B, 0x00005051, 0x00003D0B, 0x00000A44, 0x000500C2,
     0x0000000B, 0x00004E69, 0x00003D0B, 0x00000A28, 0x000500C7, 0x0000000B,
     0x00001C09, 0x00004E69, 0x00000A13, 0x000500C7, 0x0000000B, 0x000059EF,
@@ -254,7 +254,7 @@ const uint32_t resolve_clear_32bpp_scaled_cs[] = {
     0x00003343, 0x00005158, 0x00000A19, 0x000500C7, 0x0000000B, 0x000039C1,
     0x00003343, 0x00000A81, 0x00050051, 0x0000000B, 0x0000229A, 0x000061A6,
     0x00000000, 0x00050084, 0x0000000B, 0x000059D1, 0x000039C1, 0x0000229A,
-    0x00050041, 0x0000028E, 0x00004F61, 0x0000118F, 0x00000A0B, 0x0004003D,
+    0x00050041, 0x0000028E, 0x00004F61, 0x00000CE9, 0x00000A0B, 0x0004003D,
     0x00000011, 0x00004704, 0x00004F61, 0x00050050, 0x00000011, 0x0000337F,
     0x00001C09, 0x00001C09, 0x000500AE, 0x0000000F, 0x000054ED, 0x0000337F,
     0x0000072D, 0x000600A9, 0x00000011, 0x00005854, 0x000054ED, 0x00000724,

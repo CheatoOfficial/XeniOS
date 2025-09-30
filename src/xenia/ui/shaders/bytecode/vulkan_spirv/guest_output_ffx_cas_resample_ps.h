@@ -33,7 +33,7 @@
     %v2float = OpTypeVector %float 2
 %_struct_1048 = OpTypeStruct %v2int %v2float %float
 %_ptr_PushConstant__struct_1048 = OpTypePointer PushConstant %_struct_1048
-       %4495 = OpVariable %_ptr_PushConstant__struct_1048 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1048 PushConstant
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_v2int = OpTypePointer PushConstant %v2int
       %int_1 = OpConstant %int 1
@@ -73,11 +73,11 @@
       %18571 = OpLoad %v4float %gl_FragCoord
       %14008 = OpVectorShuffle %v2float %18571 %18571 0 1
       %17656 = OpConvertFToS %v2int %14008
-      %19279 = OpAccessChain %_ptr_PushConstant_v2int %4495 %int_0
+      %19279 = OpAccessChain %_ptr_PushConstant_v2int %3305 %int_0
       %22822 = OpLoad %v2int %19279
       %23312 = OpISub %v2int %17656 %22822
        %9938 = OpBitcast %v2uint %23312
-      %20997 = OpAccessChain %_ptr_PushConstant_v2float %4495 %int_1
+      %20997 = OpAccessChain %_ptr_PushConstant_v2float %3305 %int_1
       %22579 = OpLoad %v2float %20997
       %13397 = OpBitcast %v2uint %22579
       %12762 = OpVectorTimesScalar %v2float %22579 %float_0_5
@@ -88,7 +88,7 @@
        %7641 = OpCompositeExtract %uint %17743 0
        %7529 = OpCompositeExtract %uint %17743 1
       %18241 = OpCompositeConstruct %v4uint %16707 %13283 %7641 %7529
-       %9777 = OpAccessChain %_ptr_PushConstant_float %4495 %int_2
+       %9777 = OpAccessChain %_ptr_PushConstant_float %3305 %int_2
       %18808 = OpLoad %float %9777
       %17599 = OpBitcast %uint %18808
       %19625 = OpConvertUToF %v2float %9938
@@ -452,7 +452,7 @@ const uint32_t guest_output_ffx_cas_resample_ps[] = {
     0x00040020, 0x0000029A, 0x00000001, 0x0000001D, 0x0004003B, 0x0000029A,
     0x00000C93, 0x00000001, 0x00040017, 0x00000013, 0x0000000D, 0x00000002,
     0x0005001E, 0x00000418, 0x00000012, 0x00000013, 0x0000000D, 0x00040020,
-    0x00000695, 0x00000009, 0x00000418, 0x0004003B, 0x00000695, 0x0000118F,
+    0x00000695, 0x00000009, 0x00000418, 0x0004003B, 0x00000695, 0x00000CE9,
     0x00000009, 0x0004002B, 0x0000000C, 0x00000A0B, 0x00000000, 0x00040020,
     0x0000028F, 0x00000009, 0x00000012, 0x0004002B, 0x0000000C, 0x00000A0E,
     0x00000001, 0x00040020, 0x00000290, 0x00000009, 0x00000013, 0x0004002B,
@@ -482,10 +482,10 @@ const uint32_t guest_output_ffx_cas_resample_ps[] = {
     0x00000000, 0x00000502, 0x000200F8, 0x00006175, 0x0004003D, 0x0000001D,
     0x0000488B, 0x00000C93, 0x0007004F, 0x00000013, 0x000036B8, 0x0000488B,
     0x0000488B, 0x00000000, 0x00000001, 0x0004006E, 0x00000012, 0x000044F8,
-    0x000036B8, 0x00050041, 0x0000028F, 0x00004B4F, 0x0000118F, 0x00000A0B,
+    0x000036B8, 0x00050041, 0x0000028F, 0x00004B4F, 0x00000CE9, 0x00000A0B,
     0x0004003D, 0x00000012, 0x00005926, 0x00004B4F, 0x00050082, 0x00000012,
     0x00005B10, 0x000044F8, 0x00005926, 0x0004007C, 0x00000011, 0x000026D2,
-    0x00005B10, 0x00050041, 0x00000290, 0x00005205, 0x0000118F, 0x00000A0E,
+    0x00005B10, 0x00050041, 0x00000290, 0x00005205, 0x00000CE9, 0x00000A0E,
     0x0004003D, 0x00000013, 0x00005833, 0x00005205, 0x0004007C, 0x00000011,
     0x00003455, 0x00005833, 0x0005008E, 0x00000013, 0x000031DA, 0x00005833,
     0x000000FC, 0x00050083, 0x00000013, 0x00006013, 0x000031DA, 0x0000061E,
@@ -494,7 +494,7 @@ const uint32_t guest_output_ffx_cas_resample_ps[] = {
     0x00003455, 0x00000001, 0x00050051, 0x0000000B, 0x00001DD9, 0x0000454F,
     0x00000000, 0x00050051, 0x0000000B, 0x00001D69, 0x0000454F, 0x00000001,
     0x00070050, 0x00000017, 0x00004741, 0x00004143, 0x000033E3, 0x00001DD9,
-    0x00001D69, 0x00050041, 0x0000028A, 0x00002631, 0x0000118F, 0x00000A11,
+    0x00001D69, 0x00050041, 0x0000028A, 0x00002631, 0x00000CE9, 0x00000A11,
     0x0004003D, 0x0000000D, 0x00004978, 0x00002631, 0x0004007C, 0x0000000B,
     0x000044BF, 0x00004978, 0x00040070, 0x00000013, 0x00004CA9, 0x000026D2,
     0x0007004F, 0x00000011, 0x000020FA, 0x00004741, 0x00004741, 0x00000000,

@@ -46,7 +46,7 @@
      %uint_7 = OpConstant %uint 7
 %_struct_990 = OpTypeStruct %uint %uint
 %_ptr_PushConstant__struct_990 = OpTypePointer PushConstant %_struct_990
-       %4495 = OpVariable %_ptr_PushConstant__struct_990 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_990 PushConstant
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_uint = OpTypePointer PushConstant %uint
       %int_1 = OpConstant %int 1
@@ -90,9 +90,9 @@
                OpSelectionMerge %19578 None
                OpSwitch %uint_0 %11880
       %11880 = OpLabel
-      %22245 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_0
+      %22245 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_0
       %15627 = OpLoad %uint %22245
-      %20439 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_1
+      %20439 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_1
       %22340 = OpLoad %uint %20439
       %10293 = OpCompositeConstruct %v2uint %22340 %22340
       %24330 = OpShiftRightLogical %v2uint %10293 %2053
@@ -215,7 +215,7 @@ const uint32_t host_depth_store_1xmsaa_cs[] = {
     0x0000000B, 0x00000A31, 0x0000000D, 0x0005002C, 0x00000011, 0x00000805,
     0x00000A28, 0x00000A31, 0x0004002B, 0x0000000B, 0x00000A1F, 0x00000007,
     0x0004001E, 0x000003DE, 0x0000000B, 0x0000000B, 0x00040020, 0x0000065B,
-    0x00000009, 0x000003DE, 0x0004003B, 0x0000065B, 0x0000118F, 0x00000009,
+    0x00000009, 0x000003DE, 0x0004003B, 0x0000065B, 0x00000CE9, 0x00000009,
     0x0004002B, 0x0000000C, 0x00000A0B, 0x00000000, 0x00040020, 0x00000288,
     0x00000009, 0x0000000B, 0x0004002B, 0x0000000C, 0x00000A0E, 0x00000001,
     0x00040017, 0x00000014, 0x0000000B, 0x00000003, 0x00040020, 0x00000291,
@@ -246,9 +246,9 @@ const uint32_t host_depth_store_1xmsaa_cs[] = {
     0x0005002C, 0x00000011, 0x0000074E, 0x00000A13, 0x00000A13, 0x00050036,
     0x00000008, 0x0000161F, 0x00000000, 0x00000502, 0x000200F8, 0x00003B06,
     0x000300F7, 0x00004C7A, 0x00000000, 0x000300FB, 0x00000A0A, 0x00002E68,
-    0x000200F8, 0x00002E68, 0x00050041, 0x00000288, 0x000056E5, 0x0000118F,
+    0x000200F8, 0x00002E68, 0x00050041, 0x00000288, 0x000056E5, 0x00000CE9,
     0x00000A0B, 0x0004003D, 0x0000000B, 0x00003D0B, 0x000056E5, 0x00050041,
-    0x00000288, 0x00004FD7, 0x0000118F, 0x00000A0E, 0x0004003D, 0x0000000B,
+    0x00000288, 0x00004FD7, 0x00000CE9, 0x00000A0E, 0x0004003D, 0x0000000B,
     0x00005744, 0x00004FD7, 0x00050050, 0x00000011, 0x00002835, 0x00005744,
     0x00005744, 0x000500C2, 0x00000011, 0x00005F0A, 0x00002835, 0x00000805,
     0x000500C7, 0x00000011, 0x00001997, 0x00005F0A, 0x000007A2, 0x00050041,

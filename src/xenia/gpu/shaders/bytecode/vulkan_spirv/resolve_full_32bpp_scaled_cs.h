@@ -131,7 +131,7 @@
 %_ptr_Uniform_uint = OpTypePointer Uniform %uint
 %_struct_1017 = OpTypeStruct %uint %uint %uint %uint
 %_ptr_PushConstant__struct_1017 = OpTypePointer PushConstant %_struct_1017
-       %4495 = OpVariable %_ptr_PushConstant__struct_1017 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1017 PushConstant
 %_ptr_PushConstant_uint = OpTypePointer PushConstant %uint
     %uint_13 = OpConstant %uint 13
   %uint_2047 = OpConstant %uint 2047
@@ -194,9 +194,9 @@
                OpSelectionMerge %19578 None
                OpSwitch %uint_0 %11880
       %11880 = OpLabel
-      %22245 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_0
+      %22245 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_0
       %15627 = OpLoad %uint %22245
-      %22700 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_1
+      %22700 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_1
       %20824 = OpLoad %uint %22700
       %20561 = OpBitwiseAnd %uint %15627 %uint_1023
       %19978 = OpShiftRightLogical %uint %15627 %uint_10
@@ -229,9 +229,9 @@
       %14785 = OpBitwiseAnd %uint %13123 %uint_2047
        %8858 = OpCompositeExtract %uint %23601 0
       %22993 = OpIMul %uint %14785 %8858
-      %20036 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_2
+      %20036 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_2
       %18628 = OpLoad %uint %20036
-      %22701 = OpAccessChain %_ptr_PushConstant_uint %4495 %int_3
+      %22701 = OpAccessChain %_ptr_PushConstant_uint %3305 %int_3
       %20919 = OpLoad %uint %22701
       %19164 = OpBitwiseAnd %uint %18628 %uint_7
       %21999 = OpBitwiseAnd %uint %18628 %uint_8
@@ -2856,7 +2856,7 @@ const uint32_t resolve_full_32bpp_scaled_cs[] = {
     0x00000A1B, 0x00000002, 0x0000079C, 0x0004003B, 0x00000A1B, 0x00000CC7,
     0x00000002, 0x00040020, 0x00000288, 0x00000002, 0x0000000B, 0x0006001E,
     0x000003F9, 0x0000000B, 0x0000000B, 0x0000000B, 0x0000000B, 0x00040020,
-    0x00000676, 0x00000009, 0x000003F9, 0x0004003B, 0x00000676, 0x0000118F,
+    0x00000676, 0x00000009, 0x000003F9, 0x0004003B, 0x00000676, 0x00000CE9,
     0x00000009, 0x00040020, 0x00000289, 0x00000009, 0x0000000B, 0x0004002B,
     0x0000000B, 0x00000A31, 0x0000000D, 0x0004002B, 0x0000000B, 0x00000A81,
     0x000007FF, 0x0004002B, 0x0000000B, 0x00000A37, 0x0000000F, 0x0004002B,
@@ -2909,8 +2909,8 @@ const uint32_t resolve_full_32bpp_scaled_cs[] = {
     0x00050036, 0x00000008, 0x0000161F, 0x00000000, 0x00000502, 0x000200F8,
     0x00003B06, 0x000300F7, 0x00004C7A, 0x00000000, 0x000300FB, 0x00000A0A,
     0x00002E68, 0x000200F8, 0x00002E68, 0x00050041, 0x00000289, 0x000056E5,
-    0x0000118F, 0x00000A0B, 0x0004003D, 0x0000000B, 0x00003D0B, 0x000056E5,
-    0x00050041, 0x00000289, 0x000058AC, 0x0000118F, 0x00000A0E, 0x0004003D,
+    0x00000CE9, 0x00000A0B, 0x0004003D, 0x0000000B, 0x00003D0B, 0x000056E5,
+    0x00050041, 0x00000289, 0x000058AC, 0x00000CE9, 0x00000A0E, 0x0004003D,
     0x0000000B, 0x00005158, 0x000058AC, 0x000500C7, 0x0000000B, 0x00005051,
     0x00003D0B, 0x00000A44, 0x000500C2, 0x0000000B, 0x00004E0A, 0x00003D0B,
     0x00000A28, 0x000500C7, 0x0000000B, 0x0000217E, 0x00004E0A, 0x00000A13,
@@ -2935,8 +2935,8 @@ const uint32_t resolve_full_32bpp_scaled_cs[] = {
     0x00000A19, 0x000500C7, 0x0000000B, 0x000039C1, 0x00003343, 0x00000A81,
     0x00050051, 0x0000000B, 0x0000229A, 0x00005C31, 0x00000000, 0x00050084,
     0x0000000B, 0x000059D1, 0x000039C1, 0x0000229A, 0x00050041, 0x00000289,
-    0x00004E44, 0x0000118F, 0x00000A11, 0x0004003D, 0x0000000B, 0x000048C4,
-    0x00004E44, 0x00050041, 0x00000289, 0x000058AD, 0x0000118F, 0x00000A14,
+    0x00004E44, 0x00000CE9, 0x00000A11, 0x0004003D, 0x0000000B, 0x000048C4,
+    0x00004E44, 0x00050041, 0x00000289, 0x000058AD, 0x00000CE9, 0x00000A14,
     0x0004003D, 0x0000000B, 0x000051B7, 0x000058AD, 0x000500C7, 0x0000000B,
     0x00004ADC, 0x000048C4, 0x00000A1F, 0x000500C7, 0x0000000B, 0x000055EF,
     0x000048C4, 0x00000A22, 0x000500AB, 0x00000009, 0x0000500F, 0x000055EF,

@@ -32,7 +32,7 @@
       %v2int = OpTypeVector %int 2
 %_struct_1028 = OpTypeStruct %v2int %v2float
 %_ptr_PushConstant__struct_1028 = OpTypePointer PushConstant %_struct_1028
-       %4495 = OpVariable %_ptr_PushConstant__struct_1028 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1028 PushConstant
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_v2int = OpTypePointer PushConstant %v2int
         %150 = OpTypeImage %float 2D 0 0 0 1 Unknown
@@ -55,7 +55,7 @@
       %18571 = OpLoad %v4float %gl_FragCoord
       %14008 = OpVectorShuffle %v2float %18571 %18571 0 1
       %17656 = OpConvertFToS %v2int %14008
-      %19279 = OpAccessChain %_ptr_PushConstant_v2int %4495 %int_0
+      %19279 = OpAccessChain %_ptr_PushConstant_v2int %3305 %int_0
       %22822 = OpLoad %v2int %19279
       %23236 = OpISub %v2int %17656 %22822
       %10630 = OpBitcast %v2uint %23236
@@ -64,7 +64,7 @@
        %8907 = OpSampledImage %510 %14905 %16965
       %13759 = OpConvertUToF %v2float %10630
       %15917 = OpFAdd %v2float %13759 %1566
-      %11863 = OpAccessChain %_ptr_PushConstant_v2float %4495 %int_1
+      %11863 = OpAccessChain %_ptr_PushConstant_v2float %3305 %int_1
       %20800 = OpLoad %v2float %11863
       %24336 = OpFMul %v2float %15917 %20800
        %9229 = OpImageSampleExplicitLod %v4float %8907 %24336 Lod %float_0
@@ -96,7 +96,7 @@ const uint32_t guest_output_bilinear_ps[] = {
     0x00000001, 0x00040017, 0x00000013, 0x0000000D, 0x00000002, 0x00040015,
     0x0000000C, 0x00000020, 0x00000001, 0x00040017, 0x00000012, 0x0000000C,
     0x00000002, 0x0004001E, 0x00000404, 0x00000012, 0x00000013, 0x00040020,
-    0x00000681, 0x00000009, 0x00000404, 0x0004003B, 0x00000681, 0x0000118F,
+    0x00000681, 0x00000009, 0x00000404, 0x0004003B, 0x00000681, 0x00000CE9,
     0x00000009, 0x0004002B, 0x0000000C, 0x00000A0B, 0x00000000, 0x00040020,
     0x0000028F, 0x00000009, 0x00000012, 0x00090019, 0x00000096, 0x0000000D,
     0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000,
@@ -113,13 +113,13 @@ const uint32_t guest_output_bilinear_ps[] = {
     0x00006175, 0x0004003D, 0x0000001D, 0x0000488B, 0x00000C93, 0x0007004F,
     0x00000013, 0x000036B8, 0x0000488B, 0x0000488B, 0x00000000, 0x00000001,
     0x0004006E, 0x00000012, 0x000044F8, 0x000036B8, 0x00050041, 0x0000028F,
-    0x00004B4F, 0x0000118F, 0x00000A0B, 0x0004003D, 0x00000012, 0x00005926,
+    0x00004B4F, 0x00000CE9, 0x00000A0B, 0x0004003D, 0x00000012, 0x00005926,
     0x00004B4F, 0x00050082, 0x00000012, 0x00005AC4, 0x000044F8, 0x00005926,
     0x0004007C, 0x00000011, 0x00002986, 0x00005AC4, 0x0004003D, 0x00000096,
     0x00003A39, 0x00001160, 0x0004003D, 0x000001FC, 0x00004245, 0x0000133F,
     0x00050056, 0x000001FE, 0x000022CB, 0x00003A39, 0x00004245, 0x00040070,
     0x00000013, 0x000035BF, 0x00002986, 0x00050081, 0x00000013, 0x00003E2D,
-    0x000035BF, 0x0000061E, 0x00050041, 0x00000290, 0x00002E57, 0x0000118F,
+    0x000035BF, 0x0000061E, 0x00050041, 0x00000290, 0x00002E57, 0x00000CE9,
     0x00000A0E, 0x0004003D, 0x00000013, 0x00005140, 0x00002E57, 0x00050085,
     0x00000013, 0x00005F10, 0x00003E2D, 0x00005140, 0x00070058, 0x0000001D,
     0x0000240D, 0x000022CB, 0x00005F10, 0x00000002, 0x00000A0C, 0x00050051,
