@@ -31,7 +31,7 @@
     %v2float = OpTypeVector %float 2
 %_struct_1010 = OpTypeStruct %v2int %float
 %_ptr_PushConstant__struct_1010 = OpTypePointer PushConstant %_struct_1010
-       %4495 = OpVariable %_ptr_PushConstant__struct_1010 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_1010 PushConstant
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_v2int = OpTypePointer PushConstant %v2int
     %float_1 = OpConstant %float 1
@@ -60,11 +60,11 @@
       %18571 = OpLoad %v4float %gl_FragCoord
       %14008 = OpVectorShuffle %v2float %18571 %18571 0 1
       %17656 = OpConvertFToS %v2int %14008
-      %19279 = OpAccessChain %_ptr_PushConstant_v2int %4495 %int_0
+      %19279 = OpAccessChain %_ptr_PushConstant_v2int %3305 %int_0
       %22822 = OpLoad %v2int %19279
       %23312 = OpISub %v2int %17656 %22822
        %9938 = OpBitcast %v2uint %23312
-      %20997 = OpAccessChain %_ptr_PushConstant_float %4495 %int_1
+      %20997 = OpAccessChain %_ptr_PushConstant_float %3305 %int_1
       %22237 = OpLoad %float %20997
       %16454 = OpBitcast %uint %22237
        %6990 = OpBitcast %v2int %9938
@@ -196,7 +196,7 @@ const uint32_t guest_output_ffx_cas_sharpen_ps[] = {
     0x0000001D, 0x0004003B, 0x0000029A, 0x00000C93, 0x00000001, 0x00040017,
     0x00000013, 0x0000000D, 0x00000002, 0x0004001E, 0x000003F2, 0x00000012,
     0x0000000D, 0x00040020, 0x0000066F, 0x00000009, 0x000003F2, 0x0004003B,
-    0x0000066F, 0x0000118F, 0x00000009, 0x0004002B, 0x0000000C, 0x00000A0B,
+    0x0000066F, 0x00000CE9, 0x00000009, 0x0004002B, 0x0000000C, 0x00000A0B,
     0x00000000, 0x00040020, 0x0000028F, 0x00000009, 0x00000012, 0x0004002B,
     0x0000000D, 0x0000008A, 0x3F800000, 0x0004002B, 0x0000000D, 0x00000A0C,
     0x00000000, 0x0004002B, 0x0000000C, 0x00000A0E, 0x00000001, 0x00040020,
@@ -217,10 +217,10 @@ const uint32_t guest_output_ffx_cas_sharpen_ps[] = {
     0x000200F8, 0x00006175, 0x0004003D, 0x0000001D, 0x0000488B, 0x00000C93,
     0x0007004F, 0x00000013, 0x000036B8, 0x0000488B, 0x0000488B, 0x00000000,
     0x00000001, 0x0004006E, 0x00000012, 0x000044F8, 0x000036B8, 0x00050041,
-    0x0000028F, 0x00004B4F, 0x0000118F, 0x00000A0B, 0x0004003D, 0x00000012,
+    0x0000028F, 0x00004B4F, 0x00000CE9, 0x00000A0B, 0x0004003D, 0x00000012,
     0x00005926, 0x00004B4F, 0x00050082, 0x00000012, 0x00005B10, 0x000044F8,
     0x00005926, 0x0004007C, 0x00000011, 0x000026D2, 0x00005B10, 0x00050041,
-    0x0000028A, 0x00005205, 0x0000118F, 0x00000A0E, 0x0004003D, 0x0000000D,
+    0x0000028A, 0x00005205, 0x00000CE9, 0x00000A0E, 0x0004003D, 0x0000000D,
     0x000056DD, 0x00005205, 0x0004007C, 0x0000000B, 0x00004046, 0x000056DD,
     0x0004007C, 0x00000012, 0x00001B4E, 0x000026D2, 0x00050080, 0x00000012,
     0x0000381D, 0x00001B4E, 0x0000070B, 0x0004003D, 0x00000096, 0x00005A11,

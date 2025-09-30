@@ -39,7 +39,7 @@
 %gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
 %_struct_993 = OpTypeStruct %v2uint
 %_ptr_PushConstant__struct_993 = OpTypePointer PushConstant %_struct_993
-       %4495 = OpVariable %_ptr_PushConstant__struct_993 PushConstant
+       %3305 = OpVariable %_ptr_PushConstant__struct_993 PushConstant
         %int = OpTypeInt 32 1
       %int_0 = OpConstant %int 0
 %_ptr_PushConstant_v2uint = OpTypePointer PushConstant %v2uint
@@ -78,7 +78,7 @@
       %12914 = OpLabel
       %13761 = OpLoad %v3uint %gl_GlobalInvocationID
       %21717 = OpVectorShuffle %v2uint %13761 %13761 0 1
-       %7760 = OpAccessChain %_ptr_PushConstant_v2uint %4495 %int_0
+       %7760 = OpAccessChain %_ptr_PushConstant_v2uint %3305 %int_0
       %13378 = OpLoad %v2uint %7760
       %23437 = OpUGreaterThanEqual %v2bool %21717 %13378
       %23076 = OpAny %bool %23437
@@ -182,7 +182,7 @@ const uint32_t apply_gamma_pwl_fxaa_luma_cs[] = {
     0x00000003, 0x00040020, 0x00000291, 0x00000001, 0x00000014, 0x0004003B,
     0x00000291, 0x00000F48, 0x00000001, 0x0003001E, 0x000003E1, 0x00000011,
     0x00040020, 0x0000065E, 0x00000009, 0x000003E1, 0x0004003B, 0x0000065E,
-    0x0000118F, 0x00000009, 0x00040015, 0x0000000C, 0x00000020, 0x00000001,
+    0x00000CE9, 0x00000009, 0x00040015, 0x0000000C, 0x00000020, 0x00000001,
     0x0004002B, 0x0000000C, 0x00000A0B, 0x00000000, 0x00040020, 0x0000028E,
     0x00000009, 0x00000011, 0x00020014, 0x00000009, 0x00040017, 0x0000000F,
     0x00000009, 0x00000002, 0x00090019, 0x00000096, 0x0000000D, 0x00000001,
@@ -210,7 +210,7 @@ const uint32_t apply_gamma_pwl_fxaa_luma_cs[] = {
     0x00003B06, 0x000300F7, 0x00005445, 0x00000000, 0x000300FB, 0x00000A0A,
     0x00003272, 0x000200F8, 0x00003272, 0x0004003D, 0x00000014, 0x000035C1,
     0x00000F48, 0x0007004F, 0x00000011, 0x000054D5, 0x000035C1, 0x000035C1,
-    0x00000000, 0x00000001, 0x00050041, 0x0000028E, 0x00001E50, 0x0000118F,
+    0x00000000, 0x00000001, 0x00050041, 0x0000028E, 0x00001E50, 0x00000CE9,
     0x00000A0B, 0x0004003D, 0x00000011, 0x00003442, 0x00001E50, 0x000500AE,
     0x0000000F, 0x00005B8D, 0x000054D5, 0x00003442, 0x0004009A, 0x00000009,
     0x00005A24, 0x00005B8D, 0x000300F7, 0x0000477E, 0x00000002, 0x000400FA,
