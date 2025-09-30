@@ -1404,7 +1404,7 @@ void* X64HelperEmitter::EmitFrsqrteHelper() {
   je(L25, CodeGenerator::T_NEAR);
 
   L(L9);
-  lea(edx, ptr[rcx * 8]);
+  lea(edx, ptr[0 + rcx * 8]);
   shr(rax, 49);
   sub(ecx, 1023);
   and_(edx, 8);
