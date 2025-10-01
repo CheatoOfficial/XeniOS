@@ -94,7 +94,10 @@ struct NtSystemClock {
       domain_fresh_ == Domain::Host,
       std::chrono::local_time<std::chrono::system_clock::duration>>
   to_local(const time_point& tp) {
-    return std::chrono::current_zone()->to_local(to_sys(tp));
+    // Return UTC time instead of local to avoid Wine timezone API issues
+    auto sys_tp = to_sys(tp);
+    return std::chrono::local_time<std::chrono::system_clock::duration>(
+        sys_tp.time_since_epoch());
   }
 
   template <Domain domain_fresh_ = domain_>
