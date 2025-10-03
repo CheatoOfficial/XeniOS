@@ -804,6 +804,14 @@ class BaseBuildCommand(Command):
             help="Skips running premake before building.")
 
     def execute(self, args, pass_args, cwd):
+        # Check Vulkan SDK availability
+        if not os.environ.get("VULKAN_SDK"):
+            print("ERROR: Vulkan SDK not found!"
+                  "\nPlease install Vulkan SDK from:"
+                  "\nhttps://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+                  f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
+            return 1
+
         if not args["no_premake"]:
             print("- running premake...")
             run_platform_premake(cc=args["cc"])
