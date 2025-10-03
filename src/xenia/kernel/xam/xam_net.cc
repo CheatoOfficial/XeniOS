@@ -173,6 +173,9 @@ XNetStartupParams xnet_startup_params = {0};
 
 dword_result_t NetDll_XNetStartup_entry(dword_t caller,
                                         pointer_t<XNetStartupParams> params) {
+  XELOGI("NetDll_XNetStartup: caller={}, params={:08X}", caller.value(),
+         params.guest_address());
+
   if (params) {
     assert_true(params->cfgSizeOfStruct == sizeof(XNetStartupParams));
     std::memcpy(&xnet_startup_params, params, sizeof(XNetStartupParams));
@@ -248,38 +251,45 @@ DECLARE_XAM_EXPORT1(NetDll_XNetRandom, kNetworking, kStub);
 
 dword_result_t NetDll_WSAStartup_entry(dword_t caller, word_t version,
                                        pointer_t<X_WSADATA> data_ptr) {
-// TODO(benvanik): abstraction layer needed.
+  // TODO(benvanik): abstraction layer needed.
+  XELOGI("NetDll_WSAStartup: version={:04X}, data_ptr={:08X}", version.value(),
+         data_ptr.guest_address());
+
+  int ret = 0;
+
 #ifdef XE_PLATFORM_WIN32
   WSADATA wsaData;
   ZeroMemory(&wsaData, sizeof(WSADATA));
-  int ret = WSAStartup(version, &wsaData);
-
-  auto data_out = kernel_state()->memory()->TranslateVirtual(data_ptr);
+  ret = WSAStartup(version, &wsaData);
+#endif
 
   if (data_ptr) {
+    auto data_out = kernel_state()->memory()->TranslateVirtual(data_ptr);
+
+#ifdef XE_PLATFORM_WIN32
     data_ptr->version = wsaData.wVersion;
     data_ptr->version_high = wsaData.wHighVersion;
-    std::memcpy(&data_ptr->description, wsaData.szDescription, 0x100);
-    std::memcpy(&data_ptr->system_status, wsaData.szSystemStatus, 0x80);
     data_ptr->max_sockets = wsaData.iMaxSockets;
     data_ptr->max_udpdg = wsaData.iMaxUdpDg;
+    std::memcpy(&data_ptr->description, wsaData.szDescription, 0x100);
+    std::memcpy(&data_ptr->system_status, wsaData.szSystemStatus, 0x80);
+#else
+    // Match Windows behavior with reasonable values
+    data_ptr->version = version.value();
+    data_ptr->version_high = version.value();
+    data_ptr->max_sockets = 100;
+    data_ptr->max_udpdg = 1024;
+    // WinSock 2.2 typically returns empty strings for these fields
+    std::memset(&data_ptr->description, 0, 0x100);
+    std::memset(&data_ptr->system_status, 0, 0x80);
+#endif
 
     // Some games (5841099F) want this value round-tripped - they'll compare if
     // it changes and bugcheck if it does.
-    uint32_t vendor_ptr = xe::load_and_swap<uint32_t>(data_out + 0x190);
-    xe::store_and_swap<uint32_t>(data_out + 0x190, vendor_ptr);
+    // vendor_info_ptr is at offset 0x18A (after max_udpdg at 0x188)
+    uint32_t vendor_ptr = xe::load_and_swap<uint32_t>(data_out + 0x18A);
+    xe::store_and_swap<uint32_t>(data_out + 0x18A, vendor_ptr);
   }
-#else
-  int ret = 0;
-  if (data_ptr) {
-    // Guess these values!
-    data_ptr->version = version.value();
-    data_ptr->description[0] = '\0';
-    data_ptr->system_status[0] = '\0';
-    data_ptr->max_sockets = 100;
-    data_ptr->max_udpdg = 1024;
-  }
-#endif
 
   // DEBUG
   /*
@@ -650,6 +660,9 @@ DECLARE_XAM_EXPORT1(NetDll_inet_addr, kNetworking, kImplemented);
 
 dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
                                    dword_t protocol) {
+  XELOGI("NetDll_socket: af={}, type={}, protocol={}", af.value(), type.value(),
+         protocol.value());
+
   XSocket* socket = new XSocket(kernel_state());
   X_STATUS result = socket->Initialize(XSocket::AddressFamily((uint32_t)af),
                                        XSocket::Type((uint32_t)type),
@@ -659,9 +672,11 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
     socket->Release();
 
     XThread::SetLastError(socket->GetLastWSAError());
+    XELOGI("NetDll_socket: failed with error");
     return -1;
   }
 
+  XELOGI("NetDll_socket: returning handle {:08X}", socket->handle());
   return socket->handle();
 }
 DECLARE_XAM_EXPORT1(NetDll_socket, kNetworking, kImplemented);
@@ -702,6 +717,9 @@ DECLARE_XAM_EXPORT1(NetDll_shutdown, kNetworking, kImplemented);
 dword_result_t NetDll_setsockopt_entry(dword_t caller, dword_t socket_handle,
                                        dword_t level, dword_t optname,
                                        lpvoid_t optval_ptr, dword_t optlen) {
+  XELOGI("NetDll_setsockopt: socket={:08X}, level={:04X}, optname={:04X}",
+         socket_handle.value(), level.value(), optname.value());
+
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -710,7 +728,10 @@ dword_result_t NetDll_setsockopt_entry(dword_t caller, dword_t socket_handle,
   }
 
   X_STATUS status = socket->SetOption(level, optname, optval_ptr, optlen);
-  return XSUCCEEDED(status) ? 0 : -1;
+  int result = XSUCCEEDED(status) ? 0 : -1;
+  XELOGI("NetDll_setsockopt: {}, returning {}",
+         XSUCCEEDED(status) ? "success" : "failed", result);
+  return result;
 }
 DECLARE_XAM_EXPORT1(NetDll_setsockopt, kNetworking, kImplemented);
 
@@ -732,6 +753,9 @@ DECLARE_XAM_EXPORT1(NetDll_getsockopt, kNetworking, kImplemented);
 
 dword_result_t NetDll_ioctlsocket_entry(dword_t caller, dword_t socket_handle,
                                         dword_t cmd, lpvoid_t arg_ptr) {
+  XELOGI("NetDll_ioctlsocket: socket={:08X}, cmd={:08X}", socket_handle.value(),
+         cmd.value());
+
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -742,6 +766,7 @@ dword_result_t NetDll_ioctlsocket_entry(dword_t caller, dword_t socket_handle,
   X_STATUS status = socket->IOControl(cmd, arg_ptr);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
+    XELOGI("NetDll_ioctlsocket: failed");
     return -1;
   }
 
@@ -753,20 +778,30 @@ DECLARE_XAM_EXPORT1(NetDll_ioctlsocket, kNetworking, kImplemented);
 dword_result_t NetDll_bind_entry(dword_t caller, dword_t socket_handle,
                                  pointer_t<XSOCKADDR_IN> name,
                                  dword_t namelen) {
+  XELOGI("NetDll_bind: socket={:08X}, namelen={}", socket_handle.value(),
+         namelen.value());
+
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
     XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    XELOGE("NetDll_bind: failed - invalid socket");
     return -1;
   }
 
   N_XSOCKADDR_IN native_name(name);
+  XELOGI(
+      "NetDll_bind: calling socket->Bind, family={}, port={:04X}, addr={:08X}",
+      native_name.sin_family, uint16_t(native_name.sin_port),
+      uint32_t(native_name.sin_addr));
   X_STATUS status = socket->Bind(&native_name, namelen);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
+    XELOGE("NetDll_bind: failed with status {:08X}", status);
     return -1;
   }
 
+  XELOGI("NetDll_bind: success, port={}", socket->bound_port());
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_bind, kNetworking, kImplemented);
@@ -899,6 +934,9 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
                                  pointer_t<x_fd_set> writefds,
                                  pointer_t<x_fd_set> exceptfds,
                                  lpvoid_t timeout_ptr) {
+  XELOGI("NetDll_select: nfds={}, timeout={:08X}", nfds.value(),
+         timeout_ptr.guest_address());
+
   host_set host_readfds = {0};
   fd_set native_readfds = {0};
   if (readfds) {
@@ -994,6 +1032,10 @@ dword_result_t NetDll_recvfrom_entry(dword_t caller, dword_t socket_handle,
 
   if (ret == -1) {
     XThread::SetLastError(socket->GetLastWSAError());
+  } else if (ret > 0) {
+    // Only log when we actually receive data
+    XELOGD("NetDll_recvfrom: socket={:08X}, received {} bytes",
+           socket_handle.value(), ret);
   }
 
   return ret;
@@ -1019,6 +1061,9 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
                                    dword_t flags,
                                    pointer_t<XSOCKADDR_IN> to_ptr,
                                    dword_t to_len) {
+  XELOGD("NetDll_sendto: socket={:08X}, len={}", socket_handle.value(),
+         buf_len.value());
+
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
@@ -1027,7 +1072,9 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
   }
 
   N_XSOCKADDR_IN native_to(to_ptr);
-  return socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+  int ret = socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
+  XELOGD("NetDll_sendto: returned {}", ret);
+  return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_sendto, kNetworking, kImplemented);
 

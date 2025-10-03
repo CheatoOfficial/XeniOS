@@ -11,6 +11,7 @@
 
 #include <cstring>
 
+#include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/xam_module.h"
@@ -25,6 +26,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -91,10 +93,27 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     return X_STATUS_SUCCESS;
   }
 
-  int ret =
-      setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
+  // Translate Xbox socket level to native
+  int native_level = level;
+  if (level == 0xFFFF) {  // Xbox SOL_SOCKET
+    native_level = SOL_SOCKET;
+  }
+
+  // Translate Xbox socket options to native
+  int native_optname = optname;
+  if (level == 0xFFFF) {
+    switch (optname) {
+      case 0x0020:  // Xbox SO_BROADCAST
+        native_optname = SO_BROADCAST;
+        break;
+        // Add more translations as needed
+    }
+  }
+
+  int ret = setsockopt(native_handle_, native_level, native_optname,
+                       (char*)optval_ptr, optlen);
   if (ret < 0) {
-    // TODO: WSAGetLastError()
+    XELOGE("XSocket::SetOption: setsockopt failed, errno={}", errno);
     return X_STATUS_UNSUCCESSFUL;
   }
 
@@ -113,10 +132,29 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
     // TODO: Get last error
     return X_STATUS_UNSUCCESSFUL;
   }
-
   return X_STATUS_SUCCESS;
 #elif XE_PLATFORM_LINUX
-  return X_STATUS_UNSUCCESSFUL;
+  // Translate Xbox/Windows ioctl commands to Linux equivalents
+  int native_cmd = cmd;
+  switch (cmd) {
+    case 0x8004667E:  // Windows FIONBIO - set non-blocking mode
+      native_cmd = FIONBIO;
+      break;
+    case 0x4004667F:  // Windows FIONREAD - get bytes available
+      native_cmd = FIONREAD;
+      break;
+    default:
+      XELOGW("XSocket::IOControl: unknown cmd={:08X}, passing through", cmd);
+      break;
+  }
+
+  int ret = ioctl(native_handle_, native_cmd, arg_ptr);
+  if (ret < 0) {
+    XELOGE("XSocket::IOControl: ioctl failed, cmd={:08X} -> {:08X}, errno={}",
+           cmd, native_cmd, errno);
+    return X_STATUS_UNSUCCESSFUL;
+  }
+  return X_STATUS_SUCCESS;
 #endif
 }
 
@@ -130,8 +168,26 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 }
 
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
+  // On Linux and Windows (when running under Wine), ports < 1024 require root
+  // privileges. Remap to port + 10000 to avoid privilege issues.
+  // Note: sin_port is xe::be<uint16_t> which automatically handles endianness,
+  // so we use it directly without ntohs/htons.
+  uint16_t original_port = uint16_t(name->sin_port);
+  if (original_port < 1024) {
+    uint16_t new_port = original_port + 10000;
+    name->sin_port = new_port;
+    XELOGW("XSocket::Bind: port {} requires privileges, remapping to port {}",
+           original_port, new_port);
+  }
+
   int ret = bind(native_handle_, (sockaddr*)name, name_len);
+
   if (ret < 0) {
+#ifdef XE_PLATFORM_WIN32
+    XELOGE("XSocket::Bind: bind() failed with WSA error {}", WSAGetLastError());
+#else
+    XELOGE("XSocket::Bind: bind() failed with errno={}", errno);
+#endif
     return X_STATUS_UNSUCCESSFUL;
   }
 
