@@ -830,6 +830,9 @@ void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
     default:
       break;
   }
+  if (presenter_) {
+    presenter_->RequestUIPaintFromUIThread();
+  }
 }
 
 void ImGuiDrawer::UpdateMousePosition(float x, float y) {

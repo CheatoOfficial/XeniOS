@@ -484,8 +484,6 @@ VirtualKey GTKWindow::TranslateVirtualKey(guint keyval) {
       return VirtualKey::kSpace;
     case GDK_KEY_Caps_Lock:
       return VirtualKey::kCapital;
-    case GDK_KEY_Escape:
-      return VirtualKey::kEscape;
     case GDK_KEY_F1:
       return VirtualKey::kF1;
     case GDK_KEY_F2:
@@ -521,6 +519,8 @@ VirtualKey GTKWindow::TranslateVirtualKey(guint keyval) {
     case GDK_KEY_Pause:
     case GDK_KEY_Break:
       return VirtualKey::kPause;
+    case GDK_KEY_Escape:
+      return VirtualKey::kEscape;
     default:
       XELOGW("Unhandled key code: {}", keyval);
       return VirtualKey(keyval);

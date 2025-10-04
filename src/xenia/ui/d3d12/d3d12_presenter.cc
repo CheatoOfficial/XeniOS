@@ -1068,6 +1068,12 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
       0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
                                      ? DXGI_PRESENT_ALLOW_TEARING
                                      : 0));
+  static bool logged_present = false;
+  if (!logged_present) {
+    XELOGI("D3D12Presenter: First Present() call, result: 0x{:08X}",
+           present_result);
+    logged_present = true;
+  }
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.

@@ -121,9 +121,131 @@ vs_version = import_vs_environment()
 
 default_branch = "canary_experimental"
 
+def setup_vulkan_sdk():
+    """Setup Vulkan SDK environment variables if not already set.
+
+    Returns:
+        True if Vulkan SDK is available and valid, False otherwise.
+    """
+    # Check if VULKAN_SDK is already set and valid
+    existing_vulkan_sdk = os.environ.get("VULKAN_SDK")
+    if existing_vulkan_sdk:
+        # Validate that the path exists
+        if os.path.exists(existing_vulkan_sdk):
+            # Check if spirv-opt is accessible
+            if has_bin("spirv-opt"):
+                print(f"VULKAN_SDK is set to {existing_vulkan_sdk}")
+                return True
+            print(f"WARNING: VULKAN_SDK is set to {existing_vulkan_sdk} but spirv-opt not found in PATH")
+        else:
+            print(f"WARNING: VULKAN_SDK is set to {existing_vulkan_sdk} but directory does not exist")
+        return False
+
+    if sys.platform != "win32":
+        # On Linux, find spirv-opt in PATH and set VULKAN_SDK based on its location
+        spirv_opt_path = get_bin("spirv-opt")
+        if spirv_opt_path:
+            # spirv-opt is typically in $VULKAN_SDK/bin/, so get parent directory
+            spirv_bin_dir = os.path.dirname(spirv_opt_path)
+            vulkan_sdk = os.path.dirname(spirv_bin_dir)
+            os.environ["VULKAN_SDK"] = vulkan_sdk
+            print(f"Found Vulkan SDK at {vulkan_sdk} (from spirv-opt location)")
+            return True
+        return False
+
+    # Windows: Check if Vulkan SDK is installed at the default location
+    vulkan_base = "C:\\VulkanSDK"
+    if not os.path.exists(vulkan_base):
+        return False
+
+    # Get the first (latest) version directory
+    try:
+        subdirs = [d for d in os.listdir(vulkan_base)
+                   if os.path.isdir(os.path.join(vulkan_base, d))]
+        if not subdirs:
+            return False
+
+        vulkan_sdk = os.path.join(vulkan_base, subdirs[0])
+        vulkan_bin = os.path.join(vulkan_sdk, "Bin")
+
+        os.environ["VULKAN_SDK"] = vulkan_sdk
+        os.environ["PATH"] = f"{vulkan_bin}{os.pathsep}{os.environ['PATH']}"
+
+        print(f"Found Vulkan SDK at {vulkan_sdk}")
+        return True
+    except Exception:
+        return False
+
+
+def setup_qt():
+    """Setup Qt environment variables if not already set.
+
+    Returns:
+        True if Qt is available and valid, False otherwise.
+    """
+    # Check if QT_DIR is already set and valid
+    existing_qt_dir = os.environ.get("QT_DIR")
+    if existing_qt_dir:
+        # Validate that the path exists
+        if os.path.exists(existing_qt_dir):
+            print(f"QT_DIR is set to {existing_qt_dir}")
+            return True
+        else:
+            print(f"WARNING: QT_DIR is set to {existing_qt_dir} but directory does not exist")
+        return False
+
+    if sys.platform != "win32":
+        # On Linux, check for Qt6 via pkg-config or common install locations
+        return False
+
+    # Windows: Check if Qt is installed at the default location
+    qt_base = "C:\\Qt"
+    if not os.path.exists(qt_base):
+        return False
+
+    # Get the first (latest) version directory
+    try:
+        # List all version directories (e.g., 6.8.1, 6.7.0)
+        version_dirs = [d for d in os.listdir(qt_base)
+                        if os.path.isdir(os.path.join(qt_base, d)) and d[0].isdigit()]
+        if not version_dirs:
+            return False
+
+        # Sort versions to get the latest (simple string sort works for semantic versions)
+        version_dirs.sort(reverse=True)
+        qt_version_dir = os.path.join(qt_base, version_dirs[0])
+
+        # Look for msvc compiler directory (e.g., msvc2022_64, msvc2019_64)
+        compiler_dirs = [d for d in os.listdir(qt_version_dir)
+                         if os.path.isdir(os.path.join(qt_version_dir, d)) and d.startswith("msvc")]
+        if not compiler_dirs:
+            return False
+
+        # Prefer msvc2022_64 if available, otherwise use the first available
+        if "msvc2022_64" in compiler_dirs:
+            compiler_dir = "msvc2022_64"
+        else:
+            compiler_dirs.sort(reverse=True)
+            compiler_dir = compiler_dirs[0]
+
+        qt_dir = os.path.join(qt_version_dir, compiler_dir)
+        os.environ["QT_DIR"] = qt_dir
+
+        print(f"Found Qt at {qt_dir}")
+        return True
+    except Exception:
+        return False
+
+
 def main():
     # Add self to the root search path.
     sys.path.insert(0, self_path)
+
+    # Setup Vulkan SDK and check if available
+    vulkan_sdk_available = setup_vulkan_sdk()
+
+    # Setup Qt (optional, only needed for Qt-based UI)
+    qt_available = setup_qt()
 
     # Augment path to include our fancy things.
     os.environ["PATH"] += os.pathsep + os.pathsep.join([
@@ -564,6 +686,63 @@ def get_build_bin_path(args):
     return os.path.join(self_path, "build", "bin", platform.capitalize(), args["config"].capitalize())
 
 
+def run_windeployqt(bin_path, config):
+    """Runs windeployqt to copy Qt DLLs to the build output directory.
+
+    Args:
+      bin_path: Path to the directory containing the built executable.
+      config: Build configuration (debug, checked, or release).
+
+    Returns:
+      True if windeployqt succeeded or was not needed, False on error.
+    """
+    if sys.platform != "win32":
+        return True
+
+    qt_dir = os.environ.get("QT_DIR")
+    if not qt_dir:
+        # Qt not configured, skip
+        return True
+
+    windeployqt_path = os.path.join(qt_dir, "bin", "windeployqt.exe")
+    if not os.path.exists(windeployqt_path):
+        print(f"WARNING: windeployqt not found at {windeployqt_path}")
+        return True
+
+    # Find the xenia executable
+    exe_path = os.path.join(bin_path, "xenia_edge.exe")
+    if not os.path.exists(exe_path):
+        # Executable not found, might not be building xenia-app
+        return True
+
+    print(f"\n- deploying Qt dependencies to {bin_path}...")
+
+    # Determine if we need debug or release Qt DLLs
+    # Debug and Checked builds need debug Qt DLLs
+    deploy_args = [
+        windeployqt_path,
+        "--no-translations",  # Don't copy translation files
+        "--no-system-d3d-compiler",  # Don't copy D3D compiler
+        "--no-opengl-sw",  # Don't copy software OpenGL renderer
+    ]
+
+    if config.lower() in ["debug", "checked"]:
+        deploy_args.append("--debug")
+    else:
+        deploy_args.append("--release")
+
+    deploy_args.append(exe_path)
+
+    result = subprocess.call(deploy_args)
+
+    if result == 0:
+        print("  Qt dependencies deployed successfully")
+        return True
+    else:
+        print(f"WARNING: windeployqt failed with exit code {result}")
+        return False
+
+
 def create_clion_workspace():
     """Creates some basic workspace information inside the .idea directory for first start.
     """
@@ -892,6 +1071,10 @@ class BuildCommand(BaseBuildCommand):
         result = super(BuildCommand, self).execute(args, pass_args, cwd)
 
         if not result:
+            # Run windeployqt to copy Qt DLLs
+            bin_path = get_build_bin_path(args)
+            run_windeployqt(bin_path, args["config"])
+
             print(f"{bcolors.OKCYAN}Success!{bcolors.ENDC}")
         else:
             print(f"{bcolors.FAIL}Failed!{bcolors.ENDC}")
@@ -1029,9 +1212,17 @@ class BuildShadersCommand(Command):
             print("Building Vulkan SPIR-V shaders...")
 
             # Get the SPIR-V tool paths.
-            vulkan_sdk_path = os.environ["VULKAN_SDK"]
+            vulkan_sdk_path = os.environ.get("VULKAN_SDK")
+            if not vulkan_sdk_path:
+                print("ERROR: VULKAN_SDK environment variable is not set")
+                if sys.platform == "win32":
+                    print("Please install Vulkan SDK from:")
+                    print("https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe")
+                else:
+                    print("Please install Vulkan SDK and set VULKAN_SDK environment variable")
+                return 1
             if not os.path.exists(vulkan_sdk_path):
-                print("ERROR: could not find the Vulkan SDK in $VULKAN_SDK")
+                print(f"ERROR: could not find the Vulkan SDK at {vulkan_sdk_path}")
                 return 1
             # bin is lowercase on Linux (even though it's uppercase on Windows).
             vulkan_bin_path = os.path.join(vulkan_sdk_path, "bin")

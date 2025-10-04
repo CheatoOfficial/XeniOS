@@ -43,7 +43,7 @@ project("xenia-app")
   local_platform_files()
   files({
     "../base/main_init_"..platform_suffix..".cc",
-    "../ui/windowed_app_main_"..platform_suffix..".cc",
+    "../ui/windowed_app_main_qt.cc",
   })
 
   resincludedirs({
@@ -85,6 +85,7 @@ project("xenia-app")
     files({
       "main_resources.rc",
     })
+    linkoptions({"/ENTRY:mainCRTStartup"})
 
   filter({"architecture:x86_64", "files:../base/main_init_"..platform_suffix..".cc"})
     vectorextensions("SSE2")  -- Disable AVX for main_init_win.cc so our AVX check doesn't use AVX instructions.

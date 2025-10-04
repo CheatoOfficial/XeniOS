@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <condition_variable>
@@ -956,6 +957,10 @@ class Presenter {
 
   std::array<GuestOutputProperties, kGuestOutputMailboxSize>
       guest_output_properties_;
+
+#if XE_PLATFORM_LINUX
+  std::chrono::steady_clock::time_point linux_ui_tick_last_paint_time_;
+#endif
   // Accessible only by refreshing, whether the last refresh contained an image
   // rather than being blank.
   bool guest_output_active_last_refresh_ = false;

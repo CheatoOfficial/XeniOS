@@ -16,6 +16,7 @@
 #include "xenia/ui/window.h"
 
 #if XE_PLATFORM_WIN32
+#include "xenia/ui/surface_win.h"
 #include "xenia/ui/window_win.h"
 #endif
 
@@ -1208,7 +1209,12 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
 #if XE_PLATFORM_WIN32
   HMONITOR surface_new_win32_monitor = nullptr;
   if (surface_) {
-    HWND hwnd = static_cast<const Win32Window*>(window_)->hwnd();
+    // Get HWND from the surface instead of assuming Win32Window
+    // This supports both Win32Window and QtWindow
+    HWND hwnd = nullptr;
+    if (surface_->GetType() == Surface::kTypeIndex_Win32Hwnd) {
+      hwnd = static_cast<const Win32HwndSurface*>(surface_)->hwnd();
+    }
     // The HWND may be non-existent if the window has been closed and destroyed
     // (the HWND, not the xe::ui::Window) already.
     if (hwnd) {
@@ -1382,6 +1388,20 @@ void Presenter::WaitForUITickFromUIThread() {
     }
     dxgi_ui_tick_signal_condition_.wait(dxgi_ui_tick_lock);
   }
+#elif XE_PLATFORM_LINUX
+  if (!AreUITicksNeededFromUIThread()) {
+    return;
+  }
+  // On Linux, implement timer-based rate limiting at 60 FPS to match game frame
+  // rate.
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      now - linux_ui_tick_last_paint_time_);
+  constexpr auto frame_time = std::chrono::microseconds(16667);  // ~60 FPS
+  if (elapsed < frame_time) {
+    std::this_thread::sleep_for(frame_time - elapsed);
+  }
+  linux_ui_tick_last_paint_time_ = std::chrono::steady_clock::now();
 #endif  // XE_PLATFORM
 }
 
