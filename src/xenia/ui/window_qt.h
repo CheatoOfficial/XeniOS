@@ -50,6 +50,8 @@ class QtWindow : public Window {
 
   void ApplyNewFullscreen() override;
   void ApplyNewTitle() override;
+  void LoadAndApplyIcon(const void* buffer, size_t size,
+                        bool can_apply_state_in_current_phase) override;
   void ApplyNewMainMenu(MenuItem* old_main_menu) override;
   void ApplyNewCursorVisibility(
       CursorVisibility old_cursor_visibility) override;

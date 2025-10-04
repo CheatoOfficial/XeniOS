@@ -13,9 +13,11 @@
 #include <QCloseEvent>
 #include <QCursor>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QMenuBar>
 #include <QMouseEvent>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QThread>
 #include <QTimer>
@@ -279,6 +281,28 @@ void QtWindow::ApplyNewTitle() {
   if (qwindow_) {
     qwindow_->setWindowTitle(
         QString::fromUtf8(GetTitle().data(), GetTitle().size()));
+  }
+}
+
+void QtWindow::LoadAndApplyIcon(const void* buffer, size_t size,
+                                bool can_apply_state_in_current_phase) {
+  if (!qwindow_) {
+    return;
+  }
+
+  bool reset = !buffer || !size;
+
+  if (reset) {
+    // Reset to default/no icon
+    qwindow_->setWindowIcon(QIcon());
+  } else {
+    // Load icon from buffer (typically from game executable)
+    QPixmap pixmap;
+    if (pixmap.loadFromData(static_cast<const uchar*>(buffer),
+                            static_cast<uint>(size))) {
+      QIcon icon(pixmap);
+      qwindow_->setWindowIcon(icon);
+    }
   }
 }
 
