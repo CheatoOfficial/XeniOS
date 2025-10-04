@@ -12,15 +12,6 @@ project("xenia-ui")
   local_platform_files()
   removefiles({
     "*_demo.cc",
-    -- Exclude old platform-specific implementations in favor of Qt
-    "window_gtk.cc",
-    "window_win.cc",
-    "file_picker_gtk.cc",
-    "file_picker_win.cc",
-    "windowed_app_context_gtk.cc",
-    "windowed_app_context_win.cc",
-    "windowed_app_main_posix.cc",
-    "windowed_app_main_win.cc",
   })
   if os.istarget("android") then
     filter("platforms:Android-*")

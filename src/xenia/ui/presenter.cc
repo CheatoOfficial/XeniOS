@@ -17,7 +17,6 @@
 
 #if XE_PLATFORM_WIN32
 #include "xenia/ui/surface_win.h"
-#include "xenia/ui/window_win.h"
 #endif
 
 // On Windows, InvalidateRect causes WM_PAINT to be sent quite quickly, so
