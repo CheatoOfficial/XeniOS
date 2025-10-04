@@ -80,12 +80,12 @@ bool QtFilePicker::Show(Window* parent_window) {
         QString::fromUtf8(dir_str.c_str(), static_cast<int>(dir_str.size()));
   }
 
+  // Try native dialog; Qt will automatically fall back to its own dialog if
+  // native is unavailable
   QString file_path = QFileDialog::getOpenFileName(
       qt_window ? qt_window->qwindow() : nullptr, title, initial_dir,
-      QString(),                        // filter
-      nullptr,                          // selected filter
-      QFileDialog::DontUseNativeDialog  // Use Qt dialog to avoid native API
-                                        // issues
+      QString(),  // filter
+      nullptr     // selected filter
   );
 
   if (!file_path.isEmpty()) {
