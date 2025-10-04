@@ -122,6 +122,7 @@ filter({"configurations:Release", "platforms:not Windows"})
   })
 
 filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
+  symbols("Off")  -- Disable PDB generation for release builds
   linktimeoptimization("On")
   buildoptions({
     "/Gw",

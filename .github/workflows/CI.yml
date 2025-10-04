@@ -159,10 +159,9 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          foreach ($file in 'build\bin\Windows\Release\xenia_edge.exe','build\bin\Windows\Release\xenia_edge.pdb') {
-            if ((get-item $file).Length -le 100000) {
-              echo "::error::$file is too small."
-            }
+          $binary = 'build\bin\Windows\Release\xenia_edge.exe'
+          if ((get-item $binary).Length -le 100000) {
+            echo "::error::$binary is too small."
           }
           robocopy . build\bin\Windows\Release LICENSE /r:0 /w:0
           # Copy all files and directories (Qt DLLs, plugins, etc.) excluding build artifacts
