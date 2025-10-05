@@ -1,0 +1,15 @@
+<!--
+  Qt Resource File for UI Assets
+
+  To regenerate ui_resources_qrc.cpp after modifying this file:
+  $ cd src/xenia/ui
+  $ rcc ui_resources.qrc -name ui_resources -o ui_resources_qrc.cpp
+
+  The -name parameter is required to generate the correct function name
+  (qInitResources_ui_resources) for use with Q_INIT_RESOURCE macro.
+-->
+<RCC>
+    <qresource prefix="/xenia">
+        <file alias="icon.png">../../../assets/icon/128.png</file>
+    </qresource>
+</RCC>

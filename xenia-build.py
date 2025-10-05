@@ -1688,6 +1688,11 @@ class NukeCommand(Command):
         return 0
 
 
+# Generated files that should be excluded from linting/formatting
+GENERATED_FILES = [
+    "src/xenia/ui/ui_resources_qrc.cpp",  # Qt resource file
+]
+
 def find_xenia_source_files():
     """Gets all xenia source files in the project.
 
@@ -1697,7 +1702,8 @@ def find_xenia_source_files():
     return [os.path.join(root, name)
             for root, dirs, files in os.walk("src")
             for name in files
-            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))]
+            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))
+            and os.path.join(root, name) not in GENERATED_FILES]
 
 
 class LintCommand(Command):
@@ -1769,14 +1775,18 @@ class LintCommand(Command):
         else:
             print("- git-clang-format --diff")
             if os.path.exists(difftemp): os.remove(difftemp)
-            ret = shell_call([
+            cmd = [
                 sys.executable,
                 "third_party/clang-format/git-clang-format",
                 f"--binary={clang_format_binary}",
                 f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
                 "--style=file",
                 "--diff",
-                ], throw_on_error=False, stdout_path=difftemp)
+            ]
+            # Exclude generated files
+            for generated_file in GENERATED_FILES:
+                cmd.append(f":(exclude){generated_file}")
+            ret = shell_call(cmd, throw_on_error=False, stdout_path=difftemp)
             with open(difftemp) as f:
                 contents = f.read()
                 not_modified = "no modified files" in contents
@@ -1786,14 +1796,18 @@ class LintCommand(Command):
             if not not_modified:
                 any_errors = True
                 print("")
-                shell_call([
+                cmd = [
                     sys.executable,
                     "third_party/clang-format/git-clang-format",
                     f"--binary={clang_format_binary}",
                     f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
                     "--style=file",
                     "--diff",
-                    ])
+                ]
+                # Exclude generated files
+                for generated_file in GENERATED_FILES:
+                    cmd.append(f":(exclude){generated_file}")
+                shell_call(cmd)
                 print("ERROR: 1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
             else:
@@ -1844,12 +1858,16 @@ class FormatCommand(Command):
                 return 0
         else:
             print("- git-clang-format")
-            shell_call([
+            cmd = [
                 sys.executable,
                 "third_party/clang-format/git-clang-format",
                 f"--binary={clang_format_binary}",
                 f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
-                ])
+            ]
+            # Exclude generated files
+            for generated_file in GENERATED_FILES:
+                cmd.append(f":(exclude){generated_file}")
+            shell_call(cmd)
             print("")
 
         return 0

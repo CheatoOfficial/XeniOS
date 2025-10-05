@@ -37,6 +37,9 @@
 #include "xenia/ui/surface_win.h"
 #endif
 
+// Initialize Qt resources - must be outside of namespace scope
+inline void InitializeUIResources() { Q_INIT_RESOURCE(ui_resources); }
+
 namespace xe {
 namespace ui {
 
@@ -172,9 +175,20 @@ QtWindow::~QtWindow() {
 }
 
 bool QtWindow::OpenImpl() {
+  // Initialize Qt resources (needed for app icon)
+  InitializeUIResources();
+
   qwindow_ = new QtWindowInternal(this);
   qwindow_->setWindowTitle(
       QString::fromUtf8(GetTitle().data(), GetTitle().size()));
+
+  // Set default application icon from resources
+  QIcon app_icon(":/xenia/icon.png");
+  if (!app_icon.isNull()) {
+    qwindow_->setWindowIcon(app_icon);
+  } else {
+    XELOGW("Failed to load window icon from Qt resources");
+  }
 
   QWidget* central_widget = new QWidget(qwindow_);
   qwindow_->setCentralWidget(central_widget);

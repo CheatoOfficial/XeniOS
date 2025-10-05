@@ -33,3 +33,6 @@ project("xenia-ui")
       "X11-xcb",
       "fontconfig"
     })
+    files({
+      "ui_resources_qrc.cpp",
+    })
