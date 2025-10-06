@@ -68,7 +68,7 @@ const std::map<std::string, std::vector<std::string>>& GetKnownEnumOptions() {
 #endif
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
-      {"render_target_path_d3d12", {"any", "rtvfull", "rtvsingle"}},
+      {"render_target_path_d3d12", {"any", "rtv", "rov"}},
       {"render_target_path_vulkan", {"any", "fbo", "fsi"}},
       {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},
       {"postprocess_scaling_and_sharpening",
