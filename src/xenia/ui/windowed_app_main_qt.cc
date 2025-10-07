@@ -30,6 +30,9 @@ int main(int argc, char** argv) {
 
   QApplication qt_app(argc, argv);
 
+  // Use Qt's own menu bar instead of native on all platforms
+  qt_app.setAttribute(Qt::AA_DontUseNativeMenuBar);
+
   int result;
 
   {
