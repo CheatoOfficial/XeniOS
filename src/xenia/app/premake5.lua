@@ -132,3 +132,22 @@ project("xenia-app")
     if not os.isfile(user_file) then
       debugdir(project_root)
     end
+
+  -- Run windeployqt as post-build event to copy Qt DLLs
+  filter({"platforms:Windows", "configurations:Debug or Checked"})
+    local qt_dir = os.getenv("QT_DIR")
+    if qt_dir then
+      local windeployqt = path.translate(path.join(qt_dir, "bin", "windeployqt.exe"), "\\")
+      postbuildcommands {
+        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --debug --no-translations --no-system-d3d-compiler --no-opengl-sw "$(TargetPath)"'
+      }
+    end
+
+  filter({"platforms:Windows", "configurations:Release"})
+    local qt_dir = os.getenv("QT_DIR")
+    if qt_dir then
+      local windeployqt = path.translate(path.join(qt_dir, "bin", "windeployqt.exe"), "\\")
+      postbuildcommands {
+        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --release --no-translations --no-system-d3d-compiler --no-opengl-sw "$(TargetPath)"'
+      }
+    end
