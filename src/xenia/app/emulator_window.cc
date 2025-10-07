@@ -716,14 +716,14 @@ bool EmulatorWindow::Initialize() {
   // CPU menu.
   auto cpu_menu = MenuItem::Create(MenuItem::Type::kPopup, "&CPU");
   {
+    cpu_menu->AddChild(
+        MenuItem::Create(MenuItem::Type::kString, "&Reset Time Scalar", "Num+*",
+                         std::bind(&EmulatorWindow::CpuTimeScalarReset, this)));
     cpu_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "&Reset Time Scalar", "Numpad *",
-        std::bind(&EmulatorWindow::CpuTimeScalarReset, this)));
-    cpu_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "Time Scalar /= 2", "Numpad -",
+        MenuItem::Type::kString, "Time Scalar /= 2", "Num+-",
         std::bind(&EmulatorWindow::CpuTimeScalarSetHalf, this)));
     cpu_menu->AddChild(MenuItem::Create(
-        MenuItem::Type::kString, "Time Scalar *= 2", "Numpad +",
+        MenuItem::Type::kString, "Time Scalar *= 2", "Num++",
         std::bind(&EmulatorWindow::CpuTimeScalarSetDouble, this)));
   }
   cpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));

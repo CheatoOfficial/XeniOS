@@ -570,6 +570,12 @@ VirtualKey QtWindow::TranslateVirtualKey(int qt_key) {
       return VirtualKey::kF11;
     case Qt::Key_F12:
       return VirtualKey::kF12;
+    case Qt::Key_Asterisk:
+      return VirtualKey::kMultiply;
+    case Qt::Key_Plus:
+      return VirtualKey::kAdd;
+    case Qt::Key_Minus:
+      return VirtualKey::kSubtract;
     default:
       return VirtualKey::kNone;
   }
