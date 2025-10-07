@@ -249,6 +249,46 @@ class Emulator {
   struct ContentInstallEntry {
     ContentInstallEntry(std::filesystem::path path) : path_(path) {};
 
+    // Move constructor
+    ContentInstallEntry(ContentInstallEntry&& other) noexcept
+        : name_(std::move(other.name_)),
+          path_(std::move(other.path_)),
+          data_installation_path_(std::move(other.data_installation_path_)),
+          header_installation_path_(std::move(other.header_installation_path_)),
+          content_size_(other.content_size_),
+          currently_installed_size_(other.currently_installed_size_),
+          content_type_(other.content_type_),
+          installation_state_(other.installation_state_),
+          installation_result_(other.installation_result_),
+          installation_error_message_(
+              std::move(other.installation_error_message_)),
+          icon_data_(std::move(other.icon_data_)),
+          cancelled_(other.cancelled_.load()) {}
+
+    // Move assignment
+    ContentInstallEntry& operator=(ContentInstallEntry&& other) noexcept {
+      if (this != &other) {
+        name_ = std::move(other.name_);
+        path_ = std::move(other.path_);
+        data_installation_path_ = std::move(other.data_installation_path_);
+        header_installation_path_ = std::move(other.header_installation_path_);
+        content_size_ = other.content_size_;
+        currently_installed_size_ = other.currently_installed_size_;
+        content_type_ = other.content_type_;
+        installation_state_ = other.installation_state_;
+        installation_result_ = other.installation_result_;
+        installation_error_message_ =
+            std::move(other.installation_error_message_);
+        icon_data_ = std::move(other.icon_data_);
+        cancelled_.store(other.cancelled_.load());
+      }
+      return *this;
+    }
+
+    // Delete copy constructor and copy assignment
+    ContentInstallEntry(const ContentInstallEntry&) = delete;
+    ContentInstallEntry& operator=(const ContentInstallEntry&) = delete;
+
     std::string name_{};
     std::filesystem::path path_;
     std::filesystem::path data_installation_path_;
@@ -262,7 +302,8 @@ class Emulator {
     X_STATUS installation_result_{};
     std::string installation_error_message_{};
 
-    std::unique_ptr<ui::ImmediateTexture> icon_;
+    std::vector<uint8_t> icon_data_;      // Raw PNG data for Qt dialog
+    std::atomic<bool> cancelled_{false};  // Flag to cancel installation
   };
 
   // Migrates data from content to content/xuid with respect to common data.

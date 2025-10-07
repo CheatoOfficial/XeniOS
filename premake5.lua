@@ -134,7 +134,29 @@ filter("platforms:Linux")
   system("linux")
   toolset("clang")
   pkg_config.all("gtk+-x11-3.0")
-  pkg_config.all("Qt6Core Qt6Gui Qt6Widgets")
+  local qt_dir = os.getenv("QT_DIR")
+  if qt_dir then
+    includedirs({
+      path.join(qt_dir, "include"),
+      path.join(qt_dir, "include/QtCore"),
+      path.join(qt_dir, "include/QtGui"),
+      path.join(qt_dir, "include/QtWidgets"),
+    })
+    libdirs({
+      path.join(qt_dir, "lib"),
+    })
+    runpathdirs({
+      path.join(qt_dir, "lib"),
+    })
+    links({
+      "Qt6Core",
+      "Qt6Gui",
+      "Qt6Widgets",
+    })
+  else
+    pkg_config.all("Qt6Core Qt6Gui Qt6Widgets")
+  end
+
   links({
     "stdc++fs",
     "dl",

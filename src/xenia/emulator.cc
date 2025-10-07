@@ -852,15 +852,26 @@ X_STATUS Emulator::ProcessContentPackageHeader(
   installation_info.content_size_ = header->content_metadata.content_size;
   installation_info.installation_state_ = InstallState::pending;
 
-  installation_info.icon_ = imgui_drawer_->LoadImGuiIcon(
-      std::span<const uint8_t>(header->content_metadata.title_thumbnail,
-                               header->content_metadata.title_thumbnail_size));
+  // Store raw PNG data for Qt dialog
+  installation_info.icon_data_.assign(
+      header->content_metadata.title_thumbnail,
+      header->content_metadata.title_thumbnail +
+          header->content_metadata.title_thumbnail_size);
+
   return X_STATUS_SUCCESS;
 }
 
 X_STATUS Emulator::InstallContentPackage(
     const std::filesystem::path& path, ContentInstallEntry& installation_info) {
   installation_info.installation_state_ = InstallState::preparing;
+
+  // Check if installation was cancelled before starting
+  if (installation_info.cancelled_.load()) {
+    installation_info.installation_state_ = InstallState::failed;
+    installation_info.installation_error_message_ = "Installation cancelled";
+    installation_info.installation_result_ = X_ERROR_CANCELLED;
+    return X_ERROR_CANCELLED;
+  }
 
   std::unique_ptr<vfs::XContentContainerDevice> device =
       vfs::XContentContainerDevice::CreateContentDevice("", path);
@@ -914,9 +925,46 @@ X_STATUS Emulator::InstallContentPackage(
 
   vfs::VirtualFileSystem::ExtractContentHeader(device.get(), header_path);
 
+  // Check for cancellation before extracting files
+  if (installation_info.cancelled_.load()) {
+    installation_info.installation_state_ = InstallState::failed;
+    installation_info.installation_error_message_ = "Installation cancelled";
+    installation_info.installation_result_ = X_ERROR_CANCELLED;
+
+    // Clean up partial installation
+    std::error_code ec;
+    if (std::filesystem::exists(installation_path)) {
+      std::filesystem::remove_all(installation_path, ec);
+    }
+    if (std::filesystem::exists(header_path)) {
+      std::filesystem::remove(header_path, ec);
+    }
+
+    return X_ERROR_CANCELLED;
+  }
+
   X_STATUS error_code = vfs::VirtualFileSystem::ExtractContentFiles(
       device.get(), installation_path,
       installation_info.currently_installed_size_);
+
+  // Check for cancellation after extraction
+  if (installation_info.cancelled_.load()) {
+    installation_info.installation_state_ = InstallState::failed;
+    installation_info.installation_error_message_ = "Installation cancelled";
+    installation_info.installation_result_ = X_ERROR_CANCELLED;
+
+    // Clean up partial installation
+    std::error_code ec;
+    if (std::filesystem::exists(installation_path)) {
+      std::filesystem::remove_all(installation_path, ec);
+    }
+    if (std::filesystem::exists(header_path)) {
+      std::filesystem::remove(header_path, ec);
+    }
+
+    return X_ERROR_CANCELLED;
+  }
+
   if (error_code != X_ERROR_SUCCESS) {
     installation_info.installation_state_ = InstallState::failed;
     return error_code;
