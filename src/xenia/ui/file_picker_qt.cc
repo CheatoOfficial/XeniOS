@@ -20,8 +20,26 @@
 #include "xenia/base/string.h"
 #include "xenia/ui/window_qt.h"
 
+#if XE_PLATFORM_WIN32
+#include "xenia/base/platform_win.h"
+#endif
+
 namespace xe {
 namespace ui {
+
+#if XE_PLATFORM_WIN32
+// Detect if running under Wine by checking for wine_get_version in ntdll
+static bool IsRunningOnWine() {
+  static bool is_wine = []() {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+      return GetProcAddress(ntdll, "wine_get_version") != nullptr;
+    }
+    return false;
+  }();
+  return is_wine;
+}
+#endif
 
 class QtFilePicker : public FilePicker {
  public:
@@ -80,13 +98,20 @@ bool QtFilePicker::Show(Window* parent_window) {
         QString::fromUtf8(dir_str.c_str(), static_cast<int>(dir_str.size()));
   }
 
-  // Try native dialog; Qt will automatically fall back to its own dialog if
-  // native is unavailable
+  // Force Qt's dialog when running on Wine, as native Windows dialogs don't
+  // work well. Otherwise try native dialog.
+  QFileDialog::Options options = QFileDialog::Options();
+#if XE_PLATFORM_WIN32
+  if (IsRunningOnWine()) {
+    options |= QFileDialog::DontUseNativeDialog;
+  }
+#endif
+
   QString file_path = QFileDialog::getOpenFileName(
       qt_window ? qt_window->qwindow() : nullptr, title, initial_dir,
       QString(),  // filter
-      nullptr     // selected filter
-  );
+      nullptr,    // selected filter
+      options);
 
   if (!file_path.isEmpty()) {
     QByteArray utf8_bytes = file_path.toUtf8();
