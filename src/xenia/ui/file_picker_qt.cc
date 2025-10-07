@@ -60,23 +60,20 @@ QtFilePicker::QtFilePicker() = default;
 QtFilePicker::~QtFilePicker() = default;
 
 bool QtFilePicker::Show(Window* parent_window) {
-  QString title;
   QFileDialog::FileMode file_mode;
   QFileDialog::AcceptMode accept_mode;
 
   switch (mode()) {
     case Mode::kOpen:
       if (type() == Type::kFile) {
-        title = "Open File";
-        file_mode = QFileDialog::ExistingFile;
+        file_mode = multi_selection() ? QFileDialog::ExistingFiles
+                                      : QFileDialog::ExistingFile;
       } else {
-        title = "Open Directory";
         file_mode = QFileDialog::Directory;
       }
       accept_mode = QFileDialog::AcceptOpen;
       break;
     case Mode::kSave:
-      title = "Save File";
       file_mode = QFileDialog::AnyFile;
       accept_mode = QFileDialog::AcceptSave;
       break;
@@ -86,6 +83,9 @@ bool QtFilePicker::Show(Window* parent_window) {
       assert_always();
       return false;
   }
+
+  // Use the custom title set via set_title(), or default based on mode
+  QString title = QString::fromStdString(this->title());
 
   auto* qt_window =
       parent_window ? dynamic_cast<QtWindow*>(parent_window) : nullptr;
@@ -98,6 +98,9 @@ bool QtFilePicker::Show(Window* parent_window) {
         QString::fromUtf8(dir_str.c_str(), static_cast<int>(dir_str.size()));
   }
 
+  // Don't apply file filters - show all files
+  QString filter;
+
   // Force Qt's dialog when running on Wine, as native Windows dialogs don't
   // work well. Otherwise try native dialog.
   QFileDialog::Options options = QFileDialog::Options();
@@ -107,20 +110,38 @@ bool QtFilePicker::Show(Window* parent_window) {
   }
 #endif
 
-  QString file_path = QFileDialog::getOpenFileName(
-      qt_window ? qt_window->qwindow() : nullptr, title, initial_dir,
-      QString(),  // filter
-      nullptr,    // selected filter
-      options);
+  std::vector<std::filesystem::path> selected_files;
 
-  if (!file_path.isEmpty()) {
-    QByteArray utf8_bytes = file_path.toUtf8();
-    std::string file_path_str(utf8_bytes.constData(), utf8_bytes.size());
+  if (multi_selection() && mode() == Mode::kOpen && type() == Type::kFile) {
+    // Use getOpenFileNames for multi-selection
+    QStringList file_paths = QFileDialog::getOpenFileNames(
+        qt_window ? qt_window->qwindow() : nullptr, title, initial_dir, filter,
+        nullptr,  // selected filter
+        options);
 
-    std::vector<std::filesystem::path> selected_files;
-    selected_files.push_back(xe::to_path(file_path_str));
-    set_selected_files(selected_files);
-    return true;
+    if (!file_paths.isEmpty()) {
+      for (const QString& file_path : file_paths) {
+        QByteArray utf8_bytes = file_path.toUtf8();
+        std::string file_path_str(utf8_bytes.constData(), utf8_bytes.size());
+        selected_files.push_back(xe::to_path(file_path_str));
+      }
+      set_selected_files(selected_files);
+      return true;
+    }
+  } else {
+    // Use getOpenFileName for single selection
+    QString file_path = QFileDialog::getOpenFileName(
+        qt_window ? qt_window->qwindow() : nullptr, title, initial_dir, filter,
+        nullptr,  // selected filter
+        options);
+
+    if (!file_path.isEmpty()) {
+      QByteArray utf8_bytes = file_path.toUtf8();
+      std::string file_path_str(utf8_bytes.constData(), utf8_bytes.size());
+      selected_files.push_back(xe::to_path(file_path_str));
+      set_selected_files(selected_files);
+      return true;
+    }
   }
 
   return false;

@@ -1173,7 +1173,7 @@ void EmulatorWindow::InstallContent() {
   file_picker->set_mode(ui::FilePicker::Mode::kOpen);
   file_picker->set_type(ui::FilePicker::Type::kFile);
   file_picker->set_multi_selection(true);
-  file_picker->set_title("Select Content Package");
+  file_picker->set_title("Select Content Package(s)");
   file_picker->set_extensions({
       {"All Files (*.*)", "*.*"},
   });
