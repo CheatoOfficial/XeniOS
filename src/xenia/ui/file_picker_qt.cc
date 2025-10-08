@@ -107,6 +107,8 @@ bool QtFilePicker::Show(Window* parent_window) {
 #if XE_PLATFORM_WIN32
   if (IsRunningOnWine()) {
     options |= QFileDialog::DontUseNativeDialog;
+    options |= QFileDialog::DontResolveSymlinks;
+    options |= QFileDialog::DontUseCustomDirectoryIcons;
   }
 #endif
 
