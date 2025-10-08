@@ -34,6 +34,7 @@ std::string config_name = "xenia-edge.config.toml";
 std::filesystem::path config_folder;
 std::filesystem::path config_path;
 std::string game_config_suffix = ".config.toml";
+std::function<void()> config_saved_callback;
 
 bool sortCvar(cvar::IConfigVar* a, cvar::IConfigVar* b) {
   if (a->category() < b->category()) return true;
@@ -139,6 +140,17 @@ void ReadGameConfig(const std::filesystem::path& file_path) {
   XELOGI("Loaded game config: {}", file_path);
 }
 
+void ReloadConfig() {
+  if (config_path.empty()) {
+    return;
+  }
+
+  if (std::filesystem::exists(config_path)) {
+    ReadConfig(config_path, false);
+    XELOGI("Reloaded config from: {}", xe::path_to_utf8(config_path));
+  }
+}
+
 void SaveConfig() {
   if (config_path.empty()) {
     return;
@@ -241,6 +253,15 @@ void SaveConfig() {
     fwrite(sb.buffer(), 1, sb.length(), handle);
     fclose(handle);
   }
+
+  // Notify that config was saved
+  if (config_saved_callback) {
+    config_saved_callback();
+  }
+}
+
+void SetConfigSavedCallback(std::function<void()> callback) {
+  config_saved_callback = callback;
 }
 
 void SetupConfig(const std::filesystem::path& config_folder) {

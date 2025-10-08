@@ -252,9 +252,12 @@ std::unique_ptr<ImmediateTexture> ImGuiDrawer::LoadImGuiIcon(
     return {};
   }
 
-  return immediate_drawer_->CreateTexture(
+  auto texture = immediate_drawer_->CreateTexture(
       width, height, ImmediateTextureFilter::kLinear, true,
       reinterpret_cast<uint8_t*>(image_data));
+
+  stbi_image_free(image_data);  // Free the image data after creating texture
+  return texture;
 }
 
 std::map<uint32_t, std::unique_ptr<ImmediateTexture>> ImGuiDrawer::LoadIcons(

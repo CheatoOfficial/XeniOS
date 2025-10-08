@@ -80,6 +80,7 @@ class ProfileManager {
 
   void ReloadProfiles();
   void ReloadProfile(const uint64_t xuid);
+  void SyncProfilesWithConfig();
 
   UserProfile* GetProfile(const uint64_t xuid) const;
   UserProfile* GetProfile(const uint8_t user_index) const;

@@ -266,7 +266,7 @@ class EmulatorApp final : public xe::ui::WindowedApp {
   static std::vector<std::unique_ptr<hid::InputDriver>> CreateInputDrivers(
       ui::Window* window);
 
-  void EmulatorThread();
+  void EmulatorThread(bool is_game_process);
   void ShutdownEmulatorThreadFromUIThread();
 
   DebugWindowClosedListener debug_window_closed_listener_;
@@ -527,12 +527,34 @@ bool EmulatorApp::OnInitialize() {
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
 
-  // Determine window size based on user setting.
-  auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
+  // Check if this is a game process (has target or launch_data.bin) or UI
+  // process
+  bool has_launch_data = false;
+  FILE* launch_data_file =
+      xe::filesystem::OpenFile(kernel::xam::kXamModuleLoaderDataFileName, "rb");
+  if (launch_data_file) {
+    has_launch_data = true;
+    fclose(launch_data_file);
+  }
+  bool is_game_process = !cvars::target.empty() || has_launch_data;
+
+  // Determine window size based on process type
+  uint32_t window_width, window_height;
+  if (is_game_process) {
+    // Game process - use full resolution from settings
+    auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
+    window_width = res.first;
+    window_height = res.second;
+  } else {
+    // UI process - sized to comfortably hold configuration manager (900x700)
+    window_width = 950;
+    window_height = 750;
+  }
 
   // Main emulator display window.
-  emulator_window_ = EmulatorWindow::Create(emulator_.get(), app_context(),
-                                            res.first, res.second);
+  emulator_window_ =
+      EmulatorWindow::Create(emulator_.get(), app_context(), window_width,
+                             window_height, is_game_process);
   if (!emulator_window_) {
     XELOGE("Failed to create the main emulator window");
     return false;
@@ -542,7 +564,8 @@ bool EmulatorApp::OnInitialize() {
   emulator_thread_quit_requested_.store(false, std::memory_order_relaxed);
   emulator_thread_event_ = xe::threading::Event::CreateAutoResetEvent(false);
   assert_not_null(emulator_thread_event_);
-  emulator_thread_ = std::thread(&EmulatorApp::EmulatorThread, this);
+  emulator_thread_ =
+      std::thread(&EmulatorApp::EmulatorThread, this, is_game_process);
 
   return true;
 }
@@ -566,7 +589,7 @@ void EmulatorApp::OnDestroy() {
   std::quick_exit(EXIT_SUCCESS);
 }
 
-void EmulatorApp::EmulatorThread() {
+void EmulatorApp::EmulatorThread(bool is_game_process) {
   assert_not_null(emulator_thread_event_);
 
   xe::threading::set_name("Emulator");
@@ -574,9 +597,11 @@ void EmulatorApp::EmulatorThread() {
 
   // Setup and initialize all subsystems. If we can't do something
   // (unsupported system, memory issues, etc) this will fail early.
+  // Only load input drivers if this is a game process
   X_STATUS result = emulator_->Setup(
       emulator_window_->window(), emulator_window_->imgui_drawer(), true,
-      CreateAudioSystem, CreateGraphicsSystem, CreateInputDrivers);
+      CreateAudioSystem, CreateGraphicsSystem,
+      is_game_process ? CreateInputDrivers : nullptr);
   if (XFAILED(result)) {
     XELOGE("Failed to setup emulator: {:08X}", result);
     app_context().RequestDeferredQuit();
@@ -719,12 +744,27 @@ void EmulatorApp::EmulatorThread() {
     // Normalize the path and make absolute.
     auto abs_path = std::filesystem::absolute(path);
 
-    result = app_context().CallInUIThread(
-        [this, abs_path]() { return emulator_window_->RunTitle(abs_path); });
+    // TODO(has207): Add archive format check like in RunTitle?
+    result = emulator_->LaunchPath(abs_path);
     if (XFAILED(result)) {
       xe::FatalError(fmt::format("Failed to launch target: {:08X}", result));
       app_context().RequestDeferredQuit();
       return;
+    }
+
+    // Store the host path in loader_data for potential restart with
+    // launch_data.bin
+    auto xam_for_path =
+        emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
+            "xam.xex");
+    if (xam_for_path) {
+      xam_for_path->loader_data().host_path = xe::path_to_utf8(abs_path);
+    }
+
+    // Add to recent titles if this is a game process
+    if (is_game_process && emulator_window_) {
+      emulator_window_->AddRecentlyLaunchedTitle(abs_path,
+                                                 emulator_->title_name());
     }
   }
 
@@ -736,9 +776,7 @@ void EmulatorApp::EmulatorThread() {
 
     if (xam->loader_data().launch_data_present) {
       const std::filesystem::path host_path = xam->loader_data().host_path;
-      app_context().CallInUIThread([this, host_path]() {
-        return emulator_window_->RunTitle(host_path);
-      });
+      emulator_->LaunchPath(host_path);
     }
   }
 

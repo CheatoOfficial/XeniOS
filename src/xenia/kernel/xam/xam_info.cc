@@ -399,14 +399,60 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
       auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
 
       if (display_window && imgui_drawer) {
+        // Show a dialog and wait for user to click OK before terminating
+        // The parent UI will detect the launch_data.bin file and automatically
+        // relaunch without a game argument when this process exits
         display_window->app_context().CallInUIThreadSynchronous(
-            [imgui_drawer]() {
-              xe::ui::ImGuiDialog::ShowMessageBox(
-                  imgui_drawer, "Title was restarted",
-                  "Title closed with new launch data. \nPlease restart Xenia. "
-                  "Game will be loaded automatically.");
+            [imgui_drawer, display_window, kernel_state = kernel_state()]() {
+              class LaunchDataRestartDialog : public xe::ui::ImGuiDialog {
+               public:
+                LaunchDataRestartDialog(ui::ImGuiDrawer* imgui_drawer,
+                                        ui::Window* display_window,
+                                        kernel::KernelState* kernel_state)
+                    : ImGuiDialog(imgui_drawer),
+                      display_window_(display_window),
+                      kernel_state_(kernel_state) {}
+
+               protected:
+                void OnDraw(ImGuiIO& io) override {
+                  bool dialog_open = true;
+                  ImGui::OpenPopup("Title Restart Required");
+                  if (ImGui::BeginPopupModal(
+                          "Title Restart Required", &dialog_open,
+                          ImGuiWindowFlags_AlwaysAutoResize)) {
+                    ImGui::TextUnformatted(
+                        "Title is restarting with new launch data.\n"
+                        "Click OK to continue. Game will be loaded "
+                        "automatically.");
+                    ImGui::Spacing();
+                    if (ImGui::Button("OK", ImVec2(120, 0))) {
+                      ImGui::CloseCurrentPopup();
+                      Close();
+                      // Terminate the title and quit after user clicks OK
+                      kernel_state_->TerminateTitle();
+                      display_window_->app_context().QuitFromUIThread();
+                    }
+                    ImGui::EndPopup();
+                  }
+                  if (!dialog_open) {
+                    Close();
+                    kernel_state_->TerminateTitle();
+                    display_window_->app_context().QuitFromUIThread();
+                  }
+                }
+
+               private:
+                ui::Window* display_window_;
+                kernel::KernelState* kernel_state_;
+              };
+
+              new LaunchDataRestartDialog(imgui_drawer, display_window,
+                                          kernel_state);
             });
       }
+      // Don't call TerminateTitle here - the dialog will do it when user clicks
+      // OK
+      return;
     }
   } else {
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");

@@ -15,6 +15,7 @@
 
 #include "xenia/app/patches_dialog.h"
 #include "xenia/app/profile_dialogs.h"
+#include "xenia/app/recent_titles_ui.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -55,7 +56,7 @@ class EmulatorWindow {
 
   static std::unique_ptr<EmulatorWindow> Create(
       Emulator* emulator, ui::WindowedAppContext& app_context, uint32_t width,
-      uint32_t height);
+      uint32_t height, bool is_game_process = false);
 
   std::unique_ptr<xe::threading::Thread> Gamepad_HotKeys_Listener;
 
@@ -82,8 +83,25 @@ class EmulatorWindow {
 
   void OnEmulatorInitialized();
 
+  void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file,
+                               bool for_launch_data = false);
   xe::X_STATUS RunTitle(const std::filesystem::path& path_to_file);
   void UpdateTitle();
+  bool HasRunningChildProcess();
+  void CheckChildProcessStatus();
+  void ScheduleChildProcessCheck();
+
+  // Keyboard forwarding for child processes
+  void SendKeyToChild(ui::VirtualKey key, bool ctrl = false, bool alt = false,
+                      bool shift = false);
+  void SendCommandToChild(const std::string& command);
+  void ExecuteOrForward(std::function<void()> local_action, ui::VirtualKey key,
+                        bool ctrl = false, bool alt = false,
+                        bool shift = false);
+
+  void AddRecentlyLaunchedTitle(std::filesystem::path path_to_file,
+                                std::string title_name);
+
   void SetFullscreen(bool fullscreen);
   void ToggleFullscreen();
   void SetInitializingShaderStorage(bool initializing);
@@ -95,6 +113,10 @@ class EmulatorWindow {
 
   void ToggleProfilesConfigDialog();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
+  void FileOpen();
+  const std::vector<RecentTitleEntry>& GetRecentlyLaunchedTitles() const {
+    return recently_launched_titles_;
+  }
 
   // Types of button functions for hotkeys.
   enum class ButtonFunctions {
@@ -144,6 +166,7 @@ class EmulatorWindow {
 
     void OnClosing(ui::UIEvent& e) override;
     void OnFileDrop(ui::FileDropEvent& e) override;
+    void OnGotFocus(ui::UISetupEvent& e) override;
 
     void OnKeyDown(ui::KeyEvent& e) override;
 
@@ -183,7 +206,7 @@ class EmulatorWindow {
 
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
-                          uint32_t height);
+                          uint32_t height, bool is_game_process = false);
 
   bool Initialize();
 
@@ -208,7 +231,6 @@ class EmulatorWindow {
   void ToggleFullscreenOnDoubleClick();
   void FileDrop(const std::filesystem::path& filename);
   void OnMouseUp(const ui::MouseEvent& e);
-  void FileOpen();
   void FileClose();
   void InstallContent();
   void ExtractZarchive();
@@ -242,14 +264,21 @@ class EmulatorWindow {
   void RunPreviouslyPlayedTitle();
   void FillRecentlyLaunchedTitlesMenu(xe::ui::MenuItem* recent_menu);
   void LoadRecentlyLaunchedTitles();
-  void AddRecentlyLaunchedTitle(std::filesystem::path path_to_file,
-                                std::string title_name);
 
   void ClearDialogs();
 
+  class RecentTitlesUI* recent_titles_ui_ = nullptr;
+
   Emulator* emulator_;
   ui::WindowedAppContext& app_context_;
+  bool is_game_process_;
   EmulatorWindowListener window_listener_;
+
+#if XE_PLATFORM_LINUX
+  std::vector<pid_t> child_processes_;
+#elif XE_PLATFORM_WIN32
+  std::vector<HANDLE> child_processes_;
+#endif
   std::unique_ptr<ui::Window> window_;
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
   std::unique_ptr<DisplayConfigGameConfigLoadCallback>
@@ -270,6 +299,11 @@ class EmulatorWindow {
   std::unique_ptr<ProfileConfigDialog> profile_config_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
+
+  // Menu items that need to be enabled/disabled based on child process state
+  ui::MenuItem* file_menu_ = nullptr;
+  ui::MenuItem* file_open_item_ = nullptr;
+  ui::MenuItem* file_open_recent_menu_ = nullptr;
 };
 
 }  // namespace app

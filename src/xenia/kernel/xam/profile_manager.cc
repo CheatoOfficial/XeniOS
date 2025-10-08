@@ -10,6 +10,7 @@
 #include "xenia/kernel/xam/profile_manager.h"
 
 #include "xenia/base/logging.h"
+#include "xenia/config.h"
 #include "xenia/emulator.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
@@ -147,6 +148,42 @@ void ProfileManager::ReloadProfiles() {
   for (const auto account_xuid : FindProfiles()) {
     LoadAccount(account_xuid);
   }
+}
+
+void ProfileManager::SyncProfilesWithConfig() {
+  // First reload all accounts from disk to pick up any new/deleted profiles
+  accounts_.clear();
+  for (const auto account_xuid : FindProfiles()) {
+    LoadAccount(account_xuid);
+  }
+
+  // Then logout all currently logged in profiles
+  std::vector<uint8_t> slots_to_logout;
+  for (const auto& [slot, profile] : logged_profiles_) {
+    slots_to_logout.push_back(slot);
+  }
+  for (uint8_t slot : slots_to_logout) {
+    Logout(slot, false);
+  }
+
+  // Now login profiles based on the current cvar values
+  const std::string* profile_cvars[4] = {
+      &cvars::logged_profile_slot_0_xuid, &cvars::logged_profile_slot_1_xuid,
+      &cvars::logged_profile_slot_2_xuid, &cvars::logged_profile_slot_3_xuid};
+
+  for (uint8_t slot = 0; slot < 4; slot++) {
+    if (!profile_cvars[slot]->empty()) {
+      uint64_t xuid =
+          xe::string_util::from_string<uint64_t>(*profile_cvars[slot], true);
+      if (xuid != 0) {
+        Login(xuid, slot, false);
+      }
+    }
+  }
+
+  // Send a single notification after all changes
+  kernel_state_->BroadcastNotification(kXNotificationSystemSignInChanged,
+                                       GetUsedUserSlots().to_ulong());
 }
 
 UserProfile* ProfileManager::GetProfile(const uint64_t xuid) const {
@@ -577,6 +614,9 @@ void ProfileManager::UpdateConfig(const uint64_t xuid, const uint8_t slot) {
     default:
       break;
   }
+
+  // Save config immediately to persist login/logout changes
+  config::SaveConfig();
   return;
 }
 
