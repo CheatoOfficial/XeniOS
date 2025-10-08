@@ -14,6 +14,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QMouseEvent>
+#include <QStyle>
 #include <QVBoxLayout>
 
 #include "third_party/fmt/include/fmt/format.h"
@@ -200,15 +201,13 @@ void PostProcessingDialogQt::SetupUI() {
   info_label->setStyleSheet("color: #b0b0b0; font-style: italic;");
   top_bar_layout->addWidget(info_label);
 
-  auto* close_button = new QPushButton("×", this);
+  auto* close_button = new QPushButton(this);
+  close_button->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
   close_button->setStyleSheet(R"(
     QPushButton {
       background-color: rgba(70, 70, 70, 200);
-      color: #e0e0e0;
       border: 1px solid rgba(100, 100, 100, 150);
       border-radius: 12px;
-      font-size: 18px;
-      font-weight: bold;
       min-width: 24px;
       max-width: 24px;
       min-height: 24px;
@@ -218,7 +217,6 @@ void PostProcessingDialogQt::SetupUI() {
     QPushButton:hover {
       background-color: rgba(200, 50, 50, 220);
       border-color: rgba(200, 50, 50, 255);
-      color: white;
     }
     QPushButton:pressed {
       background-color: rgba(150, 30, 30, 220);
