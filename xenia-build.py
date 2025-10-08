@@ -1820,7 +1820,7 @@ class LintCommand(Command):
                 # Exclude generated files
                 for generated_file in GENERATED_FILES:
                     cmd.append(f":(exclude){generated_file}")
-                shell_call(cmd)
+                shell_call(cmd, throw_on_error=False)
                 print("ERROR: 1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
             else:
@@ -1880,7 +1880,13 @@ class FormatCommand(Command):
             # Exclude generated files
             for generated_file in GENERATED_FILES:
                 cmd.append(f":(exclude){generated_file}")
-            shell_call(cmd)
+
+            ret = shell_call(cmd, throw_on_error=False)
+            if ret != 0:
+                print("\nFiles were formatted. Please stage the changes:")
+                print("  git status")
+                print("  git add <files>")
+                return 1
             print("")
 
         return 0
