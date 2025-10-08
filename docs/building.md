@@ -16,6 +16,13 @@ drivers.
   * Ensure Python is in PATH.
 * [Vulkan SDK](https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe)
   * The build script will automatically detect it if installed at `C:\VulkanSDK`
+* Qt 6.9.2 (for the UI)
+  * Install using aqtinstall:
+    ```
+    pip install aqtinstall
+    python -m aqt install-qt windows desktop 6.9.2 win64_msvc2022_64 -O C:\Qt
+    ```
+  * The build script will automatically detect it if installed at `C:\Qt\6.9.2\msvc2022_64`
 
 ```
 git clone https://github.com/has207/xenia-edge.git
@@ -108,10 +115,28 @@ Clang-19 or newer should be available from system repositories on all up to date
 You will also need some development libraries. To get them on an Ubuntu system:
 
 ```sh
-sudo apt-get install build-essential mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libgtk-3-dev liblz4-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-19 llvm-19 ninja-build
+sudo apt-get install build-essential mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libgtk-3-dev liblz4-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-19 llvm-19 ninja-build libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0
 ```
 
 In addition, you will need up to date Vulkan libraries and drivers for your hardware, which most distributions have in their standard repositories nowadays.
+
+**Qt 6.9.2 (for the UI)**
+
+You can install Qt from your distribution's package manager, or use aqtinstall:
+
+```sh
+pip install aqtinstall
+aqt install-qt linux desktop 6.9.2 linux_gcc_64 -O /opt/Qt
+```
+
+If using aqtinstall, add Qt to your environment:
+
+```sh
+export PATH="/opt/Qt/6.9.2/gcc_64/bin:$PATH"
+export CMAKE_PREFIX_PATH="/opt/Qt/6.9.2/gcc_64"
+export PKG_CONFIG_PATH="/opt/Qt/6.9.2/gcc_64/lib/pkgconfig:$PKG_CONFIG_PATH"
+export QT_DIR="/opt/Qt/6.9.2/gcc_64"
+```
 
 ## Running
 
