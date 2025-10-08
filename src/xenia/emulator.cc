@@ -925,43 +925,47 @@ X_STATUS Emulator::InstallContentPackage(
 
   vfs::VirtualFileSystem::ExtractContentHeader(device.get(), header_path);
 
-  // Check for cancellation before extracting files
-  if (installation_info.cancelled_.load()) {
-    installation_info.installation_state_ = InstallState::failed;
-    installation_info.installation_error_message_ = "Installation cancelled";
-    installation_info.installation_result_ = X_ERROR_CANCELLED;
-
-    // Clean up partial installation
+  // Lambda to handle cleanup - defined once, used in both cancellation paths
+  auto cleanup_and_fail = [&]() {
     std::error_code ec;
+    bool cleanup_failed = false;
+
     if (std::filesystem::exists(installation_path)) {
       std::filesystem::remove_all(installation_path, ec);
-    }
-    if (std::filesystem::exists(header_path)) {
-      std::filesystem::remove(header_path, ec);
+      if (ec) {
+        cleanup_failed = true;
+      }
     }
 
+    if (std::filesystem::exists(header_path)) {
+      std::filesystem::remove(header_path, ec);
+      if (ec) {
+        cleanup_failed = true;
+      }
+    }
+
+    // Set state AFTER cleanup is done, so dialog doesn't pop up prematurely
+    installation_info.installation_result_ = X_ERROR_CANCELLED;
+    installation_info.installation_error_message_ =
+        cleanup_failed ? "Installation cancelled (cleanup failed)"
+                       : "Installation cancelled";
+    installation_info.installation_state_ = InstallState::failed;
+  };
+
+  // Check for cancellation before extracting files
+  if (installation_info.cancelled_.load()) {
+    cleanup_and_fail();
     return X_ERROR_CANCELLED;
   }
 
   X_STATUS error_code = vfs::VirtualFileSystem::ExtractContentFiles(
       device.get(), installation_path,
-      installation_info.currently_installed_size_);
+      installation_info.currently_installed_size_,
+      [&installation_info]() { return installation_info.cancelled_.load(); });
 
   // Check for cancellation after extraction
-  if (installation_info.cancelled_.load()) {
-    installation_info.installation_state_ = InstallState::failed;
-    installation_info.installation_error_message_ = "Installation cancelled";
-    installation_info.installation_result_ = X_ERROR_CANCELLED;
-
-    // Clean up partial installation
-    std::error_code ec;
-    if (std::filesystem::exists(installation_path)) {
-      std::filesystem::remove_all(installation_path, ec);
-    }
-    if (std::filesystem::exists(header_path)) {
-      std::filesystem::remove(header_path, ec);
-    }
-
+  if (installation_info.cancelled_.load() || error_code == X_ERROR_CANCELLED) {
+    cleanup_and_fail();
     return X_ERROR_CANCELLED;
   }
 

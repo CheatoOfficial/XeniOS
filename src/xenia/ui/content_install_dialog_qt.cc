@@ -241,11 +241,18 @@ void ContentInstallDialogQt::UpdateProgress() {
       widgets.progress_bar->setValue(progress);
 
       if (entry.currently_installed_size_ != entry.content_size_ &&
-          entry.installation_result_ == X_ERROR_SUCCESS) {
+          entry.installation_result_ == X_ERROR_SUCCESS &&
+          !entry.cancelled_.load()) {
         is_everything_installed = false;
       }
     } else {
       widgets.progress_bar->setValue(0);
+      // If content_size is still 0, headers haven't been processed yet
+      // So not everything is installed (unless it's been cancelled)
+      if (entry.installation_state_ != Emulator::InstallState::failed &&
+          !entry.cancelled_.load()) {
+        is_everything_installed = false;
+      }
     }
   }
 
@@ -343,7 +350,14 @@ bool ContentInstallDialogQt::IsEverythingInstalled() {
   for (const auto& entry : *installation_entries_) {
     if (entry.content_size_ > 0) {
       if (entry.currently_installed_size_ != entry.content_size_ &&
-          entry.installation_result_ == X_ERROR_SUCCESS) {
+          entry.installation_result_ == X_ERROR_SUCCESS &&
+          !entry.cancelled_.load()) {
+        return false;
+      }
+    } else {
+      // If content_size is still 0, headers haven't been processed yet
+      if (entry.installation_state_ != Emulator::InstallState::failed &&
+          !entry.cancelled_.load()) {
         return false;
       }
     }

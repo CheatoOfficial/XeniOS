@@ -53,9 +53,9 @@ class VirtualFileSystem {
                                      std::filesystem::path base_path,
                                      uint64_t& progress,
                                      bool extract_to_root = false);
-  static X_STATUS ExtractContentFiles(Device* device,
-                                      std::filesystem::path base_path,
-                                      uint64_t& progress);
+  static X_STATUS ExtractContentFiles(
+      Device* device, std::filesystem::path base_path, uint64_t& progress,
+      std::function<bool()> should_cancel = nullptr);
   static void ExtractContentHeader(Device* device,
                                    std::filesystem::path base_path);
 

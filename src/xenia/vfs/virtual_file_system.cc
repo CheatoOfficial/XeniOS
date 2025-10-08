@@ -409,15 +409,20 @@ X_STATUS VirtualFileSystem::ExtractContentFile(Entry* entry,
   return 0;
 }
 
-X_STATUS VirtualFileSystem::ExtractContentFiles(Device* device,
-                                                std::filesystem::path base_path,
-                                                uint64_t& progress) {
+X_STATUS VirtualFileSystem::ExtractContentFiles(
+    Device* device, std::filesystem::path base_path, uint64_t& progress,
+    std::function<bool()> should_cancel) {
   // Run through all the files, breadth-first style.
   std::queue<vfs::Entry*> queue;
   auto root = device->ResolvePath("/");
   queue.push(root);
 
   while (!queue.empty()) {
+    // Check for cancellation before processing each file
+    if (should_cancel && should_cancel()) {
+      return X_ERROR_CANCELLED;
+    }
+
     auto entry = queue.front();
     queue.pop();
     for (auto& entry : entry->children()) {
