@@ -42,16 +42,12 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/stat.h>
-// X11 headers - include before other headers that might define None
+// X11 headers
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XTest.h>
 #include <X11/keysym.h>
-#include <gdk/gdk.h>
-#include <gdk/gdkkeysyms.h>
-#include <gdk/gdkx.h>
-#include <unistd.h>  // for usleep
 // Undefine X11 macros that conflict with our code
 #ifdef None
 #undef None
