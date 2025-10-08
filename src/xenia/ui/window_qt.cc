@@ -259,8 +259,8 @@ bool QtWindow::OpenImpl() {
   CursorVisibility cursor_visibility = GetCursorVisibility();
   if (cursor_visibility == CursorVisibility::kAutoHidden) {
     cursor_auto_hide_last_pos_ = QCursor::pos();
-    cursor_currently_auto_hidden_ = true;
-    UpdateCursorVisibility();
+    // Start the auto-hide timer immediately
+    SetCursorAutoHideTimer();
   } else if (cursor_visibility == CursorVisibility::kHidden) {
     UpdateCursorVisibility();
   }

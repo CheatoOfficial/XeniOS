@@ -351,6 +351,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
   // Start periodic child process checking if this is UI process
   if (!is_game_process_) {
     ScheduleChildProcessCheck();
+  } else {
+    // Game process: enable cursor auto-hide
+    window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
   }
 
   emulator_initialized_ = true;
@@ -1459,7 +1462,6 @@ void EmulatorWindow::SetFullscreen(bool fullscreen) {
     return;
   }
   window_->SetFullscreen(fullscreen);
-  window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
 }
 
 void EmulatorWindow::ToggleFullscreen() {
