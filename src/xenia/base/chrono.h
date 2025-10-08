@@ -89,6 +89,8 @@ struct NtSystemClock {
     return sys_time{cdp.time_since_epoch()};
   }
 
+  // TODO(Gliniak): Disable until WINE will implement tzdb.
+  /*
   template <Domain domain_fresh_ = domain_>
   static constexpr std::enable_if_t<
       domain_fresh_ == Domain::Host,
@@ -99,6 +101,8 @@ struct NtSystemClock {
     return std::chrono::local_time<std::chrono::system_clock::duration>(
         sys_tp.time_since_epoch());
   }
+    return std::chrono::current_zone()->to_local(to_sys(tp));
+  }*/
 
   template <Domain domain_fresh_ = domain_>
   static constexpr std::enable_if_t<domain_fresh_ == Domain::Host, time_point>
