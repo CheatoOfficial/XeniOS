@@ -16,6 +16,7 @@
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
 #include "xenia/app/config_dialog.h"
+#include "xenia/app/postprocessing_dialog_qt.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -435,264 +436,6 @@ void EmulatorWindow::DisplayConfigGameConfigLoadCallback::PostGameConfigLoad() {
   emulator_window_.ApplyDisplayConfigForCvars();
 }
 
-void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
-  gpu::GraphicsSystem* graphics_system =
-      emulator_window_.emulator_->graphics_system();
-  if (!graphics_system) {
-    return;
-  }
-
-  // In the top-left corner so it's close to the menu bar from where it was
-  // opened.
-  // Origin Y coordinate 20 was taken from the Dear ImGui demo.
-  ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-  // Alpha from Dear ImGui tooltips (0.35 from the overlay provides too low
-  // visibility). Slightly translucent so some effect of the changes can still
-  // be seen through it, but more opaque for better readability.
-  ImGui::SetNextWindowBgAlpha(0.85f);
-  bool dialog_open = true;
-  if (!ImGui::Begin("Post-processing", &dialog_open,
-                    ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_AlwaysAutoResize |
-                        ImGuiWindowFlags_HorizontalScrollbar)) {
-    ImGui::End();
-    return;
-  }
-
-  // Even if the close button has been pressed, still paint everything not to
-  // have one frame with an empty window.
-
-  // Prevent user confusion which has been reported multiple times.
-  ImGui::TextUnformatted("All effects can be used on GPUs of any brand.");
-  ImGui::Spacing();
-
-  gpu::CommandProcessor* command_processor =
-      graphics_system->command_processor();
-  if (command_processor) {
-    if (ImGui::TreeNodeEx(
-            "Anti-aliasing",
-            ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
-      gpu::CommandProcessor::SwapPostEffect current_swap_post_effect =
-          command_processor->GetDesiredSwapPostEffect();
-      int new_swap_post_effect_index = int(current_swap_post_effect);
-      ImGui::RadioButton("None", &new_swap_post_effect_index,
-                         int(gpu::CommandProcessor::SwapPostEffect::kNone));
-      ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Normal Quality]",
-          &new_swap_post_effect_index,
-          int(gpu::CommandProcessor::SwapPostEffect::kFxaa));
-      ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Extreme Quality]",
-          &new_swap_post_effect_index,
-          int(gpu::CommandProcessor::SwapPostEffect::kFxaaExtreme));
-      gpu::CommandProcessor::SwapPostEffect new_swap_post_effect =
-          gpu::CommandProcessor::SwapPostEffect(new_swap_post_effect_index);
-      if (current_swap_post_effect != new_swap_post_effect) {
-        command_processor->SetDesiredSwapPostEffect(new_swap_post_effect);
-      }
-
-      // Override the values in the cvars to save them to the config at exit if
-      // the user has set them to anything new.
-      if (GetSwapPostEffectForCvarValue(cvars::postprocess_antialiasing) !=
-          new_swap_post_effect) {
-        OVERRIDE_string(postprocess_antialiasing,
-                        GetCvarValueForSwapPostEffect(new_swap_post_effect));
-      }
-
-      ImGui::TreePop();
-    }
-  }
-
-  ui::Presenter* presenter = graphics_system->presenter();
-  if (presenter) {
-    const ui::Presenter::GuestOutputPaintConfig& current_presenter_config =
-        presenter->GetGuestOutputPaintConfigFromUIThread();
-    ui::Presenter::GuestOutputPaintConfig new_presenter_config =
-        current_presenter_config;
-
-    if (ImGui::TreeNodeEx(
-            "Resampling and sharpening",
-            ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
-      // Filtering effect.
-      int new_effect_index = int(new_presenter_config.GetEffect());
-      ImGui::RadioButton(
-          "None / Bilinear", &new_effect_index,
-          int(ui::Presenter::GuestOutputPaintConfig::Effect::kBilinear));
-      ImGui::RadioButton(
-          "AMD FidelityFX Contrast Adaptive Sharpening (CAS)",
-          &new_effect_index,
-          int(ui::Presenter::GuestOutputPaintConfig::Effect::kCas));
-      ImGui::RadioButton(
-          "AMD FidelityFX Super Resolution 1.0 (FSR)", &new_effect_index,
-          int(ui::Presenter::GuestOutputPaintConfig::Effect::kFsr));
-      new_presenter_config.SetEffect(
-          ui::Presenter::GuestOutputPaintConfig::Effect(new_effect_index));
-
-      // effect_description must be one complete, but short enough, sentence per
-      // line, as TextWrapped doesn't work correctly in auto-resizing windows
-      // (in the initial frames, the window becomes extremely tall, and widgets
-      // added after the wrapped text have no effect on the width of the text).
-      const char* effect_description = nullptr;
-      switch (new_presenter_config.GetEffect()) {
-        case ui::Presenter::GuestOutputPaintConfig::Effect::kBilinear:
-          effect_description =
-              "Simple bilinear filtering is done if resampling is needed.\n"
-              "Otherwise, only anti-aliasing is done if enabled, or displaying "
-              "as is.";
-          break;
-        case ui::Presenter::GuestOutputPaintConfig::Effect::kCas:
-          effect_description =
-              "Sharpening and resampling to up to 2x2 to improve the fidelity "
-              "of details.\n"
-              "For scaling by more than 2x2, bilinear stretching is done "
-              "afterwards.";
-          break;
-        case ui::Presenter::GuestOutputPaintConfig::Effect::kFsr:
-          effect_description =
-              "High-quality edge-preserving upscaling to arbitrary target "
-              "resolutions.\n"
-              "For scaling by more than 2x2, multiple upsampling passes are "
-              "done.\n"
-              "If not upscaling, Contrast Adaptive Sharpening (CAS) is used "
-              "instead.";
-          break;
-      }
-      if (effect_description) {
-        ImGui::TextUnformatted(effect_description);
-      }
-
-      if (new_presenter_config.GetEffect() ==
-              ui::Presenter::GuestOutputPaintConfig::Effect::kCas ||
-          new_presenter_config.GetEffect() ==
-              ui::Presenter::GuestOutputPaintConfig::Effect::kFsr) {
-        if (effect_description) {
-          ImGui::Spacing();
-        }
-
-        ImGui::TextUnformatted(
-            "FXAA is highly recommended when using CAS or FSR.");
-
-        ImGui::Spacing();
-
-        // 2 decimal places is more or less enough precision for the sharpness
-        // given the minor visual effect of small changes, the width of the
-        // slider, and readability convenience (2 decimal places is like an
-        // integer percentage). However, because Dear ImGui parses the string
-        // representation of the number and snaps the value to it internally,
-        // 2 decimal places actually offer less precision than the slider itself
-        // does. This is especially prominent in the low range of the non-linear
-        // FSR sharpness reduction slider. 3 decimal places are optimal in this
-        // case.
-
-        if (new_presenter_config.GetEffect() ==
-            ui::Presenter::GuestOutputPaintConfig::Effect::kFsr) {
-          float fsr_sharpness_reduction =
-              new_presenter_config.GetFsrSharpnessReduction();
-          ImGui::TextUnformatted(
-              "FSR sharpness reduction when upscaling (lower is sharper):");
-          const auto label = fmt::format(
-              "{} %%", static_cast<int>(fsr_sharpness_reduction * 100));
-          // Power 2.0 scaling as the reduction is in stops, used in exp2.
-          fsr_sharpness_reduction = sqrt(2.f * fsr_sharpness_reduction);
-          ImGui::SliderFloat(
-              "##FSRSharpnessReduction", &fsr_sharpness_reduction,
-              ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMin,
-              ui::Presenter::GuestOutputPaintConfig::kFsrSharpnessReductionMax,
-              label.c_str(), ImGuiSliderFlags_NoInput);
-          fsr_sharpness_reduction =
-              .5f * fsr_sharpness_reduction * fsr_sharpness_reduction;
-          ImGui::SameLine();
-          if (ImGui::Button("Reset##ResetFSRSharpnessReduction")) {
-            fsr_sharpness_reduction = ui::Presenter::GuestOutputPaintConfig ::
-                kFsrSharpnessReductionDefault;
-          }
-          new_presenter_config.SetFsrSharpnessReduction(
-              fsr_sharpness_reduction);
-        }
-
-        float cas_additional_sharpness =
-            new_presenter_config.GetCasAdditionalSharpness();
-        ImGui::TextUnformatted(
-            new_presenter_config.GetEffect() ==
-                    ui::Presenter::GuestOutputPaintConfig::Effect::kFsr
-                ? "CAS additional sharpness when not upscaling (higher is "
-                  "sharper):"
-                : "CAS additional sharpness (higher is sharper):");
-        const auto label = fmt::format(
-            "{} %%", static_cast<int>(cas_additional_sharpness * 100));
-        ImGui::SliderFloat(
-            "##CASAdditionalSharpness", &cas_additional_sharpness,
-            ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMin,
-            ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMax,
-            label.c_str(), ImGuiSliderFlags_NoInput);
-        ImGui::SameLine();
-        if (ImGui::Button("Reset##ResetCASAdditionalSharpness")) {
-          cas_additional_sharpness = ui::Presenter::GuestOutputPaintConfig ::
-              kCasAdditionalSharpnessDefault;
-        }
-        new_presenter_config.SetCasAdditionalSharpness(
-            cas_additional_sharpness);
-
-        // There's no need to expose the setting for the maximum number of FSR
-        // EASU passes as it's largely meaningless if the user doesn't have a
-        // very high-resolution monitor compared to the original image size as
-        // most of the values of the slider will have no effect, and that's just
-        // very fine-grained performance control for a fixed-overhead pass only
-        // for huge screen resolutions.
-      }
-
-      ImGui::TreePop();
-    }
-
-    if (ImGui::TreeNodeEx("Dithering", ImGuiTreeNodeFlags_Framed |
-                                           ImGuiTreeNodeFlags_DefaultOpen)) {
-      bool dither = current_presenter_config.GetDither();
-      ImGui::Checkbox(
-          "Dither the final output to 8bpc to make gradients smoother",
-          &dither);
-      new_presenter_config.SetDither(dither);
-
-      ImGui::TreePop();
-    }
-
-    presenter->SetGuestOutputPaintConfigFromUIThread(new_presenter_config);
-
-    // Override the values in the cvars to save them to the config at exit if
-    // the user has set them to anything new.
-    ui::Presenter::GuestOutputPaintConfig cvars_presenter_config =
-        GetGuestOutputPaintConfigForCvars();
-    if (cvars_presenter_config.GetEffect() !=
-        new_presenter_config.GetEffect()) {
-      OVERRIDE_string(postprocess_scaling_and_sharpening,
-                      GetCvarValueForGuestOutputPaintEffect(
-                          new_presenter_config.GetEffect()));
-    }
-    if (cvars_presenter_config.GetCasAdditionalSharpness() !=
-        new_presenter_config.GetCasAdditionalSharpness()) {
-      OVERRIDE_double(postprocess_ffx_cas_additional_sharpness,
-                      new_presenter_config.GetCasAdditionalSharpness());
-    }
-    if (cvars_presenter_config.GetFsrSharpnessReduction() !=
-        new_presenter_config.GetFsrSharpnessReduction()) {
-      OVERRIDE_double(postprocess_ffx_fsr_sharpness_reduction,
-                      new_presenter_config.GetFsrSharpnessReduction());
-    }
-    if (cvars_presenter_config.GetDither() !=
-        new_presenter_config.GetDither()) {
-      OVERRIDE_bool(postprocess_dither, new_presenter_config.GetDither());
-    }
-  }
-
-  ImGui::End();
-
-  if (!dialog_open) {
-    emulator_window_.ToggleDisplayConfigDialog();
-    // `this` might have been destroyed by ToggleDisplayConfigDialog.
-    return;
-  }
-}
-
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
@@ -1086,6 +829,45 @@ void EmulatorWindow::ApplyDisplayConfigForCvars() {
   if (presenter) {
     presenter->SetGuestOutputPaintConfigFromUIThread(
         GetGuestOutputPaintConfigForCvars());
+  }
+}
+
+void EmulatorWindow::UpdateAntiAliasingCvar(
+    gpu::CommandProcessor::SwapPostEffect effect) {
+  if (GetSwapPostEffectForCvarValue(cvars::postprocess_antialiasing) !=
+      effect) {
+    OVERRIDE_string(postprocess_antialiasing,
+                    GetCvarValueForSwapPostEffect(effect));
+  }
+}
+
+void EmulatorWindow::UpdateScalingAndSharpeningCvar(
+    ui::Presenter::GuestOutputPaintConfig::Effect effect) {
+  auto cvars_config = GetGuestOutputPaintConfigForCvars();
+  if (cvars_config.GetEffect() != effect) {
+    OVERRIDE_string(postprocess_scaling_and_sharpening,
+                    GetCvarValueForGuestOutputPaintEffect(effect));
+  }
+}
+
+void EmulatorWindow::UpdateFsrSharpnessCvar(float value) {
+  auto cvars_config = GetGuestOutputPaintConfigForCvars();
+  if (cvars_config.GetFsrSharpnessReduction() != value) {
+    OVERRIDE_double(postprocess_ffx_fsr_sharpness_reduction, value);
+  }
+}
+
+void EmulatorWindow::UpdateCasSharpnessCvar(float value) {
+  auto cvars_config = GetGuestOutputPaintConfigForCvars();
+  if (cvars_config.GetCasAdditionalSharpness() != value) {
+    OVERRIDE_double(postprocess_ffx_cas_additional_sharpness, value);
+  }
+}
+
+void EmulatorWindow::UpdateDitherCvar(bool value) {
+  auto cvars_config = GetGuestOutputPaintConfigForCvars();
+  if (cvars_config.GetDither() != value) {
+    OVERRIDE_bool(postprocess_dither, value);
   }
 }
 
@@ -1685,11 +1467,17 @@ void EmulatorWindow::ToggleFullscreen() {
 }
 
 void EmulatorWindow::ToggleDisplayConfigDialog() {
-  if (!display_config_dialog_) {
-    display_config_dialog_ = std::unique_ptr<DisplayConfigDialog>(
-        new DisplayConfigDialog(imgui_drawer_.get(), *this));
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (!qt_window) {
+    return;
+  }
+
+  if (!postprocessing_dialog_qt_) {
+    postprocessing_dialog_qt_ =
+        new PostProcessingDialogQt(qt_window->qwindow(), this);
+    postprocessing_dialog_qt_->show();
   } else {
-    display_config_dialog_.reset();
+    postprocessing_dialog_qt_->close();
   }
 }
 
@@ -2649,8 +2437,8 @@ xe::X_STATUS EmulatorWindow::RunTitle(
     kernel::xam::xam_dialogs_shown_--;
   }
 
-  if (display_config_dialog_) {
-    display_config_dialog_.reset();
+  if (postprocessing_dialog_qt_) {
+    postprocessing_dialog_qt_->close();
   }
 
   ClearDialogs();
@@ -2794,8 +2582,8 @@ void EmulatorWindow::ClearDialogs() {
     profile_config_dialog_.reset();
   }
 
-  if (display_config_dialog_) {
-    display_config_dialog_.reset();
+  if (postprocessing_dialog_qt_) {
+    postprocessing_dialog_qt_->close();
   }
 
   imgui_drawer_.get()->ClearDialogs();

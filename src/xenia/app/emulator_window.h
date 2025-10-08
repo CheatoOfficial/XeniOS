@@ -13,6 +13,8 @@
 #include <memory>
 #include <string>
 
+#include <QPointer>
+
 #include "xenia/app/patches_dialog.h"
 #include "xenia/app/profile_dialogs.h"
 #include "xenia/app/recent_titles_ui.h"
@@ -191,19 +193,7 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
-  class DisplayConfigDialog final : public ui::ImGuiDialog {
-   public:
-    DisplayConfigDialog(ui::ImGuiDrawer* imgui_drawer,
-                        EmulatorWindow& emulator_window)
-        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {}
-
-   protected:
-    void OnDraw(ImGuiIO& io) override;
-
-   private:
-    EmulatorWindow& emulator_window_;
-  };
-
+ public:
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
                           uint32_t height, bool is_game_process = false);
@@ -225,6 +215,14 @@ class EmulatorWindow {
   static ui::Presenter::GuestOutputPaintConfig
   GetGuestOutputPaintConfigForCvars();
   void ApplyDisplayConfigForCvars();
+
+  // Helper methods for updating cvars from Qt dialog
+  void UpdateAntiAliasingCvar(gpu::CommandProcessor::SwapPostEffect effect);
+  void UpdateScalingAndSharpeningCvar(
+      ui::Presenter::GuestOutputPaintConfig::Effect effect);
+  void UpdateFsrSharpnessCvar(float value);
+  void UpdateCasSharpnessCvar(float value);
+  void UpdateDitherCvar(bool value);
 
   void OnKeyDown(ui::KeyEvent& e);
   void OnMouseDown(const ui::MouseEvent& e);
@@ -292,7 +290,7 @@ class EmulatorWindow {
   std::string base_title_;
   bool initializing_shader_storage_ = false;
 
-  std::unique_ptr<DisplayConfigDialog> display_config_dialog_;
+  QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.
