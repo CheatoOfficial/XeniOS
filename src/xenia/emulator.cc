@@ -1313,8 +1313,11 @@ bool Emulator::ExceptionCallback(Exception* ex) {
     return false;
   }
 
-  // Within range. Pause the emulator and eat the exception.
-  Pause();
+  // Within range. Log the crash and suspend the faulting thread.
+  // Only pause the entire emulator if debugging is enabled.
+  if (cvars::debug) {
+    Pause();
+  }
 
   // Dump information into the log.
   auto current_thread = kernel::XThread::GetCurrentThread();
