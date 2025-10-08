@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include "xenia/app/launch_data_restart_dialog_qt.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
@@ -22,9 +23,8 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
-#include "xenia/ui/imgui_dialog.h"
-#include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/window.h"
+#include "xenia/ui/window_qt.h"
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/xbox.h"
 
@@ -396,59 +396,20 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
 
     if (loader_data.launch_data_present) {
       auto display_window = kernel_state()->emulator()->display_window();
-      auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
 
-      if (display_window && imgui_drawer) {
+      if (display_window) {
         // Show a dialog and wait for user to click OK before terminating
         // The parent UI will detect the launch_data.bin file and automatically
         // relaunch without a game argument when this process exits
-        display_window->app_context().CallInUIThreadSynchronous(
-            [imgui_drawer, display_window, kernel_state = kernel_state()]() {
-              class LaunchDataRestartDialog : public xe::ui::ImGuiDialog {
-               public:
-                LaunchDataRestartDialog(ui::ImGuiDrawer* imgui_drawer,
-                                        ui::Window* display_window,
-                                        kernel::KernelState* kernel_state)
-                    : ImGuiDialog(imgui_drawer),
-                      display_window_(display_window),
-                      kernel_state_(kernel_state) {}
-
-               protected:
-                void OnDraw(ImGuiIO& io) override {
-                  bool dialog_open = true;
-                  ImGui::OpenPopup("Title Restart Required");
-                  if (ImGui::BeginPopupModal(
-                          "Title Restart Required", &dialog_open,
-                          ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::TextUnformatted(
-                        "Title is restarting with new launch data.\n"
-                        "Click OK to continue. Game will be loaded "
-                        "automatically.");
-                    ImGui::Spacing();
-                    if (ImGui::Button("OK", ImVec2(120, 0))) {
-                      ImGui::CloseCurrentPopup();
-                      Close();
-                      // Terminate the title and quit after user clicks OK
-                      kernel_state_->TerminateTitle();
-                      display_window_->app_context().QuitFromUIThread();
-                    }
-                    ImGui::EndPopup();
-                  }
-                  if (!dialog_open) {
-                    Close();
-                    kernel_state_->TerminateTitle();
-                    display_window_->app_context().QuitFromUIThread();
-                  }
-                }
-
-               private:
-                ui::Window* display_window_;
-                kernel::KernelState* kernel_state_;
-              };
-
-              new LaunchDataRestartDialog(imgui_drawer, display_window,
-                                          kernel_state);
-            });
+        auto* qt_window = dynamic_cast<ui::QtWindow*>(display_window);
+        if (qt_window) {
+          display_window->app_context().CallInUIThread(
+              [qt_window, display_window, kernel_state = kernel_state()]() {
+                auto* dialog = new app::LaunchDataRestartDialogQt(
+                    qt_window->qwindow(), display_window, kernel_state);
+                dialog->show();
+              });
+        }
       }
       // Don't call TerminateTitle here - the dialog will do it when user clicks
       // OK

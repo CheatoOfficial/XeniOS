@@ -15,9 +15,7 @@
 
 #include <QPointer>
 
-#include "xenia/app/patches_dialog.h"
 #include "xenia/app/profile_dialogs.h"
-#include "xenia/app/recent_titles_ui.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -174,6 +172,7 @@ class EmulatorWindow {
 
     void OnMouseDown(ui::MouseEvent& e) override;
     void OnMouseUp(ui::MouseEvent& e) override;
+    void OnMouseDoubleClick(ui::MouseEvent& e) override;
 
    private:
     EmulatorWindow& emulator_window_;
@@ -226,7 +225,7 @@ class EmulatorWindow {
 
   void OnKeyDown(ui::KeyEvent& e);
   void OnMouseDown(const ui::MouseEvent& e);
-  void ToggleFullscreenOnDoubleClick();
+  void OnMouseDoubleClick(const ui::MouseEvent& e);
   void FileDrop(const std::filesystem::path& filename);
   void OnMouseUp(const ui::MouseEvent& e);
   void FileClose();
@@ -234,8 +233,6 @@ class EmulatorWindow {
   void ExtractZarchive();
   void CreateZarchive();
   void ShowContentDirectory();
-  void ShowConfigDialog();
-  void ShowPatchesDialog();
   void CpuTimeScalarReset();
   void CpuTimeScalarSetHalf();
   void CpuTimeScalarSetDouble();
@@ -244,10 +241,13 @@ class EmulatorWindow {
   void GpuTraceFrame();
   void GpuClearCaches();
   void ToggleDisplayConfigDialog();
+  void ToggleConfigDialog();
+  void OpenConfigDialog(const std::string& category = "");
   void ToggleControllerVibration();
   void ShowCompatibility();
   void ShowFAQ();
   void ShowBuildCommit();
+  void ShowAbout();
 
   EmulatorWindow::ControllerHotKey ProcessControllerHotkey(int buttons);
   void VibrateController(xe::hid::InputSystem* input_sys, uint32_t user_index,
@@ -264,8 +264,6 @@ class EmulatorWindow {
   void LoadRecentlyLaunchedTitles();
 
   void ClearDialogs();
-
-  class RecentTitlesUI* recent_titles_ui_ = nullptr;
 
   Emulator* emulator_;
   ui::WindowedAppContext& app_context_;
@@ -291,6 +289,9 @@ class EmulatorWindow {
   bool initializing_shader_storage_ = false;
 
   QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
+  QPointer<class GameListDialogQt> game_list_dialog_qt_;
+  QPointer<class ProfileDialogQt> profile_dialog_qt_;
+  QPointer<class ConfigDialogQt> config_dialog_qt_;
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.

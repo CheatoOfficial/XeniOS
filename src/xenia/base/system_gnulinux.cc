@@ -30,8 +30,9 @@ void LaunchWebBrowser(const std::string_view url) {
 }
 
 void LaunchFileExplorer(const std::filesystem::path& path) {
-  auto cmd = std::string("xdg-open ");
-  cmd.append(path);
+  auto cmd = std::string("xdg-open \"");
+  cmd.append(path.string());
+  cmd.append("\"");
   system(cmd.c_str());
 }
 

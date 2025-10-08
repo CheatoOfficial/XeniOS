@@ -12,11 +12,20 @@
 #include <cstdlib>
 #include <sstream>
 #include <thread>
+
+#include <QCursor>
+#include <QGridLayout>
+#include <QMenu>
+#include <QMessageBox>
+
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
-#include "xenia/app/config_dialog.h"
+#include "xenia/app/config_dialog_qt.h"
+#include "xenia/app/game_list_dialog_qt.h"
+#include "xenia/app/notification_widget_qt.h"
 #include "xenia/app/postprocessing_dialog_qt.h"
+#include "xenia/app/profile_dialog_qt.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -345,7 +354,16 @@ void EmulatorWindow::OnEmulatorInitialized() {
 
   // Show recently played games list when the app starts
   if (!recently_launched_titles_.empty() && !is_game_process_) {
-    recent_titles_ui_ = new RecentTitlesUI(imgui_drawer_.get(), this);
+    auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+    if (qt_window) {
+      // Get the central widget and its layout
+      QWidget* central_widget = qt_window->qwindow()->centralWidget();
+      if (central_widget && central_widget->layout()) {
+        game_list_dialog_qt_ = new GameListDialogQt(central_widget, this);
+        // Add it to the layout so it fills the window
+        central_widget->layout()->addWidget(game_list_dialog_qt_);
+      }
+    }
   }
 
   // Start periodic child process checking if this is UI process
@@ -433,6 +451,11 @@ void EmulatorWindow::EmulatorWindowListener::OnMouseDown(ui::MouseEvent& e) {
 
 void EmulatorWindow::EmulatorWindowListener::OnMouseUp(ui::MouseEvent& e) {
   emulator_window_.OnMouseUp(e);
+}
+
+void EmulatorWindow::EmulatorWindowListener::OnMouseDoubleClick(
+    ui::MouseEvent& e) {
+  emulator_window_.OnMouseDoubleClick(e);
 }
 
 void EmulatorWindow::DisplayConfigGameConfigLoadCallback::PostGameConfigLoad() {
@@ -560,7 +583,6 @@ bool EmulatorWindow::Initialize() {
         });
     file_menu_ = file_menu.get();
     auto recent_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Open Recent");
-    auto zar_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Zar Package");
     FillRecentlyLaunchedTitlesMenu(recent_menu.get());
     {
       auto open_item = MenuItem::Create(MenuItem::Type::kString, "&Open...",
@@ -574,17 +596,6 @@ bool EmulatorWindow::Initialize() {
       file_menu->AddChild(std::move(open_item));
       file_open_recent_menu_ = recent_menu.get();
       file_menu->AddChild(std::move(recent_menu));
-      file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-      file_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "Install Content...",
-                           std::bind(&EmulatorWindow::InstallContent, this)));
-      zar_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "Create",
-                           std::bind(&EmulatorWindow::CreateZarchive, this)));
-      zar_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "Extract",
-                           std::bind(&EmulatorWindow::ExtractZarchive, this)));
-      file_menu->AddChild(std::move(zar_menu));
 #ifdef DEBUG
       file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
       file_menu->AddChild(
@@ -595,13 +606,6 @@ bool EmulatorWindow::Initialize() {
       file_menu->AddChild(MenuItem::Create(
           MenuItem::Type::kString, "Show content directory...",
           std::bind(&EmulatorWindow::ShowContentDirectory, this)));
-      file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-      file_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "&Configuration Manager",
-                           std::bind(&EmulatorWindow::ShowConfigDialog, this)));
-      file_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Manage patches",
-          std::bind(&EmulatorWindow::ShowPatchesDialog, this)));
       file_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
       file_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "E&xit", "Alt+F4",
@@ -618,91 +622,63 @@ bool EmulatorWindow::Initialize() {
     }
     main_menu->AddChild(std::move(profile_menu));
 
-    // CPU menu.
-    auto cpu_menu = MenuItem::Create(MenuItem::Type::kPopup, "&CPU");
+    // Configuration menu.
+    auto config_menu =
+        MenuItem::Create(MenuItem::Type::kPopup, "&Configuration");
     {
-      cpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Reset Time Scalar", "Numpad *",
-          std::bind(&EmulatorWindow::CpuTimeScalarReset, this)));
-      cpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "Time Scalar /= 2", "Numpad -",
-          std::bind(&EmulatorWindow::CpuTimeScalarSetHalf, this)));
-      cpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "Time Scalar *= 2", "Numpad +",
-          std::bind(&EmulatorWindow::CpuTimeScalarSetDouble, this)));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&General",
+                           [this]() { OpenConfigDialog("General"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&CPU",
+                           [this]() { OpenConfigDialog("CPU"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&GPU",
+                           [this]() { OpenConfigDialog("GPU"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&APU",
+                           [this]() { OpenConfigDialog("APU"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&HID",
+                           [this]() { OpenConfigDialog("HID"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Kernel",
+                           [this]() { OpenConfigDialog("Kernel"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Logging",
+                           [this]() { OpenConfigDialog("Logging"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Storage",
+                           [this]() { OpenConfigDialog("Storage"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&UI",
+                           [this]() { OpenConfigDialog("UI"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Video",
+                           [this]() { OpenConfigDialog("Video"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&x64",
+                           [this]() { OpenConfigDialog("x64"); }));
     }
-    cpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-    {
-      cpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kString,
-                                          "Toggle Profiler &Display", "F3",
-                                          []() { Profiler::ToggleDisplay(); }));
-      cpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kString,
-                                          "&Pause/Resume Profiler", "`",
-                                          []() { Profiler::TogglePause(); }));
-    }
-    cpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-    {
-      cpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Break and Show Guest Debugger",
-          "Pause/Break",
-          std::bind(&EmulatorWindow::CpuBreakIntoDebugger, this)));
-      cpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Break into Host Debugger",
-          "Ctrl+Pause/Break",
-          std::bind(&EmulatorWindow::CpuBreakIntoHostDebugger, this)));
-    }
-    main_menu->AddChild(std::move(cpu_menu));
+    main_menu->AddChild(std::move(config_menu));
 
-    // GPU menu.
-    auto gpu_menu = MenuItem::Create(MenuItem::Type::kPopup, "&GPU");
+    // Tools menu.
+    auto tools_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Tools");
     {
-      gpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Trace Frame", "F4", [this]() {
-            ExecuteOrForward(std::bind(&EmulatorWindow::GpuTraceFrame, this),
-                             ui::VirtualKey::kF4);
-          }));
+      tools_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Install Content...",
+                           std::bind(&EmulatorWindow::InstallContent, this)));
+      tools_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
+      auto zar_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Zar Package");
+      zar_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "Create",
+                           std::bind(&EmulatorWindow::CreateZarchive, this)));
+      zar_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "Extract",
+                           std::bind(&EmulatorWindow::ExtractZarchive, this)));
+      tools_menu->AddChild(std::move(zar_menu));
     }
-    gpu_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-    {
-      gpu_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Clear Runtime Caches", "F5",
-          std::bind(&EmulatorWindow::GpuClearCaches, this)));
-    }
-    main_menu->AddChild(std::move(gpu_menu));
-
-    // Display menu.
-    auto display_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Display");
-    {
-      display_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Post-processing settings", "F6",
-          std::bind(&EmulatorWindow::ToggleDisplayConfigDialog, this)));
-    }
-    display_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-    {
-      display_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Fullscreen", "F11", [this]() {
-            ExecuteOrForward(std::bind(&EmulatorWindow::ToggleFullscreen, this),
-                             ui::VirtualKey::kF11);
-          }));
-      display_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Take Screenshot", "F12", [this]() {
-            ExecuteOrForward(std::bind(&EmulatorWindow::TakeScreenshot, this),
-                             ui::VirtualKey::kF12);
-          }));
-    }
-    main_menu->AddChild(std::move(display_menu));
-
-    // HID menu.
-    auto hid_menu = MenuItem::Create(MenuItem::Type::kPopup, "&HID");
-    {
-      hid_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Toggle controller vibration", "",
-          std::bind(&EmulatorWindow::ToggleControllerVibration, this)));
-      hid_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&Display controller hotkeys", "",
-          std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
-    }
-    main_menu->AddChild(std::move(hid_menu));
+    main_menu->AddChild(std::move(tools_menu));
 
     // Help menu.
     auto help_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Help");
@@ -725,9 +701,9 @@ bool EmulatorWindow::Initialize() {
                 "compare/" XE_BUILD_COMMIT "..." XE_BUILD_BRANCH);
           }));
       help_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
-      help_menu->AddChild(MenuItem::Create(
-          MenuItem::Type::kString, "&About...",
-          []() { LaunchWebBrowser("https://xenia.jp/about/"); }));
+      help_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&About...",
+                           std::bind(&EmulatorWindow::ShowAbout, this)));
     }
     main_menu->AddChild(std::move(help_menu));
 
@@ -999,8 +975,62 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 }
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
-  if (e.button() == ui::MouseEvent::Button::kLeft) {
-    ToggleFullscreenOnDoubleClick();
+  if (e.button() == ui::MouseEvent::Button::kRight) {
+    // Show context menu on right-click
+    auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+    if (qt_window) {
+      QMenu context_menu(qt_window->qwindow());
+
+      QAction* fullscreen_action = context_menu.addAction(
+          window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen");
+      QObject::connect(fullscreen_action, &QAction::triggered,
+                       [this]() { ToggleFullscreen(); });
+
+      context_menu.addSeparator();
+
+      QAction* postprocess_action =
+          context_menu.addAction("Post-Processing...");
+      QObject::connect(postprocess_action, &QAction::triggered,
+                       [this]() { ToggleDisplayConfigDialog(); });
+
+      // Get current vibration state
+      bool vibration_enabled = false;
+      auto input_sys = emulator()->input_system();
+      if (input_sys) {
+        vibration_enabled = input_sys->GetVibrationCvar();
+      }
+
+      QString vibration_text =
+          QString("Vibration: %1").arg(vibration_enabled ? "On" : "Off");
+      QAction* vibration_action = context_menu.addAction(vibration_text);
+      QObject::connect(vibration_action, &QAction::triggered,
+                       [this]() { ToggleControllerVibration(); });
+
+      QAction* hotkeys_action =
+          context_menu.addAction("Show Controller Hotkeys");
+      QObject::connect(hotkeys_action, &QAction::triggered,
+                       [this]() { DisplayHotKeysConfig(); });
+
+      context_menu.addSeparator();
+
+      QAction* screenshot_action = context_menu.addAction("Take Screenshot");
+      QObject::connect(screenshot_action, &QAction::triggered,
+                       [this]() { TakeScreenshot(); });
+
+      QAction* profile_action = context_menu.addAction("Show Profile");
+      QObject::connect(profile_action, &QAction::triggered, [this]() {
+        if (!profile_config_dialog_) {
+          profile_config_dialog_ =
+              std::make_unique<ProfileConfigDialog>(imgui_drawer(), this);
+        } else {
+          profile_config_dialog_.reset();
+        }
+      });
+
+      // Show menu at mouse position
+      QPoint global_pos = QCursor::pos();
+      context_menu.exec(global_pos);
+    }
   }
 }
 
@@ -1054,9 +1084,14 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
   const std::string notification_text =
       fmt::format("Screenshot saved: {}", filename);
 
-  app_context_.CallInUIThread([&, notification_text]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Screenshot Created!",
-                                       notification_text, 0);
+  app_context_.CallInUIThread([this, notification_text]() {
+    auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+    if (qt_window) {
+      auto* notification = new NotificationWidgetQt(
+          qt_window->qwindow(), "Screenshot Created!",
+          QString::fromStdString(notification_text), 3000);
+      notification->Show();
+    }
   });
 }
 
@@ -1082,34 +1117,15 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
   }
 }
 
-void EmulatorWindow::ToggleFullscreenOnDoubleClick() {
+void EmulatorWindow::OnMouseDoubleClick(const ui::MouseEvent& e) {
   // Don't toggle fullscreen if any ImGui dialogs are open
   // This allows users to double-click to select text in dialog input fields
   if (imgui_drawer_ && imgui_drawer_->HasOpenDialogs()) {
     return;
   }
 
-  // this function tests if user has double clicked.
-  // if double click was achieved the fullscreen gets toggled
-  const auto now = steady_clock::now();  // current mouse event time
-  constexpr int16_t mouse_down_max_threshold = 250;
-  constexpr int16_t mouse_up_max_threshold = 250;
-  constexpr int16_t mouse_up_down_max_delta = 100;
-  // max delta to prevent 'chaining' of double clicks with next mouse events
-
-  const auto last_mouse_down_delta = diff_in_ms(now, last_mouse_down);
-  if (last_mouse_down_delta >= mouse_down_max_threshold) {
-    last_mouse_down = now;
-    return;
-  }
-
-  const auto last_mouse_up_delta = diff_in_ms(now, last_mouse_up);
-  const auto mouse_event_deltas = diff_in_ms(last_mouse_up, last_mouse_down);
-  if (last_mouse_up_delta >= mouse_up_max_threshold) {
-    return;
-  }
-
-  if (mouse_event_deltas < mouse_up_down_max_delta) {
+  // Only toggle fullscreen on left button double-click
+  if (e.button() == ui::MouseEvent::Button::kLeft) {
     ToggleFullscreen();
   }
 }
@@ -1396,24 +1412,6 @@ void EmulatorWindow::ShowContentDirectory() {
   LaunchFileExplorer(content_root);
 }
 
-void EmulatorWindow::ShowPatchesDialog() {
-  if (emulator_) {
-    app_context_.CallInUIThread([this]() {
-      auto dialog = new PatchesDialog(imgui_drawer_.get(), this);
-      imgui_drawer_->AddDialog(dialog);
-    });
-  }
-}
-
-void EmulatorWindow::ShowConfigDialog() {
-  if (emulator_) {
-    app_context_.CallInUIThread([this]() {
-      auto dialog = new ConfigDialog(imgui_drawer_.get(), this);
-      imgui_drawer_->AddDialog(dialog);
-    });
-  }
-}
-
 void EmulatorWindow::CpuTimeScalarReset() {
   Clock::set_guest_time_scalar(1.0);
   UpdateTitle();
@@ -1484,18 +1482,43 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
 }
 
 void EmulatorWindow::ToggleProfilesConfigDialog() {
-  if (!profile_config_dialog_) {
-    disable_hotkeys_ = true;
-    emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 1);
-    profile_config_dialog_ =
-        std::make_unique<ProfileConfigDialog>(imgui_drawer_.get(), this);
-    kernel::xam::xam_dialogs_shown_++;
-  } else {
-    disable_hotkeys_ = false;
-    emulator_->kernel_state()->BroadcastNotification(kXNotificationSystemUI, 0);
-    profile_config_dialog_.reset();
-    kernel::xam::xam_dialogs_shown_--;
+  if (!profile_dialog_qt_) {
+    profile_dialog_qt_ = new ProfileDialogQt(nullptr, this);
+    // Refresh game list icons when profile dialog closes
+    QObject::connect(profile_dialog_qt_, &QDialog::finished, [this]() {
+      if (game_list_dialog_qt_) {
+        game_list_dialog_qt_->RefreshIcons();
+      }
+    });
   }
+
+  profile_dialog_qt_->show();
+  profile_dialog_qt_->raise();
+  profile_dialog_qt_->activateWindow();
+}
+
+void EmulatorWindow::ToggleConfigDialog() {
+  if (!config_dialog_qt_) {
+    config_dialog_qt_ = new ConfigDialogQt(nullptr, this);
+  }
+
+  config_dialog_qt_->show();
+  config_dialog_qt_->raise();
+  config_dialog_qt_->activateWindow();
+}
+
+void EmulatorWindow::OpenConfigDialog(const std::string& category) {
+  if (!config_dialog_qt_) {
+    config_dialog_qt_ = new ConfigDialogQt(nullptr, this);
+  }
+
+  if (!category.empty()) {
+    config_dialog_qt_->SelectCategory(category);
+  }
+
+  config_dialog_qt_->show();
+  config_dialog_qt_->raise();
+  config_dialog_qt_->activateWindow();
 }
 
 void EmulatorWindow::ToggleControllerVibration() {
@@ -1510,6 +1533,23 @@ void EmulatorWindow::ToggleControllerVibration() {
           kXNotificationSystemProfileSettingChanged,
           static_cast<uint32_t>(input_sys->GetConnectedSlots().count()));
     }
+
+    // Save the config to disk
+    config::SaveConfig();
+
+    // Show notification
+    bool vibration_enabled = input_sys->GetVibrationCvar();
+    QString status = vibration_enabled ? "On" : "Off";
+
+    app_context_.CallInUIThread([this, status]() {
+      auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+      if (qt_window) {
+        auto* notification = new NotificationWidgetQt(
+            qt_window->qwindow(), "Controller Vibration",
+            QString("Vibration is now %1").arg(status), 2000);
+        notification->Show();
+      }
+    });
   }
 }
 
@@ -1539,6 +1579,41 @@ void EmulatorWindow::ShowBuildCommit() {
   LaunchWebBrowser(
       "https://github.com/has207/xenia-edge/commit/" XE_BUILD_COMMIT);
 #endif
+}
+
+void EmulatorWindow::ShowAbout() {
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (!qt_window) {
+    return;
+  }
+
+  QString about_text = QString(
+                           "<h2>Xenia Edge</h2>"
+                           "<p>Experimental fork of Xenia Canary</p>"
+                           "<p><b>Branch:</b> %1<br>"
+                           "<b>Commit:</b> %2<br>"
+                           "<b>Build Date:</b> %3</p>"
+                           "<p>For more information, visit <a "
+                           "href=\"https://github.com/has207/"
+                           "xenia-edge\">github.com/has207/xenia-edge</a></p>")
+                           .arg(XE_BUILD_BRANCH)
+                           .arg(XE_BUILD_COMMIT_SHORT)
+                           .arg(XE_BUILD_DATE);
+
+  QMessageBox about_box(qt_window->qwindow());
+  about_box.setWindowTitle("About Xenia Edge");
+  about_box.setTextFormat(Qt::RichText);
+  about_box.setText(about_text);
+  about_box.setStandardButtons(QMessageBox::Ok);
+  about_box.setDefaultButton(QMessageBox::Ok);
+
+  // Center the button by using a custom layout
+  QGridLayout* layout = qobject_cast<QGridLayout*>(about_box.layout());
+  if (layout) {
+    layout->setAlignment(Qt::AlignCenter);
+  }
+
+  about_box.exec();
 }
 
 void EmulatorWindow::UpdateTitle() {
@@ -2021,9 +2096,13 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg += "Controller Hotkeys: " +
          xe::string_util::BoolToString(cvars::controller_hotkeys);
 
-  ClearDialogs();
-  xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Controller Hotkeys",
-                                      msg);
+  // Show Qt message box
+  QMessageBox msgBox;
+  msgBox.setWindowTitle("Controller Hotkeys");
+  msgBox.setText(QString::fromStdString(msg));
+  msgBox.setIcon(QMessageBox::Information);
+  msgBox.setStandardButtons(QMessageBox::Ok);
+  msgBox.exec();
 }
 
 std::string EmulatorWindow::CanonicalizeFileExtension(
@@ -2178,10 +2257,10 @@ void EmulatorWindow::CheckChildProcessStatus() {
     XELOGI("Recent titles reloaded, count: {}",
            recently_launched_titles_.size());
 
-    // Reload the recent titles UI dialog if it's open
-    if (recent_titles_ui_) {
-      recent_titles_ui_->LoadRecentTitles();
-      XELOGI("Recent titles UI dialog refreshed");
+    // Reload the recent titles dialog if it's open
+    if (game_list_dialog_qt_) {
+      game_list_dialog_qt_->LoadGameList();
+      XELOGI("Game list dialog refreshed");
     }
 
     // Check for launch_data.bin

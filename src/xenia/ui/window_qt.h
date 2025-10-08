@@ -42,6 +42,7 @@ class QtWindow : public Window {
   void OnMouseMoveEvent(QMouseEvent* event);
   void OnMousePressEvent(QMouseEvent* event);
   void OnMouseReleaseEvent(QMouseEvent* event);
+  void OnMouseDoubleClickEvent(QMouseEvent* event);
   void OnWheelEvent(QWheelEvent* event);
 
  protected:

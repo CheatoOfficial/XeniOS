@@ -1,0 +1,444 @@
+/**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2025 Xenia Canary. All rights reserved.                          *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+#include "xenia/app/profile_dialog_qt.h"
+
+#include <QHBoxLayout>
+#include <QImage>
+#include <QInputDialog>
+#include <QMenu>
+#include <QMessageBox>
+
+#include "third_party/fmt/include/fmt/format.h"
+#include "xenia/app/emulator_window.h"
+#include "xenia/base/logging.h"
+#include "xenia/base/system.h"
+#include "xenia/emulator.h"
+#include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/xam/profile_manager.h"
+#include "xenia/kernel/xam/ui/gamercard_ui.h"
+#include "xenia/kernel/xam/ui/title_info_ui.h"
+#include "xenia/kernel/xam/xam_state.h"
+
+namespace xe {
+namespace app {
+
+ProfileDialogQt::ProfileDialogQt(QWidget* parent,
+                                 EmulatorWindow* emulator_window)
+    : QDialog(parent), emulator_window_(emulator_window) {
+  SetupUI();
+  LoadProfileIcons();
+  PopulateProfileList();
+}
+
+ProfileDialogQt::~ProfileDialogQt() {
+  // Cleanup handled by Qt
+}
+
+void ProfileDialogQt::SetupUI() {
+  setWindowTitle("Profiles Menu");
+  setModal(false);
+  setAttribute(Qt::WA_DeleteOnClose);
+  setMinimumSize(400, 500);
+
+  auto* main_layout = new QVBoxLayout(this);
+
+  // Profile list
+  profile_list_ = new QListWidget(this);
+  profile_list_->setContextMenuPolicy(Qt::CustomContextMenu);
+  profile_list_->setIconSize(QSize(64, 64));
+  connect(profile_list_, &QListWidget::itemClicked, this,
+          &ProfileDialogQt::OnProfileItemClicked);
+  connect(profile_list_, &QListWidget::itemDoubleClicked, this,
+          &ProfileDialogQt::OnProfileItemDoubleClicked);
+  connect(profile_list_, &QListWidget::customContextMenuRequested, this,
+          &ProfileDialogQt::OnProfileContextMenu);
+
+  main_layout->addWidget(profile_list_);
+
+  // Buttons
+  auto* button_layout = new QHBoxLayout();
+
+  create_profile_button_ = new QPushButton("Create Profile", this);
+  connect(create_profile_button_, &QPushButton::clicked, this,
+          &ProfileDialogQt::OnCreateProfileClicked);
+  button_layout->addWidget(create_profile_button_);
+
+  button_layout->addStretch();
+
+  close_button_ = new QPushButton("Close", this);
+  connect(close_button_, &QPushButton::clicked, this,
+          &ProfileDialogQt::OnCloseClicked);
+  button_layout->addWidget(close_button_);
+
+  main_layout->addLayout(button_layout);
+}
+
+void ProfileDialogQt::LoadProfileIcons() {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return;
+  }
+
+  // Load icons for all accounts (not just logged in profiles)
+  auto accounts = profile_manager->GetAccounts();
+  for (const auto& [xuid, account] : *accounts) {
+    QPixmap icon = LoadProfileIcon(xuid);
+    if (!icon.isNull()) {
+      profile_icons_[xuid] = icon;
+    }
+  }
+}
+
+QPixmap ProfileDialogQt::LoadProfileIcon(uint64_t xuid) {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return QPixmap();
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return QPixmap();
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return QPixmap();
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return QPixmap();
+  }
+
+  const auto profile = profile_manager->GetProfile(xuid);
+  if (!profile) {
+    return QPixmap();
+  }
+
+  const auto profile_icon =
+      profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
+  if (profile_icon.empty()) {
+    return QPixmap();
+  }
+
+  QImage image;
+  if (image.loadFromData(profile_icon.data(),
+                         static_cast<int>(profile_icon.size()))) {
+    return QPixmap::fromImage(image);
+  }
+
+  return QPixmap();
+}
+
+void ProfileDialogQt::PopulateProfileList() {
+  profile_list_->clear();
+
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    profile_list_->addItem("No emulator available");
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    profile_list_->addItem("No kernel state available");
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    profile_list_->addItem("No XAM state available");
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    profile_list_->addItem("No profile manager available");
+    return;
+  }
+
+  auto profiles = profile_manager->GetAccounts();
+  if (profiles->empty()) {
+    profile_list_->addItem("No profiles found!");
+    return;
+  }
+
+  for (auto& [xuid, account] : *profiles) {
+    const uint8_t user_index =
+        profile_manager->GetUserIndexAssignedToProfile(xuid);
+
+    QString gamertag = QString::fromStdString(account.GetGamertagString());
+    QString status = (user_index == XUserIndexAny)
+                         ? " (Not logged in)"
+                         : fmt::format(" (Slot {})", user_index + 1).c_str();
+
+    auto* item = new QListWidgetItem(gamertag + status);
+    item->setData(Qt::UserRole, QVariant::fromValue(xuid));
+
+    // Set icon if available
+    auto icon_it = profile_icons_.find(xuid);
+    if (icon_it != profile_icons_.end()) {
+      item->setIcon(QIcon(icon_it->second));
+    }
+
+    profile_list_->addItem(item);
+  }
+}
+
+void ProfileDialogQt::RefreshProfiles() {
+  // Clear existing icons first
+  profile_icons_.clear();
+  LoadProfileIcons();
+  PopulateProfileList();
+}
+
+void ProfileDialogQt::OnProfileItemClicked(QListWidgetItem* item) {
+  if (!item) {
+    return;
+  }
+
+  selected_xuid_ = item->data(Qt::UserRole).toULongLong();
+}
+
+void ProfileDialogQt::OnProfileItemDoubleClicked(QListWidgetItem* item) {
+  if (!item) {
+    return;
+  }
+
+  uint64_t xuid = item->data(Qt::UserRole).toULongLong();
+  if (xuid == 0) {
+    return;  // Not a valid profile item
+  }
+
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return;
+  }
+
+  const uint8_t user_index =
+      profile_manager->GetUserIndexAssignedToProfile(xuid);
+
+  if (user_index == XUserIndexAny) {
+    // Not logged in, so login
+    profile_manager->Login(xuid);
+    RefreshProfiles();
+  } else {
+    // Already logged in, so logout
+    profile_manager->Logout(user_index);
+    RefreshProfiles();
+  }
+}
+
+void ProfileDialogQt::OnProfileContextMenu(const QPoint& pos) {
+  QListWidgetItem* item = profile_list_->itemAt(pos);
+  if (!item) {
+    return;
+  }
+
+  uint64_t xuid = item->data(Qt::UserRole).toULongLong();
+  if (xuid == 0) {
+    return;  // Not a valid profile item
+  }
+
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return;
+  }
+
+  const uint8_t user_index =
+      profile_manager->GetUserIndexAssignedToProfile(xuid);
+
+  QMenu context_menu(this);
+
+  if (user_index == XUserIndexAny) {
+    QAction* login_action = context_menu.addAction("Login");
+    connect(login_action, &QAction::triggered, [=, this]() {
+      profile_manager->Login(xuid);
+      RefreshProfiles();
+    });
+
+    // Login to slot submenu
+    QMenu* login_slot_menu = context_menu.addMenu("Login to slot:");
+    for (uint8_t i = 1; i <= XUserMaxUserCount; i++) {
+      QAction* slot_action = login_slot_menu->addAction(
+          QString::fromStdString(fmt::format("slot {}", i)));
+      connect(slot_action, &QAction::triggered, [=, this]() {
+        profile_manager->Login(xuid, i - 1);
+        RefreshProfiles();
+      });
+    }
+  } else {
+    QAction* logout_action = context_menu.addAction("Logout");
+    connect(logout_action, &QAction::triggered, [=, this]() {
+      profile_manager->Logout(user_index);
+      RefreshProfiles();
+    });
+  }
+
+  // Modify (Gamercard)
+  QAction* modify_action = context_menu.addAction("Modify");
+  connect(modify_action, &QAction::triggered, [=, this]() {
+    new kernel::xam::ui::GamercardUI(
+        emulator_window_->window(), emulator_window_->imgui_drawer(),
+        emulator_window_->emulator()->kernel_state(), xuid);
+  });
+
+  // Show Played Titles (disabled if not signed in)
+  const bool is_signedin = profile_manager->GetProfile(xuid) != nullptr;
+  QAction* played_titles_action = context_menu.addAction("Show Played Titles");
+  played_titles_action->setEnabled(is_signedin);
+  connect(played_titles_action, &QAction::triggered, [=, this]() {
+    new kernel::xam::ui::TitleListUI(emulator_window_->imgui_drawer(),
+                                     ImVec2(500, 100),
+                                     profile_manager->GetProfile(user_index));
+  });
+
+  QAction* show_content_action =
+      context_menu.addAction("Show Content Directory");
+  connect(show_content_action, &QAction::triggered, [=, this]() {
+    const auto path = profile_manager->GetProfileContentPath(
+        xuid, emulator_window_->emulator()->kernel_state()->title_id());
+
+    if (!std::filesystem::exists(path)) {
+      std::filesystem::create_directories(path);
+    }
+
+    std::thread path_open(LaunchFileExplorer, path);
+    path_open.detach();
+  });
+
+  if (!emulator_window_->emulator()->is_title_open()) {
+    context_menu.addSeparator();
+    QAction* delete_action = context_menu.addAction("Delete Profile...");
+    connect(delete_action, &QAction::triggered, [=, this]() {
+      auto profiles = profile_manager->GetAccounts();
+      auto profile_it = profiles->find(xuid);
+      if (profile_it == profiles->end()) {
+        return;
+      }
+
+      QString gamertag =
+          QString::fromStdString(profile_it->second.GetGamertagString());
+
+      QMessageBox::StandardButton reply = QMessageBox::question(
+          this, "Delete Profile",
+          QString("Are you sure you want to delete profile: %1 (XUID: %2)?\n\n"
+                  "This will remove all data assigned to this profile "
+                  "including savefiles.")
+              .arg(gamertag)
+              .arg(xuid, 16, 16, QChar('0')),
+          QMessageBox::Yes | QMessageBox::No);
+
+      if (reply == QMessageBox::Yes) {
+        profile_manager->DeleteProfile(xuid);
+        RefreshProfiles();
+      }
+    });
+  }
+
+  context_menu.exec(profile_list_->mapToGlobal(pos));
+}
+
+void ProfileDialogQt::OnCreateProfileClicked() {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return;
+  }
+
+  // Prompt for gamertag
+  bool ok;
+  QString gamertag = QInputDialog::getText(
+      this, "Create Profile",
+      "Enter gamertag (3-15 characters):", QLineEdit::Normal, "", &ok);
+
+  if (!ok || gamertag.isEmpty()) {
+    return;
+  }
+
+  // Validate gamertag length
+  if (gamertag.length() < 3 || gamertag.length() > 15) {
+    QMessageBox::warning(this, "Invalid Gamertag",
+                         "Gamertag must be between 3 and 15 characters.");
+    return;
+  }
+
+  // Create the profile
+  std::string gamertag_string = gamertag.toStdString();
+  bool autologin = (profile_manager->GetAccountCount() == 0);
+
+  if (profile_manager->CreateProfile(gamertag_string, autologin, false)) {
+    RefreshProfiles();
+    QMessageBox::information(
+        this, "Profile Created",
+        QString("Profile '%1' created successfully!").arg(gamertag));
+  } else {
+    QMessageBox::critical(this, "Error",
+                          "Failed to create profile. Please try again.");
+  }
+}
+
+void ProfileDialogQt::OnCloseClicked() { close(); }
+
+}  // namespace app
+}  // namespace xe

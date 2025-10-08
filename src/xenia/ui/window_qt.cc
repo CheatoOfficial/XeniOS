@@ -106,6 +106,13 @@ class ExternalRenderWidget : public QWidget {
     event->accept();
   }
 
+  void mouseDoubleClickEvent(QMouseEvent* event) override {
+    if (window_) {
+      window_->OnMouseDoubleClickEvent(event);
+    }
+    event->accept();
+  }
+
   void wheelEvent(QWheelEvent* event) override {
     if (window_) {
       window_->OnWheelEvent(event);
@@ -693,6 +700,19 @@ void QtWindow::OnMouseReleaseEvent(QMouseEvent* event) {
 
   MouseEvent e(this, button, event->position().x(), event->position().y());
   OnMouseUp(e, destruction_receiver);
+}
+
+void QtWindow::OnMouseDoubleClickEvent(QMouseEvent* event) {
+  WindowDestructionReceiver destruction_receiver(this);
+
+  // Only handle left button double-click
+  if (event->button() != Qt::LeftButton) {
+    return;
+  }
+
+  MouseEvent::Button button = MouseEvent::Button::kLeft;
+  MouseEvent e(this, button, event->position().x(), event->position().y());
+  OnMouseDoubleClick(e, destruction_receiver);
 }
 
 void QtWindow::OnMouseMoveEvent(QMouseEvent* event) {

@@ -594,6 +594,8 @@ class Window {
                    WindowDestructionReceiver& destruction_receiver);
   void OnMouseUp(MouseEvent& e,
                  WindowDestructionReceiver& destruction_receiver);
+  void OnMouseDoubleClick(MouseEvent& e,
+                          WindowDestructionReceiver& destruction_receiver);
   void OnMouseWheel(MouseEvent& e,
                     WindowDestructionReceiver& destruction_receiver);
 
