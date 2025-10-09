@@ -10,6 +10,7 @@
 #ifndef XENIA_APP_GAME_LIST_DIALOG_QT_H_
 #define XENIA_APP_GAME_LIST_DIALOG_QT_H_
 
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -86,11 +87,12 @@ class GameListDialogQt : public QWidget {
   QToolButton* play_button_;
   QToolButton* settings_button_;
   QToolButton* profile_button_;
-  QLabel* play_icon_label_;
   QLabel* play_label_;
   QLabel* profile_label_;
   QLabel* profile_question_label_;
   QTimer* game_state_timer_;
+  QGraphicsOpacityEffect* play_opacity_;
+  QGraphicsOpacityEffect* play_label_opacity_;
 
   int last_logged_in_count_ = 0;
   bool has_logged_in_profile_ = false;

@@ -12,6 +12,7 @@
 #include <QCursor>
 #include <QDesktopServices>
 #include <QEvent>
+#include <QGraphicsOpacityEffect>
 #include <QHeaderView>
 #include <QImage>
 #include <QMenu>
@@ -86,12 +87,10 @@ void GameListDialogQt::SetupUI() {
   open_layout->setSpacing(5);
 
   auto* open_button = new QToolButton(this);
-  open_button->setText("📂");
+  open_button->setIcon(QIcon(":/xenia/folder-icon.png"));
+  open_button->setIconSize(QSize(64, 64));
   open_button->setMinimumSize(100, 80);
   open_button->setMaximumSize(100, 80);
-  QFont open_icon_font = open_button->font();
-  open_icon_font.setPointSize(48);
-  open_button->setFont(open_icon_font);
   connect(open_button, &QToolButton::clicked, [this]() {
     if (emulator_window_) {
       emulator_window_->FileOpen();
@@ -112,21 +111,21 @@ void GameListDialogQt::SetupUI() {
   play_layout->setContentsMargins(0, 0, 0, 0);
   play_layout->setSpacing(5);
 
-  // Use a button with an icon label overlay for better centering
+  // Use a button with an icon
   play_button_ = new QToolButton(this);
+  play_button_->setIcon(QIcon(":/xenia/play-icon.png"));
+  play_button_->setIconSize(QSize(64, 64));
   play_button_->setMinimumSize(100, 80);
   play_button_->setMaximumSize(100, 80);
   play_button_->setEnabled(false);
+
+  // Create opacity effect for greying out
+  play_opacity_ = new QGraphicsOpacityEffect(play_button_);
+  play_opacity_->setOpacity(0.4);
+  play_button_->setGraphicsEffect(play_opacity_);
+
   connect(play_button_, &QToolButton::clicked, this,
           &GameListDialogQt::OnPlayClicked);
-
-  play_icon_label_ = new QLabel("▶", play_button_);
-  play_icon_label_->setAlignment(Qt::AlignCenter);
-  QFont icon_font = play_icon_label_->font();
-  icon_font.setPointSize(48);
-  play_icon_label_->setFont(icon_font);
-  play_icon_label_->setGeometry(0, -8, 100, 80);  // Shift up by 8px
-  play_icon_label_->setAttribute(Qt::WA_TransparentForMouseEvents);
 
   play_label_ = new QLabel("Play", this);
   play_label_->setAlignment(Qt::AlignCenter);
@@ -135,6 +134,11 @@ void GameListDialogQt::SetupUI() {
   play_label_->setFont(text_font);
   open_label->setFont(text_font);  // Apply to open label too
   play_label_->setFixedHeight(20);
+
+  // Create opacity effect for label
+  play_label_opacity_ = new QGraphicsOpacityEffect(play_label_);
+  play_label_opacity_->setOpacity(0.4);
+  play_label_->setGraphicsEffect(play_label_opacity_);
 
   play_layout->addWidget(play_button_);
   play_layout->addWidget(play_label_);
@@ -147,10 +151,10 @@ void GameListDialogQt::SetupUI() {
   settings_layout->setSpacing(5);
 
   settings_button_ = new QToolButton(this);
-  settings_button_->setText("⚙");
+  settings_button_->setIcon(QIcon(":/xenia/settings-icon.png"));
+  settings_button_->setIconSize(QSize(64, 64));
   settings_button_->setMinimumSize(100, 80);
   settings_button_->setMaximumSize(100, 80);
-  settings_button_->setFont(icon_font);
   connect(settings_button_, &QToolButton::clicked, this,
           &GameListDialogQt::OnSettingsClicked);
 
@@ -173,10 +177,10 @@ void GameListDialogQt::SetupUI() {
   profile_layout->setSpacing(5);
 
   profile_button_ = new QToolButton(this);
-  profile_button_->setText("👤");
+  profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
+  profile_button_->setIconSize(QSize(64, 64));
   profile_button_->setMinimumSize(100, 80);
   profile_button_->setMaximumSize(100, 80);
-  profile_button_->setFont(icon_font);
   profile_button_->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(profile_button_, &QToolButton::clicked, this,
           &GameListDialogQt::OnProfileClicked);
@@ -211,6 +215,9 @@ void GameListDialogQt::SetupUI() {
   // Search box
   search_box_ = new QLineEdit(this);
   search_box_->setPlaceholderText("Search games...");
+  QFont search_font = search_box_->font();
+  search_font.setPointSize(16);
+  search_box_->setFont(search_font);
   connect(search_box_, &QLineEdit::textChanged, this,
           &GameListDialogQt::OnFilterTextChanged);
 
@@ -219,19 +226,48 @@ void GameListDialogQt::SetupUI() {
 
   main_layout->addWidget(search_box_);
 
+  // Custom header widget to match row layout
+  auto* header_widget = new QWidget(this);
+  auto* header_layout = new QHBoxLayout(header_widget);
+  header_layout->setContentsMargins(10, 5, 10, 5);
+  header_layout->setSpacing(15);
+
+  auto* icon_header = new QLabel("Icon", this);
+  icon_header->setMinimumWidth(80);
+  icon_header->setMaximumWidth(80);
+  QFont header_font = icon_header->font();
+  header_font.setBold(true);
+  icon_header->setFont(header_font);
+  header_layout->addWidget(icon_header);
+
+  auto* title_header = new QLabel("Title", this);
+  title_header->setFont(header_font);
+  header_layout->addWidget(title_header, 1);
+
+  auto* last_played_header = new QLabel("Last Played", this);
+  last_played_header->setFont(header_font);
+  last_played_header->setMinimumWidth(200);
+  last_played_header->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  header_layout->addWidget(last_played_header);
+
+  main_layout->addWidget(header_widget);
+
   // Table widget
   table_widget_ = new QTableWidget(this);
-  table_widget_->setColumnCount(3);
-  table_widget_->setHorizontalHeaderLabels({"Icon", "Title", "Last Played"});
-  table_widget_->horizontalHeader()->setStretchLastSection(false);
-  table_widget_->horizontalHeader()->setSectionResizeMode(1,
-                                                          QHeaderView::Stretch);
+  table_widget_->setColumnCount(1);
+  table_widget_->horizontalHeader()->setVisible(false);
+  table_widget_->horizontalHeader()->setStretchLastSection(true);
   table_widget_->verticalHeader()->setVisible(false);
   table_widget_->setShowGrid(false);
   table_widget_->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_widget_->setSelectionMode(QAbstractItemView::SingleSelection);
   table_widget_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   table_widget_->setContextMenuPolicy(Qt::CustomContextMenu);
+  table_widget_->setMouseTracking(true);
+
+  // Disable default table item hover highlighting (we handle it in row widget)
+  table_widget_->setStyleSheet(
+      "QTableWidget::item:hover { background-color: transparent; }");
 
   // Auto-hide scrollbar - only show when hovering or scrolling
   table_widget_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -420,10 +456,25 @@ void GameListDialogQt::PopulateTable() {
     int row = table_widget_->rowCount();
     table_widget_->insertRow(row);
 
-    // Icon column
+    // Create a single container widget for the entire row
+    auto* row_widget = new QWidget();
+    row_widget->setAttribute(Qt::WA_Hover);
+    row_widget->setStyleSheet(
+        "QWidget { border-bottom: 1px solid rgba(128, 128, 128, 50); }"
+        "QWidget:hover { background-color: rgba(128, 128, 128, 50); }");
+    auto* row_layout = new QHBoxLayout(row_widget);
+    row_layout->setContentsMargins(10, 10, 10, 10);
+    row_layout->setSpacing(15);
+
+    // Icon
     auto* icon_label = new QLabel();
     icon_label->setAlignment(Qt::AlignCenter);
     icon_label->setMinimumSize(80, 80);
+    icon_label->setMaximumSize(80, 80);
+    icon_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    icon_label->setStyleSheet(
+        "QLabel { border: 2px solid rgba(255, 255, 255, 100); border-radius: "
+        "4px; }");
 
     auto icon_it = title_icons_.find(entry.title_id);
     if (icon_it != title_icons_.end() && !icon_it->second.isNull()) {
@@ -432,32 +483,35 @@ void GameListDialogQt::PopulateTable() {
     } else {
       if (!has_logged_in_profile_) {
         icon_label->setText("Not\nlogged\nin");
-        icon_label->setStyleSheet("color: gray;");
+        icon_label->setStyleSheet(
+            "QLabel { color: gray; border: 2px solid rgba(255, 255, 255, 100); "
+            "border-radius: 4px; }");
       } else {
         // Empty space if logged in but no icon
         icon_label->setText("");
       }
     }
+    row_layout->addWidget(icon_label);
 
-    table_widget_->setCellWidget(row, 0, icon_label);
-
-    // Title column - just the title, large font
+    // Title - large font
     auto* title_label = new QLabel(QString::fromStdString(entry.title_name));
     title_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
     QFont title_font = title_label->font();
     title_font.setBold(true);
     title_font.setPointSize(title_font.pointSize() * 1.5);  // 1.5x larger
     title_label->setFont(title_font);
-    title_label->setContentsMargins(10, 0, 10, 0);
-    table_widget_->setCellWidget(row, 1, title_label);
+    row_layout->addWidget(title_label, 1);  // Stretch factor
 
-    // Last played column
+    // Last played
     auto* last_played_label = new QLabel(
         QString::fromStdString(FormatLastPlayed(entry.last_run_time)));
-    last_played_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
-    last_played_label->setContentsMargins(10, 0, 10, 0);
-    table_widget_->setCellWidget(row, 2, last_played_label);
+    last_played_label->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
+    last_played_label->setMinimumWidth(200);
+    last_played_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row_layout->addWidget(last_played_label);
 
+    table_widget_->setCellWidget(row, 0, row_widget);
     table_widget_->setRowHeight(row, 100);
 
     // Store the path in the row for later retrieval
@@ -465,10 +519,6 @@ void GameListDialogQt::PopulateTable() {
     table_widget_->item(row, 0)->setData(
         Qt::UserRole, QString::fromStdString(entry.path_to_file.string()));
   }
-
-  // Adjust column widths
-  table_widget_->setColumnWidth(0, 100);
-  table_widget_->setColumnWidth(2, 200);  // Fixed width for last played
 }
 
 std::string GameListDialogQt::FormatLastPlayed(time_t timestamp) {
@@ -592,7 +642,7 @@ void GameListDialogQt::OnSelectionChanged() {
 
   // No selection
   selected_game_path_.clear();
-  play_button_->setEnabled(false);
+  UpdatePlayButtonState();
 }
 
 void GameListDialogQt::UpdatePlayButtonState() {
@@ -601,15 +651,28 @@ void GameListDialogQt::UpdatePlayButtonState() {
 
   // Update button appearance based on game state
   if (game_is_running) {
-    play_icon_label_->setText("⏸");
+    play_button_->setIcon(QIcon(":/xenia/pause-icon.png"));
     play_label_->setText("Pause");
     play_button_->setToolTip("Game is running");
     play_button_->setEnabled(false);
+    // Greyed out when game is running
+    play_opacity_->setOpacity(0.4);
+    play_label_opacity_->setOpacity(0.4);
   } else {
-    play_icon_label_->setText("▶");
+    play_button_->setIcon(QIcon(":/xenia/play-icon.png"));
     play_label_->setText("Play");
     play_button_->setToolTip("Launch selected game");
-    play_button_->setEnabled(!selected_game_path_.empty());
+    bool is_enabled = !selected_game_path_.empty();
+    play_button_->setEnabled(is_enabled);
+
+    // Greyed out when disabled, normal when enabled
+    if (is_enabled) {
+      play_opacity_->setOpacity(1.0);  // Normal appearance
+      play_label_opacity_->setOpacity(1.0);
+    } else {
+      play_opacity_->setOpacity(0.4);  // Greyed out
+      play_label_opacity_->setOpacity(0.4);
+    }
   }
 
   last_game_running_state_ = game_is_running;

@@ -1595,7 +1595,9 @@ void EmulatorWindow::ShowAbout() {
                            "<b>Build Date:</b> %3</p>"
                            "<p>For more information, visit <a "
                            "href=\"https://github.com/has207/"
-                           "xenia-edge\">github.com/has207/xenia-edge</a></p>")
+                           "xenia-edge\">github.com/has207/xenia-edge</a></p>"
+                           "<p style=\"font-size: small;\">Icons by <a "
+                           "href=\"https://icons8.com\">Icons8</a></p>")
                            .arg(XE_BUILD_BRANCH)
                            .arg(XE_BUILD_COMMIT_SHORT)
                            .arg(XE_BUILD_DATE);

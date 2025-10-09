@@ -8,6 +8,8 @@
  */
 
 #include <QApplication>
+#include <QColor>
+#include <QPalette>
 #include <cstdio>
 #include <cstdlib>
 
@@ -29,6 +31,47 @@ int main(int argc, char** argv) {
 #endif
 
   QApplication qt_app(argc, argv);
+
+  // Force dark theme
+  QPalette dark_palette;
+  dark_palette.setColor(QPalette::Window, QColor(53, 53, 53));
+  dark_palette.setColor(QPalette::WindowText, Qt::white);
+  dark_palette.setColor(QPalette::Base, QColor(35, 35, 35));
+  dark_palette.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+  dark_palette.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+  dark_palette.setColor(QPalette::ToolTipText, Qt::white);
+  dark_palette.setColor(QPalette::Text, Qt::white);
+  dark_palette.setColor(QPalette::Button, QColor(53, 53, 53));
+  dark_palette.setColor(QPalette::ButtonText, Qt::white);
+  dark_palette.setColor(QPalette::BrightText, Qt::red);
+  dark_palette.setColor(QPalette::Link, QColor(42, 130, 218));
+  dark_palette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+  dark_palette.setColor(QPalette::HighlightedText, Qt::black);
+  dark_palette.setColor(QPalette::Disabled, QPalette::Text,
+                        QColor(127, 127, 127));
+  dark_palette.setColor(QPalette::Disabled, QPalette::ButtonText,
+                        QColor(127, 127, 127));
+  qt_app.setPalette(dark_palette);
+
+  // Fix menu spacing and styling
+  qt_app.setStyleSheet(
+      "QMenuBar::item { "
+      "  padding: 5px 10px; "
+      "} "
+      "QMenu { "
+      "  background-color: rgb(53, 53, 53); "
+      "  border: 1px solid rgb(80, 80, 80); "
+      "  border-radius: 0px; "
+      "} "
+      "QMenu::item { "
+      "  padding: 5px 25px 5px 10px; "
+      "  background-color: transparent; "
+      "} "
+      "QMenu::item:selected { "
+      "  background-color: rgb(42, 130, 218); "
+      "  color: black; "
+      "} "
+      "QMenu::indicator { width: 0px; margin-left: 0px; }");
 
   // Set different application name for game processes so they show as separate
   // dock entries. Check if we have a target file argument (game process) or not
