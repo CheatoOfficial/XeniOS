@@ -595,19 +595,40 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
   xe::threading::set_name("Emulator");
   Profiler::ThreadEnter("Emulator");
 
-  // Setup and initialize all subsystems. If we can't do something
-  // (unsupported system, memory issues, etc) this will fail early.
-  // Only load input drivers if this is a game process
+  // UI process: Minimal setup for profiles/GPD only
+  if (!is_game_process) {
+    // Initialize just enough for profiles: kernel state with XAM module
+    X_STATUS result = emulator_->Setup(emulator_window_->window(),
+                                       emulator_window_->imgui_drawer(), false,
+                                       nullptr, nullptr, nullptr);
+    if (XFAILED(result)) {
+      XELOGE("Failed to setup minimal emulator for UI: {:08X}", result);
+      app_context().RequestDeferredQuit();
+      return;
+    }
+
+    // Notify that the UI is ready to be shown
+    app_context().CallInUIThread(
+        [this]() { emulator_window_->OnEmulatorInitialized(); });
+
+    // Keep the thread alive for UI process
+    while (!emulator_thread_quit_requested_.load(std::memory_order_relaxed)) {
+      xe::threading::Wait(emulator_thread_event_.get(), false);
+    }
+    return;
+  }
+
+  // Game process: Full emulator setup with graphics, audio, and input
   X_STATUS result = emulator_->Setup(
       emulator_window_->window(), emulator_window_->imgui_drawer(), true,
-      CreateAudioSystem, CreateGraphicsSystem,
-      is_game_process ? CreateInputDrivers : nullptr);
+      CreateAudioSystem, CreateGraphicsSystem, CreateInputDrivers);
   if (XFAILED(result)) {
     XELOGE("Failed to setup emulator: {:08X}", result);
     app_context().RequestDeferredQuit();
     return;
   }
 
+  // Setup graphics presenter painting for game process
   app_context().CallInUIThread(
       [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 

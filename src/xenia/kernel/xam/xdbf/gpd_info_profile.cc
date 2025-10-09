@@ -120,6 +120,99 @@ void GpdInfoProfile::UpdateTitleInfo(const uint32_t title_id,
   memcpy(current_info, title_data, sizeof(X_XDBF_GPD_TITLE_PLAYED));
 }
 
+// Xenia-specific: Use custom string IDs to store file paths
+// String IDs 0xFFFE0000 - 0xFFFEFFFF are reserved for Xenia extensions
+// For multi-disc titles, we store all paths in a single string separated by
+// newline (newline is invalid in filenames on both Windows and Linux) Format:
+// "path/to/disc1.iso\npath/to/disc2.iso\npath/to/disc3.iso"
+constexpr uint32_t kXeniaPathStringBase = 0xFFFE0000;
+constexpr char kPathDelimiter = '\n';
+
+void GpdInfoProfile::SetTitlePath(uint32_t title_id,
+                                  const std::filesystem::path& path) {
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string path_u16 = xe::to_utf16(xe::path_to_utf8(path));
+  AddString(string_id, path_u16);
+}
+
+void GpdInfoProfile::AddTitlePath(uint32_t title_id,
+                                  const std::filesystem::path& path) {
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  std::u16string existing_paths_u16 = GetString(string_id);
+
+  if (existing_paths_u16.empty()) {
+    // No paths yet, this shouldn't happen in normal flow but handle it
+    SetTitlePath(title_id, path);
+    return;
+  }
+
+  // Convert to UTF-8 for easier manipulation
+  std::string existing_paths = xe::to_utf8(existing_paths_u16);
+  std::string new_path = xe::path_to_utf8(path);
+
+  // Append new path with newline delimiter
+  existing_paths += kPathDelimiter;
+  existing_paths += new_path;
+
+  // Store back
+  const std::u16string combined_u16 = xe::to_utf16(existing_paths);
+  AddString(string_id, combined_u16);
+}
+
+std::optional<std::filesystem::path> GpdInfoProfile::GetTitlePath(
+    uint32_t title_id) const {
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string path_u16 = GetString(string_id);
+
+  if (path_u16.empty()) {
+    return std::nullopt;
+  }
+
+  // Get the first path (before any newline)
+  std::string paths_utf8 = xe::to_utf8(path_u16);
+  size_t delimiter_pos = paths_utf8.find(kPathDelimiter);
+  if (delimiter_pos != std::string::npos) {
+    paths_utf8 = paths_utf8.substr(0, delimiter_pos);
+  }
+
+  return std::filesystem::path(paths_utf8);
+}
+
+std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
+    uint32_t title_id) const {
+  std::vector<std::filesystem::path> paths;
+
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string path_u16 = GetString(string_id);
+
+  if (path_u16.empty()) {
+    return paths;
+  }
+
+  // Split by newline delimiter
+  std::string paths_utf8 = xe::to_utf8(path_u16);
+  size_t start = 0;
+  size_t end = 0;
+
+  while ((end = paths_utf8.find(kPathDelimiter, start)) != std::string::npos) {
+    std::string path_str = paths_utf8.substr(start, end - start);
+    if (!path_str.empty()) {
+      paths.push_back(std::filesystem::path(path_str));
+    }
+    start = end + 1;
+  }
+
+  // Add the last path (or only path if no delimiter)
+  if (start < paths_utf8.length()) {
+    std::string path_str = paths_utf8.substr(start);
+    if (!path_str.empty()) {
+      paths.push_back(std::filesystem::path(path_str));
+    }
+  }
+
+  return paths;
+}
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

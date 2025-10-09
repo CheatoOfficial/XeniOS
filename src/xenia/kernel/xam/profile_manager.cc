@@ -150,6 +150,18 @@ void ProfileManager::ReloadProfiles() {
   }
 }
 
+void ProfileManager::ReloadProfileGpds() {
+  // Reload GPD files from disk for all logged-in profiles
+  // This is needed when the game process exits and the UI process
+  // needs to pick up changes made by the game process
+  for (const auto& [user_index, profile] : logged_profiles_) {
+    if (profile) {
+      XELOGI("Reloading GPDs for profile {:016X}", profile->xuid());
+      profile->LoadProfileGpds();
+    }
+  }
+}
+
 void ProfileManager::SyncProfilesWithConfig() {
   // First reload all accounts from disk to pick up any new/deleted profiles
   accounts_.clear();

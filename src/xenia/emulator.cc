@@ -252,9 +252,9 @@ X_STATUS Emulator::Setup(
     return X_STATUS_UNSUCCESSFUL;
   }
 
-  XELOGI("{}: Initializing Audio...", __func__);
-  // Initialize the APU.
+  // Initialize the APU (optional for UI process).
   if (audio_system_factory) {
+    XELOGI("{}: Initializing Audio...", __func__);
     audio_system_ = audio_system_factory(processor_.get());
     if (!audio_system_) {
       XELOGE("{}: Cannot initalize audio_system!", __func__);
@@ -262,12 +262,14 @@ X_STATUS Emulator::Setup(
     }
   }
 
-  XELOGI("{}: Initializing Graphics...", __func__);
-  // Initialize the GPU.
-  graphics_system_ = graphics_system_factory();
-  if (!graphics_system_) {
-    XELOGE("{}: Cannot initalize graphics_system!", __func__);
-    return X_STATUS_NOT_IMPLEMENTED;
+  // Initialize the GPU (optional for UI process).
+  if (graphics_system_factory) {
+    XELOGI("{}: Initializing Graphics...", __func__);
+    graphics_system_ = graphics_system_factory();
+    if (!graphics_system_) {
+      XELOGE("{}: Cannot initalize graphics_system!", __func__);
+      return X_STATUS_NOT_IMPLEMENTED;
+    }
   }
 
   XELOGI("{}: Initializing HID...", __func__);
@@ -311,15 +313,17 @@ X_STATUS Emulator::Setup(
   plugin_loader_ = std::make_unique<xe::patcher::PluginLoader>(
       kernel_state_.get(), storage_root() / "plugins");
 
-  XELOGI("{}: Starting graphics_system...", __func__);
-  // Setup the core components.
-  result = graphics_system_->Setup(
-      processor_.get(), kernel_state_.get(),
-      display_window_ ? &display_window_->app_context() : nullptr,
-      display_window_ != nullptr);
-  if (result) {
-    XELOGE("{}: Failed to setup graphics_system!", __func__);
-    return result;
+  if (graphics_system_) {
+    XELOGI("{}: Starting graphics_system...", __func__);
+    // Setup the core components.
+    result = graphics_system_->Setup(
+        processor_.get(), kernel_state_.get(),
+        display_window_ ? &display_window_->app_context() : nullptr,
+        display_window_ != nullptr);
+    if (result) {
+      XELOGE("{}: Failed to setup graphics_system!", __func__);
+      return result;
+    }
   }
 
   if (audio_system_) {
@@ -1575,9 +1579,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
     game_info_database_ =
         std::make_unique<kernel::util::GameInfoDatabase>(db.get());
-    kernel_state_->xam_state()->LoadSpaInfo(db.get());
+    kernel_state_->xam_state()->LoadSpaInfo(db.get(), path);
 
-    kernel_state_->xam_state()->user_tracker()->AddTitleToPlayedList();
+    // AddTitleToPlayedList is now called inside LoadSpaInfo/UpdateSpaInfo
 
     if (game_info_database_->IsValid()) {
       title_name_ = game_info_database_->GetTitleName(
@@ -1645,10 +1649,12 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // miss the initial seconds - for instance, sound from an intro video may
   // start playing before the video can be seen if doing this in parallel with
   // the main thread.
-  on_shader_storage_initialization(true);
-  graphics_system_->InitializeShaderStorage(cache_root_, title_id_.value(),
-                                            true);
-  on_shader_storage_initialization(false);
+  if (graphics_system_) {
+    on_shader_storage_initialization(true);
+    graphics_system_->InitializeShaderStorage(cache_root_, title_id_.value(),
+                                              true);
+    on_shader_storage_initialization(false);
+  }
 
   auto main_thread = kernel_state_->LaunchModule(module);
   if (!main_thread) {

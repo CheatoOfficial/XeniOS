@@ -10,6 +10,7 @@
 #include "xenia/emulator.h"
 #include "xenia/kernel/xam/user_profile.h"
 
+#include <algorithm>
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/stb/stb_image.h"
 #include "xenia/kernel/kernel_state.h"
@@ -35,7 +36,7 @@ bool UserTracker::AddUser(uint64_t xuid) {
   tracked_xuids_.insert(xuid);
 
   if (spa_data_) {
-    AddTitleToPlayedList(xuid);
+    AddTitleToPlayedList(xuid, current_title_path_);
   }
   return true;
 }
@@ -140,11 +141,12 @@ void UserTracker::AddTitleToPlayedList() {
   }
 
   for (const uint64_t xuid : tracked_xuids_) {
-    AddTitleToPlayedList(xuid);
+    AddTitleToPlayedList(xuid, current_title_path_);
   }
 }
 
-void UserTracker::AddTitleToPlayedList(uint64_t xuid) {
+void UserTracker::AddTitleToPlayedList(uint64_t xuid,
+                                       const std::filesystem::path& path) {
   auto user = kernel_state()->xam_state()->GetUserProfile(xuid);
   if (!user) {
     return;
@@ -181,6 +183,30 @@ void UserTracker::AddTitleToPlayedList(uint64_t xuid) {
   // Normally we only need to update last booted time. Everything else is filled
   // during creation time OR SPA UPDATE TIME!
   title_info->last_played = current_time;
+
+  // Store the file path in the GPD
+  if (!path.empty()) {
+    // Check if we already have a path for this title
+    auto existing_path = user->dashboard_gpd_.GetTitlePath(title_id);
+    if (existing_path.has_value()) {
+      // Check if this is a different path (different disc)
+      if (existing_path.value() != path) {
+        // Check if this path is already in the list
+        auto all_paths = user->dashboard_gpd_.GetTitlePaths(title_id);
+        bool path_exists = std::find(all_paths.begin(), all_paths.end(),
+                                     path) != all_paths.end();
+
+        if (!path_exists) {
+          XELOGI("Adding additional disc path for title {:08X}: {}", title_id,
+                 xe::path_to_utf8(path));
+          user->dashboard_gpd_.AddTitlePath(title_id, path);
+        }
+      }
+    } else {
+      // First time seeing this title, set the primary path
+      user->dashboard_gpd_.SetTitlePath(title_id, path);
+    }
+  }
 
   UpdateProfileGpd();
 }
@@ -324,13 +350,22 @@ void UserTracker::UpdateMissingAchievemntsIcons() {
   }
 }
 
-void UserTracker::UpdateSpaInfo(SpaInfo* spa_info) {
+void UserTracker::UpdateSpaInfo(SpaInfo* spa_info,
+                                const std::filesystem::path& title_path) {
   spa_data_ = spa_info;
+  current_title_path_ = title_path;
 
   if (!spa_data_) {
     return;
   }
 
+  // First, ensure the title is added to all tracked users' played lists
+  // This creates the necessary GPD entries before we try to update them
+  for (const uint64_t xuid : tracked_xuids_) {
+    AddTitleToPlayedList(xuid, current_title_path_);
+  }
+
+  // Now update existing GPD files with latest SPA data
   UpdateProfileGpd();
   UpdateTitleGpdFile();
   UpdateMissingAchievemntsIcons();

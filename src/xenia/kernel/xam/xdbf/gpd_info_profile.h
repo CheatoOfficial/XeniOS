@@ -41,6 +41,12 @@ class GpdInfoProfile : public GpdInfo {
 
   std::u16string GetTitleName(const uint32_t title_id) const;
 
+  // Xenia-specific: Store file path(s) for each title
+  void SetTitlePath(uint32_t title_id, const std::filesystem::path& path);
+  void AddTitlePath(uint32_t title_id, const std::filesystem::path& path);
+  std::optional<std::filesystem::path> GetTitlePath(uint32_t title_id) const;
+  std::vector<std::filesystem::path> GetTitlePaths(uint32_t title_id) const;
+
  private:
   X_XDBF_GPD_TITLE_PLAYED FillTitlePlayedData(const SpaInfo* title_data) const;
 };

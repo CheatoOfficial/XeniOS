@@ -344,16 +344,8 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
-  if (!emulator_->kernel_state()
-           ->xam_state()
-           ->profile_manager()
-           ->GetAccountCount()) {
-    new NoProfileDialog(imgui_drawer_.get(), this);
-    disable_hotkeys_ = true;
-  }
-
-  // Show recently played games list when the app starts
-  if (!recently_launched_titles_.empty() && !is_game_process_) {
+  // For UI process: emulator is not initialized, just show Qt UI
+  if (!is_game_process_) {
     auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
     if (qt_window) {
       // Get the central widget and its layout
@@ -364,15 +356,26 @@ void EmulatorWindow::OnEmulatorInitialized() {
         central_widget->layout()->addWidget(game_list_dialog_qt_);
       }
     }
+
+    // Start periodic child process checking for UI process
+    ScheduleChildProcessCheck();
+
+    emulator_initialized_ = true;
+    window_->SetMainMenuEnabled(true);
+    return;
   }
 
-  // Start periodic child process checking if this is UI process
-  if (!is_game_process_) {
-    ScheduleChildProcessCheck();
-  } else {
-    // Game process: enable cursor auto-hide
-    window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
+  // Game process: emulator is fully initialized
+  if (!emulator_->kernel_state()
+           ->xam_state()
+           ->profile_manager()
+           ->GetAccountCount()) {
+    new NoProfileDialog(imgui_drawer_.get(), this);
+    disable_hotkeys_ = true;
   }
+
+  // Game process: enable cursor auto-hide
+  window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
 
   emulator_initialized_ = true;
   window_->SetMainMenuEnabled(true);
@@ -2254,12 +2257,37 @@ void EmulatorWindow::CheckChildProcessStatus() {
 
   // Detect transition from having child to no child
   if (had_child_last_check && !has_child_now) {
-    XELOGI("Child process exited, reloading recent titles");
+    XELOGI("Child process exited, remounting profiles and reloading GPDs");
+
+    // Remount VFS for all logged-in profiles to pick up file changes from game
+    // process
+    if (emulator_ && emulator_->kernel_state() &&
+        emulator_->kernel_state()->xam_state()) {
+      auto profile_manager =
+          emulator_->kernel_state()->xam_state()->profile_manager();
+      if (profile_manager) {
+        // Remount VFS for each logged-in profile
+        for (uint8_t i = 0; i < 4; i++) {
+          auto profile = profile_manager->GetProfile(i);
+          if (profile) {
+            uint64_t xuid = profile->xuid();
+            XELOGI("Remounting VFS for profile {:016X}", xuid);
+            profile_manager->DismountProfile(xuid);
+            profile_manager->MountProfile(xuid);
+          }
+        }
+
+        // Now reload GPDs from the freshly mounted VFS
+        profile_manager->ReloadProfileGpds();
+        XELOGI("Profile VFS remounted and GPDs reloaded");
+      }
+    }
+
     LoadRecentlyLaunchedTitles();
     XELOGI("Recent titles reloaded, count: {}",
            recently_launched_titles_.size());
 
-    // Reload the recent titles dialog if it's open
+    // Reload the game list dialog if it's open
     if (game_list_dialog_qt_) {
       game_list_dialog_qt_->LoadGameList();
       XELOGI("Game list dialog refreshed");

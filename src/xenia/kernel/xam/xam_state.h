@@ -55,7 +55,8 @@ class XamState {
   bool IsUserSignedIn(uint64_t xuid) const;
 
   //
-  void LoadSpaInfo(const SpaInfo* info);
+  void LoadSpaInfo(const SpaInfo* info,
+                   const std::filesystem::path& title_path = {});
 
   X_DASH_APP_INFO dash_app_info_ = {};
 

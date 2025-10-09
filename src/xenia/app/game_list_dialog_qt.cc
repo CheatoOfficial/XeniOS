@@ -20,11 +20,15 @@
 #include <QScrollBar>
 #include <QUrl>
 #include <chrono>
+#include <fstream>
+#include <regex>
 #include <thread>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/app/profile_dialog_qt.h"
+#include "xenia/base/chrono.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
 #include "xenia/base/system.h"
@@ -32,11 +36,13 @@
 #include "xenia/emulator.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/title_id_utils.h"
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/user_tracker.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 
 namespace xe {
 namespace app {
@@ -300,109 +306,202 @@ void GameListDialogQt::LoadGameList() {
   game_entries_.clear();
   title_icons_.clear();
 
-  if (!emulator_window_) {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    PopulateTable();
     return;
   }
 
-  const auto& emulator_recent_titles =
-      emulator_window_->GetRecentlyLaunchedTitles();
-
-  for (const auto& entry : emulator_recent_titles) {
-    game_entries_.push_back(
-        {entry.title_name, entry.path_to_file, entry.last_run_time, 0, {}});
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    PopulateTable();
+    return;
   }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    PopulateTable();
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    PopulateTable();
+    return;
+  }
+
+  // Phase 1: Load game metadata from dashboard GPDs directly
+  // This works even without a logged-in profile
+  std::map<uint32_t, GameListEntry> titles_by_id;
+
+  // Scan all profile directories for dashboard GPDs
+  auto content_root = emulator_window_->emulator()->content_root();
+  auto profiles_directory = xe::filesystem::FilterByName(
+      xe::filesystem::ListDirectories(content_root),
+      std::regex("[0-9A-F]{16}"));
+
+  for (const auto& profile_dir : profiles_directory) {
+    const std::string profile_xuid = xe::path_to_utf8(profile_dir.name);
+    if (profile_xuid == fmt::format("{:016X}", 0)) {
+      continue;  // Skip shared content directory
+    }
+
+    // Construct path to dashboard GPD
+    std::filesystem::path dashboard_gpd_path =
+        profile_dir.path / profile_dir.name / kernel::xam::kDashboardStringID /
+        fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
+        profile_dir.name / fmt::format("{:08X}.gpd", kernel::kDashboardID);
+
+    if (!std::filesystem::exists(dashboard_gpd_path)) {
+      continue;
+    }
+
+    // Read dashboard GPD file directly
+    std::ifstream file(dashboard_gpd_path, std::ios::binary);
+    if (!file.is_open()) {
+      continue;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> gpd_data(file_size);
+    file.read(reinterpret_cast<char*>(gpd_data.data()), file_size);
+    file.close();
+
+    // Parse dashboard GPD
+    kernel::xam::GpdInfoProfile dashboard_gpd(gpd_data);
+    if (!dashboard_gpd.IsValid()) {
+      continue;
+    }
+
+    // Extract title information from this dashboard GPD
+    auto titles_info = dashboard_gpd.GetTitlesInfo();
+    for (const auto& title_info : titles_info) {
+      uint32_t title_id = title_info->title_id;
+
+      // Only add each title once (first profile we see it in)
+      if (titles_by_id.find(title_id) != titles_by_id.end()) {
+        continue;
+      }
+
+      // Get title name
+      std::string title_name =
+          xe::to_utf8(dashboard_gpd.GetTitleName(title_id));
+      // Remove null terminator if present
+      if (!title_name.empty() && title_name.back() == '\0') {
+        title_name.pop_back();
+      }
+
+      // Get file path(s) from dashboard GPD
+      std::filesystem::path path_to_file;
+      auto gpd_path = dashboard_gpd.GetTitlePath(title_id);
+      if (gpd_path.has_value()) {
+        path_to_file = *gpd_path;
+      }
+
+      // Check if there are multiple discs
+      auto all_paths = dashboard_gpd.GetTitlePaths(title_id);
+      if (all_paths.size() > 1) {
+        XELOGI("Title {:08X} has {} discs", title_id, all_paths.size());
+      }
+
+      // Get last played time
+      time_t last_played = 0;
+      if (title_info->last_played.is_valid()) {
+        auto last_played_tp = chrono::WinSystemClock::to_sys(
+            title_info->last_played.to_time_point());
+        last_played = std::chrono::system_clock::to_time_t(last_played_tp);
+      }
+
+      // Add to our map (without icon for now)
+      titles_by_id[title_id] = {title_name, path_to_file, last_played, title_id,
+                                std::vector<uint8_t>()};
+    }
+  }
+
+  // Convert map to vector and sort by last played time (most recent first)
+  for (auto& [title_id, title] : titles_by_id) {
+    game_entries_.push_back(std::move(title));
+  }
+
+  std::sort(game_entries_.begin(), game_entries_.end(),
+            [](const GameListEntry& a, const GameListEntry& b) {
+              return a.last_run_time > b.last_run_time;
+            });
 
   // Show/hide search box based on number of entries
   if (search_box_) {
     search_box_->setVisible(game_entries_.size() > 5);
   }
 
+  // Phase 2: Load icons if a profile is logged in
   TryLoadIcons();
   PopulateTable();
 }
 
 void GameListDialogQt::TryLoadIcons() {
+  // Icons are only loaded if a user is logged in
   if (!emulator_window_ || !emulator_window_->emulator()) {
+    has_logged_in_profile_ = false;
     return;
   }
 
   auto kernel_state = emulator_window_->emulator()->kernel_state();
   if (!kernel_state) {
+    has_logged_in_profile_ = false;
     return;
   }
 
   auto xam_state = kernel_state->xam_state();
   if (!xam_state) {
+    has_logged_in_profile_ = false;
     return;
   }
 
-  auto user_tracker = xam_state->user_tracker();
   auto profile_manager = xam_state->profile_manager();
-
-  if (!user_tracker || !profile_manager) {
+  if (!profile_manager) {
+    has_logged_in_profile_ = false;
     return;
   }
 
-  // Check if the number of logged-in profiles has changed
+  // Check if any profile is logged in
   has_logged_in_profile_ = false;
-  int current_logged_in_count = 0;
-
-  for (uint8_t i = 0; i < 4; i++) {
-    if (profile_manager->GetProfile(i)) {
-      current_logged_in_count++;
-      has_logged_in_profile_ = true;
-    }
-  }
-
-  // If the count changed, refresh icons
-  if (current_logged_in_count != last_logged_in_count_) {
-    XELOGI("Logged-in profile count changed from {} to {}, refreshing icons",
-           last_logged_in_count_, current_logged_in_count);
-    last_logged_in_count_ = current_logged_in_count;
-    RefreshIcons();
-  }
-
-  // Check all logged in profiles
   for (uint8_t user_index = 0; user_index < 4; user_index++) {
     const auto profile = profile_manager->GetProfile(user_index);
-    if (!profile) {
-      continue;
-    }
+    if (profile) {
+      has_logged_in_profile_ = true;
 
-    // Get all played titles for this profile
-    auto played_titles = user_tracker->GetPlayedTitles(profile->xuid());
-
-    // Match each game entry with played titles by name
-    for (auto& game_entry : game_entries_) {
-      for (const auto& played_title : played_titles) {
-        std::string played_name = xe::to_utf8(played_title.title_name);
-        // Remove null terminator if present
-        if (!played_name.empty() && played_name.back() == '\0') {
-          played_name.pop_back();
+      // Load icons for all game entries from this profile's title GPDs
+      XELOGI("Loading icons for {} game entries from profile {:016X}",
+             game_entries_.size(), profile->xuid());
+      for (const auto& game_entry : game_entries_) {
+        // Skip if we already loaded this icon
+        if (title_icons_.find(game_entry.title_id) != title_icons_.end()) {
+          continue;
         }
-        std::string trimmed_played = xe::string_util::trim(played_name);
-        std::string trimmed_game = xe::string_util::trim(game_entry.title_name);
 
-        if (trimmed_played == trimmed_game) {
-          if (!played_title.icon.empty()) {
-            game_entry.icon = std::vector<uint8_t>(played_title.icon.begin(),
-                                                   played_title.icon.end());
-            game_entry.title_id = played_title.id;
+        // Get the title icon from the profile's title GPD
+        auto icon_data = profile->GetTitleIcon(game_entry.title_id);
+        if (icon_data.empty()) {
+          XELOGI("No icon data for title {:08X} from profile {:016X}",
+                 game_entry.title_id, profile->xuid());
+          continue;  // No icon available for this title
+        }
 
-            // Create QPixmap from icon data
-            QPixmap pixmap = CreateIconPixmap(game_entry.icon);
-            if (!pixmap.isNull()) {
-              title_icons_[game_entry.title_id] = pixmap;
-            }
-          }
-          break;  // Found match for this game
+        // Create QPixmap from icon data
+        QPixmap pixmap = CreateIconPixmap(icon_data);
+        if (!pixmap.isNull()) {
+          XELOGI("Loaded icon for title {:08X}, size: {} bytes",
+                 game_entry.title_id, icon_data.size());
+          title_icons_[game_entry.title_id] = pixmap;
+        } else {
+          XELOGI("Failed to create QPixmap for title {:08X}",
+                 game_entry.title_id);
         }
       }
     }
   }
-
-  // Refresh the table to show the icons
-  PopulateTable();
 }
 
 QPixmap GameListDialogQt::CreateIconPixmap(
@@ -421,17 +520,9 @@ QPixmap GameListDialogQt::CreateIconPixmap(
 }
 
 void GameListDialogQt::RefreshIcons() {
-  // Clear existing icons
+  // Clear existing icons and reload the entire game list from GPD
   title_icons_.clear();
-
-  // Reset the title IDs to force re-matching
-  for (auto& entry : game_entries_) {
-    entry.title_id = 0;
-    entry.icon.clear();
-  }
-
-  // Reload icons
-  TryLoadIcons();
+  LoadGameList();
 }
 
 void GameListDialogQt::PopulateTable() {
@@ -493,6 +584,13 @@ void GameListDialogQt::PopulateTable() {
     }
     row_layout->addWidget(icon_label);
 
+    // Title container with title and path
+    auto* title_container = new QWidget();
+    title_container->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* title_layout = new QVBoxLayout(title_container);
+    title_layout->setContentsMargins(0, 0, 0, 0);
+    title_layout->setSpacing(2);
+
     // Title - large font
     auto* title_label = new QLabel(QString::fromStdString(entry.title_name));
     title_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
@@ -501,7 +599,22 @@ void GameListDialogQt::PopulateTable() {
     title_font.setBold(true);
     title_font.setPointSize(title_font.pointSize() * 1.5);  // 1.5x larger
     title_label->setFont(title_font);
-    row_layout->addWidget(title_label, 1);  // Stretch factor
+    title_layout->addWidget(title_label);
+
+    // Path - smaller font (only show if path is available)
+    if (!entry.path_to_file.empty()) {
+      auto* path_label =
+          new QLabel(QString::fromStdString(entry.path_to_file.string()));
+      path_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+      path_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+      QFont path_font = path_label->font();
+      path_font.setPointSize(path_font.pointSize() * 0.8);  // Smaller font
+      path_label->setFont(path_font);
+      path_label->setStyleSheet("color: gray;");
+      title_layout->addWidget(path_label);
+    }
+
+    row_layout->addWidget(title_container, 1);  // Stretch factor
 
     // Last played
     auto* last_played_label = new QLabel(

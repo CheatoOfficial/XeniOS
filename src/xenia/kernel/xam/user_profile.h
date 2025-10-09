@@ -20,6 +20,7 @@
 #include "xenia/kernel/xam/xam.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_title.h"
+#include "xenia/kernel/xam/xdbf/xdbf_io.h"
 
 namespace xe {
 namespace kernel {
@@ -147,8 +148,22 @@ class UserProfile {
                 sizeof(account_info_.passcode));
   };
 
+  // Public accessor for dashboard GPD (for getting title paths)
+  const GpdInfoProfile& dashboard_gpd() const { return dashboard_gpd_; }
+
+  // Public accessor for getting title icon from title GPD
+  std::vector<uint8_t> GetTitleIcon(uint32_t title_id) const {
+    const GpdInfo* gpd = GetGpd(title_id);
+    if (!gpd) {
+      return {};
+    }
+    auto icon_data = gpd->GetImage(kXdbfIdTitle);
+    return std::vector<uint8_t>(icon_data.begin(), icon_data.end());
+  }
+
   friend class UserTracker;
   friend class GpdAchievementBackend;
+  friend class ProfileManager;
 
  private:
   uint64_t xuid_;

@@ -62,7 +62,9 @@ void UserProfile::LoadProfileGpds() {
       continue;
     }
 
-    games_gpd_.emplace(gpd->title_id, GpdInfoTitle(gpd->title_id, gpd_data));
+    // Use insert_or_assign to replace existing GPDs when reloading
+    games_gpd_.insert_or_assign(gpd->title_id,
+                                GpdInfoTitle(gpd->title_id, gpd_data));
   }
 }
 
