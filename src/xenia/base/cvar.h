@@ -46,6 +46,8 @@ class ICommandVar {
 class IConfigVar : virtual public ICommandVar {
  public:
   virtual const std::string& category() const = 0;
+  virtual const std::string& display_name() const = 0;
+  virtual bool is_advanced() const = 0;
   virtual bool is_transient() const = 0;
   virtual std::string config_value() const = 0;
   virtual void LoadConfigValue(const toml::node* result) = 0;
@@ -81,10 +83,13 @@ template <class T>
 class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
  public:
   ConfigVar<T>(const char* name, T* default_value, const char* description,
-               const char* category, bool is_transient);
+               const char* display_name, const char* category, bool is_advanced,
+               bool is_transient);
   std::string config_value() const override;
   const T& GetTypedConfigValue() const;
   const std::string& category() const override;
+  const std::string& display_name() const override;
+  bool is_advanced() const override;
   bool is_transient() const override;
   void AddToLaunchOptions(cxxopts::Options* options) override;
   void LoadConfigValue(const toml::node* result) override;
@@ -98,6 +103,8 @@ class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
 
  private:
   std::string category_;
+  std::string display_name_;
+  bool is_advanced_;
   bool is_transient_;
   std::unique_ptr<T> config_value_ = nullptr;
   std::unique_ptr<T> game_config_value_ = nullptr;
@@ -176,10 +183,13 @@ CommandVar<T>::CommandVar(const char* name, T* default_value,
 
 template <class T>
 ConfigVar<T>::ConfigVar(const char* name, T* default_value,
-                        const char* description, const char* category,
+                        const char* description, const char* display_name,
+                        const char* category, bool is_advanced,
                         bool is_transient)
     : CommandVar<T>(name, default_value, description),
       category_(category),
+      display_name_(display_name && display_name[0] ? display_name : name),
+      is_advanced_(is_advanced),
       is_transient_(is_transient) {}
 
 template <class T>
@@ -240,6 +250,14 @@ void CommandVar<T>::SetValue(T val) {
 template <class T>
 const std::string& ConfigVar<T>::category() const {
   return category_;
+}
+template <class T>
+const std::string& ConfigVar<T>::display_name() const {
+  return display_name_;
+}
+template <class T>
+bool ConfigVar<T>::is_advanced() const {
+  return is_advanced_;
 }
 template <class T>
 bool ConfigVar<T>::is_transient() const {
@@ -309,10 +327,12 @@ void ParseLaunchArgumentsFromAndroidBundle(jobject bundle);
 
 template <typename T>
 IConfigVar* define_configvar(const char* name, T* default_value,
-                             const char* description, const char* category,
+                             const char* description, const char* display_name,
+                             const char* category, bool is_advanced,
                              bool is_transient) {
-  IConfigVar* cfgvar = new ConfigVar<T>(name, default_value, description,
-                                        category, is_transient);
+  IConfigVar* cfgvar =
+      new ConfigVar<T>(name, default_value, description, display_name, category,
+                       is_advanced, is_transient);
   AddConfigVar(cfgvar);
   return cfgvar;
 }
@@ -358,6 +378,38 @@ ICommandVar* define_cmdvar(const char* name, T* default_value,
   DEFINE_CVar(name, default_value, description, category, true,           \
               std::filesystem::path)
 
+// Advanced versions - same as regular but marked as advanced in the UI
+#define DEFINE_bool_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false, bool)
+
+#define DEFINE_int32_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false, \
+                       int32_t)
+
+#define DEFINE_uint32_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false,  \
+                       uint32_t)
+
+#define DEFINE_uint64_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false,  \
+                       uint64_t)
+
+#define DEFINE_int64_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false, \
+                       int64_t)
+
+#define DEFINE_double_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false,  \
+                       double)
+
+#define DEFINE_string_advanced(name, default_value, description, category) \
+  DEFINE_CVar_advanced(name, default_value, description, category, false,  \
+                       std::string)
+
+#define DEFINE_path_advanced(name, default_value, description, category)  \
+  DEFINE_CVar_advanced(name, default_value, description, category, false, \
+                       std::filesystem::path)
+
 #define DEFINE_CVar(name, default_value, description, category, is_transient, \
                     type)                                                     \
   namespace cvars {                                                           \
@@ -365,7 +417,17 @@ ICommandVar* define_cmdvar(const char* name, T* default_value,
   }                                                                           \
   namespace cv {                                                              \
   static cvar::IConfigVar* const cv_##name = cvar::define_configvar(          \
-      #name, &cvars::name, description, category, is_transient);              \
+      #name, &cvars::name, description, "", category, false, is_transient);   \
+  }
+
+#define DEFINE_CVar_advanced(name, default_value, description, category,   \
+                             is_transient, type)                           \
+  namespace cvars {                                                        \
+  type name = default_value;                                               \
+  }                                                                        \
+  namespace cv {                                                           \
+  static cvar::IConfigVar* const cv_##name = cvar::define_configvar(       \
+      #name, &cvars::name, description, "", category, true, is_transient); \
   }
 
 // CmdVars can only be strings for now, we don't need any others
