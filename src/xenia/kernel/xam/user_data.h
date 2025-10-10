@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "xenia/base/byte_order.h"
 #include "xenia/base/string_util.h"
 #include "xenia/xbox.h"
 
@@ -99,10 +100,24 @@ class UserData {
         return std::u16string();
       }
 
+      // Calculate the number of UTF-16 characters from byte size
+      size_t char_count = get_extended_data().size() / sizeof(char16_t);
+
       const char16_t* str_begin =
           reinterpret_cast<const char16_t*>(get_extended_data().data());
 
-      return string_util::read_u16string_and_swap(str_begin);
+      // Create string from data with explicit size instead of relying on null
+      // terminator
+      std::u16string input_str(str_begin, char_count);
+
+      // Swap bytes for each character
+      std::u16string output_str;
+      output_str.reserve(input_str.size());
+      for (const auto& ch : input_str) {
+        output_str.push_back(xe::byte_swap(ch));
+      }
+
+      return output_str;
     }
 
     return 0;

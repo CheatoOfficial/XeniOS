@@ -798,10 +798,10 @@ bool UserTracker::UpdateUserIcon(uint64_t xuid,
   XTileType icon_type = XTileType::kGameIcon;
 
   if (std::pair<uint16_t, uint16_t>(width, height) == kProfileIconSize) {
-    icon_type = XTileType::kGamerTile;
+    icon_type = XTileType::kPersonalGamerTile;
   } else if (std::pair<uint16_t, uint16_t>(width, height) ==
              kProfileIconSizeSmall) {
-    icon_type = XTileType::kGamerTileSmall;
+    icon_type = XTileType::kPersonalGamerTileSmall;
   } else {
     return false;
   }

@@ -26,8 +26,17 @@ UserProfile::UserProfile(const uint64_t xuid,
   // "You do not have permissions to perform this operation."
   LoadProfileGpds();
 
+  // Load default gamer tiles
   LoadProfileIcon(XTileType::kGamerTile);
   LoadProfileIcon(XTileType::kGamerTileSmall);
+
+  // Also load personal gamer tiles (custom profile pictures)
+  // Note: These use the same filenames as regular tiles, so if a personal
+  // tile exists, it will overwrite the default tile file. We load both types
+  // to maintain compatibility - the personal tile will be preferred when
+  // present.
+  LoadProfileIcon(XTileType::kPersonalGamerTile);
+  LoadProfileIcon(XTileType::kPersonalGamerTileSmall);
 }
 
 GpdInfo* UserProfile::GetGpd(const uint32_t title_id) {
@@ -106,15 +115,33 @@ void UserProfile::WriteProfileIcon(XTileType tile_type,
 
   const X_STATUS result = kernel_state()->file_system()->OpenFile(
       nullptr, path, vfs::FileDisposition::kOverwriteIf,
-      vfs::FileAccess::kGenericAll, false, true, &file, &action);
+      vfs::FileAccess::kGenericWrite | vfs::FileAccess::kFileWriteData, false,
+      true, &file, &action);
 
   if (result != X_STATUS_SUCCESS) {
     return;
   }
 
+  // Set the file length first to ensure we can write
+  X_STATUS set_length_result = file->SetLength(icon_data.size());
+  if (set_length_result != X_STATUS_SUCCESS &&
+      set_length_result != X_STATUS_NOT_IMPLEMENTED) {
+    XELOGW("WriteProfileIcon: SetLength failed with status {:08X}",
+           set_length_result);
+  }
+
   size_t written_bytes = 0;
 
-  file->WriteSync({icon_data.data(), icon_data.size()}, 0, &written_bytes);
+  X_STATUS write_result =
+      file->WriteSync({icon_data.data(), icon_data.size()}, 0, &written_bytes);
+  if (write_result != X_STATUS_SUCCESS) {
+    XELOGW("WriteProfileIcon: WriteSync failed with status {:08X}",
+           write_result);
+  } else {
+    XELOGI("WriteProfileIcon: Successfully wrote {} bytes to {}", written_bytes,
+           path);
+  }
+
   file->Destroy();
 
   profile_images_.insert_or_assign(

@@ -124,17 +124,22 @@ class UserProfile {
   bool IsLiveEnabled() const { return account_info_.IsLiveEnabled(); }
 
   std::span<const uint8_t> GetProfileIcon(XTileType icon_type) {
-    // Overwrite same types?
+    // First check if the requested type exists
+    if (profile_images_.find(icon_type) != profile_images_.cend()) {
+      return {profile_images_[icon_type].data(),
+              profile_images_[icon_type].size()};
+    }
+
+    // If personal/local tile requested but not found, fall back to regular tile
     if (icon_type == XTileType::kPersonalGamerTile ||
         icon_type == XTileType::kLocalGamerTile) {
       icon_type = XTileType::kGamerTile;
-    }
-
-    if (icon_type == XTileType::kPersonalGamerTileSmall ||
-        icon_type == XTileType::kLocalGamerTileSmall) {
+    } else if (icon_type == XTileType::kPersonalGamerTileSmall ||
+               icon_type == XTileType::kLocalGamerTileSmall) {
       icon_type = XTileType::kGamerTileSmall;
     }
 
+    // Try again with the fallback type
     if (profile_images_.find(icon_type) == profile_images_.cend()) {
       return {};
     }

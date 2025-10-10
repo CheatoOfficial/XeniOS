@@ -17,14 +17,15 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
+#include "xenia/app/profile_editor_dialog_qt.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/system.h"
 #include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/profile_manager.h"
-#include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/ui/window_qt.h"
 
 namespace xe {
 namespace app {
@@ -130,24 +131,43 @@ QPixmap ProfileDialogQt::LoadProfileIcon(uint64_t xuid) {
     return QPixmap();
   }
 
+  // First try to get the profile if it's already logged in
   const auto profile = profile_manager->GetProfile(xuid);
-  if (!profile) {
-    return QPixmap();
+  std::vector<uint8_t> profile_icon_data;
+
+  if (profile) {
+    // Profile is logged in, get icon directly
+    auto profile_icon_span =
+        profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
+    profile_icon_data.assign(profile_icon_span.begin(),
+                             profile_icon_span.end());
+  } else {
+    // Profile is not logged in, temporarily mount it to load the icon
+    if (profile_manager->MountProfile(xuid)) {
+      auto temp_profile = profile_manager->GetProfile(xuid);
+      if (temp_profile) {
+        auto profile_icon_span =
+            temp_profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
+        profile_icon_data.assign(profile_icon_span.begin(),
+                                 profile_icon_span.end());
+      }
+      profile_manager->DismountProfile(xuid);
+    }
   }
 
-  const auto profile_icon =
-      profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
-  if (profile_icon.empty()) {
-    return QPixmap();
+  // If no custom icon found, return the default user icon
+  if (profile_icon_data.empty()) {
+    return QPixmap(":/xenia/user-icon.png");
   }
 
   QImage image;
-  if (image.loadFromData(profile_icon.data(),
-                         static_cast<int>(profile_icon.size()))) {
+  if (image.loadFromData(profile_icon_data.data(),
+                         static_cast<int>(profile_icon_data.size()))) {
     return QPixmap::fromImage(image);
   }
 
-  return QPixmap();
+  // Fallback to default icon if loading fails
+  return QPixmap(":/xenia/user-icon.png");
 }
 
 void ProfileDialogQt::PopulateProfileList() {
@@ -325,19 +345,17 @@ void ProfileDialogQt::OnProfileContextMenu(const QPoint& pos) {
   // Modify (Gamercard)
   QAction* modify_action = context_menu.addAction("Modify");
   connect(modify_action, &QAction::triggered, [=, this]() {
-    new kernel::xam::ui::GamercardUI(
-        emulator_window_->window(), emulator_window_->imgui_drawer(),
-        emulator_window_->emulator()->kernel_state(), xuid);
-  });
-
-  // Show Played Titles (disabled if not signed in)
-  const bool is_signedin = profile_manager->GetProfile(xuid) != nullptr;
-  QAction* played_titles_action = context_menu.addAction("Show Played Titles");
-  played_titles_action->setEnabled(is_signedin);
-  connect(played_titles_action, &QAction::triggered, [=, this]() {
-    new kernel::xam::ui::TitleListUI(emulator_window_->imgui_drawer(),
-                                     ImVec2(500, 100),
-                                     profile_manager->GetProfile(user_index));
+    auto* editor_dialog =
+        new ProfileEditorDialogQt(nullptr, emulator_window_, xuid);
+    editor_dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(editor_dialog, &QDialog::finished, [this](int result) {
+      if (result == QDialog::Accepted) {
+        RefreshProfiles();
+      }
+    });
+    editor_dialog->show();
+    editor_dialog->raise();
+    editor_dialog->activateWindow();
   });
 
   QAction* show_content_action =

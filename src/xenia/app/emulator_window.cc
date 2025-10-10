@@ -1020,15 +1020,9 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
       QObject::connect(screenshot_action, &QAction::triggered,
                        [this]() { TakeScreenshot(); });
 
-      QAction* profile_action = context_menu.addAction("Show Profile");
-      QObject::connect(profile_action, &QAction::triggered, [this]() {
-        if (!profile_config_dialog_) {
-          profile_config_dialog_ =
-              std::make_unique<ProfileConfigDialog>(imgui_drawer(), this);
-        } else {
-          profile_config_dialog_.reset();
-        }
-      });
+      QAction* profile_action = context_menu.addAction("Profiles Menu");
+      QObject::connect(profile_action, &QAction::triggered,
+                       [this]() { ToggleProfilesConfigDialog(); });
 
       // Show menu at mouse position
       QPoint global_pos = QCursor::pos();

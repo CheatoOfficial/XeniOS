@@ -27,6 +27,7 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/app/profile_dialog_qt.h"
+#include "xenia/app/profile_editor_dialog_qt.h"
 #include "xenia/base/chrono.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
@@ -962,6 +963,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
   if (!emulator_window_ || !emulator_window_->emulator()) {
     profile_label_->setText("Logged Out");
     profile_question_label_->setVisible(true);
+    profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
     return;
   }
 
@@ -969,6 +971,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
   if (!kernel_state) {
     profile_label_->setText("Logged Out");
     profile_question_label_->setVisible(true);
+    profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
     return;
   }
 
@@ -976,6 +979,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
   if (!xam_state) {
     profile_label_->setText("Logged Out");
     profile_question_label_->setVisible(true);
+    profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
     return;
   }
 
@@ -983,6 +987,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
   if (!profile_manager) {
     profile_label_->setText("Logged Out");
     profile_question_label_->setVisible(true);
+    profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
     return;
   }
 
@@ -1000,6 +1005,34 @@ void GameListDialogQt::UpdateProfileButtonState() {
         profile_question_label_->setVisible(
             false);  // Hide question mark when logged in
         current_profile_xuid_ = profile->xuid();
+
+        // Load and display profile picture
+        const auto profile_icon =
+            profile->GetProfileIcon(kernel::xam::XTileType::kPersonalGamerTile);
+        if (!profile_icon.empty()) {
+          // Use personal gamer tile if available
+          QPixmap pixmap;
+          if (pixmap.loadFromData(profile_icon.data(),
+                                  static_cast<int>(profile_icon.size()))) {
+            profile_button_->setIcon(QIcon(pixmap));
+            return;
+          }
+        }
+
+        // Fall back to regular gamer tile
+        const auto gamer_tile =
+            profile->GetProfileIcon(kernel::xam::XTileType::kGamerTile);
+        if (!gamer_tile.empty()) {
+          QPixmap pixmap;
+          if (pixmap.loadFromData(gamer_tile.data(),
+                                  static_cast<int>(gamer_tile.size()))) {
+            profile_button_->setIcon(QIcon(pixmap));
+            return;
+          }
+        }
+
+        // If no profile icon is available, keep the default icon
+        profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
         return;
       }
     }
@@ -1008,6 +1041,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
   // No profiles logged in
   profile_label_->setText("Logged Out");
   profile_question_label_->setVisible(true);
+  profile_button_->setIcon(QIcon(":/xenia/user-icon.png"));
   current_profile_xuid_ = 0;
 }
 
@@ -1042,7 +1076,7 @@ void GameListDialogQt::OnProfileContextMenu(const QPoint& pos) {
   const uint8_t user_index =
       profile_manager->GetUserIndexAssignedToProfile(xuid);
 
-  QMenu context_menu(this);
+  QMenu context_menu;
 
   if (user_index != XUserIndexAny) {
     QAction* logout_action = context_menu.addAction("Logout");
@@ -1056,19 +1090,18 @@ void GameListDialogQt::OnProfileContextMenu(const QPoint& pos) {
   // Modify (Gamercard)
   QAction* modify_action = context_menu.addAction("Modify");
   connect(modify_action, &QAction::triggered, [=, this]() {
-    new kernel::xam::ui::GamercardUI(
-        emulator_window_->window(), emulator_window_->imgui_drawer(),
-        emulator_window_->emulator()->kernel_state(), xuid);
-  });
-
-  // Show Played Titles (disabled if not signed in)
-  const bool is_signedin = profile_manager->GetProfile(xuid) != nullptr;
-  QAction* played_titles_action = context_menu.addAction("Show Played Titles");
-  played_titles_action->setEnabled(is_signedin);
-  connect(played_titles_action, &QAction::triggered, [=, this]() {
-    new kernel::xam::ui::TitleListUI(emulator_window_->imgui_drawer(),
-                                     ImVec2(500, 100),
-                                     profile_manager->GetProfile(user_index));
+    auto* editor_dialog =
+        new ProfileEditorDialogQt(nullptr, emulator_window_, xuid);
+    editor_dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(editor_dialog, &QDialog::finished, [this](int result) {
+      if (result == QDialog::Accepted) {
+        UpdateProfileButtonState();
+        RefreshIcons();
+      }
+    });
+    editor_dialog->show();
+    editor_dialog->raise();
+    editor_dialog->activateWindow();
   });
 
   QAction* show_content_action =
