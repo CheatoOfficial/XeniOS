@@ -43,6 +43,7 @@
 #include "xenia/kernel/xam/user_tracker.h"
 #include "xenia/kernel/xam/xam_state.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
+#include "xenia/kernel/xam/xdbf/gpd_info_title.h"
 
 namespace xe {
 namespace app {
@@ -441,7 +442,7 @@ void GameListDialogQt::LoadGameList() {
 }
 
 void GameListDialogQt::TryLoadIcons() {
-  // Icons are only loaded if a user is logged in
+  // Icons and achievement data are only loaded if a user is logged in
   if (!emulator_window_ || !emulator_window_->emulator()) {
     has_logged_in_profile_ = false;
     return;
@@ -472,10 +473,27 @@ void GameListDialogQt::TryLoadIcons() {
     if (profile) {
       has_logged_in_profile_ = true;
 
-      // Load icons for all game entries from this profile's title GPDs
-      XELOGI("Loading icons for {} game entries from profile {:016X}",
-             game_entries_.size(), profile->xuid());
-      for (const auto& game_entry : game_entries_) {
+      // Load icons and achievement data for all game entries from this
+      // profile's title GPDs
+      XELOGI(
+          "Loading icons and achievement data for {} game entries from profile "
+          "{:016X}",
+          game_entries_.size(), profile->xuid());
+      for (auto& game_entry : game_entries_) {
+        // Get achievement stats from the profile
+        auto stats = profile->GetTitleAchievementStats(game_entry.title_id);
+        game_entry.achievements_total = stats.achievements_total;
+        game_entry.achievements_unlocked = stats.achievements_unlocked;
+        game_entry.gamerscore_total = stats.gamerscore_total;
+        game_entry.gamerscore_earned = stats.gamerscore_earned;
+
+        if (stats.achievements_total > 0) {
+          XELOGI("Title {:08X}: {}/{} achievements, {}/{} gamerscore",
+                 game_entry.title_id, game_entry.achievements_unlocked,
+                 game_entry.achievements_total, game_entry.gamerscore_earned,
+                 game_entry.gamerscore_total);
+        }
+
         // Skip if we already loaded this icon
         if (title_icons_.find(game_entry.title_id) != title_icons_.end()) {
           continue;
@@ -591,14 +609,23 @@ void GameListDialogQt::PopulateTable() {
     title_layout->setContentsMargins(0, 0, 0, 0);
     title_layout->setSpacing(2);
 
+    // Check if file is corrupted (GPD has no title name)
+    bool file_corrupted = entry.title_name.empty();
+
     // Title - large font
-    auto* title_label = new QLabel(QString::fromStdString(entry.title_name));
+    QString display_title = file_corrupted
+                                ? QString("File Corrupted")
+                                : QString::fromStdString(entry.title_name);
+    auto* title_label = new QLabel(display_title);
     title_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
     QFont title_font = title_label->font();
     title_font.setBold(true);
     title_font.setPointSize(title_font.pointSize() * 1.5);  // 1.5x larger
     title_label->setFont(title_font);
+    if (file_corrupted) {
+      title_label->setStyleSheet("color: red;");
+    }
     title_layout->addWidget(title_label);
 
     // Path - smaller font (only show if path is available)
@@ -614,6 +641,35 @@ void GameListDialogQt::PopulateTable() {
       title_layout->addWidget(path_label);
     }
 
+    // Achievement info - smaller font (only show if there are achievements)
+    if (entry.achievements_total > 0) {
+      QString achievement_text =
+          QString("Achievements: %1/%2 | Gamerscore: %3/%4")
+              .arg(entry.achievements_unlocked)
+              .arg(entry.achievements_total)
+              .arg(entry.gamerscore_earned)
+              .arg(entry.gamerscore_total);
+      auto* achievement_label = new QLabel(achievement_text);
+      achievement_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+      achievement_label->setAttribute(Qt::WA_TransparentForMouseEvents);
+      QFont achievement_font = achievement_label->font();
+      achievement_font.setPointSize(achievement_font.pointSize() *
+                                    0.8);  // Smaller font
+      achievement_label->setFont(achievement_font);
+
+      // Color based on completion
+      if (entry.achievements_unlocked == entry.achievements_total &&
+          entry.achievements_total > 0) {
+        achievement_label->setStyleSheet("color: #4CAF50;");  // Green for 100%
+      } else if (entry.achievements_unlocked > 0) {
+        achievement_label->setStyleSheet(
+            "color: #FFA726;");  // Orange for partial
+      } else {
+        achievement_label->setStyleSheet("color: gray;");  // Gray for none
+      }
+      title_layout->addWidget(achievement_label);
+    }
+
     row_layout->addWidget(title_container, 1);  // Stretch factor
 
     // Last played
@@ -627,10 +683,11 @@ void GameListDialogQt::PopulateTable() {
     table_widget_->setCellWidget(row, 0, row_widget);
     table_widget_->setRowHeight(row, 100);
 
-    // Store the path in the row for later retrieval
+    // Store the path and title_id in the row for later retrieval
     table_widget_->setItem(row, 0, new QTableWidgetItem());
     table_widget_->item(row, 0)->setData(
         Qt::UserRole, QString::fromStdString(entry.path_to_file.string()));
+    table_widget_->item(row, 0)->setData(Qt::UserRole + 1, entry.title_id);
   }
 }
 
@@ -674,23 +731,34 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   }
 
   QString path_str = item->data(Qt::UserRole).toString();
-  if (path_str.isEmpty()) {
-    return;
-  }
+  uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
 
   std::filesystem::path path = path_str.toStdString();
+  bool has_path = !path_str.isEmpty();
 
-  QMenu context_menu(this);
-  QAction* launch_action = context_menu.addAction("Launch");
-  QAction* open_folder_action =
-      context_menu.addAction("Open containing folder");
+  QMenu context_menu;
+
+  // Only show Launch and Open containing folder if the entry has a path
+  QAction* launch_action = nullptr;
+  QAction* open_folder_action = nullptr;
+
+  if (has_path) {
+    launch_action = context_menu.addAction("Launch");
+    open_folder_action = context_menu.addAction("Open containing folder");
+    context_menu.addSeparator();
+  }
+
+  // Remove option is always available for all entries
+  QAction* remove_action = context_menu.addAction("Remove from list");
 
   QAction* selected = context_menu.exec(table_widget_->mapToGlobal(pos));
 
-  if (selected == launch_action) {
+  if (selected == launch_action && launch_action) {
     LaunchGame(path);
-  } else if (selected == open_folder_action) {
+  } else if (selected == open_folder_action && open_folder_action) {
     OpenContainingFolder(path);
+  } else if (selected == remove_action) {
+    RemoveTitleFromDashboard(title_id);
   }
 }
 
@@ -708,6 +776,105 @@ void GameListDialogQt::OpenContainingFolder(const std::filesystem::path& path) {
   std::filesystem::path folder = path.parent_path();
   std::thread path_open(LaunchFileExplorer, folder);
   path_open.detach();
+}
+
+void GameListDialogQt::RemoveTitleFromDashboard(uint32_t title_id) {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto xam_state = kernel_state->xam_state();
+  if (!xam_state) {
+    return;
+  }
+
+  auto profile_manager = xam_state->profile_manager();
+  if (!profile_manager) {
+    return;
+  }
+
+  // Ask for confirmation
+  QMessageBox::StandardButton reply;
+  reply = QMessageBox::question(
+      nullptr, "Remove Title",
+      QString("Are you sure you want to remove this title from the game list?"),
+      QMessageBox::Yes | QMessageBox::No);
+
+  if (reply != QMessageBox::Yes) {
+    return;
+  }
+
+  // Remove the title from all profiles' dashboard GPDs
+  auto content_root = emulator_window_->emulator()->content_root();
+  auto profiles_directory = xe::filesystem::FilterByName(
+      xe::filesystem::ListDirectories(content_root),
+      std::regex("[0-9A-F]{16}"));
+
+  bool removed_from_any = false;
+
+  for (const auto& profile_dir : profiles_directory) {
+    const std::string profile_xuid = xe::path_to_utf8(profile_dir.name);
+    if (profile_xuid == fmt::format("{:016X}", 0)) {
+      continue;  // Skip shared content directory
+    }
+
+    // Construct path to dashboard GPD
+    std::filesystem::path dashboard_gpd_path =
+        profile_dir.path / profile_dir.name / kernel::xam::kDashboardStringID /
+        fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
+        profile_dir.name / fmt::format("{:08X}.gpd", kernel::kDashboardID);
+
+    if (!std::filesystem::exists(dashboard_gpd_path)) {
+      continue;
+    }
+
+    // Read dashboard GPD file
+    std::ifstream file(dashboard_gpd_path, std::ios::binary);
+    if (!file.is_open()) {
+      continue;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> gpd_data(file_size);
+    file.read(reinterpret_cast<char*>(gpd_data.data()), file_size);
+    file.close();
+
+    // Parse dashboard GPD
+    kernel::xam::GpdInfoProfile dashboard_gpd(gpd_data);
+    if (!dashboard_gpd.IsValid()) {
+      continue;
+    }
+
+    // Try to remove the title
+    if (dashboard_gpd.RemoveTitle(title_id)) {
+      // Write back the modified GPD
+      std::vector<uint8_t> serialized_gpd = dashboard_gpd.Serialize();
+
+      std::ofstream out_file(dashboard_gpd_path, std::ios::binary);
+      if (out_file.is_open()) {
+        out_file.write(reinterpret_cast<const char*>(serialized_gpd.data()),
+                       serialized_gpd.size());
+        out_file.close();
+        removed_from_any = true;
+      }
+    }
+  }
+
+  if (removed_from_any) {
+    // Reload the game list
+    LoadGameList();
+  } else {
+    QMessageBox::warning(nullptr, "Remove Title",
+                         "Failed to remove title from dashboard.");
+  }
 }
 
 void GameListDialogQt::OnPlayClicked() {

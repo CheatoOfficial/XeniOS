@@ -9,6 +9,7 @@
 
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 
+#include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
 
 #include <ranges>
@@ -89,13 +90,28 @@ void GpdInfoProfile::AddNewTitle(const SpaInfo* title_data) {
 }
 
 bool GpdInfoProfile::RemoveTitle(const uint32_t title_id) {
-  const Entry* entry =
-      GetEntry(static_cast<uint16_t>(GpdSection::kTitle), title_id);
-  if (!entry) {
+  // Find the entry by searching through all title entries and matching the
+  // title_id in the data (not the entry ID, which is different!)
+  const Entry* entry_to_delete = nullptr;
+
+  for (const auto& e : entries_) {
+    if (e.info.section.get() == static_cast<uint16_t>(GpdSection::kTitle)) {
+      if (e.data.size() >= sizeof(X_XDBF_GPD_TITLE_PLAYED)) {
+        auto* title_data =
+            reinterpret_cast<const X_XDBF_GPD_TITLE_PLAYED*>(e.data.data());
+        if (title_data->title_id.get() == title_id) {
+          entry_to_delete = &e;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!entry_to_delete) {
     return false;
   }
 
-  DeleteEntry(entry);
+  DeleteEntry(entry_to_delete);
   return true;
 }
 

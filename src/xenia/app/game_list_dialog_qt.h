@@ -39,6 +39,12 @@ struct GameListEntry {
   time_t last_run_time;
   uint32_t title_id;
   std::vector<uint8_t> icon;
+
+  // Achievement data
+  uint32_t achievements_unlocked = 0;
+  uint32_t achievements_total = 0;
+  uint32_t gamerscore_earned = 0;
+  uint32_t gamerscore_total = 0;
 };
 
 class GameListDialogQt : public QWidget {
@@ -75,6 +81,7 @@ class GameListDialogQt : public QWidget {
   QPixmap CreateIconPixmap(const std::vector<uint8_t>& icon_data);
   void LaunchGame(const std::filesystem::path& path);
   void OpenContainingFolder(const std::filesystem::path& path);
+  void RemoveTitleFromDashboard(uint32_t title_id);
   std::string FormatLastPlayed(time_t timestamp);
 
   EmulatorWindow* emulator_window_;

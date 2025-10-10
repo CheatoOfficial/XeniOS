@@ -161,6 +161,36 @@ class UserProfile {
     return std::vector<uint8_t>(icon_data.begin(), icon_data.end());
   }
 
+  // Public accessor for getting achievement stats from title GPD
+  struct TitleAchievementStats {
+    uint32_t achievements_total = 0;
+    uint32_t achievements_unlocked = 0;
+    uint32_t gamerscore_total = 0;
+    uint32_t gamerscore_earned = 0;
+  };
+
+  TitleAchievementStats GetTitleAchievementStats(uint32_t title_id) const {
+    TitleAchievementStats stats;
+
+    // Get the GPD for this title
+    auto it = games_gpd_.find(title_id);
+    if (it == games_gpd_.end()) {
+      return stats;
+    }
+
+    const GpdInfoTitle& title_gpd = it->second;
+    if (!title_gpd.IsValid()) {
+      return stats;
+    }
+
+    stats.achievements_total = title_gpd.GetAchievementCount();
+    stats.achievements_unlocked = title_gpd.GetUnlockedAchievementCount();
+    stats.gamerscore_total = title_gpd.GetTotalGamerscore();
+    stats.gamerscore_earned = title_gpd.GetGamerscore();
+
+    return stats;
+  }
+
   friend class UserTracker;
   friend class GpdAchievementBackend;
   friend class ProfileManager;

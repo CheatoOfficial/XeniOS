@@ -43,10 +43,10 @@ class GpdInfoTitle : public GpdInfo {
   std::u16string GetAchievementDescription(const uint32_t id);
   std::u16string GetAchievementUnachievedDescription(const uint32_t id);
 
-  uint32_t GetTotalGamerscore();
-  uint32_t GetGamerscore();
-  uint32_t GetAchievementCount();
-  uint32_t GetUnlockedAchievementCount();
+  uint32_t GetTotalGamerscore() const;
+  uint32_t GetGamerscore() const;
+  uint32_t GetAchievementCount() const;
+  uint32_t GetUnlockedAchievementCount() const;
 
  private:
   const char16_t* GetAchievementTitlePtr(const uint32_t id);
