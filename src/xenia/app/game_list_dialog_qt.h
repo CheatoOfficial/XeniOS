@@ -82,6 +82,8 @@ class GameListDialogQt : public QWidget {
   void LaunchGame(const std::filesystem::path& path);
   void OpenContainingFolder(const std::filesystem::path& path);
   void RemoveTitleFromDashboard(uint32_t title_id);
+  void ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
+                              const QString& title_name = "");
   std::string FormatLastPlayed(time_t timestamp);
 
   EmulatorWindow* emulator_window_;

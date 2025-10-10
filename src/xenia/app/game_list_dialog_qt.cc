@@ -25,6 +25,7 @@
 #include <thread>
 
 #include "third_party/fmt/include/fmt/format.h"
+#include "xenia/app/achievements_dialog_qt.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/app/profile_dialog_qt.h"
 #include "xenia/app/profile_editor_dialog_qt.h"
@@ -382,8 +383,20 @@ void GameListDialogQt::LoadGameList() {
     for (const auto& title_info : titles_info) {
       uint32_t title_id = title_info->title_id;
 
-      // Only add each title once (first profile we see it in)
+      // Get last played time for this profile
+      time_t last_played = 0;
+      if (title_info->last_played.is_valid()) {
+        auto last_played_tp = chrono::WinSystemClock::to_sys(
+            title_info->last_played.to_time_point());
+        last_played = std::chrono::system_clock::to_time_t(last_played_tp);
+      }
+
+      // Check if we already have this title
       if (titles_by_id.find(title_id) != titles_by_id.end()) {
+        // Update with most recent timestamp
+        if (last_played > titles_by_id[title_id].last_run_time) {
+          titles_by_id[title_id].last_run_time = last_played;
+        }
         continue;
       }
 
@@ -406,14 +419,6 @@ void GameListDialogQt::LoadGameList() {
       auto all_paths = dashboard_gpd.GetTitlePaths(title_id);
       if (all_paths.size() > 1) {
         XELOGI("Title {:08X} has {} discs", title_id, all_paths.size());
-      }
-
-      // Get last played time
-      time_t last_played = 0;
-      if (title_info->last_played.is_valid()) {
-        auto last_played_tp = chrono::WinSystemClock::to_sys(
-            title_info->last_played.to_time_point());
-        last_played = std::chrono::system_clock::to_time_t(last_played_tp);
       }
 
       // Add to our map (without icon for now)
@@ -474,12 +479,45 @@ void GameListDialogQt::TryLoadIcons() {
     if (profile) {
       has_logged_in_profile_ = true;
 
-      // Load icons and achievement data for all game entries from this
-      // profile's title GPDs
+      // Load icons, achievement data, and profile-specific timestamps for all
+      // game entries from this profile's title GPDs
       XELOGI(
-          "Loading icons and achievement data for {} game entries from profile "
+          "Loading icons, achievement data, and timestamps for {} game entries "
+          "from profile "
           "{:016X}",
           game_entries_.size(), profile->xuid());
+
+      // Get the profile's dashboard GPD to get profile-specific timestamps
+      const auto& dashboard_gpd = profile->dashboard_gpd();
+      if (dashboard_gpd.IsValid()) {
+        auto profile_titles_info = dashboard_gpd.GetTitlesInfo();
+
+        for (auto& game_entry : game_entries_) {
+          // Update timestamp to this profile's last played time
+          bool found = false;
+          for (const auto& title_info : profile_titles_info) {
+            if (title_info->title_id == game_entry.title_id) {
+              if (title_info->last_played.is_valid()) {
+                auto last_played_tp = chrono::WinSystemClock::to_sys(
+                    title_info->last_played.to_time_point());
+                game_entry.last_run_time =
+                    std::chrono::system_clock::to_time_t(last_played_tp);
+              } else {
+                game_entry.last_run_time =
+                    0;  // Profile hasn't played this game
+              }
+              found = true;
+              break;
+            }
+          }
+          // If not found in this profile's dashboard, the profile hasn't played
+          // it
+          if (!found) {
+            game_entry.last_run_time = 0;
+          }
+        }
+      }
+
       for (auto& game_entry : game_entries_) {
         // Get achievement stats from the profile
         auto stats = profile->GetTitleAchievementStats(game_entry.title_id);
@@ -569,9 +607,10 @@ void GameListDialogQt::PopulateTable() {
     // Create a single container widget for the entire row
     auto* row_widget = new QWidget();
     row_widget->setAttribute(Qt::WA_Hover);
+    row_widget->setObjectName("GameListRow");
     row_widget->setStyleSheet(
-        "QWidget { border-bottom: 1px solid rgba(128, 128, 128, 50); }"
-        "QWidget:hover { background-color: rgba(128, 128, 128, 50); }");
+        "#GameListRow { border-bottom: 1px solid rgba(128, 128, 128, 50); }"
+        "#GameListRow:hover { background-color: rgba(128, 128, 128, 50); }");
     auto* row_layout = new QHBoxLayout(row_widget);
     row_layout->setContentsMargins(10, 10, 10, 10);
     row_layout->setSpacing(15);
@@ -597,8 +636,11 @@ void GameListDialogQt::PopulateTable() {
             "QLabel { color: gray; border: 2px solid rgba(255, 255, 255, 100); "
             "border-radius: 4px; }");
       } else {
-        // Empty space if logged in but no icon
-        icon_label->setText("");
+        // Logged in but no icon - user hasn't played this game
+        icon_label->setText("Not\nplayed");
+        icon_label->setStyleSheet(
+            "QLabel { color: gray; border: 2px solid rgba(255, 255, 255, 100); "
+            "border-radius: 4px; }");
       }
     }
     row_layout->addWidget(icon_label);
@@ -694,7 +736,7 @@ void GameListDialogQt::PopulateTable() {
 
 std::string GameListDialogQt::FormatLastPlayed(time_t timestamp) {
   if (timestamp == 0) {
-    return "Unknown";
+    return "-";
   }
 
   return fmt::format("{:%Y-%m-%d %H:%M}", std::chrono::system_clock::time_point(
@@ -737,6 +779,11 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   std::filesystem::path path = path_str.toStdString();
   bool has_path = !path_str.isEmpty();
 
+  // Get profile manager
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  auto xam_state = kernel_state->xam_state();
+  auto profile_manager = xam_state->profile_manager();
+
   QMenu context_menu;
 
   // Only show Launch and Open containing folder if the entry has a path
@@ -746,11 +793,44 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   if (has_path) {
     launch_action = context_menu.addAction("Launch");
     open_folder_action = context_menu.addAction("Open containing folder");
-    context_menu.addSeparator();
   }
 
-  // Remove option is always available for all entries
-  QAction* remove_action = context_menu.addAction("Remove from list");
+  // Achievements option (enabled if user is logged in)
+  QAction* achievements_action = nullptr;
+  bool is_signedin = false;
+  uint64_t xuid = 0;
+
+  // TODO: Handle multiple signed-in profiles better
+  // For now, just use the first logged-in profile we find
+  for (uint8_t user_index = 0; user_index < XUserMaxUserCount; user_index++) {
+    const auto profile = profile_manager->GetProfile(user_index);
+    if (profile) {
+      is_signedin = true;
+      xuid = profile->xuid();
+      break;
+    }
+  }
+
+  if (is_signedin && title_id != 0) {
+    achievements_action = context_menu.addAction("Achievements");
+    connect(achievements_action, &QAction::triggered, [=, this]() {
+      // Get the title name from the game entry
+      QString title_name;
+      for (const auto& entry : game_entries_) {
+        if (entry.title_id == title_id) {
+          title_name = QString::fromStdString(entry.title_name);
+          break;
+        }
+      }
+      ShowAchievementsDialog(xuid, title_id, title_name);
+    });
+  }
+
+  // Separator before Remove option
+  context_menu.addSeparator();
+
+  // Remove option is always available for all entries (at the bottom, in red)
+  QAction* remove_action = context_menu.addAction("🗑 Remove from list");
 
   QAction* selected = context_menu.exec(table_widget_->mapToGlobal(pos));
 
@@ -758,6 +838,8 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     LaunchGame(path);
   } else if (selected == open_folder_action && open_folder_action) {
     OpenContainingFolder(path);
+  } else if (selected == achievements_action && achievements_action) {
+    // Achievements dialog will open in a separate call
   } else if (selected == remove_action) {
     RemoveTitleFromDashboard(title_id);
   }
@@ -1200,6 +1282,16 @@ void GameListDialogQt::HideScrollbar() {
       "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
       "    background: none;"
       "}");
+}
+
+void GameListDialogQt::ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
+                                              const QString& title_name) {
+  auto* achievements_dialog = new AchievementsDialogQt(
+      nullptr, emulator_window_, xuid, title_id, title_name);
+  achievements_dialog->setAttribute(Qt::WA_DeleteOnClose);
+  achievements_dialog->show();
+  achievements_dialog->raise();
+  achievements_dialog->activateWindow();
 }
 
 }  // namespace app
