@@ -197,6 +197,7 @@ jobs:
       - uses: actions/checkout@main
         with:
           fetch-depth: 0
+          submodules: false
 
       - name: Cache Vulkan SDK
         id: cache-vulkan-sdk
