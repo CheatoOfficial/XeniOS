@@ -17,6 +17,7 @@ project("xenia-gpu")
   })
   includedirs({
     project_root.."/third_party/Vulkan-Headers/include",
+    project_root.."/third_party/glslang",  -- For glslang SPIRV headers
   })
 
   -- Include SPIRV-Tools headers from Vulkan SDK for Windows
