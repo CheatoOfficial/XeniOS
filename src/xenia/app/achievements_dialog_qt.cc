@@ -443,9 +443,8 @@ QString AchievementsDialogQt::GetUnlockedTime(
         chrono::WinSystemClock::to_sys(achievement.unlock_time.to_time_point());
     auto unlock_time = std::chrono::system_clock::to_time_t(unlock_tp);
 
-    return QString::fromStdString(fmt::format(
-        "{:%Y-%m-%d %H:%M}", std::chrono::system_clock::time_point(
-                                 std::chrono::seconds(unlock_time))));
+    return QString::fromStdString(
+        fmt::format("{:%Y-%m-%d %H:%M}", fmt::localtime(unlock_time)));
   }
 
   return "Unknown time";

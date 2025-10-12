@@ -739,8 +739,7 @@ std::string GameListDialogQt::FormatLastPlayed(time_t timestamp) {
     return "-";
   }
 
-  return fmt::format("{:%Y-%m-%d %H:%M}", std::chrono::system_clock::time_point(
-                                              std::chrono::seconds(timestamp)));
+  return fmt::format("{:%Y-%m-%d %H:%M}", fmt::localtime(timestamp));
 }
 
 void GameListDialogQt::OnFilterTextChanged(const QString& text) {
