@@ -25,9 +25,11 @@ class XamDialog : public xe::ui::ImGuiDialog {
   }
 
  protected:
-  XamDialog(xe::ui::ImGuiDrawer* imgui_drawer);
+  XamDialog(xe::ui::ImGuiDrawer* imgui_drawer)
+      : xe::ui::ImGuiDialog(imgui_drawer) {}
 
-  ~XamDialog();
+  virtual ~XamDialog() {};
+
   void OnClose() override {
     if (close_callback_) {
       close_callback_();
