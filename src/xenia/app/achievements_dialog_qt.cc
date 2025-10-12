@@ -147,14 +147,14 @@ void AchievementsDialogQt::SetupUI() {
       "  background-color: #2D2D2D;"
       "  alternate-background-color: #2D2D2D;"
       "  gridline-color: #444444;"
-      "  selection-background-color: #3D5A80;"
+      "  selection-background-color: rgba(16, 124, 16, 120);"
       "}"
       "QTableWidget::item {"
       "  border-bottom: 1px solid #444444;"
       "  padding: 0px;"
       "}"
       "QTableWidget::item:selected {"
-      "  background-color: #3D5A80;"
+      "  background-color: rgba(16, 124, 16, 120);"
       "}");
 
   // Row height - consistent minimum height with auto-resize for content

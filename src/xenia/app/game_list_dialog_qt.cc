@@ -17,6 +17,7 @@
 #include <QImage>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPalette>
 #include <QScrollBar>
 #include <QUrl>
 #include <chrono>
@@ -274,9 +275,11 @@ void GameListDialogQt::SetupUI() {
   table_widget_->setContextMenuPolicy(Qt::CustomContextMenu);
   table_widget_->setMouseTracking(true);
 
-  // Disable default table item hover highlighting (we handle it in row widget)
+  // Set Xbox green theme for table
   table_widget_->setStyleSheet(
-      "QTableWidget::item:hover { background-color: transparent; }");
+      "QTableWidget::item:hover { background-color: transparent; }"
+      "QTableWidget::item:selected { background-color: rgba(16, 124, 16, 120); "
+      "}");
 
   // Auto-hide scrollbar - only show when hovering or scrolling
   table_widget_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -610,7 +613,7 @@ void GameListDialogQt::PopulateTable() {
     row_widget->setObjectName("GameListRow");
     row_widget->setStyleSheet(
         "#GameListRow { border-bottom: 1px solid rgba(128, 128, 128, 50); }"
-        "#GameListRow:hover { background-color: rgba(128, 128, 128, 50); }");
+        "#GameListRow:hover { background-color: rgba(16, 124, 16, 80); }");
     auto* row_layout = new QHBoxLayout(row_widget);
     row_layout->setContentsMargins(10, 10, 10, 10);
     row_layout->setSpacing(15);
@@ -1234,12 +1237,12 @@ void GameListDialogQt::ShowScrollbar() {
       "    margin: 0px;"
       "}"
       "QScrollBar::handle:vertical {"
-      "    background: rgba(128, 128, 128, 180);"
+      "    background: rgba(16, 124, 16, 180);"
       "    min-height: 20px;"
       "    border-radius: 5px;"
       "}"
       "QScrollBar::handle:vertical:hover {"
-      "    background: rgba(128, 128, 128, 220);"
+      "    background: rgba(16, 124, 16, 220);"
       "}"
       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
       "    height: 0px;"
@@ -1268,12 +1271,12 @@ void GameListDialogQt::HideScrollbar() {
       "    margin: 0px;"
       "}"
       "QScrollBar::handle:vertical {"
-      "    background: rgba(128, 128, 128, 0);"
+      "    background: rgba(16, 124, 16, 0);"
       "    min-height: 20px;"
       "    border-radius: 5px;"
       "}"
       "QScrollBar::handle:vertical:hover {"
-      "    background: rgba(128, 128, 128, 180);"
+      "    background: rgba(16, 124, 16, 180);"
       "}"
       "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
       "    height: 0px;"
