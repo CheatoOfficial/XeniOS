@@ -71,7 +71,9 @@ template <typename T>
 X_RESULT xeXamDispatchDialog(T* dialog,
                              std::function<X_RESULT(T*)> close_callback,
                              uint32_t overlapped) {
-  auto pre = []() {};
+  auto pre = []() {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  };
   auto run = [dialog, close_callback]() -> X_RESULT {
     X_RESULT result;
     dialog->set_close_callback([&dialog, &result, &close_callback]() {
@@ -89,7 +91,10 @@ X_RESULT xeXamDispatchDialog(T* dialog,
     // dialog should be deleted at this point!
     return result;
   };
-  auto post = []() { xe::threading::Sleep(std::chrono::milliseconds(100)); };
+  auto post = []() {
+    xe::threading::Sleep(std::chrono::milliseconds(100));
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  };
   if (!overlapped) {
     pre();
     auto result = run();
@@ -105,7 +110,9 @@ template <typename T>
 X_RESULT xeXamDispatchDialogEx(
     T* dialog, std::function<X_RESULT(T*, uint32_t&, uint32_t&)> close_callback,
     uint32_t overlapped) {
-  auto pre = []() {};
+  auto pre = []() {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  };
   auto run = [dialog, close_callback](uint32_t& extended_error,
                                       uint32_t& length) -> X_RESULT {
     auto display_window = kernel_state()->emulator()->display_window();
@@ -124,7 +131,10 @@ X_RESULT xeXamDispatchDialogEx(
     // dialog should be deleted at this point!
     return result;
   };
-  auto post = []() { xe::threading::Sleep(std::chrono::milliseconds(100)); };
+  auto post = []() {
+    xe::threading::Sleep(std::chrono::milliseconds(100));
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  };
   if (!overlapped) {
     pre();
     uint32_t extended_error, length;
@@ -140,8 +150,13 @@ X_RESULT xeXamDispatchDialogEx(
 
 X_RESULT xeXamDispatchHeadless(std::function<X_RESULT()> run_callback,
                                uint32_t overlapped) {
-  auto pre = []() {};
-  auto post = []() { xe::threading::Sleep(std::chrono::milliseconds(100)); };
+  auto pre = []() {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  };
+  auto post = []() {
+    xe::threading::Sleep(std::chrono::milliseconds(100));
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  };
   if (!overlapped) {
     pre();
     auto result = run_callback();
@@ -157,8 +172,13 @@ X_RESULT xeXamDispatchHeadless(std::function<X_RESULT()> run_callback,
 X_RESULT xeXamDispatchHeadlessEx(
     std::function<X_RESULT(uint32_t&, uint32_t&)> run_callback,
     uint32_t overlapped) {
-  auto pre = []() {};
-  auto post = []() { xe::threading::Sleep(std::chrono::milliseconds(100)); };
+  auto pre = []() {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+  };
+  auto post = []() {
+    xe::threading::Sleep(std::chrono::milliseconds(100));
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  };
   if (!overlapped) {
     pre();
     uint32_t extended_error, length;
