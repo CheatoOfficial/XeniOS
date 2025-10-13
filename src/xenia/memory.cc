@@ -212,12 +212,10 @@ bool Memory::Initialize() {
   // without any restriction. This however needs some form of validation.
   // That's why we're commiting whole physical memory range and deal with
   // allocations issues on custom page protection level.
-  for (size_t i = 1; i <= 16; i++) {
-    xe::memory::AllocFixed(heaps_.physical.TranslateRelative(i << 24),
-                           heaps_.physical.page_size() * 0x10000,
-                           xe::memory::AllocationType::kCommit,
-                           xe::memory::PageAccess::kReadWrite);
-  }
+  // Commit the entire 512MB physical memory range
+  xe::memory::AllocFixed(heaps_.physical.TranslateRelative(0x01000000),
+                         0x1F000000, xe::memory::AllocationType::kCommit,
+                         xe::memory::PageAccess::kReadWrite);
 
   // Add handlers for MMIO.
   mmio_handler_ = cpu::MMIOHandler::Install(
