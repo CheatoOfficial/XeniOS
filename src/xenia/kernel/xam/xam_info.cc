@@ -7,7 +7,6 @@
  ******************************************************************************
  */
 
-#include "xenia/app/launch_data_restart_dialog_qt.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
@@ -23,8 +22,6 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
-#include "xenia/ui/window.h"
-#include "xenia/ui/window_qt.h"
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/xbox.h"
 
@@ -395,25 +392,21 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
     xam->SaveLoaderData();
 
     if (loader_data.launch_data_present) {
-      auto display_window = kernel_state()->emulator()->display_window();
-
-      if (display_window) {
-        // Show a dialog and wait for user to click OK before terminating
-        // The parent UI will detect the launch_data.bin file and automatically
-        // relaunch without a game argument when this process exits
-        auto* qt_window = dynamic_cast<ui::QtWindow*>(display_window);
-        if (qt_window) {
-          display_window->app_context().CallInUIThread(
-              [qt_window, display_window, kernel_state = kernel_state()]() {
-                auto* dialog = new app::LaunchDataRestartDialogQt(
-                    qt_window->qwindow(), display_window, kernel_state);
-                dialog->show();
-              });
-        }
+      // Notify the UI that a restart with launch data is requested.
+      // The UI layer will show an appropriate dialog and handle termination.
+      // If no UI handler is set, just terminate immediately.
+      auto on_launch_data_restart =
+          kernel_state()->emulator()->on_launch_data_restart();
+      if (on_launch_data_restart) {
+        on_launch_data_restart();
+        // The callback will handle termination
+        return;
       }
-      // Don't call TerminateTitle here - the dialog will do it when user clicks
-      // OK
-      return;
+
+      // Fallback: if no UI handler, log and terminate
+      XELOGW(
+          "XamLoaderLaunchTitle: restart with launch data requested, but no UI "
+          "handler set");
     }
   } else {
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");

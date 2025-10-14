@@ -23,6 +23,7 @@
 #include "third_party/tomlplusplus/toml.hpp"
 #include "xenia/app/config_dialog_qt.h"
 #include "xenia/app/game_list_dialog_qt.h"
+#include "xenia/app/launch_data_restart_dialog_qt.h"
 #include "xenia/app/notification_widget_qt.h"
 #include "xenia/app/postprocessing_dialog_qt.h"
 #include "xenia/app/profile_dialog_qt.h"
@@ -387,6 +388,19 @@ void EmulatorWindow::OnEmulatorInitialized() {
     Gamepad_HotKeys_Listener =
         threading::Thread::Create({}, [&] { GamepadHotKeys(); });
     Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
+  }
+
+  // Register callback for launch data restart requests from the kernel
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (qt_window) {
+    emulator_->set_on_launch_data_restart([this, qt_window]() {
+      // Show dialog in UI thread
+      window_->app_context().CallInUIThread([this, qt_window]() {
+        auto* dialog = new app::LaunchDataRestartDialogQt(
+            qt_window->qwindow(), window_.get(), emulator_->kernel_state());
+        dialog->show();
+      });
+    });
   }
 }
 

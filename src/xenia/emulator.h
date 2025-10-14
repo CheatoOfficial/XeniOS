@@ -348,6 +348,15 @@ class Emulator {
   xe::Delegate<> on_terminate;
   xe::Delegate<> on_exit;
 
+  // Called when XamLoaderLaunchTitle requests a restart with launch data.
+  // The UI layer should show an appropriate dialog and handle termination.
+  std::function<void()> on_launch_data_restart() const {
+    return on_launch_data_restart_;
+  }
+  void set_on_launch_data_restart(std::function<void()> callback) {
+    on_launch_data_restart_ = std::move(callback);
+  }
+
  private:
   enum : uint64_t { EmulatorFlagDisclaimerAcknowledged = 1ULL << 0 };
   static uint64_t GetPersistentEmulatorFlags();
@@ -406,6 +415,8 @@ class Emulator {
   bool paused_;
   bool restoring_;
   threading::Fence restore_fence_;  // Fired on restore finish.
+
+  std::function<void()> on_launch_data_restart_;
 };
 
 }  // namespace xe

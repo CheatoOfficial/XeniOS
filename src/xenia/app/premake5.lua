@@ -118,6 +118,8 @@ project("xenia-app")
       "xenia-ui-d3d12",
     })
 
+  filter("platforms:Windows")
+
   if enableMiscSubprojects then
     filter({"platforms:Windows", SINGLE_LIBRARY_FILTER})
       links({
