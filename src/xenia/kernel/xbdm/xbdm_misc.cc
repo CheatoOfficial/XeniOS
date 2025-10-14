@@ -19,7 +19,7 @@
 
 DECLARE_bool(debug);
 
-DECLARE_bool(force_mount_devkit);
+DEFINE_bool(force_mount_devkit, false, "Force devkit mount", "Storage");
 
 namespace xe {
 namespace kernel {

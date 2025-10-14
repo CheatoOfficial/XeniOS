@@ -281,7 +281,7 @@ filter("platforms:Windows")
     "dxguid",
     "bcrypt",
   })
-
+  -- Add Qt for Windows
   local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
     includedirs({
@@ -296,7 +296,6 @@ filter("platforms:Windows")
   end
 
 filter({"platforms:Windows", "configurations:Release"})
-  local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
     links({
       "Qt6Core",
@@ -306,7 +305,6 @@ filter({"platforms:Windows", "configurations:Release"})
   end
 
 filter({"platforms:Windows", "configurations:Debug or Checked"})
-  local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
     links({
       "Qt6Cored",

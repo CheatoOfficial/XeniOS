@@ -643,7 +643,7 @@ def run_premake(target_os, action, cc=None):
         os.path.join("tools", "build", "premake.py"),
         "--file=premake5.lua",
         f"--os={target_os}",
-        #"--test-suite-mode=combined",
+        "--test-suite-mode=combined",
         "--verbose",
         action,
     ]
@@ -1019,20 +1019,43 @@ class BaseBuildCommand(Command):
             else:
                 targets = None
                 if args["target"]:
-                    targets = "/t:" + ";".join(
-                        target + (":Rebuild" if args["force"] else "")
-                        for target in args["target"])
-                else:
-                    targets = "/t:Rebuild" if args["force"] else None
+                    # Build each project file directly to avoid MSBuild trying to
+                    # run the target on every project in the solution
+                    result = 0
+                    # Convert config name to match project configuration names
+                    # e.g., "debug" -> "Debug Windows"
+                    config_name = f"{args['config'].capitalize()} Windows"
+                    for target in args["target"]:
+                        project_file = f"build/{target}.vcxproj"
+                        if not os.path.exists(project_file):
+                            print(f"ERROR: Project file {project_file} does not exist")
+                            result = 1
+                            break
 
-                result = subprocess.call([
-                    "msbuild",
-                    "build/xenia.sln",
-                    "/nologo",
-                    "/m",
-                    "/v:m",
-                    f"/p:Configuration={args['config']}",
-                    ] + ([targets] if targets else []) + pass_args)
+                        target_arg = "/t:Rebuild" if args["force"] else "/t:Build"
+                        result = subprocess.call([
+                            "msbuild",
+                            project_file,
+                            "/nologo",
+                            "/m",
+                            "/v:m",
+                            target_arg,
+                            f"/p:Configuration={config_name}",
+                            "/p:Platform=x64",
+                            ] + pass_args)
+                        if result != 0:
+                            break
+                else:
+                    # Build entire solution
+                    targets = "/t:Rebuild" if args["force"] else None
+                    result = subprocess.call([
+                        "msbuild",
+                        "build/xenia.sln",
+                        "/nologo",
+                        "/m",
+                        "/v:m",
+                        f"/p:Configuration={args['config']}",
+                        ] + ([targets] if targets else []) + pass_args)
         elif sys.platform == "darwin":
             schemes = args["target"] or ["xenia-app"]
             nested_args = [["-scheme", scheme] for scheme in schemes]
@@ -1424,12 +1447,20 @@ class TestCommand(BaseBuildCommand):
                 print(f"ERROR: Unable to find {test_targets[i]} - build it.")
                 return 1
 
+        # Prepare environment with Qt bin directory in PATH if available
+        test_env = dict(os.environ)
+        qt_dir = os.environ.get("QT_DIR")
+        if qt_dir and sys.platform == "win32":
+            qt_bin = os.path.join(qt_dir, "bin")
+            if os.path.exists(qt_bin):
+                test_env["PATH"] = f"{qt_bin}{os.pathsep}{test_env['PATH']}"
+                print(f"- Qt bin directory added to PATH: {qt_bin}\n")
+
         # Run tests.
         any_failed = False
         for test_executable in test_executables:
             print(f"- {test_executable}")
-            result = shell_call([test_executable] + pass_args,
-                                throw_on_error=False)
+            result = subprocess.call([test_executable] + pass_args, env=test_env)
             if result:
                 any_failed = True
                 if args["continue"]:
