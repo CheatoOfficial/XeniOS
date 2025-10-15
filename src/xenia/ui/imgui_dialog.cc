@@ -41,7 +41,9 @@ ImGuiIO& ImGuiDialog::GetIO() { return imgui_drawer()->GetIO(); }
 
 void ImGuiDialog::Draw() {
   // Draw UI.
-  OnDraw(GetIO());
+  if (!has_close_pending_) {
+    OnDraw(GetIO());
+  }
 
   // Check to see if the UI closed itself and needs to be deleted.
   if (has_close_pending_) {

@@ -34,6 +34,8 @@ class ImGuiDialog {
 
   void Draw();
 
+  bool IsClosing() const { return has_close_pending_; }
+
  protected:
   ImGuiDialog(ImGuiDrawer* imgui_drawer);
 

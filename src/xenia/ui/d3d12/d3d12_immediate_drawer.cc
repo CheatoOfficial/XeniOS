@@ -358,10 +358,7 @@ void D3D12ImmediateDrawer::Begin(UIDrawContext& ui_draw_context,
       ++it;
       continue;
     }
-    if (std::next(it) != textures_deleted_.end()) {
-      *it = textures_deleted_.back();
-    }
-    textures_deleted_.pop_back();
+    it = textures_deleted_.erase(it);
   }
 
   // Release upload buffers for completed texture uploads.

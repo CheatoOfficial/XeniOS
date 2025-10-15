@@ -11,6 +11,7 @@
 
 #include <cfloat>
 #include <cstring>
+#include <ranges>
 
 #include "third_party/imgui/imgui.h"
 #include "xenia/base/assert.h"
@@ -600,32 +601,25 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   dialog_loop_next_index_ = SIZE_MAX;
 
   if (!notifications_.empty() && are_notifications_enabled_) {
-    std::vector<ui::ImGuiNotification*> guest_notifications = {};
-    std::vector<ui::ImGuiNotification*> host_notifications = {};
+    auto guest_notifications =
+        notifications_ | std::views::filter([](auto* notification) {
+          return notification->GetNotificationType() == NotificationType::Guest;
+        });
 
-    std::copy_if(notifications_.cbegin(), notifications_.cend(),
-                 std::back_inserter(guest_notifications),
-                 [](ui::ImGuiNotification* notification) {
-                   return notification->GetNotificationType() ==
-                          NotificationType::Guest;
-                 });
+    auto host_notifications =
+        notifications_ | std::views::filter([](auto* notification) {
+          return notification->GetNotificationType() == NotificationType::Host;
+        });
 
-    std::copy_if(notifications_.cbegin(), notifications_.cend(),
-                 std::back_inserter(host_notifications),
-                 [](ui::ImGuiNotification* notification) {
-                   return notification->GetNotificationType() ==
-                          NotificationType::Host;
-                 });
-
-    if (guest_notifications.size() > 0) {
-      guest_notifications.at(0)->Draw();
+    if (!guest_notifications.empty()) {
+      guest_notifications.front()->Draw();
     }
 
-    if (host_notifications.size() > 0) {
-      host_notifications.at(0)->Draw();
+    if (!host_notifications.empty()) {
+      host_notifications.front()->Draw();
 
-      if (host_notifications.size() > 1) {
-        host_notifications.at(0)->SetDeletionPending();
+      if (std::ranges::distance(host_notifications) > 1) {
+        host_notifications.front()->SetDeletionPending();
       }
     }
   }
