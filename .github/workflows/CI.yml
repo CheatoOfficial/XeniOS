@@ -260,7 +260,7 @@ jobs:
           }
 
       - name: Build
-        run: python xenia-build.py build --config=Release --target=src\xenia-app
+        run: python xenia-build.py build --config=Release --target=xenia-app
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
