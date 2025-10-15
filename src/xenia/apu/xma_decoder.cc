@@ -10,6 +10,7 @@
 #include "xenia/apu/xma_decoder.h"
 
 #include "xenia/apu/xma_context.h"
+#include "xenia/apu/xma_context_fake.h"
 #include "xenia/apu/xma_context_new.h"
 #include "xenia/apu/xma_context_old.h"
 
@@ -54,8 +55,8 @@ extern "C" {
 DEFINE_bool(ffmpeg_verbose, false, "Verbose FFmpeg output (debug and above)",
             "APU");
 
-DEFINE_bool(use_new_decoder, false,
-            "Enables usage of new experimental XMA audio decoder.", "APU");
+DEFINE_string(xma_decoder, "old", "XMA decoder backend to use (old, new, fake)",
+              "APU");
 
 DEFINE_bool(use_dedicated_xma_thread, true,
             "Enables XMA decoding on separate thread. Disabled should produce "
@@ -139,8 +140,10 @@ X_STATUS XmaDecoder::Setup(kernel::KernelState* kernel_state) {
 
   // Setup XMA contexts.
   for (int i = 0; i < kContextCount; ++i) {
-    if (cvars::use_new_decoder) {
+    if (cvars::xma_decoder == "new") {
       contexts_[i] = new XmaContextNew();
+    } else if (cvars::xma_decoder == "fake") {
+      contexts_[i] = new XmaContextFake();
     } else {
       contexts_[i] = new XmaContextOld();
     }
