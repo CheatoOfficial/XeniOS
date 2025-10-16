@@ -60,6 +60,9 @@ bool VulkanPipelineCache::Initialize() {
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
 
+  // Cache the SPIR-V version for geometry shader creation.
+  spirv_version_ = SpirvShaderTranslator::Features(vulkan_device).spirv_version;
+
   bool edram_fragment_shader_interlock =
       render_target_cache_.GetPath() ==
       RenderTargetCache::Path::kPixelShaderInterlock;
@@ -67,8 +70,7 @@ bool VulkanPipelineCache::Initialize() {
   // Initialize SPIRV-Tools for optimization (optional - will work without it)
   // Always initialize SPIRV-Tools for background optimization
   spirv_tools_context_ = std::make_unique<ui::vulkan::SpirvToolsContext>();
-  if (!spirv_tools_context_->Initialize(
-          SpirvShaderTranslator::Features(vulkan_device).spirv_version)) {
+  if (!spirv_tools_context_->Initialize(spirv_version_)) {
     XELOGE("Failed to initialize SPIRV-Tools for shader optimization");
     // Continue without optimization
     spirv_tools_context_.reset();
@@ -1028,7 +1030,7 @@ VkShaderModule VulkanPipelineCache::GetGeometryShader(GeometryShaderKey key) {
       (key.user_clip_plane_cull ? key.user_clip_plane_count : 0) +
       key.has_vertex_kill_and;
 
-  SpirvBuilder builder(spv::Spv_1_5,
+  SpirvBuilder builder(spirv_version_,
                        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1,
                        nullptr);
   spv::Id ext_inst_glsl_std_450 = builder.import("GLSL.std.450");

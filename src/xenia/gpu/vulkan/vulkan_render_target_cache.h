@@ -268,6 +268,9 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
 
   Path path_ = Path::kHostRenderTargets;
 
+  // Cached SPIR-V version based on device capabilities.
+  unsigned int spirv_version_;
+
   // Accessible in fragment and compute shaders.
   VkDescriptorSetLayout descriptor_set_layout_storage_buffer_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout descriptor_set_layout_sampled_image_ = VK_NULL_HANDLE;
