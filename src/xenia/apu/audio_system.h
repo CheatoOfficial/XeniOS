@@ -50,6 +50,14 @@ class AudioSystem {
   void UnregisterClient(size_t index);
   void SubmitFrame(size_t index, float* samples);
 
+  // Get performance statistics for a client
+  struct ClientPerformance {
+    uint32_t frames_submitted;
+    uint32_t frames_processed;
+    uint32_t frames_dropped;
+  };
+  bool GetClientPerformance(size_t index, ClientPerformance* out_perf);
+
   // Creates an independent, non-registered driver instance.
   virtual AudioDriver* CreateDriver(xe::threading::Semaphore* semaphore,
                                     uint32_t frequency, uint32_t channels,
@@ -90,6 +98,9 @@ class AudioSystem {
     uint32_t callback_arg;
     uint32_t wrapped_callback_arg;
     bool in_use;
+    std::atomic<uint32_t> frames_submitted{0};
+    std::atomic<uint32_t> frames_processed{0};
+    std::atomic<uint32_t> frames_dropped{0};
   } clients_[kMaximumClientCount];
 
   int FindFreeClient();
