@@ -136,7 +136,6 @@ filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
 filter("platforms:Linux")
   system("linux")
   toolset("clang")
-  pkg_config.all("gtk+-x11-3.0")
   local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
     includedirs({
@@ -399,6 +398,17 @@ workspace("xenia")
       "src/xenia/base/app_win32.manifest"
     })
     removefatalwarnings("All")
+
+    -- Add POSIX feature test macros for FFmpeg on Linux
+    if prj.name == "libavutil" or prj.name == "libavcodec" or prj.name == "libavformat" then
+      filter({"platforms:Linux"})
+        defines({
+          "_GNU_SOURCE",
+          "_POSIX_C_SOURCE=200809L",
+          "_XOPEN_SOURCE=700",
+        })
+      filter({})
+    end
 
     -- Suppress warnings for third_party modules on Windows
     filter({"platforms:Windows"})

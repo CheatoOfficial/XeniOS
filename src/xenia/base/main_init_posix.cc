@@ -6,9 +6,9 @@
 * Released under the BSD license - see LICENSE in the root for more details. *
 ******************************************************************************
 */
-#include <gdk/gdk.h>
-#include <gtk/gtk.h>
 #include <xbyak/xbyak/xbyak_util.h>
+#include <cstdio>
+#include <cstdlib>
 
 class StartupCpuFeatureCheck {
  public:
@@ -24,12 +24,7 @@ class StartupCpuFeatureCheck {
     if (error_message == nullptr) {
       return;
     } else {
-      GtkDialogFlags flags = GTK_DIALOG_DESTROY_WITH_PARENT;
-      auto dialog =
-          gtk_message_dialog_new(nullptr, flags, GTK_MESSAGE_ERROR,
-                                 GTK_BUTTONS_CLOSE, "%s", error_message);
-      gtk_dialog_run(GTK_DIALOG(dialog));
-      gtk_widget_destroy(dialog);
+      fprintf(stderr, "ERROR: %s\n", error_message);
       exit(1);
     }
   }
