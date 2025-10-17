@@ -15,12 +15,25 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/glslang/SPIRV/GLSL.std.450.h"
 #include "xenia/base/assert.h"
+#include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/gpu/spirv_compatibility.h"
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/ui/vulkan/spirv_tools_context.h"
+
+DEFINE_string(
+    spirv_version_override, "auto",
+    "Override the SPIR-V version used in shader translation.\n"
+    "Use: [auto, 1.0, 1.3, 1.4, 1.5, 1.6]\n"
+    " auto: Auto-detect based on Vulkan device capabilities (default)\n"
+    " 1.0: SPIR-V 1.0 (Vulkan 1.0)\n"
+    " 1.3: SPIR-V 1.3 (Vulkan 1.1)\n"
+    " 1.4: SPIR-V 1.4 (Vulkan 1.1 with KHR_spirv_1_4 extension)\n"
+    " 1.5: SPIR-V 1.5 (Vulkan 1.2+)\n"
+    " 1.6: SPIR-V 1.6 (Vulkan 1.3+)",
+    "GPU");
 
 namespace xe {
 namespace gpu {
@@ -63,15 +76,35 @@ SpirvShaderTranslator::Features::Features(
           vulkan_device->properties().fragmentShaderSampleInterlock),
       demote_to_helper_invocation(
           vulkan_device->properties().shaderDemoteToHelperInvocation) {
-  const uint32_t vulkan_api_version = vulkan_device->properties().apiVersion;
-  if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
-    spirv_version = spv::Spv_1_5;
-  } else if (vulkan_device->extensions().ext_1_2_KHR_spirv_1_4) {
-    spirv_version = spv::Spv_1_4;
-  } else if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
-    spirv_version = spv::Spv_1_3;
-  } else {
+  // Check for SPIR-V version override from CVAR.
+  const std::string& override_version = cvars::spirv_version_override;
+  if (override_version == "1.0") {
     spirv_version = spv::Spv_1_0;
+    XELOGD("SPIR-V version override: 1.0");
+  } else if (override_version == "1.3") {
+    spirv_version = spv::Spv_1_3;
+    XELOGD("SPIR-V version override: 1.3");
+  } else if (override_version == "1.4") {
+    spirv_version = spv::Spv_1_4;
+    XELOGD("SPIR-V version override: 1.4");
+  } else if (override_version == "1.5") {
+    spirv_version = spv::Spv_1_5;
+    XELOGD("SPIR-V version override: 1.5");
+  } else if (override_version == "1.6") {
+    spirv_version = spv::Spv_1_6;
+    XELOGD("SPIR-V version override: 1.6");
+  } else {
+    // Auto-detect based on Vulkan device capabilities.
+    const uint32_t vulkan_api_version = vulkan_device->properties().apiVersion;
+    if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+      spirv_version = spv::Spv_1_5;
+    } else if (vulkan_device->extensions().ext_1_2_KHR_spirv_1_4) {
+      spirv_version = spv::Spv_1_4;
+    } else if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
+      spirv_version = spv::Spv_1_3;
+    } else {
+      spirv_version = spv::Spv_1_0;
+    }
   }
 }
 
