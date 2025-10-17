@@ -23,20 +23,81 @@
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/ui/vulkan/spirv_tools_context.h"
 
-DEFINE_string(
-    spirv_version_override, "auto",
-    "Override the SPIR-V version used in shader translation.\n"
-    "Use: [auto, 1.0, 1.3, 1.4, 1.5, 1.6]\n"
-    " auto: Auto-detect based on Vulkan device capabilities (default)\n"
-    " 1.0: SPIR-V 1.0 (Vulkan 1.0)\n"
-    " 1.3: SPIR-V 1.3 (Vulkan 1.1)\n"
-    " 1.4: SPIR-V 1.4 (Vulkan 1.1 with KHR_spirv_1_4 extension)\n"
-    " 1.5: SPIR-V 1.5 (Vulkan 1.2+)\n"
-    " 1.6: SPIR-V 1.6 (Vulkan 1.3+)",
-    "GPU");
+DEFINE_string(spirv_version_override, "auto",
+              "Override the SPIR-V version used in shader translation.\n"
+              "Use: [auto, 1.0, 1.3, 1.4, 1.5, 1.6]\n"
+              " auto: Test for SPIR-V 1.5 support, fall back to 1.0 (default)\n"
+              " 1.0: SPIR-V 1.0 (Vulkan 1.0)\n"
+              " 1.3: SPIR-V 1.3 (Vulkan 1.1)\n"
+              " 1.4: SPIR-V 1.4 (Vulkan 1.1 with KHR_spirv_1_4 extension)\n"
+              " 1.5: SPIR-V 1.5 (Vulkan 1.2+)\n"
+              " 1.6: SPIR-V 1.6 (Vulkan 1.3+)",
+              "GPU");
 
 namespace xe {
 namespace gpu {
+
+namespace {
+// Cache for auto-detected SPIR-V version to avoid re-testing on every
+// Features construction.
+static std::optional<spv::SpvVersion> g_cached_spirv_version;
+
+// Tests if a SPIR-V version is supported by generating a minimal shader using
+// the same SpirvBuilder used at runtime for game shaders
+bool TestSpirvVersionSupport(const ui::vulkan::VulkanDevice* vulkan_device,
+                             spv::SpvVersion spv_version) {
+  // Generate a minimal compute shader using SpirvBuilder, just like real
+  // shaders. This is a "void main() {}" compute shader.
+  SpirvBuilder builder(spv_version, SpirvShaderTranslator::kSpirvMagicToolId,
+                       nullptr);
+
+  builder.setSource(spv::SourceLanguage::Unknown, 0);
+  builder.setMemoryModel(spv::AddressingModel::Logical,
+                         spv::MemoryModel::GLSL450);
+  builder.addCapability(spv::Capability::Shader);
+
+  // Create void main() function
+  std::vector<spv::Id> param_types;
+  spv::Block* entry_block = nullptr;
+  spv::Function* main_function =
+      builder.makeFunctionEntry(spv::NoPrecision, builder.makeVoidType(),
+                                "main", param_types, {}, &entry_block);
+
+  // Add entry point
+  builder.addEntryPoint(spv::ExecutionModel::GLCompute, main_function, "main");
+  builder.addExecutionMode(main_function, spv::ExecutionMode::LocalSize, 1, 1,
+                           1);
+
+  // Return from main
+  builder.makeReturn(false);
+  builder.leaveFunction();
+
+  // Get the generated SPIR-V
+  std::vector<uint32_t> spirv_code;
+  builder.dump(spirv_code);
+
+  // Try to create a shader module with it
+  VkShaderModuleCreateInfo create_info = {};
+  create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  create_info.pNext = nullptr;
+  create_info.flags = 0;
+  create_info.codeSize = spirv_code.size() * sizeof(uint32_t);
+  create_info.pCode = spirv_code.data();
+
+  VkShaderModule test_module = VK_NULL_HANDLE;
+  VkResult result = vulkan_device->functions().vkCreateShaderModule(
+      vulkan_device->device(), &create_info, nullptr, &test_module);
+
+  if (result == VK_SUCCESS) {
+    vulkan_device->functions().vkDestroyShaderModule(vulkan_device->device(),
+                                                     test_module, nullptr);
+    return true;
+  }
+
+  return false;
+}
+
+}  // namespace
 
 SpirvShaderTranslator::Features::Features(bool all)
     : spirv_version(all ? spv::Spv_1_5 : spv::Spv_1_0),
@@ -94,16 +155,24 @@ SpirvShaderTranslator::Features::Features(
     spirv_version = spv::Spv_1_6;
     XELOGD("SPIR-V version override: 1.6");
   } else {
-    // Auto-detect based on Vulkan device capabilities.
-    const uint32_t vulkan_api_version = vulkan_device->properties().apiVersion;
-    if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
-      spirv_version = spv::Spv_1_5;
-    } else if (vulkan_device->extensions().ext_1_2_KHR_spirv_1_4) {
-      spirv_version = spv::Spv_1_4;
-    } else if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
-      spirv_version = spv::Spv_1_3;
+    // Auto-detect based on actual driver support testing.
+    // Use cached result if already detected.
+    if (g_cached_spirv_version.has_value()) {
+      spirv_version = g_cached_spirv_version.value();
     } else {
-      spirv_version = spv::Spv_1_0;
+      // Test SPIR-V 1.5, fall back to 1.0 if it fails.
+      XELOGI("Testing SPIR-V 1.5 support...");
+
+      if (TestSpirvVersionSupport(vulkan_device, spv::Spv_1_5)) {
+        spirv_version = spv::Spv_1_5;
+        XELOGI("SPIR-V 1.5 test: PASSED - using SPIR-V 1.5");
+      } else {
+        spirv_version = spv::Spv_1_0;
+        XELOGW("SPIR-V 1.5 test: FAILED - falling back to SPIR-V 1.0");
+      }
+
+      // Cache the detected version
+      g_cached_spirv_version = static_cast<spv::SpvVersion>(spirv_version);
     }
   }
 }
