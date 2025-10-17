@@ -739,7 +739,7 @@ def run_windeployqt(bin_path, config):
         "--no-opengl-sw",  # Don't copy software OpenGL renderer
     ]
 
-    if config.lower() in ["debug", "checked"]:
+    if config.lower() in ["debug", "checked", "valgrind"]:
         deploy_args.append("--debug")
     else:
         deploy_args.append("--release")
@@ -983,7 +983,7 @@ class BaseBuildCommand(Command):
         self.parser.add_argument(
             "--cc", choices=["clang", "gcc", "msc"], default=None, help="Compiler toolchain passed to premake")
         self.parser.add_argument(
-            "--config", choices=["checked", "debug", "release"], default="debug",
+            "--config", choices=["checked", "debug", "release", "valgrind"], default="debug",
             type=str.lower, help="Chooses the build configuration.")
         self.parser.add_argument(
             "--target", action="append", default=[],

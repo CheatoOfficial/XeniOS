@@ -61,7 +61,6 @@ filter("kind:StaticLib")
 
 filter("configurations:Checked")
   runtime("Debug")
-  sanitize("Address")
   inlining("Auto")  -- /Ob2 for Checked builds
   flags("NoIncrementalLink")
   editandcontinue("Off")
@@ -72,12 +71,23 @@ filter("configurations:Checked")
   })
   defines({
     "DEBUG",
+    "NDEBUG",
+  })
+
+filter({"configurations:Checked", "platforms:Linux"})
+  buildoptions({
+    "-fsanitize=undefined",
+  })
+  linkoptions({
+    "-fsanitize=undefined",
   })
 
 filter({"configurations:Checked", "platforms:Windows"}) -- "toolset:msc"
   buildoptions({
     "/RTCsu",           -- Full Run-Time Checks.
   })
+  -- AddressSanitizer on Windows (doesn't conflict with memory layout like on Linux)
+  sanitize("Address")
 
 filter({"configurations:Checked or Debug", "platforms:Linux"})
   defines({
@@ -131,6 +141,28 @@ filter({"configurations:Release", "platforms:Windows"}) -- "toolset:msc"
     "/Gw",
     "/Ob3",  -- Aggressive inlining for maximum performance
 --    "/Qpar",   -- TODO: Test this.
+  })
+
+filter("configurations:Valgrind")
+  runtime("Release")
+  optimize("Debug")  -- -Og for reasonable performance with debuggability
+  symbols("Full")  -- Full debug symbols for better Valgrind output
+  defines({
+    "DEBUG",
+    "NDEBUG",
+    "_NO_DEBUG_HEAP=1",
+  })
+  -- NO sanitize("Address") - incompatible with Valgrind
+  -- Disable optimizations that make debugging harder
+  buildoptions({
+    "-fno-omit-frame-pointer",  -- Keep frame pointers for better stack traces
+    "-fno-inline-functions",    -- Disable function inlining for clearer traces
+  })
+
+filter({"configurations:Valgrind", "platforms:Linux"})
+  -- Additional Valgrind-friendly settings for Linux
+  buildoptions({
+    "-g3",  -- Maximum debug info
   })
 
 filter("platforms:Linux")
@@ -356,7 +388,7 @@ workspace("xenia")
       filter({})
     end
   end
-  configurations({"Checked", "Debug", "Release"})
+  configurations({"Checked", "Debug", "Release", "Valgrind"})
 
   include("third_party/aes_128.lua")
   include("third_party/capstone.lua")
@@ -398,6 +430,15 @@ workspace("xenia")
       "src/xenia/base/app_win32.manifest"
     })
     removefatalwarnings("All")
+
+    filter({"platforms:Linux", "configurations:Checked"})
+      buildoptions({
+        "-fsanitize=undefined",
+      })
+      linkoptions({
+        "-fsanitize=undefined",
+      })
+    filter({})
 
     -- Add POSIX feature test macros for FFmpeg on Linux
     if prj.name == "libavutil" or prj.name == "libavcodec" or prj.name == "libavformat" then
