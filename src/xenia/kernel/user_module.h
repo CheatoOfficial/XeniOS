@@ -69,7 +69,8 @@ class UserModule : public XModule {
   bool is_dll_module() const { return is_dll_module_; }
   bool is_attached() const {
     // Special case for skipping real XAM initialization as it will fail.
-    if (bounding_filename() == "xam") {
+    if (bounding_filename() == "xam" || name_ == "xam" ||
+        name_ == "$flash_xam") {
       return true;
     }
     return is_attached_;
