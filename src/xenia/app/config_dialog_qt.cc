@@ -58,6 +58,7 @@ const std::map<std::string, std::vector<std::string>>& GetKnownEnumOptions() {
       {"postprocess_scaling_and_sharpening",
        {"bilinear", "cas", "fsr", "nearest"}},
       {"spirv_version_override", {"auto", "1.0", "1.3", "1.4", "1.5", "1.6"}},
+      {"xma_decoder", {"old", "new", "fake"}},
   };
   return options;
 }
