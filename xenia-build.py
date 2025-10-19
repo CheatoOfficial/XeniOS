@@ -1505,7 +1505,7 @@ class GenTestsCommand(Command):
             "-a32",
             "-be",
             "-mregnames",
-            "-mpower7",
+            "-ma2",
             "-maltivec",
             "-mvsx",
             "-mvmx128",
@@ -1517,7 +1517,7 @@ class GenTestsCommand(Command):
         shell_call([
             ppc_objdump,
             "--adjust-vma=0x100000",
-            "-Mpower7",
+            "-Ma2",
             "-Mvmx128",
             "-D",
             "-EB",
