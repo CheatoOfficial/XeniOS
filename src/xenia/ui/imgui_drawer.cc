@@ -35,10 +35,6 @@
 #include <fontconfig/fontconfig.h>
 #endif
 
-#ifdef XE_PLATFORM_LINUX
-#include <gtk/gtk.h>
-#endif
-
 DEFINE_path(
     custom_font_path, "",
     "Allows user to load custom font and use it instead of default one.", "UI");
@@ -142,18 +138,6 @@ void ImGuiDrawer::RemoveNotification(ImGuiNotification* dialog) {
   DetachIfLastWindowRemoved();
 }
 
-#ifdef XE_PLATFORM_LINUX
-static void SetClipboardText(void* user_data, const char* text) {
-  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-  gtk_clipboard_set_text(clipboard, text, -1);
-}
-
-static const char* GetClipboardText(void* user_data) {
-  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-  return gtk_clipboard_wait_for_text(clipboard);
-}
-#endif
-
 void ImGuiDrawer::Initialize() {
   // Setup ImGui internal state.
   // This will give us state we can swap to the ImGui globals when in use.
@@ -168,11 +152,6 @@ void ImGuiDrawer::Initialize() {
 
   InitializeFonts(font_size);
   InitializeFonts(title_font_size);
-
-#ifdef XE_PLATFORM_LINUX
-  io.SetClipboardTextFn = SetClipboardText;
-  io.GetClipboardTextFn = GetClipboardText;
-#endif
 
   auto& style = ImGui::GetStyle();
   style.ScrollbarRounding = 6.0f;
