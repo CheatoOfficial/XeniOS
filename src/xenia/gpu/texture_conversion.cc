@@ -61,23 +61,63 @@ void ConvertTexelCTX1ToR8G8(xenos::Endian endian, void* output,
   constexpr uint32_t bytes_per_block = 8;
   CopySwapBlock(endian, block.data, input, bytes_per_block);
 
-  uint8_t cr[4] = {
-      block.r0, block.r1,
-      static_cast<uint8_t>(2.f / 3.f * block.r0 + 1.f / 3.f * block.r1),
-      static_cast<uint8_t>(1.f / 3.f * block.r0 + 2.f / 3.f * block.r1)};
-  uint8_t cg[4] = {
-      block.g0, block.g1,
-      static_cast<uint8_t>(2.f / 3.f * block.g0 + 1.f / 3.f * block.g1),
-      static_cast<uint8_t>(1.f / 3.f * block.g0 + 2.f / 3.f * block.g1)};
-
+#if XE_ARCH_AMD64
+  // SSE-optimized version (SSSE3)
   auto output_bytes = static_cast<uint8_t*>(output);
+
+  __m128i palette_r =
+      _mm_setr_epi8(block.r0, block.r1,
+                    static_cast<uint8_t>((2 * block.r0 + 1 * block.r1 + 1) / 3),
+                    static_cast<uint8_t>((1 * block.r0 + 2 * block.r1 + 1) / 3),
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  __m128i palette_g =
+      _mm_setr_epi8(block.g0, block.g1,
+                    static_cast<uint8_t>((2 * block.g0 + 1 * block.g1 + 1) / 3),
+                    static_cast<uint8_t>((1 * block.g0 + 2 * block.g1 + 1) / 3),
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+  // Process row-by-row using SSSE3
   for (uint32_t oy = 0; oy < 4; ++oy) {
-    for (uint32_t ox = 0; ox < 4; ++ox) {
-      uint8_t xx = (block.xx >> (((ox + (oy * 4)) * 2))) & 3;
-      output_bytes[(oy * length) + (ox * 2) + 0] = cr[xx];
-      output_bytes[(oy * length) + (ox * 2) + 1] = cg[xx];
+    uint32_t row_indices = (block.xx >> (oy * 8)) & 0xFF;
+
+    __m128i indices = _mm_setr_epi8((row_indices >> 0) & 3,  // pixel 0
+                                    (row_indices >> 2) & 3,  // pixel 1
+                                    (row_indices >> 4) & 3,  // pixel 2
+                                    (row_indices >> 6) & 3,  // pixel 3
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    // Shuffle both palettes to get the 4 color values
+    __m128i result_r = _mm_shuffle_epi8(palette_r, indices);
+    __m128i result_g = _mm_shuffle_epi8(palette_g, indices);
+
+    // Interleave: [r0, g0, r1, g1, r2, g2, r3, g3]
+    __m128i lo = _mm_unpacklo_epi8(result_r, result_g);
+
+    _mm_storel_epi64(reinterpret_cast<__m128i*>(&output_bytes[oy * length]),
+                     lo);
+  }
+#else
+  // Scalar fallback version
+  {
+    uint8_t cr[4] = {
+        block.r0, block.r1,
+        static_cast<uint8_t>((2 * block.r0 + 1 * block.r1 + 1) / 3),
+        static_cast<uint8_t>((1 * block.r0 + 2 * block.r1 + 1) / 3)};
+    uint8_t cg[4] = {
+        block.g0, block.g1,
+        static_cast<uint8_t>((2 * block.g0 + 1 * block.g1 + 1) / 3),
+        static_cast<uint8_t>((1 * block.g0 + 2 * block.g1 + 1) / 3)};
+
+    auto output_bytes = static_cast<uint8_t*>(output);
+    for (uint32_t oy = 0; oy < 4; ++oy) {
+      for (uint32_t ox = 0; ox < 4; ++ox) {
+        uint8_t xx = (block.xx >> (((ox + (oy * 4)) * 2))) & 3;
+        output_bytes[(oy * length) + (ox * 2) + 0] = cr[xx];
+        output_bytes[(oy * length) + (ox * 2) + 1] = cg[xx];
+      }
     }
   }
+#endif
 }
 
 void ConvertTexelDXT3AToDXT3(xenos::Endian endian, void* output,
