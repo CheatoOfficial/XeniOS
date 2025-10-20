@@ -12,9 +12,9 @@
 #include <cstdarg>
 
 #include "xenia/base/assert.h"
+#include "xenia/base/byte_order.h"
 #include "xenia/base/literals.h"
 #include "xenia/base/math.h"
-#include "xenia/base/byte_order.h"
 namespace xe {
 
 using namespace xe::literals;
@@ -120,7 +120,8 @@ static __m128i ToHexUpper(__m128i value) {
 
 void StringBuffer::AppendHexUInt64(uint64_t value) {
 #if XE_ARCH_AMD64 == 1
-  __m128i conv = ToHexUpper(_mm_cvtsi64_si128(static_cast<long long>(xe::byte_swap(value))));
+  __m128i conv = ToHexUpper(
+      _mm_cvtsi64_si128(static_cast<long long>(xe::byte_swap(value))));
 
   AppendBytes(reinterpret_cast<const uint8_t*>(&conv), 16);
 #else
@@ -130,7 +131,8 @@ void StringBuffer::AppendHexUInt64(uint64_t value) {
 
 void StringBuffer::AppendHexUInt32(uint32_t value) {
 #if XE_ARCH_AMD64 == 1
-  __m128i conv = ToHexUpper(_mm_cvtsi32_si128(static_cast<int>(xe::byte_swap(value))));
+  __m128i conv =
+      ToHexUpper(_mm_cvtsi32_si128(static_cast<int>(xe::byte_swap(value))));
 
   uint64_t low = _mm_cvtsi128_si64(conv);
 
@@ -160,7 +162,8 @@ void StringBuffer::AppendParenthesizedHexUInt64(uint64_t value) {
   Grow(18);
 
   buffer_[buffer_offset_] = '(';
-  __m128i conv = ToHexUpper(_mm_cvtsi64_si128(static_cast<long long>(xe::byte_swap(value))));
+  __m128i conv = ToHexUpper(
+      _mm_cvtsi64_si128(static_cast<long long>(xe::byte_swap(value))));
   _mm_storeu_si128(reinterpret_cast<__m128i*>(&buffer_[buffer_offset_ + 1]),
                    conv);
 
