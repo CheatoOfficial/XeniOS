@@ -519,11 +519,6 @@ bool EmulatorApp::OnInitialize() {
   cache_root = std::filesystem::absolute(cache_root);
   XELOGI("Host cache root: {}", cache_root);
 
-  if (cvars::discord) {
-    discord::DiscordPresence::Initialize();
-    discord::DiscordPresence::NotPlaying();
-  }
-
   // Create the emulator but don't initialize so we can setup the window.
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
@@ -538,6 +533,12 @@ bool EmulatorApp::OnInitialize() {
     fclose(launch_data_file);
   }
   bool is_game_process = !cvars::target.empty() || has_launch_data;
+
+  // Initialize Discord rich presence only for game process
+  if (is_game_process && cvars::discord) {
+    discord::DiscordPresence::Initialize();
+    discord::DiscordPresence::NotPlaying();
+  }
 
   // Determine window size based on process type
   uint32_t window_width, window_height;
