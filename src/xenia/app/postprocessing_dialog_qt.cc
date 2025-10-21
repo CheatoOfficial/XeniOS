@@ -99,93 +99,35 @@ void PostProcessingDialogQt::SetupUI() {
       color: #d0d0d0;
       background-color: transparent;
     }
-    QRadioButton {
-      color: #d0d0d0;
-      background-color: transparent;
-      spacing: 8px;
-    }
     QRadioButton::indicator {
       width: 16px;
       height: 16px;
       border-radius: 8px;
-      border: 2px solid #707070;
+      border: 2px solid #909090;
       background-color: rgba(50, 50, 50, 200);
     }
     QRadioButton::indicator:hover {
-      border-color: #909090;
+      border-color: #b0b0b0;
+      background-color: rgba(70, 70, 70, 200);
     }
     QRadioButton::indicator:checked {
-      background-color: #4a9eff;
-      border-color: #4a9eff;
-    }
-    QCheckBox {
-      color: #d0d0d0;
-      background-color: transparent;
-      spacing: 8px;
+      border-color: #107c10;
+      background-color: #107c10;
     }
     QCheckBox::indicator {
       width: 16px;
       height: 16px;
       border-radius: 3px;
-      border: 2px solid #707070;
+      border: 2px solid #909090;
       background-color: rgba(50, 50, 50, 200);
     }
     QCheckBox::indicator:hover {
-      border-color: #909090;
+      border-color: #b0b0b0;
+      background-color: rgba(70, 70, 70, 200);
     }
     QCheckBox::indicator:checked {
-      background-color: #4a9eff;
-      border-color: #4a9eff;
-    }
-    QSlider::groove:horizontal {
-      height: 4px;
-      background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                  stop:0 rgba(60, 60, 60, 200),
-                                  stop:1 rgba(90, 90, 90, 200));
-      border: 1px solid rgba(40, 40, 40, 150);
-      border-radius: 2px;
-    }
-    QSlider::sub-page:horizontal {
-      background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                  stop:0 #3a7bc8,
-                                  stop:1 #4a9eff);
-      border-radius: 2px;
-    }
-    QSlider::handle:horizontal {
-      background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                  stop:0 #6ac0ff,
-                                  stop:1 #4a9eff);
-      border: 2px solid rgba(255, 255, 255, 80);
-      width: 14px;
-      height: 14px;
-      margin: -6px 0;
-      border-radius: 7px;
-    }
-    QSlider::handle:horizontal:hover {
-      background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                  stop:0 #7ad0ff,
-                                  stop:1 #5ab0ff);
-      border-color: rgba(255, 255, 255, 120);
-    }
-    QSlider::handle:horizontal:pressed {
-      background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                  stop:0 #5ab0ff,
-                                  stop:1 #3a8fef);
-    }
-    QPushButton {
-      background-color: rgba(70, 70, 70, 200);
-      color: #e0e0e0;
-      border: 1px solid rgba(100, 100, 100, 150);
-      border-radius: 4px;
-      padding: 6px 16px;
-      font-weight: bold;
-    }
-    QPushButton:hover {
-      background-color: rgba(90, 90, 90, 220);
-      border-color: rgba(120, 120, 120, 180);
-    }
-    QPushButton:pressed {
-      background-color: rgba(50, 50, 50, 220);
+      border-color: #107c10;
+      background-color: #107c10;
     }
   )");
 
@@ -203,23 +145,25 @@ void PostProcessingDialogQt::SetupUI() {
 
   auto* close_button = new QPushButton(this);
   close_button->setIcon(style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+  close_button->setIconSize(QSize(16, 16));
+  close_button->setFlat(true);
   close_button->setStyleSheet(R"(
     QPushButton {
-      background-color: rgba(70, 70, 70, 200);
-      border: 1px solid rgba(100, 100, 100, 150);
-      border-radius: 12px;
+      background-color: transparent;
+      border: none;
       min-width: 24px;
       max-width: 24px;
       min-height: 24px;
       max-height: 24px;
-      padding: 0px;
+      padding: 2px;
     }
     QPushButton:hover {
-      background-color: rgba(200, 50, 50, 220);
-      border-color: rgba(200, 50, 50, 255);
+      background-color: rgba(200, 50, 50, 180);
+      border-radius: 4px;
     }
     QPushButton:pressed {
       background-color: rgba(150, 30, 30, 220);
+      border-radius: 4px;
     }
   )");
   close_button->setToolTip("Close (F6)");
