@@ -600,9 +600,8 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
   // UI process: Minimal setup for profiles/GPD only
   if (!is_game_process) {
     // Initialize just enough for profiles: kernel state with XAM module
-    X_STATUS result = emulator_->Setup(emulator_window_->window(),
-                                       emulator_window_->imgui_drawer(), false,
-                                       nullptr, nullptr, nullptr);
+    X_STATUS result = emulator_->Setup(emulator_window_->window(), nullptr,
+                                       false, nullptr, nullptr, nullptr);
     if (XFAILED(result)) {
       XELOGE("Failed to setup minimal emulator for UI: {:08X}", result);
       app_context().RequestDeferredQuit();
