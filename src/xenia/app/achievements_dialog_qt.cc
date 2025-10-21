@@ -46,15 +46,17 @@ struct Achievement;
 namespace xe {
 namespace app {
 
-AchievementsDialogQt::AchievementsDialogQt(QWidget* parent,
-                                           EmulatorWindow* emulator_window,
-                                           uint64_t xuid, uint32_t title_id,
-                                           const QString& title_name)
+AchievementsDialogQt::AchievementsDialogQt(
+    QWidget* parent, kernel::KernelState* kernel_state,
+    const kernel::xam::TitleInfo* title_info,
+    const kernel::xam::UserProfile* profile)
     : QDialog(parent),
-      emulator_window_(emulator_window),
-      xuid_(xuid),
-      title_id_(title_id),
-      title_name_(title_name),
+      kernel_state_(kernel_state),
+      title_info_(title_info),
+      profile_(profile),
+      xuid_(profile->xuid()),
+      title_id_(title_info->id),
+      title_name_(QString::fromStdU16String(title_info->title_name)),
       show_locked_info_(false) {
   setWindowTitle(title_name_.isEmpty() ? "Loading Achievements..."
                                        : title_name_ + " - Achievements");
@@ -176,16 +178,11 @@ void AchievementsDialogQt::SetupUI() {
 }
 
 void AchievementsDialogQt::LoadAchievements() {
-  if (!emulator_window_ || !emulator_window_->emulator()) {
+  if (!kernel_state_) {
     return;
   }
 
-  auto kernel_state = emulator_window_->emulator()->kernel_state();
-  if (!kernel_state) {
-    return;
-  }
-
-  auto xam_state = kernel_state->xam_state();
+  auto xam_state = kernel_state_->xam_state();
   if (!xam_state) {
     return;
   }
@@ -376,18 +373,21 @@ void AchievementsDialogQt::PopulateAchievements() {
 
 QPixmap AchievementsDialogQt::GetAchievementIcon(
     const xe::kernel::xam::Achievement& achievement) {
-  if (!achievement.IsUnlocked()) {
-    // Always show lock icon for locked achievements
+  // If achievement is locked and user hasn't enabled "show locked info", show
+  // lock
+  if (!achievement.IsUnlocked() && !show_locked_info_) {
     return lock_icon_;
   }
 
-  // For unlocked achievements, show their icon if available
+  // Try to get the actual achievement icon
   auto it = achievement_icons_.find(achievement.achievement_id);
   if (it != achievement_icons_.end()) {
+    // Show the actual icon (for unlocked, or locked with "show locked" enabled)
     return it->second;
   }
 
-  return QPixmap();
+  // Icon unavailable - show lock as fallback
+  return lock_icon_;
 }
 
 QString AchievementsDialogQt::GetAchievementTitle(

@@ -21,12 +21,15 @@
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_guest_notification.h"
 
+#include "xenia/app/achievements_dialog_qt.h"
 #include "xenia/kernel/xam/ui/create_profile_ui.h"
-#include "xenia/kernel/xam/ui/game_achievements_ui.h"
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/passcode_ui.h"
 #include "xenia/kernel/xam/ui/signin_ui.h"
 #include "xenia/kernel/xam/ui/title_info_ui.h"
+#include "xenia/ui/window_qt.h"
+
+#include <QString>
 
 DEFINE_bool(storage_selection_dialog, false,
             "Show storage device selection dialog when the game requests it.",
@@ -1014,14 +1017,23 @@ dword_result_t XamShowAchievementsUI_entry(dword_t user_index,
     return X_ERROR_NO_SUCH_USER;
   }
 
-  xe::ui::ImGuiDrawer* imgui_drawer =
-      kernel_state()->emulator()->imgui_drawer();
+  const Emulator* emulator = kernel_state()->emulator();
+  xe::ui::WindowedAppContext& app_context =
+      emulator->display_window()->app_context();
 
-  auto close = [](ui::GameAchievementsUI* dialog) -> void {};
-  return xeXamDispatchDialogAsync<ui::GameAchievementsUI>(
-      new ui::GameAchievementsUI(imgui_drawer, ImVec2(100.f, 100.f),
-                                 &info.value(), user),
-      close);
+  auto* qt_window = dynamic_cast<xe::ui::QtWindow*>(emulator->display_window());
+  if (qt_window && qt_window->qwindow()) {
+    auto* kernel = kernel_state();
+    app_context.CallInUIThread([qt_window, kernel, info, user]() {
+      auto* dialog = new app::AchievementsDialogQt(qt_window->qwindow(), kernel,
+                                                   &info.value(), user);
+      dialog->show();
+      dialog->raise();
+      dialog->activateWindow();
+    });
+  }
+
+  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamShowAchievementsUI, kUserProfiles, kStub);
 

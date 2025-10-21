@@ -1289,8 +1289,28 @@ void GameListDialogQt::HideScrollbar() {
 
 void GameListDialogQt::ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
                                               const QString& title_name) {
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return;
+  }
+
+  auto kernel_state = emulator_window_->emulator()->kernel_state();
+  if (!kernel_state) {
+    return;
+  }
+
+  auto user_tracker = kernel_state->xam_state()->user_tracker();
+  const auto title_info = user_tracker->GetUserTitleInfo(xuid, title_id);
+  if (!title_info) {
+    return;
+  }
+
+  const auto profile = kernel_state->xam_state()->GetUserProfile(xuid);
+  if (!profile) {
+    return;
+  }
+
   auto* achievements_dialog = new AchievementsDialogQt(
-      nullptr, emulator_window_, xuid, title_id, title_name);
+      nullptr, kernel_state, &title_info.value(), profile);
   achievements_dialog->setAttribute(Qt::WA_DeleteOnClose);
   achievements_dialog->show();
   achievements_dialog->raise();

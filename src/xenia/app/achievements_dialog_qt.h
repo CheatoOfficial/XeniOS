@@ -25,23 +25,25 @@
 
 namespace xe {
 namespace kernel {
+class KernelState;
 namespace xam {
 struct Achievement;
-}
+struct TitleInfo;
+class UserProfile;
+}  // namespace xam
 }  // namespace kernel
 }  // namespace xe
 
 namespace xe {
 namespace app {
-class EmulatorWindow;
 
 class AchievementsDialogQt : public QDialog {
   Q_OBJECT
 
  public:
-  AchievementsDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
-                       uint64_t xuid, uint32_t title_id,
-                       const QString& title_name = "");
+  AchievementsDialogQt(QWidget* parent, kernel::KernelState* kernel_state,
+                       const kernel::xam::TitleInfo* title_info,
+                       const kernel::xam::UserProfile* profile);
   ~AchievementsDialogQt() override;
 
  private slots:
@@ -59,7 +61,9 @@ class AchievementsDialogQt : public QDialog {
   QString GetUnlockedTime(const xe::kernel::xam::Achievement& achievement);
   void UpdateSummary();
 
-  EmulatorWindow* emulator_window_;
+  kernel::KernelState* kernel_state_;
+  const kernel::xam::TitleInfo* title_info_;
+  const kernel::xam::UserProfile* profile_;
   uint64_t xuid_;
   uint32_t title_id_;
   QString title_name_;
