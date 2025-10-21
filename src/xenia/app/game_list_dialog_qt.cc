@@ -225,6 +225,7 @@ void GameListDialogQt::SetupUI() {
   // Search box
   search_box_ = new QLineEdit(this);
   search_box_->setPlaceholderText("Search games...");
+  search_box_->setClearButtonEnabled(true);
   QFont search_font = search_box_->font();
   search_font.setPointSize(16);
   search_box_->setFont(search_font);
