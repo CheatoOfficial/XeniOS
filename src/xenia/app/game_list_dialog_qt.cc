@@ -758,6 +758,8 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
 
   QString path_str = item->data(Qt::UserRole).toString();
   if (path_str.isEmpty()) {
+    // No path available - show message and open file picker
+    LaunchGameWithFilePicker();
     return;
   }
 
@@ -789,13 +791,15 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
 
   QMenu context_menu;
 
-  // Only show Launch and Open containing folder if the entry has a path
+  // Always show launch/open option, but change text based on path availability
   QAction* launch_action = nullptr;
   QAction* open_folder_action = nullptr;
 
   if (has_path) {
     launch_action = context_menu.addAction("Launch");
     open_folder_action = context_menu.addAction("Open containing folder");
+  } else {
+    launch_action = context_menu.addAction("Open");
   }
 
   // Achievements option (enabled if user is logged in)
@@ -838,7 +842,11 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   QAction* selected = context_menu.exec(table_widget_->mapToGlobal(pos));
 
   if (selected == launch_action && launch_action) {
-    LaunchGame(path);
+    if (has_path) {
+      LaunchGame(path);
+    } else {
+      LaunchGameWithFilePicker();
+    }
   } else if (selected == open_folder_action && open_folder_action) {
     OpenContainingFolder(path);
   } else if (selected == achievements_action && achievements_action) {
@@ -855,6 +863,18 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path) {
     }
     emulator_window_->LaunchTitleInNewProcess(path);
     // Widget stays visible at all times
+  }
+}
+
+void GameListDialogQt::LaunchGameWithFilePicker() {
+  // Show message to user
+  QMessageBox::information(this, "Game Path Not Found",
+                           "The installation path for this game is not known.\n"
+                           "Please select the game file to launch it.");
+
+  // Open file picker (same as File/Open)
+  if (emulator_window_) {
+    emulator_window_->FileOpen();
   }
 }
 
@@ -966,6 +986,9 @@ void GameListDialogQt::RemoveTitleFromDashboard(uint32_t title_id) {
 void GameListDialogQt::OnPlayClicked() {
   if (!selected_game_path_.empty()) {
     LaunchGame(selected_game_path_);
+  } else {
+    // No path available for selected game - show message and open file picker
+    LaunchGameWithFilePicker();
   }
 }
 

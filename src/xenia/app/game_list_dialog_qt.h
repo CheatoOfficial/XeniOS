@@ -80,6 +80,7 @@ class GameListDialogQt : public QWidget {
   void TryLoadIcons();
   QPixmap CreateIconPixmap(const std::vector<uint8_t>& icon_data);
   void LaunchGame(const std::filesystem::path& path);
+  void LaunchGameWithFilePicker();
   void OpenContainingFolder(const std::filesystem::path& path);
   void RemoveTitleFromDashboard(uint32_t title_id);
   void ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
