@@ -47,6 +47,14 @@ DEFINE_bool(
     "optimized in a background thread.",
     "Vulkan");
 
+DEFINE_bool(
+    vulkan_spirv_inline_optimization, false,
+    "Enable inline SPIR-V shader optimization. When enabled, shaders are "
+    "optimized immediately during translation, blocking the main thread. "
+    "This increases shader compilation time but ensures all shaders are "
+    "optimized before use. Can be combined with background optimization.",
+    "Vulkan");
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -568,8 +576,48 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
     return false;
   }
 
+  // Perform inline optimization if enabled - optimize before the shader module
+  // is created
+  if (cvars::vulkan_spirv_inline_optimization && spirv_tools_context_ &&
+      translation.is_valid()) {
+    const std::vector<uint8_t>& unoptimized_binary =
+        translation.translated_binary();
+    if (!unoptimized_binary.empty()) {
+      // Reinterpret the byte vector as uint32_t for SPIRV-Tools
+      const uint32_t* spirv_words =
+          reinterpret_cast<const uint32_t*>(unoptimized_binary.data());
+      size_t word_count = unoptimized_binary.size() / sizeof(uint32_t);
+
+      std::vector<uint32_t> optimized_spirv;
+      spv_result_t result = spirv_tools_context_->Optimize(
+          spirv_words, word_count, optimized_spirv, true);
+
+      if (result == SPV_SUCCESS && !optimized_spirv.empty()) {
+        // Convert back to byte vector
+        std::vector<uint8_t> optimized_binary;
+        optimized_binary.resize(optimized_spirv.size() * sizeof(uint32_t));
+        std::memcpy(optimized_binary.data(), optimized_spirv.data(),
+                    optimized_binary.size());
+
+        // Store as optimized binary (will be used by GetOrCreateShaderModule)
+        translation.SetOptimizedBinary(optimized_binary);
+
+        size_t original_size = word_count;
+        size_t optimized_size = optimized_spirv.size();
+        XELOGI("Inline SPIRV optimization: {} -> {} words ({:.1f}% reduction)",
+               original_size, optimized_size,
+               100.0f * (1.0f - float(optimized_size) / float(original_size)));
+      } else {
+        XELOGW("Inline SPIRV optimization failed with error code: {}",
+               static_cast<int>(result));
+      }
+    }
+  }
+
   // Store unoptimized binary and queue for background optimization
-  if (spirv_tools_context_ && translation.NeedsOptimization()) {
+  // (only if inline optimization is disabled)
+  if (spirv_tools_context_ && translation.NeedsOptimization() &&
+      !cvars::vulkan_spirv_inline_optimization) {
     translation.StoreUnoptimizedBinary();
     QueueShaderForOptimization(&translation);
   }
