@@ -40,6 +40,13 @@ DEFINE_int32(
     "0 to disable multithreaded pipeline creation.",
     "Vulkan");
 
+DEFINE_bool(
+    vulkan_spirv_background_optimization, false,
+    "Enable background SPIR-V shader optimization. When enabled, shaders "
+    "are initially compiled without optimization for faster startup, then "
+    "optimized in a background thread.",
+    "Vulkan");
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -67,17 +74,14 @@ bool VulkanPipelineCache::Initialize() {
       render_target_cache_.GetPath() ==
       RenderTargetCache::Path::kPixelShaderInterlock;
 
-  // Initialize SPIRV-Tools for optimization (optional - will work without it)
-  // Always initialize SPIRV-Tools for background optimization
+  // Initialize SPIRV-Tools (used for validation and optional optimization)
   spirv_tools_context_ = std::make_unique<ui::vulkan::SpirvToolsContext>();
   if (!spirv_tools_context_->Initialize(spirv_version_)) {
-    XELOGE("Failed to initialize SPIRV-Tools for shader optimization");
-    // Continue without optimization
+    XELOGE("Failed to initialize SPIRV-Tools");
+    // Continue without SPIRV-Tools
     spirv_tools_context_.reset();
   } else {
-    XELOGI(
-        "SPIRV-Tools initialized successfully for background shader "
-        "optimization");
+    XELOGI("SPIRV-Tools initialized successfully");
   }
 
   shader_translator_ = std::make_unique<SpirvShaderTranslator>(
@@ -134,13 +138,16 @@ bool VulkanPipelineCache::Initialize() {
     }
   }
 
-  // Start the background optimization thread if SPIRV-Tools is available
-  if (spirv_tools_context_) {
+  // Start background optimization thread
+  if (cvars::vulkan_spirv_background_optimization && spirv_tools_context_) {
     optimization_thread_shutdown_.store(false, std::memory_order_release);
     optimization_thread_ =
         xe::threading::Thread::Create({}, [this]() { OptimizationThread(); });
     assert_not_null(optimization_thread_);
     optimization_thread_->set_name("SPIRV Optimizer");
+    XELOGI("SPIR-V background optimization thread started");
+  } else if (!cvars::vulkan_spirv_background_optimization) {
+    XELOGI("SPIR-V background optimization disabled");
   }
 
   return true;
@@ -2387,7 +2394,8 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
 
 void VulkanPipelineCache::QueueShaderForOptimization(
     VulkanShader::VulkanTranslation* translation) {
-  if (!spirv_tools_context_ || !optimization_thread_ || !translation) {
+  if (!cvars::vulkan_spirv_background_optimization || !spirv_tools_context_ ||
+      !optimization_thread_ || !translation) {
     return;
   }
 
