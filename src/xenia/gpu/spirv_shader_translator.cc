@@ -23,15 +23,15 @@
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/ui/vulkan/spirv_tools_context.h"
 
-DEFINE_string(spirv_version_override, "auto",
+DEFINE_string(spirv_version_override, "1.0",
               "Override the SPIR-V version used in shader translation.\n"
-              "Use: [auto, 1.0, 1.3, 1.4, 1.5, 1.6]\n"
-              " auto: Test for SPIR-V 1.5 support, fall back to 1.0 (default)\n"
-              " 1.0: SPIR-V 1.0 (Vulkan 1.0)\n"
+              "Use: [1.0, 1.3, 1.4, 1.5, 1.6, auto]\n"
+              " 1.0: SPIR-V 1.0 (Vulkan 1.0) (default)\n"
               " 1.3: SPIR-V 1.3 (Vulkan 1.1)\n"
               " 1.4: SPIR-V 1.4 (Vulkan 1.1 with KHR_spirv_1_4 extension)\n"
               " 1.5: SPIR-V 1.5 (Vulkan 1.2+)\n"
-              " 1.6: SPIR-V 1.6 (Vulkan 1.3+)",
+              " 1.6: SPIR-V 1.6 (Vulkan 1.3+)\n"
+              " auto: Test for SPIR-V 1.5 support, fall back to 1.0",
               "GPU");
 
 namespace xe {
