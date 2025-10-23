@@ -2689,8 +2689,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
           readback_buffer_offset += memexport_range.size_bytes;
         }
 
-        // Wait for GPU to finish (SYNCHRONIZATION STALL - major performance
-        // hit!).
+        // Wait for GPU to finish (SYNCHRONIZATION STALL)
         if (AwaitAllQueueOperationsCompletion()) {
           // Map staging buffer and copy to guest memory.
           void* mapped_data;
@@ -2777,9 +2776,8 @@ bool VulkanCommandProcessor::IssueCopy() {
         if (dfn.vkMapMemory(device, readback_buffer_memory_, 0, written_length,
                             0, &mapped_data) == VK_SUCCESS) {
           if (mapped_data) {
-            auto physaddr = memory_->TranslatePhysical(written_address);
-            memory::vastcpy(physaddr, static_cast<uint8_t*>(mapped_data),
-                            written_length);
+            memory::vastcpy(memory_->TranslatePhysical(written_address),
+                            static_cast<uint8_t*>(mapped_data), written_length);
           } else {
             XELOGE(
                 "VulkanCommandProcessor: Failed to map readback buffer "
@@ -2808,8 +2806,6 @@ VkBuffer VulkanCommandProcessor::RequestReadbackBuffer(uint32_t size) {
     return VK_NULL_HANDLE;
   }
 
-  // Align size to a reasonable boundary (similar to D3D12's 16MB increment).
-  constexpr uint32_t kReadbackBufferSizeIncrement = 16 * 1024 * 1024;
   size = xe::align(size, kReadbackBufferSizeIncrement);
 
   if (size > readback_buffer_size_) {
@@ -2838,7 +2834,7 @@ VkBuffer VulkanCommandProcessor::RequestReadbackBuffer(uint32_t size) {
     dfn.vkGetBufferMemoryRequirements(device, new_buffer, &memory_requirements);
 
     // Allocate HOST_VISIBLE | HOST_CACHED | HOST_COHERENT memory for readback.
-    uint32_t memory_type_index = ui::vulkan::util::ChooseMemoryType(
+    const uint32_t memory_type_index = ui::vulkan::util::ChooseMemoryType(
         vulkan_device->memory_types(), memory_requirements.memoryTypeBits,
         ui::vulkan::util::MemoryPurpose::kReadback);
     if (memory_type_index == UINT32_MAX) {

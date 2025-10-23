@@ -426,7 +426,6 @@ class VulkanCommandProcessor final : public CommandProcessor {
   }
 
   // Requests a readback buffer for CPU access to GPU data.
-  // Similar to D3D12CommandProcessor::RequestReadbackBuffer.
   VkBuffer RequestReadbackBuffer(uint32_t size);
 
   void ClearTransientDescriptorPools();
@@ -747,7 +746,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Temporary storage for memexport stream constants used in the draw.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
 
-  // Readback buffer for CPU access to resolved data (similar to D3D12).
+  // Readback buffer for CPU access to resolved data
   VkBuffer readback_buffer_ = VK_NULL_HANDLE;
   VkDeviceMemory readback_buffer_memory_ = VK_NULL_HANDLE;
   uint32_t readback_buffer_size_ = 0;
