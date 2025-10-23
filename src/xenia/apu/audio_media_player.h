@@ -79,12 +79,6 @@ class AudioMediaPlayer {
   XmpApp::PlaybackClient GetPlaybackClient() const { return playback_client_; }
   uint32_t GetDashInItState() const { return dash_init_state; }
 
-  void SetPlaybackController(uint32_t playback_controller) {
-    playback_controller_ = playback_controller;
-  }
-
-  uint32_t GetPlaybackController() const { return playback_controller_; }
-
   bool IsTitleInPlaybackControl() const {
     return playback_client_ == XmpApp::PlaybackClient::kTitle ||
            is_title_rendering_enabled_;
@@ -112,7 +106,6 @@ class AudioMediaPlayer {
   XmpApp::PlaybackMode playback_mode_ = XmpApp::PlaybackMode::kInOrder;
   XmpApp::RepeatMode repeat_mode_ = XmpApp::RepeatMode::kPlaylist;
   XmpApp::PlaybackFlags playback_flags_ = XmpApp::PlaybackFlags::kDefault;
-  uint32_t playback_controller_ = 0;
   float volume_ = 1.0f;
   uint32_t dash_init_state = 0;
 
