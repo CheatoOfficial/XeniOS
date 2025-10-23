@@ -39,6 +39,83 @@ spv::Id SpirvShaderTranslator::ZeroIfAnyOperandIsZero(spv::Id value,
       const_float_vectors_0_[num_components - 1], value);
 }
 
+spv::Id SpirvShaderTranslator::ReduceFloatPrecision(spv::Id value,
+                                                    uint32_t mantissa_bits) {
+  // Implements round-to-nearest with ties rounding up.
+  // Special values (INF, NaN, signed zeros) are preserved.
+  // Denormals may be flushed to zero, closer approximating Xbox 360
+  // hardware behavior.
+  assert_true(mantissa_bits > 0 && mantissa_bits < 23);
+
+  EnsureBuildPointAvailable();
+
+  // Convert float to uint bits
+  spv::Id value_bits =
+      builder_->createUnaryOp(spv::OpBitcast, type_uint_, value);
+
+  // Calculate the number of bits to truncate
+  uint32_t truncate_bits = 23 - mantissa_bits;
+
+  // Create a mask that keeps the sign, exponent, and desired mantissa bits
+  uint32_t truncate_mask = ~((1u << truncate_bits) - 1);
+  uint32_t round_bit = 1u << (truncate_bits - 1);
+
+  // Truncate to get the base value
+  spv::Id truncated_bits =
+      builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, value_bits,
+                            builder_->makeUintConstant(truncate_mask));
+
+  // Extract the discarded low bits to determine if we should round up
+  spv::Id discarded_bits =
+      builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, value_bits,
+                            builder_->makeUintConstant(~truncate_mask));
+
+  // Round up if discarded bits >= round_bit (round half up)
+  spv::Id should_round_up = builder_->createBinOp(
+      spv::OpUGreaterThanEqual, type_bool_, discarded_bits,
+      builder_->makeUintConstant(round_bit));
+
+  // Add one ULP at the truncated precision level
+  spv::Id ulp = builder_->makeUintConstant(1u << truncate_bits);
+  spv::Id rounded_up_bits =
+      builder_->createBinOp(spv::OpIAdd, type_uint_, truncated_bits, ulp);
+
+  // Check if rounding caused exponent overflow (finite -> infinity)
+  // This can happen when rounding up near FLT_MAX
+  spv::Id original_exp = builder_->createBinOp(
+      spv::OpBitwiseAnd, type_uint_,
+      builder_->createBinOp(spv::OpShiftRightLogical, type_uint_, value_bits,
+                            builder_->makeUintConstant(23)),
+      builder_->makeUintConstant(0xFF));
+  spv::Id rounded_exp = builder_->createBinOp(
+      spv::OpBitwiseAnd, type_uint_,
+      builder_->createBinOp(spv::OpShiftRightLogical, type_uint_,
+                            rounded_up_bits, builder_->makeUintConstant(23)),
+      builder_->makeUintConstant(0xFF));
+
+  // If original was finite (exp != 0xFF) but rounded became inf (exp == 0xFF),
+  // saturate by not rounding up
+  spv::Id original_finite =
+      builder_->createBinOp(spv::OpINotEqual, type_bool_, original_exp,
+                            builder_->makeUintConstant(0xFF));
+  spv::Id rounded_inf = builder_->createBinOp(
+      spv::OpIEqual, type_bool_, rounded_exp, builder_->makeUintConstant(0xFF));
+  spv::Id would_overflow = builder_->createBinOp(spv::OpLogicalAnd, type_bool_,
+                                                 original_finite, rounded_inf);
+
+  // If rounding would cause overflow, use truncated value instead
+  spv::Id safe_rounded =
+      builder_->createTriOp(spv::OpSelect, type_uint_, would_overflow,
+                            truncated_bits, rounded_up_bits);
+
+  // Select between truncated and rounded-up value
+  spv::Id result_bits = builder_->createTriOp(
+      spv::OpSelect, type_uint_, should_round_up, safe_rounded, truncated_bits);
+
+  // Convert back to float
+  return builder_->createUnaryOp(spv::OpBitcast, type_float_, result_bits);
+}
+
 void SpirvShaderTranslator::KillPixel(
     spv::Id condition, uint8_t memexport_eM_potentially_written_before) {
   SpirvBuilder::IfBuilder kill_if(condition, spv::SelectionControlMaskNone,
@@ -1101,10 +1178,6 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
     case ucode::AluScalarOpcode::kFrcs:
     case ucode::AluScalarOpcode::kTruncs:
     case ucode::AluScalarOpcode::kFloors:
-    case ucode::AluScalarOpcode::kExp:
-    case ucode::AluScalarOpcode::kLog:
-    case ucode::AluScalarOpcode::kRsq:
-    case ucode::AluScalarOpcode::kSqrt:
     case ucode::AluScalarOpcode::kSin:
     case ucode::AluScalarOpcode::kCos:
       return builder_->createUnaryBuiltinCall(
@@ -1112,6 +1185,34 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
           GLSLstd450(kOps[size_t(instr.scalar_opcode)]),
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+    case ucode::AluScalarOpcode::kExp: {
+      spv::Id result = builder_->createUnaryBuiltinCall(
+          type_float_, ext_inst_glsl_std_450_, GLSLstd450Exp2,
+          GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
+                               0b0001));
+      return ReduceFloatPrecision(result, 21);
+    }
+    case ucode::AluScalarOpcode::kLog: {
+      spv::Id result = builder_->createUnaryBuiltinCall(
+          type_float_, ext_inst_glsl_std_450_, GLSLstd450Log2,
+          GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
+                               0b0001));
+      return ReduceFloatPrecision(result, 21);
+    }
+    case ucode::AluScalarOpcode::kSqrt: {
+      spv::Id result = builder_->createUnaryBuiltinCall(
+          type_float_, ext_inst_glsl_std_450_, GLSLstd450Sqrt,
+          GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
+                               0b0001));
+      return ReduceFloatPrecision(result, 21);
+    }
+    case ucode::AluScalarOpcode::kRsq: {
+      spv::Id result = builder_->createUnaryBuiltinCall(
+          type_float_, ext_inst_glsl_std_450_, GLSLstd450InverseSqrt,
+          GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
+                               0b0001));
+      return ReduceFloatPrecision(result, 21);
+    }
     case ucode::AluScalarOpcode::kLogc: {
       spv::Id result = builder_->createUnaryBuiltinCall(
           type_float_, ext_inst_glsl_std_450_, GLSLstd450Log2,
@@ -1128,6 +1229,7 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
           spv::OpFDiv, type_float_, const_float_1_,
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+      result = ReduceFloatPrecision(result, 21);
       result = builder_->createTriOp(
           spv::OpSelect, type_float_,
           builder_->createBinOp(spv::OpFOrdEqual, type_bool_, result,
@@ -1144,6 +1246,7 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
           spv::OpFDiv, type_float_, const_float_1_,
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+      result = ReduceFloatPrecision(result, 21);
       result = builder_->createTriOp(
           spv::OpSelect, type_float_,
           builder_->createBinOp(spv::OpFOrdEqual, type_bool_, result,
@@ -1160,16 +1263,18 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
       return builder_->createUnaryOp(spv::OpBitcast, type_float_, result);
     }
     case ucode::AluScalarOpcode::kRcp: {
-      return builder_->createNoContractionBinOp(
+      spv::Id result = builder_->createNoContractionBinOp(
           spv::OpFDiv, type_float_, const_float_1_,
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+      return ReduceFloatPrecision(result, 21);
     }
     case ucode::AluScalarOpcode::kRsqc: {
       spv::Id result = builder_->createUnaryBuiltinCall(
           type_float_, ext_inst_glsl_std_450_, GLSLstd450InverseSqrt,
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+      result = ReduceFloatPrecision(result, 21);
       result = builder_->createTriOp(
           spv::OpSelect, type_float_,
           builder_->createBinOp(spv::OpFOrdEqual, type_bool_, result,
@@ -1186,6 +1291,7 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
           type_float_, ext_inst_glsl_std_450_, GLSLstd450InverseSqrt,
           GetOperandComponents(operand_storage[0], instr.scalar_operands[0],
                                0b0001));
+      result = ReduceFloatPrecision(result, 21);
       result = builder_->createTriOp(
           spv::OpSelect, type_float_,
           builder_->createBinOp(spv::OpFOrdEqual, type_bool_, result,

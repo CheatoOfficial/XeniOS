@@ -606,6 +606,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // must be called with absolute values of operands - use GetAbsoluteOperand!
   spv::Id ZeroIfAnyOperandIsZero(spv::Id value, spv::Id operand_0_abs,
                                  spv::Id operand_1_abs);
+  // Reduces floating-point precision by truncating mantissa bits with rounding.
+  // Used to match Xbox 360 Xenos GPU hardware approximation instructions
+  // (RCP, RSQ, EXP, LOG, SQRT) that provide ~2^-21 relative error tolerance
+  // instead of full IEEE-754 precision (equivalent to 21 vs 23 mantissa bits).
+  spv::Id ReduceFloatPrecision(spv::Id value, uint32_t mantissa_bits);
   // Conditionally discard the current fragment. Changes the build point.
   void KillPixel(spv::Id condition,
                  uint8_t memexport_eM_potentially_written_before);
