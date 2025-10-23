@@ -139,29 +139,18 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
                                ? -int32_t(region_size_ptr.value())
                                : region_size_ptr.value();
 
-  // Validate size before rounding to prevent overflow
-  // Xbox 360 has ~512MB of usable memory, so reject unreasonably large
-  // allocations
-  constexpr uint32_t kMaxAllocationSize = 512 * 1024 * 1024;  // 512MB
-  if (adjusted_size > kMaxAllocationSize) {
-    XELOGE(
-        "NtAllocateVirtualMemory: Requested size too large: {:08X} (max: "
-        "{:08X})",
-        adjusted_size, kMaxAllocationSize);
-    return X_STATUS_INVALID_PARAMETER;
-  }
-
   uint32_t alignment = adjusted_base ? page_size : 64 * 1024;
+  uint32_t original_size = adjusted_size;  // Save size before rounding
   adjusted_size = xe::round_up(adjusted_size, alignment);
 
-  // Check for overflow after rounding
-  if (adjusted_size < region_size_ptr.value() ||
-      adjusted_size > kMaxAllocationSize) {
+  // Check for overflow after rounding (compare against the already-converted
+  // positive size, not the original which could be negative)
+  if (adjusted_size < original_size) {
     XELOGE(
         "NtAllocateVirtualMemory: Size overflow after rounding: "
         "original={:08X}, "
         "rounded={:08X}",
-        region_size_ptr.value(), adjusted_size);
+        original_size, adjusted_size);
     return X_STATUS_INVALID_PARAMETER;
   }
 
@@ -225,17 +214,6 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
 
       // Use the smaller of adjusted_size and the actual allocated region size
       uint32_t size_to_zero = std::min(adjusted_size, alloc_info.region_size);
-
-      // Additional sanity check: ensure size_to_zero is reasonable
-      if (size_to_zero > kMaxAllocationSize) {
-        XELOGE(
-            "NtAllocateVirtualMemory: Refusing to zero unreasonable size: "
-            "{:08X} (address: {:08X}, adjusted_size: {:08X}, region_size: "
-            "{:08X})",
-            size_to_zero, address, adjusted_size, alloc_info.region_size);
-        heap->Release(address);
-        return X_STATUS_UNSUCCESSFUL;
-      }
 
       if (!(protect & kMemoryProtectWrite)) {
         heap->Protect(address, size_to_zero,
