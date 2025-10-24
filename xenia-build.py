@@ -207,12 +207,12 @@ def setup_qt():
             print(f"WARNING: QT_DIR is set to {existing_qt_dir} but directory does not exist")
         return False
 
-    if sys.platform != "win32":
-        # On Linux, check for Qt6 via pkg-config or common install locations
-        return False
+    # Determine Qt base directory based on platform
+    if sys.platform == "win32":
+        qt_base = "C:\\Qt"
+    else:
+        qt_base = "/opt/Qt"
 
-    # Windows: Check if Qt is installed at the default location
-    qt_base = "C:\\Qt"
     if not os.path.exists(qt_base):
         return False
 
@@ -228,22 +228,41 @@ def setup_qt():
         version_dirs.sort(reverse=True)
         qt_version_dir = os.path.join(qt_base, version_dirs[0])
 
-        # Look for msvc compiler directory (e.g., msvc2022_64, msvc2019_64)
-        compiler_dirs = [d for d in os.listdir(qt_version_dir)
-                         if os.path.isdir(os.path.join(qt_version_dir, d)) and d.startswith("msvc")]
-        if not compiler_dirs:
-            return False
+        if sys.platform == "win32":
+            # Look for msvc compiler directory (e.g., msvc2022_64, msvc2019_64)
+            compiler_dirs = [d for d in os.listdir(qt_version_dir)
+                             if os.path.isdir(os.path.join(qt_version_dir, d)) and d.startswith("msvc")]
+            if not compiler_dirs:
+                return False
 
-        # Prefer msvc2022_64 if available, otherwise use the first available
-        if "msvc2022_64" in compiler_dirs:
-            compiler_dir = "msvc2022_64"
+            # Prefer msvc2022_64 if available, otherwise use the first available
+            if "msvc2022_64" in compiler_dirs:
+                compiler_dir = "msvc2022_64"
+            else:
+                compiler_dirs.sort(reverse=True)
+                compiler_dir = compiler_dirs[0]
+
+            qt_dir = os.path.join(qt_version_dir, compiler_dir)
         else:
-            compiler_dirs.sort(reverse=True)
-            compiler_dir = compiler_dirs[0]
+            # On Linux, look for gcc_64 or similar compiler directories
+            compiler_dirs = [d for d in os.listdir(qt_version_dir)
+                             if os.path.isdir(os.path.join(qt_version_dir, d)) and
+                             (d.startswith("gcc") or d.startswith("linux"))]
+            if not compiler_dirs:
+                return False
 
-        qt_dir = os.path.join(qt_version_dir, compiler_dir)
+            # Prefer gcc_64 if available, otherwise use the first available
+            if "gcc_64" in compiler_dirs:
+                compiler_dir = "gcc_64"
+            elif "linux_gcc_64" in compiler_dirs:
+                compiler_dir = "linux_gcc_64"
+            else:
+                compiler_dirs.sort(reverse=True)
+                compiler_dir = compiler_dirs[0]
+
+            qt_dir = os.path.join(qt_version_dir, compiler_dir)
+
         os.environ["QT_DIR"] = qt_dir
-
         print(f"Found Qt at {qt_dir}")
         return True
     except Exception:

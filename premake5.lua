@@ -182,13 +182,15 @@ filter("platforms:Linux")
     runpathdirs({
       path.join(qt_dir, "lib"),
     })
+    -- For CMake: set RPATH to find Qt libraries
+    linkoptions({
+      "-Wl,-rpath," .. path.join(qt_dir, "lib"),
+    })
     links({
       "Qt6Core",
       "Qt6Gui",
       "Qt6Widgets",
     })
-  else
-    pkg_config.all("Qt6Core Qt6Gui Qt6Widgets")
   end
 
   links({
