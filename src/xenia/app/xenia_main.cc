@@ -127,6 +127,77 @@ DEFINE_bool(discord, true, "Enable Discord rich presence", "General");
 
 DECLARE_bool(widescreen);
 
+#if XE_PLATFORM_WIN32 && XE_ARCH_AMD64 == 1
+DEFINE_bool(enable_rdrand_ntdll_patch, false,
+            "Hot-patches ntdll at the start of the process to not use rdrand "
+            "as part of the RNG for heap randomization. Can reduce CPU usage "
+            "significantly, but is untested on all Windows versions.",
+            "Win32");
+
+// begin ntdll rdrand patch
+#include <psapi.h>
+
+static void write_process_memory(HANDLE process, uintptr_t offset,
+                                 unsigned size, const unsigned char* bvals) {
+  if (!WriteProcessMemory(process, (void*)offset, bvals, size, nullptr)) {
+    DWORD error = GetLastError();
+    XELOGE(
+        "RDRAND patch: Failed to write to process memory at 0x{:X} (error: {})",
+        offset, error);
+  }
+}
+
+static constexpr unsigned char pattern_cmp_processorfeature_28_[] = {
+    0x80, 0x3C, 0x25, 0x90,
+    0x02, 0xFE, 0x7F, 0x00};  // cmp     byte ptr ds:7FFE0290h, 0
+static constexpr unsigned char pattern_replacement[] = {
+    0x48, 0x39, 0xe4,             // cmp rsp, rsp = always Z
+    0x0F, 0x1F, 0x44, 0x00, 0x00  // 5byte nop
+};
+
+static void do_ntdll_rdrand_patch() {
+  HMODULE ntdll_handle = GetModuleHandleA("ntdll.dll");
+  if (!ntdll_handle) {
+    XELOGE("RDRAND patch: Failed to get ntdll.dll handle");
+    return;
+  }
+
+  MODULEINFO modinfo;
+  if (!GetModuleInformation(GetCurrentProcess(), ntdll_handle, &modinfo,
+                            sizeof(MODULEINFO))) {
+    XELOGE("RDRAND patch: Failed to get ntdll.dll module information");
+    return;
+  }
+
+  std::vector<uintptr_t> possible_places{};
+  unsigned char* strt = (unsigned char*)modinfo.lpBaseOfDll;
+
+  for (unsigned i = 0; i < modinfo.SizeOfImage; ++i) {
+    for (unsigned j = 0; j < sizeof(pattern_cmp_processorfeature_28_); ++j) {
+      if (strt[i + j] != pattern_cmp_processorfeature_28_[j]) {
+        goto miss;
+      }
+    }
+    possible_places.push_back((uintptr_t)(&strt[i]));
+  miss:;
+  }
+
+  if (possible_places.empty()) {
+    XELOGW(
+        "RDRAND patch: Pattern not found in ntdll.dll (Windows version may be "
+        "incompatible)");
+  } else {
+    for (auto&& place : possible_places) {
+      write_process_memory(GetCurrentProcess(), place,
+                           sizeof(pattern_replacement), pattern_replacement);
+    }
+    XELOGI("RDRAND patch: Successfully applied to {} location(s)",
+           possible_places.size());
+  }
+}
+// end ntdll rdrand patch
+#endif
+
 namespace xe {
 namespace app {
 
@@ -533,6 +604,13 @@ bool EmulatorApp::OnInitialize() {
     fclose(launch_data_file);
   }
   bool is_game_process = !cvars::target.empty() || has_launch_data;
+
+#if XE_PLATFORM_WIN32 && XE_ARCH_AMD64 == 1
+  // Apply ntdll rdrand patch for game process only
+  if (is_game_process && cvars::enable_rdrand_ntdll_patch) {
+    do_ntdll_rdrand_patch();
+  }
+#endif
 
   // Initialize Discord rich presence only for game process
   if (is_game_process && cvars::discord) {
