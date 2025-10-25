@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/achievements_dialog_qt.h"
+#include "xenia/ui/achievements_dialog_qt.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -25,7 +25,6 @@
 #include <algorithm>
 
 #include "third_party/fmt/include/fmt/format.h"
-#include "xenia/app/emulator_window.h"
 #include "xenia/base/chrono.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/utf8.h"
@@ -44,7 +43,7 @@ struct Achievement;
 }  // namespace xe
 
 namespace xe {
-namespace app {
+namespace ui {
 
 AchievementsDialogQt::AchievementsDialogQt(
     QWidget* parent, kernel::KernelState* kernel_state,
@@ -501,5 +500,5 @@ void AchievementsDialogQt::OnRefreshClicked() {
   LoadAchievements();
 }
 
-}  // namespace app
+}  // namespace ui
 }  // namespace xe

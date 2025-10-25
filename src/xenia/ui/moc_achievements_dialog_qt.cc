@@ -30,14 +30,14 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t {};
+struct qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t {};
 }  // unnamed namespace
 
 template <>
-constexpr inline auto xe::app::AchievementsDialogQt::qt_create_metaobjectdata<
-    qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>() {
+constexpr inline auto xe::ui::AchievementsDialogQt::qt_create_metaobjectdata<
+    qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>() {
   namespace QMC = QtMocConstants;
-  QtMocHelpers::StringRefStorage qt_stringData{"xe::app::AchievementsDialogQt",
+  QtMocHelpers::StringRefStorage qt_stringData{"xe::ui::AchievementsDialogQt",
                                                "OnShowLockedInfoChanged", "",
                                                "OnRefreshClicked"};
 
@@ -50,23 +50,23 @@ constexpr inline auto xe::app::AchievementsDialogQt::qt_create_metaobjectdata<
   QtMocHelpers::UintData qt_properties{};
   QtMocHelpers::UintData qt_enums{};
   return QtMocHelpers::metaObjectData<
-      AchievementsDialogQt, qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>(
+      AchievementsDialogQt, qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>(
       QMC::MetaObjectFlag{}, qt_stringData, qt_methods, qt_properties,
       qt_enums);
 }
-Q_CONSTINIT const QMetaObject xe::app::AchievementsDialogQt::staticMetaObject = { {
+Q_CONSTINIT const QMetaObject xe::ui::AchievementsDialogQt::staticMetaObject = { {
     QMetaObject::SuperData::link<QDialog::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>.data,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>.data,
     qt_static_metacall,
     nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>.metaTypes,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>.metaTypes,
     nullptr
 } };
 
-void xe::app::AchievementsDialogQt::qt_static_metacall(QObject* _o,
-                                                       QMetaObject::Call _c,
-                                                       int _id, void** _a) {
+void xe::ui::AchievementsDialogQt::qt_static_metacall(QObject* _o,
+                                                      QMetaObject::Call _c,
+                                                      int _id, void** _a) {
   auto* _t = static_cast<AchievementsDialogQt*>(_o);
   if (_c == QMetaObject::InvokeMetaMethod) {
     switch (_id) {
@@ -82,20 +82,20 @@ void xe::app::AchievementsDialogQt::qt_static_metacall(QObject* _o,
   (void)_a;
 }
 
-const QMetaObject* xe::app::AchievementsDialogQt::metaObject() const {
+const QMetaObject* xe::ui::AchievementsDialogQt::metaObject() const {
   return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject()
                                     : &staticMetaObject;
 }
 
-void* xe::app::AchievementsDialogQt::qt_metacast(const char* _clname) {
+void* xe::ui::AchievementsDialogQt::qt_metacast(const char* _clname) {
   if (!_clname) return nullptr;
-  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20AchievementsDialogQtE_t>.strings))
+  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui20AchievementsDialogQtE_t>.strings))
     return static_cast<void*>(this);
   return QDialog::qt_metacast(_clname);
 }
 
-int xe::app::AchievementsDialogQt::qt_metacall(QMetaObject::Call _c, int _id,
-                                               void** _a) {
+int xe::ui::AchievementsDialogQt::qt_metacall(QMetaObject::Call _c, int _id,
+                                              void** _a) {
   _id = QDialog::qt_metacall(_c, _id, _a);
   if (_id < 0) return _id;
   if (_c == QMetaObject::InvokeMetaMethod) {

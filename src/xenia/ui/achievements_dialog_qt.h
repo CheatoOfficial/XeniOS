@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_ACHIEVEMENTS_DIALOG_QT_H_
-#define XENIA_APP_ACHIEVEMENTS_DIALOG_QT_H_
+#ifndef XENIA_UI_ACHIEVEMENTS_DIALOG_QT_H_
+#define XENIA_UI_ACHIEVEMENTS_DIALOG_QT_H_
 
 #include <QCheckBox>
 #include <QDialog>
@@ -35,7 +35,7 @@ class UserProfile;
 }  // namespace xe
 
 namespace xe {
-namespace app {
+namespace ui {
 
 class AchievementsDialogQt : public QDialog {
   Q_OBJECT
@@ -81,7 +81,7 @@ class AchievementsDialogQt : public QDialog {
   bool show_locked_info_;
 };
 
-}  // namespace app
+}  // namespace ui
 }  // namespace xe
 
-#endif  // XENIA_APP_ACHIEVEMENTS_DIALOG_QT_H_
+#endif  // XENIA_UI_ACHIEVEMENTS_DIALOG_QT_H_

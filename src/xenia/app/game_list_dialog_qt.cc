@@ -26,7 +26,6 @@
 #include <thread>
 
 #include "third_party/fmt/include/fmt/format.h"
-#include "xenia/app/achievements_dialog_qt.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/app/profile_dialog_qt.h"
 #include "xenia/app/profile_editor_dialog_qt.h"
@@ -47,6 +46,7 @@
 #include "xenia/kernel/xam/xam_state.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_title.h"
+#include "xenia/ui/achievements_dialog_qt.h"
 
 namespace xe {
 namespace app {
@@ -1332,7 +1332,7 @@ void GameListDialogQt::ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
     return;
   }
 
-  auto* achievements_dialog = new AchievementsDialogQt(
+  auto* achievements_dialog = new xe::ui::AchievementsDialogQt(
       nullptr, kernel_state, &title_info.value(), profile);
   achievements_dialog->setAttribute(Qt::WA_DeleteOnClose);
   achievements_dialog->show();

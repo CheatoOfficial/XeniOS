@@ -27,6 +27,17 @@ project("xenia-cpu-ppc-tests")
     "imgui",
     "mspack",
   })
+  -- Qt is required because xenia-kernel now uses Qt for achievements dialog
+  filter("platforms:Linux")
+    local qt_dir = os.getenv("QT_DIR")
+    if qt_dir then
+      links({
+        "Qt6Core",
+        "Qt6Gui",
+        "Qt6Widgets",
+      })
+    end
+  filter({})
   files({
     "ppc_testing_main.cc",
     "../../../base/console_app_main_"..platform_suffix..".cc",
