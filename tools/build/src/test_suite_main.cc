@@ -9,6 +9,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <locale>
 #include <string>
 #include <vector>
@@ -33,8 +34,13 @@ int test_suite_main(const std::vector<std::string>& args) {
     argc++;
   }
 
-  // Run Catch.
-  return Catch::Session().run(argc, argv.data());
+  // Run Catch with compact reporter that shows dots
+  Catch::Session session;
+
+  // Use the compact reporter which shows dots for progress
+  session.configData().reporterName = "compact";
+
+  return session.run(argc, argv.data());
 }
 
 }  // namespace test_suite

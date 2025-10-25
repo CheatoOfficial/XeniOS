@@ -21,6 +21,10 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/raw_module.h"
 
+#include <atomic>
+#include <mutex>
+#include <thread>
+
 #if XE_ARCH_AMD64
 #include "xenia/cpu/backend/x64/x64_backend.h"
 #endif  // XE_ARCH
@@ -531,6 +535,9 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
 
   if (result == TestResult::kPassed) {
     ++passed_count;
+    // Print progress dot
+    fprintf(stdout, ".");
+    fflush(stdout);
   } else {
     ++failed_count;
   }
@@ -577,21 +584,69 @@ bool RunTests(const std::string_view test_name) {
   }
 
   XELOGI("{} tests loaded.", test_suites.size());
+
+  // Collect all test cases across all suites
+  std::vector<std::pair<TestSuite*, TestCase*>> all_tests;
+  for (auto& test_suite : test_suites) {
+    for (auto& test_case : test_suite.test_cases()) {
+      all_tests.push_back({&test_suite, &test_case});
+    }
+  }
+
 #if XE_COMPILER_MSVC
   // On Windows, use a single shared test runner
   TestRunner runner;
-#else
-  // On POSIX, each test will create its own runner in a forked process
-  // Pass a dummy value that won't be used
-  TestRunner* runner_ptr = nullptr;
-  TestRunner& runner = *runner_ptr;  // Never dereferenced on POSIX
-#endif
-  for (auto& test_suite : test_suites) {
-    for (auto& test_case : test_suite.test_cases()) {
-      ProtectedRunTest(test_suite, runner, test_case, failed_count,
-                       passed_count);
-    }
+  // Run tests serially on Windows
+  for (auto& [test_suite, test_case] : all_tests) {
+    ProtectedRunTest(*test_suite, runner, *test_case, failed_count,
+                     passed_count);
   }
+#else
+  // On POSIX, run tests in parallel using available CPU cores
+  // Get number of CPU cores
+  unsigned int num_cores = std::thread::hardware_concurrency();
+  if (num_cores == 0) num_cores = 4;  // Default to 4 if detection fails
+
+  XELOGI("Running tests in parallel using {} threads", num_cores);
+
+  std::mutex result_mutex;
+  std::atomic<size_t> test_index{0};
+
+  // Worker function for each thread
+  auto worker = [&]() {
+    // Dummy runner for API compatibility (not used on POSIX)
+    TestRunner* runner_ptr = nullptr;
+    TestRunner& runner = *runner_ptr;
+
+    while (true) {
+      size_t idx = test_index.fetch_add(1);
+      if (idx >= all_tests.size()) break;
+
+      auto& [test_suite, test_case] = all_tests[idx];
+      int local_failed = 0;
+      int local_passed = 0;
+
+      ProtectedRunTest(*test_suite, runner, *test_case, local_failed,
+                       local_passed);
+
+      // Update global counters thread-safely
+      std::lock_guard<std::mutex> lock(result_mutex);
+      failed_count += local_failed;
+      passed_count += local_passed;
+    }
+  };
+
+  // Create and run worker threads
+  std::vector<std::thread> threads;
+  for (unsigned int i = 0; i < num_cores; ++i) {
+    threads.emplace_back(worker);
+  }
+
+  // Wait for all threads to complete
+  for (auto& thread : threads) {
+    thread.join();
+  }
+#endif
 
   fprintf(stderr, "\n");
   fprintf(stderr, "Total tests: %d\n", failed_count + passed_count);

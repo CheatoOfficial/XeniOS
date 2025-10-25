@@ -1439,6 +1439,9 @@ class TestCommand(BaseBuildCommand):
         self.parser.add_argument(
             "--continue", action="store_true",
             help="Don't stop when a test errors, but continue running all.")
+        self.parser.add_argument(
+            "--no_sde", action="store_true",
+            help="Don't use Intel SDE to test different CPU instruction sets.")
 
     def execute(self, args, pass_args, cwd):
         print("Testing...\n")
@@ -1477,16 +1480,60 @@ class TestCommand(BaseBuildCommand):
 
         # Run tests.
         any_failed = False
+
+        # Intel SDE configurations for testing different CPU paths
+        # Only apply to xenia-cpu-tests and xenia-cpu-ppc-tests
+        sde_executable = "/opt/intel-sde/sde64"
+
+        # Check if Intel SDE is available and if we're testing CPU-related tests
+        has_cpu_tests = any("cpu" in test.lower() for test in test_targets)
+        use_sde = has_cpu_tests and os.path.exists(sde_executable) and not args.get("no_sde", False)
+
+        if use_sde:
+            print(f"Intel SDE detected at {sde_executable}")
+            print("Will test CPU code with AVX2 and AVX512 instruction sets")
+            print("(Test binaries require AVX2 minimum)\n")
+            sde_configs = [
+                ("", "Native CPU"),  # Run without SDE first
+                ("-hsw", "Haswell (AVX2)"),
+                ("-skx", "Skylake-X (AVX512)")
+            ]
+        else:
+            if has_cpu_tests and not os.path.exists(sde_executable):
+                print("Intel SDE not found - running CPU tests with native CPU only")
+            sde_configs = [("", "Native CPU")]
+
         for test_executable in test_executables:
-            print(f"- {test_executable}")
-            result = subprocess.call([test_executable] + pass_args, env=test_env)
-            if result:
-                any_failed = True
-                if args["continue"]:
-                    print("ERROR: test failed but continuing due to --continue.")
-                else:
-                    print("ERROR: test failed, aborting, use --continue to keep going.")
-                    return result
+            test_name = os.path.basename(test_executable)
+
+            # Only use SDE for CPU tests
+            if use_sde and "cpu" in test_name.lower():
+                for sde_flag, cpu_name in sde_configs:
+                    if sde_flag:
+                        print(f"- {test_executable} (emulating {cpu_name})")
+                        cmd = [sde_executable, sde_flag, "--", test_executable] + pass_args
+                    else:
+                        print(f"- {test_executable} ({cpu_name})")
+                        cmd = [test_executable] + pass_args
+
+                    result = subprocess.call(cmd, env=test_env)
+                    if result:
+                        print(f"ERROR: {test_name} failed with {cpu_name}")
+                        any_failed = True
+                        if not args["continue"]:
+                            print("ERROR: test failed, aborting, use --continue to keep going.")
+                            return result
+            else:
+                # Non-CPU tests or SDE not available - run normally
+                print(f"- {test_executable}")
+                result = subprocess.call([test_executable] + pass_args, env=test_env)
+                if result:
+                    any_failed = True
+                    if args["continue"]:
+                        print("ERROR: test failed but continuing due to --continue.")
+                    else:
+                        print("ERROR: test failed, aborting, use --continue to keep going.")
+                        return result
 
         if any_failed:
             print("ERROR: one or more tests failed.")
