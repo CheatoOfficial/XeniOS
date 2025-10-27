@@ -77,13 +77,11 @@ void PostProcessingDialogQt::SetupUI() {
     QDialog {
       background-color: rgb(30, 30, 30);
       border: 1px solid rgba(100, 100, 100, 180);
-      border-radius: 8px;
       padding: 0px;
     }
     QGroupBox {
       background-color: rgba(40, 40, 40, 200);
       border: 1px solid rgba(80, 80, 80, 150);
-      border-radius: 6px;
       margin-top: 12px;
       padding-top: 16px;
       font-weight: bold;

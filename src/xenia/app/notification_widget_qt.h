@@ -11,7 +11,6 @@
 #define XENIA_APP_NOTIFICATION_WIDGET_QT_H_
 
 #include <QLabel>
-#include <QPropertyAnimation>
 #include <QTimer>
 #include <QWidget>
 
@@ -28,11 +27,7 @@ class NotificationWidgetQt : public QWidget {
 
   void Show();
 
- private slots:
-  void OnFadeOutFinished();
-
  private:
-  QPropertyAnimation* fade_animation_;
   QTimer* auto_close_timer_;
 };
 

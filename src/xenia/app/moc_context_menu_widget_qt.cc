@@ -1,5 +1,5 @@
 /****************************************************************************
-** Meta object code from reading C++ file 'notification_widget_qt.h'
+** Meta object code from reading C++ file 'context_menu_widget_qt.h'
 **
 ** Created by: The Qt Meta Object Compiler version 69 (Qt 6.9.2)
 **
@@ -7,7 +7,7 @@
 *****************************************************************************/
 
 #include <QtCore/qmetatype.h>
-#include "notification_widget_qt.h"
+#include "context_menu_widget_qt.h"
 
 #include <QtCore/qtmochelpers.h>
 
@@ -15,7 +15,7 @@
 
 #include <QtCore/qxptype_traits.h>
 #if !defined(Q_MOC_OUTPUT_REVISION)
-#error "The header file 'notification_widget_qt.h' doesn't include <QObject>."
+#error "The header file 'context_menu_widget_qt.h' doesn't include <QObject>."
 #elif Q_MOC_OUTPUT_REVISION != 69
 #error "This file was generated using the moc from 6.9.2. It"
 #error "cannot be used with the include files from this version of Qt."
@@ -30,57 +30,57 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t {};
+struct qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t {};
 }  // unnamed namespace
 
 template <>
-constexpr inline auto xe::app::NotificationWidgetQt::qt_create_metaobjectdata<
-    qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>() {
+constexpr inline auto xe::app::ContextMenuWidgetQt::qt_create_metaobjectdata<
+    qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>() {
   namespace QMC = QtMocConstants;
-  QtMocHelpers::StringRefStorage qt_stringData{"xe::app::NotificationWidgetQt"};
+  QtMocHelpers::StringRefStorage qt_stringData{"xe::app::ContextMenuWidgetQt"};
 
   QtMocHelpers::UintData qt_methods{};
   QtMocHelpers::UintData qt_properties{};
   QtMocHelpers::UintData qt_enums{};
   return QtMocHelpers::metaObjectData<
-      NotificationWidgetQt, qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>(
+      ContextMenuWidgetQt, qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>(
       QMC::MetaObjectFlag{}, qt_stringData, qt_methods, qt_properties,
       qt_enums);
 }
-Q_CONSTINIT const QMetaObject xe::app::NotificationWidgetQt::staticMetaObject = { {
+Q_CONSTINIT const QMetaObject xe::app::ContextMenuWidgetQt::staticMetaObject = { {
     QMetaObject::SuperData::link<QWidget::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>.data,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.data,
     qt_static_metacall,
     nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>.metaTypes,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.metaTypes,
     nullptr
 } };
 
-void xe::app::NotificationWidgetQt::qt_static_metacall(QObject* _o,
-                                                       QMetaObject::Call _c,
-                                                       int _id, void** _a) {
-  auto* _t = static_cast<NotificationWidgetQt*>(_o);
+void xe::app::ContextMenuWidgetQt::qt_static_metacall(QObject* _o,
+                                                      QMetaObject::Call _c,
+                                                      int _id, void** _a) {
+  auto* _t = static_cast<ContextMenuWidgetQt*>(_o);
   (void)_t;
   (void)_c;
   (void)_id;
   (void)_a;
 }
 
-const QMetaObject* xe::app::NotificationWidgetQt::metaObject() const {
+const QMetaObject* xe::app::ContextMenuWidgetQt::metaObject() const {
   return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject()
                                     : &staticMetaObject;
 }
 
-void* xe::app::NotificationWidgetQt::qt_metacast(const char* _clname) {
+void* xe::app::ContextMenuWidgetQt::qt_metacast(const char* _clname) {
   if (!_clname) return nullptr;
-  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app20NotificationWidgetQtE_t>.strings))
+  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.strings))
     return static_cast<void*>(this);
   return QWidget::qt_metacast(_clname);
 }
 
-int xe::app::NotificationWidgetQt::qt_metacall(QMetaObject::Call _c, int _id,
-                                               void** _a) {
+int xe::app::ContextMenuWidgetQt::qt_metacall(QMetaObject::Call _c, int _id,
+                                              void** _a) {
   _id = QWidget::qt_metacall(_c, _id, _a);
   return _id;
 }

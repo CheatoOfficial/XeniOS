@@ -292,6 +292,7 @@ class EmulatorWindow {
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
   QPointer<class ProfileDialogQt> profile_dialog_qt_;
   QPointer<class ConfigDialogQt> config_dialog_qt_;
+  QPointer<class ContextMenuWidgetQt> context_menu_widget_qt_;
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.

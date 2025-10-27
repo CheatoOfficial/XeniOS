@@ -22,6 +22,7 @@
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
 #include "xenia/app/config_dialog_qt.h"
+#include "xenia/app/context_menu_widget_qt.h"
 #include "xenia/app/game_list_dialog_qt.h"
 #include "xenia/app/launch_data_restart_dialog_qt.h"
 #include "xenia/app/notification_widget_qt.h"
@@ -986,22 +987,28 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
   if (e.button() == ui::MouseEvent::Button::kRight) {
+    // If menu is already open, close it instead of opening a new one
+    if (context_menu_widget_qt_) {
+      context_menu_widget_qt_->close();
+      context_menu_widget_qt_ = nullptr;
+      return;
+    }
+
     // Show context menu on right-click
     auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
     if (qt_window) {
-      QMenu context_menu(qt_window->qwindow());
+      // Create new menu widget each time - just like notification widget
+      auto* context_menu = new ContextMenuWidgetQt(qt_window->qwindow());
+      context_menu_widget_qt_ = context_menu;
 
-      QAction* fullscreen_action = context_menu.addAction(
-          window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen");
-      QObject::connect(fullscreen_action, &QAction::triggered,
-                       [this]() { ToggleFullscreen(); });
+      context_menu->AddAction(
+          window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
+          [this]() { ToggleFullscreen(); });
 
-      context_menu.addSeparator();
+      context_menu->AddSeparator();
 
-      QAction* postprocess_action =
-          context_menu.addAction("Post-Processing...");
-      QObject::connect(postprocess_action, &QAction::triggered,
-                       [this]() { ToggleDisplayConfigDialog(); });
+      context_menu->AddAction("Post-Processing...",
+                              [this]() { ToggleDisplayConfigDialog(); });
 
       // Get current vibration state
       bool vibration_enabled = false;
@@ -1012,28 +1019,23 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
 
       QString vibration_text =
           QString("Vibration: %1").arg(vibration_enabled ? "On" : "Off");
-      QAction* vibration_action = context_menu.addAction(vibration_text);
-      QObject::connect(vibration_action, &QAction::triggered,
-                       [this]() { ToggleControllerVibration(); });
+      context_menu->AddAction(vibration_text,
+                              [this]() { ToggleControllerVibration(); });
 
-      QAction* hotkeys_action =
-          context_menu.addAction("Show Controller Hotkeys");
-      QObject::connect(hotkeys_action, &QAction::triggered,
-                       [this]() { DisplayHotKeysConfig(); });
+      context_menu->AddAction("Show Controller Hotkeys",
+                              [this]() { DisplayHotKeysConfig(); });
 
-      context_menu.addSeparator();
+      context_menu->AddSeparator();
 
-      QAction* screenshot_action = context_menu.addAction("Take Screenshot");
-      QObject::connect(screenshot_action, &QAction::triggered,
-                       [this]() { TakeScreenshot(); });
+      context_menu->AddAction("Take Screenshot",
+                              [this]() { TakeScreenshot(); });
 
-      QAction* profile_action = context_menu.addAction("Profiles Menu");
-      QObject::connect(profile_action, &QAction::triggered,
-                       [this]() { ToggleProfilesConfigDialog(); });
+      context_menu->AddAction("Profiles Menu",
+                              [this]() { ToggleProfilesConfigDialog(); });
 
       // Show menu at mouse position
       QPoint global_pos = QCursor::pos();
-      context_menu.exec(global_pos);
+      context_menu->ShowAt(global_pos);
     }
   }
 }
@@ -1481,7 +1483,7 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
         new PostProcessingDialogQt(qt_window->qwindow(), this);
     postprocessing_dialog_qt_->show();
   } else {
-    postprocessing_dialog_qt_->close();
+    postprocessing_dialog_qt_->deleteLater();
   }
 }
 
@@ -2550,7 +2552,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   }
 
   if (postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_->close();
+    postprocessing_dialog_qt_->deleteLater();
   }
 
   ClearDialogs();
@@ -2695,7 +2697,7 @@ void EmulatorWindow::ClearDialogs() {
   }
 
   if (postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_->close();
+    postprocessing_dialog_qt_->deleteLater();
   }
 
   imgui_drawer_.get()->ClearDialogs();
