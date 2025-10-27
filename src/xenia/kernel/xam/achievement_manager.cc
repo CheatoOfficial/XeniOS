@@ -8,15 +8,16 @@
  */
 
 #include "xenia/kernel/xam/achievement_manager.h"
+#include "xenia/app/notification_widget_qt.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/achievement_backends/gpd_achievement_backend.h"
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
-#include "xenia/ui/imgui_guest_notification.h"
+#include "xenia/ui/window_qt.h"
 
-DEFINE_bool(show_achievement_notification, false,
+DEFINE_bool(show_achievement_notification, true,
             "Show achievement notification on screen.", "UI");
 
 DEFINE_string(
@@ -148,12 +149,15 @@ void AchievementManager::ShowAchievementEarnedNotification(
   const Emulator* emulator = kernel_state()->emulator();
   ui::WindowedAppContext& app_context =
       emulator->display_window()->app_context();
-  ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
-  app_context.CallInUIThread([imgui_drawer, description]() {
-    new xe::ui::AchievementNotificationWindow(
-        imgui_drawer, "Achievement unlocked", description, 0,
-        kernel_state()->notification_position_);
+  app_context.CallInUIThread([emulator, description]() {
+    auto* qt_window = dynamic_cast<ui::QtWindow*>(emulator->display_window());
+    if (qt_window) {
+      auto* notification = new app::NotificationWidgetQt(
+          qt_window->qwindow(), QString("Achievement unlocked"),
+          QString::fromUtf8(description.c_str()), 4500);
+      notification->Show();
+    }
   });
 }
 
