@@ -367,6 +367,7 @@ class Emulator {
   void AddGameConfigLoadCallback(GameConfigLoadCallback* callback);
   void RemoveGameConfigLoadCallback(GameConfigLoadCallback* callback);
 
+  std::string RemountAndResolveLaunchPath(const std::string& launch_path);
   std::string FindLaunchModule();
 
   X_STATUS CompleteLaunch(const std::filesystem::path& path,

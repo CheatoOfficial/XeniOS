@@ -17,6 +17,7 @@
 #include <QGridLayout>
 #include <QMenu>
 #include <QMessageBox>
+#include <QTimer>
 
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
@@ -24,7 +25,6 @@
 #include "xenia/app/config_dialog_qt.h"
 #include "xenia/app/context_menu_widget_qt.h"
 #include "xenia/app/game_list_dialog_qt.h"
-#include "xenia/app/launch_data_restart_dialog_qt.h"
 #include "xenia/app/notification_widget_qt.h"
 #include "xenia/app/postprocessing_dialog_qt.h"
 #include "xenia/app/profile_dialog_qt.h"
@@ -395,11 +395,22 @@ void EmulatorWindow::OnEmulatorInitialized() {
   auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
   if (qt_window) {
     emulator_->set_on_launch_data_restart([this, qt_window]() {
-      // Show dialog in UI thread
+      // Show notification in UI thread
       window_->app_context().CallInUIThread([this, qt_window]() {
-        auto* dialog = new app::LaunchDataRestartDialogQt(
-            qt_window->qwindow(), window_.get(), emulator_->kernel_state());
-        dialog->show();
+        auto* notification = new NotificationWidgetQt(
+            qt_window->qwindow(), "Title Restart Required",
+            "Title is restarting with new launch data.\n"
+            "Game will be loaded automatically.",
+            5000);  // 5 second duration
+        notification->Show();
+
+        // Schedule terminate and exit after notification duration
+        QTimer::singleShot(5000, [this]() {
+          if (emulator_->kernel_state()) {
+            emulator_->kernel_state()->TerminateTitle();
+          }
+          std::quick_exit(0);
+        });
       });
     });
   }
@@ -2123,9 +2134,46 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   // Get the path to the current executable
   std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
 
-  // Verify the file exists (unless launching for launch_data)
-  if (!for_launch_data && !std::filesystem::exists(path_to_file)) {
-    XELOGE("Cannot launch title - file not found: {}", path_to_file.string());
+  // Handle launch_data.bin if present
+  std::filesystem::path actual_path = path_to_file;
+  std::string launch_module_arg;
+
+  if (for_launch_data) {
+    // Read launch_data.bin to get the host_path and launch_path
+    FILE* file = xe::filesystem::OpenFile(
+        kernel::xam::kXamModuleLoaderDataFileName, "rb");
+    if (!file) {
+      XELOGE("launch_data.bin not found");
+      return;
+    }
+
+    // Read host_path (the disc/package path)
+    uint16_t host_path_length = 0;
+    fread(&host_path_length, sizeof(host_path_length), 1, file);
+    std::string host_path;
+    host_path.resize(host_path_length);
+    fread(host_path.data(), host_path_length, 1, file);
+
+    // Read launch_path (the XEX to launch)
+    uint16_t launch_path_length = 0;
+    fread(&launch_path_length, sizeof(launch_path_length), 1, file);
+    std::string launch_path;
+    launch_path.resize(launch_path_length);
+    fread(launch_path.data(), launch_path_length, 1, file);
+
+    fclose(file);
+
+    // Delete launch_data.bin so new process doesn't try to process it
+    std::filesystem::remove(kernel::xam::kXamModuleLoaderDataFileName);
+
+    // Use the host_path as the target and launch_path as --launch_module
+    actual_path = host_path;
+    launch_module_arg = launch_path;
+  }
+
+  // Verify the file exists
+  if (!actual_path.empty() && !std::filesystem::exists(actual_path)) {
+    XELOGE("Cannot launch title - file not found: {}", actual_path.string());
     return;
   }
 
@@ -2141,9 +2189,15 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     cmd_line += u" --config=\"" + xe::to_utf16(cvars::config) + u"\"";
   }
 
-  // Add the target game file (unless launching for launch_data)
-  if (!for_launch_data) {
-    auto game_path_u16 = xe::path_to_utf16(path_to_file);
+  // Add --launch_module if specified
+  if (!launch_module_arg.empty()) {
+    cmd_line +=
+        u" --launch_module=\"" + xe::to_utf16(launch_module_arg) + u"\"";
+  }
+
+  // Add the target game file
+  if (!actual_path.empty()) {
+    auto game_path_u16 = xe::path_to_utf16(actual_path);
     cmd_line += u" \"" + game_path_u16 + u"\"";
   }
 
@@ -2187,10 +2241,17 @@ void EmulatorWindow::LaunchTitleInNewProcess(
       argv.push_back(config_arg.c_str());
     }
 
-    // Add the target game file (unless launching for launch_data)
+    // Add --launch_module if specified
+    std::string launch_module_arg_str;
+    if (!launch_module_arg.empty()) {
+      launch_module_arg_str = "--launch_module=" + launch_module_arg;
+      argv.push_back(launch_module_arg_str.c_str());
+    }
+
+    // Add the target game file
     std::string target_arg;
-    if (!for_launch_data) {
-      target_arg = path_to_file.string();
+    if (!actual_path.empty()) {
+      target_arg = actual_path.string();
       argv.push_back(target_arg.c_str());
     }
     argv.push_back(nullptr);

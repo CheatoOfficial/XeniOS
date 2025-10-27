@@ -1434,42 +1434,73 @@ void Emulator::RemoveGameConfigLoadCallback(GameConfigLoadCallback* callback) {
   game_config_load_callbacks_.erase(it);
 }
 
+std::string Emulator::RemountAndResolveLaunchPath(
+    const std::string& launch_path) {
+  // Normalize path separators for the platform
+  std::string normalized_path = launch_path;
+#if XE_PLATFORM_LINUX
+  // Convert backslashes to forward slashes for consistent paths on Linux
+  std::replace(normalized_path.begin(), normalized_path.end(), '\\', '/');
+#endif
+
+  // Get the current game:\ symbolic link path
+  std::string symbolic_link_path;
+  if (!kernel_state_->file_system()->FindSymbolicLink(kDefaultGameSymbolicLink,
+                                                      symbolic_link_path)) {
+    return "";
+  }
+
+  std::filesystem::path file_path = symbolic_link_path;
+
+  // Remove previous symbolic links.
+  // Some titles can provide root within specific directory.
+  kernel_state_->file_system()->UnregisterSymbolicLink(
+      kDefaultPartitionSymbolicLink);
+  kernel_state_->file_system()->UnregisterSymbolicLink(
+      kDefaultGameSymbolicLink);
+
+  file_path /= std::filesystem::path(normalized_path);
+
+  // Re-register symbolic links to point to the parent directory of the module
+  kernel_state_->file_system()->RegisterSymbolicLink(
+      kDefaultPartitionSymbolicLink, xe::path_to_utf8(file_path.parent_path()));
+  kernel_state_->file_system()->RegisterSymbolicLink(
+      kDefaultGameSymbolicLink, xe::path_to_utf8(file_path.parent_path()));
+
+  return xe::path_to_utf8(file_path);
+}
+
 std::string Emulator::FindLaunchModule() {
   std::string path("game:\\");
 
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
 
   if (!xam->loader_data().launch_path.empty()) {
-    std::string symbolic_link_path;
-    if (kernel_state_->file_system()->FindSymbolicLink(kDefaultGameSymbolicLink,
-                                                       symbolic_link_path)) {
-      std::filesystem::path file_path = symbolic_link_path;
-      // Remove previous symbolic links.
-      // Some titles can provide root within specific directory.
-      kernel_state_->file_system()->UnregisterSymbolicLink(
-          kDefaultPartitionSymbolicLink);
-      kernel_state_->file_system()->UnregisterSymbolicLink(
-          kDefaultGameSymbolicLink);
-
-      std::string launch_path = xam->loader_data().launch_path;
-#if XE_PLATFORM_LINUX
-      // Convert backslashes to forward slashes for consistent paths on Linux
-      std::replace(launch_path.begin(), launch_path.end(), '\\', '/');
-#endif
-      file_path /= std::filesystem::path(launch_path);
-
-      kernel_state_->file_system()->RegisterSymbolicLink(
-          kDefaultPartitionSymbolicLink,
-          xe::path_to_utf8(file_path.parent_path()));
-      kernel_state_->file_system()->RegisterSymbolicLink(
-          kDefaultGameSymbolicLink, xe::path_to_utf8(file_path.parent_path()));
-
-      return xe::path_to_utf8(file_path);
+    std::string result =
+        RemountAndResolveLaunchPath(xam->loader_data().launch_path);
+    if (!result.empty()) {
+      return result;
     }
   }
 
   if (!cvars::launch_module.empty()) {
-    return path + cvars::launch_module;
+    std::string launch_module = cvars::launch_module;
+#if XE_PLATFORM_LINUX
+    // Convert backslashes to forward slashes for consistent paths on Linux
+    std::replace(launch_module.begin(), launch_module.end(), '\\', '/');
+#endif
+
+    // If the module is in a subdirectory, remount game:\ to that subdirectory
+    std::filesystem::path module_path(launch_module);
+    if (module_path.has_parent_path() && module_path.parent_path() != ".") {
+      std::string result = RemountAndResolveLaunchPath(launch_module);
+      if (!result.empty()) {
+        return result;
+      }
+    }
+
+    // No subdirectory, just return as guest path
+    return path + launch_module;
   }
 
   return path + "default.xex";
