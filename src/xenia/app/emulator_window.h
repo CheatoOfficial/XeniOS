@@ -84,7 +84,8 @@ class EmulatorWindow {
   void OnEmulatorInitialized();
 
   void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file,
-                               bool for_launch_data = false);
+                               bool for_launch_data = false,
+                               uint32_t title_id = 0);
   xe::X_STATUS RunTitle(const std::filesystem::path& path_to_file);
   void UpdateTitle();
   bool HasRunningChildProcess();
@@ -178,20 +179,6 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
-  class DisplayConfigGameConfigLoadCallback
-      : public Emulator::GameConfigLoadCallback {
-   public:
-    DisplayConfigGameConfigLoadCallback(Emulator& emulator,
-                                        EmulatorWindow& emulator_window)
-        : Emulator::GameConfigLoadCallback(emulator),
-          emulator_window_(emulator_window) {}
-
-    void PostGameConfigLoad() override;
-
-   private:
-    EmulatorWindow& emulator_window_;
-  };
-
  public:
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
@@ -277,8 +264,6 @@ class EmulatorWindow {
 #endif
   std::unique_ptr<ui::Window> window_;
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
-  std::unique_ptr<DisplayConfigGameConfigLoadCallback>
-      display_config_game_config_load_callback_;
   // Creation may fail, in this case immediate drawer UI must not be drawn.
   std::unique_ptr<ui::ImmediateDrawer> immediate_drawer_;
 

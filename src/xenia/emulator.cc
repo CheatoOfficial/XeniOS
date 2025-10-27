@@ -95,15 +95,6 @@ DEFINE_int32(priority_class, 0,
 namespace xe {
 using namespace xe::literals;
 
-Emulator::GameConfigLoadCallback::GameConfigLoadCallback(Emulator& emulator)
-    : emulator_(emulator) {
-  emulator_.AddGameConfigLoadCallback(this);
-}
-
-Emulator::GameConfigLoadCallback::~GameConfigLoadCallback() {
-  emulator_.RemoveGameConfigLoadCallback(this);
-}
-
 Emulator::Emulator(const std::filesystem::path& command_line,
                    const std::filesystem::path& storage_root,
                    const std::filesystem::path& content_root,
@@ -1399,41 +1390,6 @@ void Emulator::WaitUntilExit() {
   on_exit();
 }
 
-void Emulator::AddGameConfigLoadCallback(GameConfigLoadCallback* callback) {
-  assert_not_null(callback);
-  // Game config load callbacks handling is entirely in the UI thread.
-  assert_true(!display_window_ ||
-              display_window_->app_context().IsInUIThread());
-  // Check if already added.
-  if (std::find(game_config_load_callbacks_.cbegin(),
-                game_config_load_callbacks_.cend(),
-                callback) != game_config_load_callbacks_.cend()) {
-    return;
-  }
-  game_config_load_callbacks_.push_back(callback);
-}
-
-void Emulator::RemoveGameConfigLoadCallback(GameConfigLoadCallback* callback) {
-  assert_not_null(callback);
-  // Game config load callbacks handling is entirely in the UI thread.
-  assert_true(!display_window_ ||
-              display_window_->app_context().IsInUIThread());
-  auto it = std::find(game_config_load_callbacks_.cbegin(),
-                      game_config_load_callbacks_.cend(), callback);
-  if (it == game_config_load_callbacks_.cend()) {
-    return;
-  }
-  if (game_config_load_callback_loop_next_index_ != SIZE_MAX) {
-    // Actualize the next callback index after the erasure from the vector.
-    size_t existing_index =
-        size_t(std::distance(game_config_load_callbacks_.cbegin(), it));
-    if (game_config_load_callback_loop_next_index_ > existing_index) {
-      --game_config_load_callback_loop_next_index_;
-    }
-  }
-  game_config_load_callbacks_.erase(it);
-}
-
 std::string Emulator::RemountAndResolveLaunchPath(
     const std::string& launch_path) {
   // Normalize path separators for the platform
@@ -1603,18 +1559,6 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // Try and load the resource database (xex only).
   if (module->title_id()) {
     auto title_id = fmt::format("{:08X}", module->title_id());
-
-    // Load the per-game configuration file and make sure updates are handled
-    // by the callbacks.
-    config::LoadGameConfig(title_id);
-    assert_true(game_config_load_callback_loop_next_index_ == SIZE_MAX);
-    game_config_load_callback_loop_next_index_ = 0;
-    while (game_config_load_callback_loop_next_index_ <
-           game_config_load_callbacks_.size()) {
-      game_config_load_callbacks_[game_config_load_callback_loop_next_index_++]
-          ->PostGameConfigLoad();
-    }
-    game_config_load_callback_loop_next_index_ = SIZE_MAX;
 
     const auto db = kernel_state_->module_xdbf(module);
 

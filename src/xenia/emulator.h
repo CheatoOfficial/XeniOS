@@ -72,28 +72,6 @@ class Emulator {
   // the proper ordering and hierarchy should be constructed in a single
   // callback (in this example, for the whole subsystem).
   //
-  // All callbacks must be created and destroyed in the UI thread only (or the
-  // thread that takes its place in the architecture of the specific app if
-  // there's no UI), as they are invoked in the UI thread.
-  class GameConfigLoadCallback {
-   public:
-    GameConfigLoadCallback(Emulator& emulator);
-    GameConfigLoadCallback(const GameConfigLoadCallback& callback) = delete;
-    GameConfigLoadCallback& operator=(const GameConfigLoadCallback& callback) =
-        delete;
-    virtual ~GameConfigLoadCallback();
-
-    // The callback is invoked in the UI thread (or the thread that takes its
-    // place in the architecture of the specific app if there's no UI).
-    virtual void PostGameConfigLoad() = 0;
-
-   protected:
-    Emulator& emulator() const { return emulator_; }
-
-   private:
-    Emulator& emulator_;
-  };
-
   explicit Emulator(const std::filesystem::path& command_line,
                     const std::filesystem::path& storage_root,
                     const std::filesystem::path& content_root,
@@ -364,9 +342,6 @@ class Emulator {
   static bool ExceptionCallbackThunk(Exception* ex, void* data);
   bool ExceptionCallback(Exception* ex);
 
-  void AddGameConfigLoadCallback(GameConfigLoadCallback* callback);
-  void RemoveGameConfigLoadCallback(GameConfigLoadCallback* callback);
-
   std::string RemountAndResolveLaunchPath(const std::string& launch_path);
   std::string FindLaunchModule();
 
@@ -398,15 +373,6 @@ class Emulator {
   std::unique_ptr<patcher::PluginLoader> plugin_loader_;
 
   std::unique_ptr<kernel::KernelState> kernel_state_;
-
-  // Accessible only from the thread that invokes those callbacks (the UI thread
-  // if the UI is available).
-  std::vector<GameConfigLoadCallback*> game_config_load_callbacks_;
-  // Using an index, not an iterator, because after the erasure, the adjustment
-  // must be done for the vector element indices that would be in the iterator
-  // range that would be invalidated.
-  // SIZE_MAX if not currently in the game config load callback loop.
-  size_t game_config_load_callback_loop_next_index_ = SIZE_MAX;
 
   kernel::object_ref<kernel::XThread> main_thread_;
   kernel::object_ref<kernel::XHostThread> plugin_loader_thread_;

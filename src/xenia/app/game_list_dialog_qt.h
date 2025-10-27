@@ -79,7 +79,7 @@ class GameListDialogQt : public QWidget {
   void PopulateTable();
   void TryLoadIcons();
   QPixmap CreateIconPixmap(const std::vector<uint8_t>& icon_data);
-  void LaunchGame(const std::filesystem::path& path);
+  void LaunchGame(const std::filesystem::path& path, uint32_t title_id = 0);
   void LaunchGameWithFilePicker();
   void OpenContainingFolder(const std::filesystem::path& path);
   void RemoveTitleFromDashboard(uint32_t title_id);
@@ -108,6 +108,7 @@ class GameListDialogQt : public QWidget {
   bool has_logged_in_profile_ = false;
   bool last_game_running_state_ = false;
   std::filesystem::path selected_game_path_;
+  uint32_t selected_game_title_id_ = 0;
   uint64_t current_profile_xuid_ = 0;
   QPointer<class ProfileDialogQt> profile_dialog_;
   QTimer* scrollbar_hide_timer_ = nullptr;

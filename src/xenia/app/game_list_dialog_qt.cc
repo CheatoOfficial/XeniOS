@@ -757,6 +757,8 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
   }
 
   QString path_str = item->data(Qt::UserRole).toString();
+  uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
+
   if (path_str.isEmpty()) {
     // No path available - show message and open file picker
     LaunchGameWithFilePicker();
@@ -764,7 +766,7 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
   }
 
   std::filesystem::path path = path_str.toStdString();
-  LaunchGame(path);
+  LaunchGame(path, title_id);
 }
 
 void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
@@ -843,7 +845,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
 
   if (selected == launch_action && launch_action) {
     if (has_path) {
-      LaunchGame(path);
+      LaunchGame(path, title_id);
     } else {
       LaunchGameWithFilePicker();
     }
@@ -856,12 +858,13 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   }
 }
 
-void GameListDialogQt::LaunchGame(const std::filesystem::path& path) {
+void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
+                                  uint32_t title_id) {
   if (emulator_window_) {
     if (emulator_window_->HasRunningChildProcess()) {
       return;
     }
-    emulator_window_->LaunchTitleInNewProcess(path);
+    emulator_window_->LaunchTitleInNewProcess(path, false, title_id);
     // Widget stays visible at all times
   }
 }
@@ -985,7 +988,7 @@ void GameListDialogQt::RemoveTitleFromDashboard(uint32_t title_id) {
 
 void GameListDialogQt::OnPlayClicked() {
   if (!selected_game_path_.empty()) {
-    LaunchGame(selected_game_path_);
+    LaunchGame(selected_game_path_, selected_game_title_id_);
   } else {
     // No path available for selected game - show message and open file picker
     LaunchGameWithFilePicker();
@@ -1021,8 +1024,10 @@ void GameListDialogQt::OnSelectionChanged() {
     auto* item = table_widget_->item(row, 0);
     if (item) {
       QString path_str = item->data(Qt::UserRole).toString();
+      uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
       if (!path_str.isEmpty()) {
         selected_game_path_ = path_str.toStdString();
+        selected_game_title_id_ = title_id;
         UpdatePlayButtonState();
         return;
       }
@@ -1031,6 +1036,7 @@ void GameListDialogQt::OnSelectionChanged() {
 
   // No selection
   selected_game_path_.clear();
+  selected_game_title_id_ = 0;
   UpdatePlayButtonState();
 }
 

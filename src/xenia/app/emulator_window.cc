@@ -224,9 +224,7 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
       window_listener_(*this),
       window_(ui::Window::Create(app_context, kBaseTitle, width, height)),
       imgui_drawer_(
-          std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)),
-      display_config_game_config_load_callback_(
-          new DisplayConfigGameConfigLoadCallback(*emulator, *this)) {
+          std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)) {
   base_title_ = std::string(kBaseTitle) +
 #ifdef DEBUG
 #if _NO_DEBUG_HEAP == 1
@@ -478,10 +476,6 @@ void EmulatorWindow::EmulatorWindowListener::OnMouseUp(ui::MouseEvent& e) {
 void EmulatorWindow::EmulatorWindowListener::OnMouseDoubleClick(
     ui::MouseEvent& e) {
   emulator_window_.OnMouseDoubleClick(e);
-}
-
-void EmulatorWindow::DisplayConfigGameConfigLoadCallback::PostGameConfigLoad() {
-  emulator_window_.ApplyDisplayConfigForCvars();
 }
 
 bool EmulatorWindow::Initialize() {
@@ -2130,7 +2124,8 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
 }
 
 void EmulatorWindow::LaunchTitleInNewProcess(
-    const std::filesystem::path& path_to_file, bool for_launch_data) {
+    const std::filesystem::path& path_to_file, bool for_launch_data,
+    uint32_t title_id) {
   // Get the path to the current executable
   std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
 
@@ -2177,6 +2172,13 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     return;
   }
 
+  // Load per-game config overrides if title_id is provided
+  std::vector<std::string> game_config_args;
+  if (title_id != 0) {
+    auto title_id_str = fmt::format("{:08X}", title_id);
+    game_config_args = config::LoadGameConfigAsArgs(title_id_str);
+  }
+
 #if XE_PLATFORM_WIN32
   // On Windows, build command line using Xenia's Unicode path handling
   auto exe_path_u16 = xe::path_to_utf16(executable_path);
@@ -2193,6 +2195,11 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   if (!launch_module_arg.empty()) {
     cmd_line +=
         u" --launch_module=\"" + xe::to_utf16(launch_module_arg) + u"\"";
+  }
+
+  // Add per-game config overrides
+  for (const auto& arg : game_config_args) {
+    cmd_line += u" " + xe::to_utf16(arg);
   }
 
   // Add the target game file
@@ -2246,6 +2253,12 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     if (!launch_module_arg.empty()) {
       launch_module_arg_str = "--launch_module=" + launch_module_arg;
       argv.push_back(launch_module_arg_str.c_str());
+    }
+
+    // Add per-game config overrides
+    for (const auto& arg : game_config_args) {
+      argv.push_back(arg.c_str());
+      XELOGI("Adding per-game config arg: {}", arg);
     }
 
     // Add the target game file

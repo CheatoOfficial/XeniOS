@@ -143,22 +143,56 @@ void ReadConfig(const std::filesystem::path& file_path,
   XELOGI("Loaded config: {}", file_path);
 }
 
-void ReadGameConfig(const std::filesystem::path& file_path) {
-  if (!cvar::ConfigVars) {
-    return;
-  }
-  const auto config = ParseConfig(file_path);
-  for (auto& it : *cvar::ConfigVars) {
-    auto config_var = static_cast<cvar::IConfigVar*>(it.second);
-    toml::path config_key =
-        toml::path(config_var->category() + "." + config_var->name());
+std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id) {
+  std::vector<std::string> args;
 
-    const auto config_key_node = config.at_path(config_key);
-    if (config_key_node) {
-      config_var->LoadConfigValue(config_key_node.node());
-    }
+  const auto game_config_path =
+      config_folder / "config" / (std::string(title_id) + game_config_suffix);
+
+  if (!std::filesystem::exists(game_config_path)) {
+    return args;
   }
-  XELOGI("Loaded game config: {}", file_path);
+
+  if (!cvar::ConfigVars) {
+    return args;
+  }
+
+  try {
+    const auto config = ParseConfig(game_config_path);
+
+    // Iterate through all registered cvars
+    for (auto& it : *cvar::ConfigVars) {
+      auto config_var = static_cast<cvar::IConfigVar*>(it.second);
+      toml::path config_key =
+          toml::path(config_var->category() + "." + config_var->name());
+
+      const auto config_key_node = config.at_path(config_key);
+      if (config_key_node) {
+        // Load the value into the cvar temporarily to validate and convert it
+        config_var->LoadConfigValue(config_key_node.node());
+
+        // Get the string representation from the cvar
+        std::string value = config_var->config_value();
+
+        // Strip TOML quotes from string values (they're added by ToString for
+        // TOML format)
+        if (value.length() >= 2 && value.front() == '"' &&
+            value.back() == '"') {
+          value = value.substr(1, value.length() - 2);
+        }
+
+        args.push_back(fmt::format("--{}={}", config_var->name(), value));
+      }
+    }
+
+    XELOGI("Loaded per-game config for title {} with {} overrides", title_id,
+           args.size());
+  } catch (const std::exception& e) {
+    XELOGE("Failed to parse per-game config {}: {}",
+           xe::path_to_utf8(game_config_path), e.what());
+  }
+
+  return args;
 }
 
 void ReloadConfig() {
@@ -311,15 +345,6 @@ void SetupConfig(const std::filesystem::path& config_folder) {
     // parameters to the user, if new options were added, descriptions were
     // updated, or default values were changed.
     SaveConfig();
-  }
-}
-
-void LoadGameConfig(const std::string_view title_id) {
-  const auto game_config_folder = config_folder / "config";
-  const auto game_config_path =
-      game_config_folder / (std::string(title_id) + game_config_suffix);
-  if (std::filesystem::exists(game_config_path)) {
-    ReadGameConfig(game_config_path);
   }
 }
 

@@ -661,9 +661,6 @@ void EmulatorApp::OnDestroy() {
   // The profiler needs to shut down before the graphics context.
   Profiler::Shutdown();
 
-  // Write all cvar overrides to the config.
-  config::SaveConfig();
-
   // TODO(DrChat): Remove this code and do a proper exit.
   XELOGI("Cheap-skate exit!");
   std::quick_exit(EXIT_SUCCESS);
