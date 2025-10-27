@@ -588,9 +588,8 @@ X_STATUS Emulator::LaunchXexFile(const std::filesystem::path& path) {
     return result;
   }
 
-  const std::string mount_path = xe::path_to_utf8(
-      std::filesystem::path(kernel_state_->GetExecutableModule()->path())
-          .parent_path());
+  const std::string mount_path =
+      utf8::find_base_guest_path(kernel_state_->GetExecutableModule()->path());
 
   // System related symlinks
   file_system_->RegisterSymbolicLink("media:", mount_path);
