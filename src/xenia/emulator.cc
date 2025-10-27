@@ -45,6 +45,7 @@
 #include "xenia/kernel/xam/xdbf/spa_info.h"
 #include "xenia/kernel/xbdm/xbdm_module.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_module.h"
+#include "xenia/kernel/xboxkrnl/xboxkrnl_xconfig.h"
 #include "xenia/memory.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -81,7 +82,7 @@ DEFINE_bool(allow_game_relative_writes, false,
             "generating test data to compare with original hardware. ",
             "General");
 
-DECLARE_int32(user_language);
+DECLARE_string(user_language);
 
 DECLARE_bool(allow_plugins);
 
@@ -1618,7 +1619,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
     if (game_info_database_->IsValid()) {
       title_name_ = game_info_database_->GetTitleName(
-          static_cast<XLanguage>(cvars::user_language));
+          static_cast<XLanguage>(kernel::xboxkrnl::GetUserLanguageValue()));
       XELOGI("Title name: {}", title_name_);
 
       // Show achievments data

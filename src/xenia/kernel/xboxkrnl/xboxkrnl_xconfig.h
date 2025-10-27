@@ -388,6 +388,10 @@ enum X_KEYBOARD_LAYOUT : uint16_t {
   EnglishQWERTY = 0x0001,
 };
 
+// Helper functions to convert string cvars to enum values
+uint32_t GetUserLanguageValue();
+uint32_t GetUserCountryValue();
+
 }  // namespace xboxkrnl
 }  // namespace kernel
 }  // namespace xe

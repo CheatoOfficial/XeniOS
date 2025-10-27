@@ -20,6 +20,7 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_memory.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_modules.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
+#include "xenia/kernel/xboxkrnl/xboxkrnl_xconfig.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/ui/windowed_app_context.h"
@@ -40,8 +41,8 @@ DEFINE_int32(avpack, 8,
              " 7 = TV PAL-60\n"
              " 8 = HDMI (default)",
              "Video");
-DECLARE_int32(user_country);
-DECLARE_int32(user_language);
+DECLARE_string(user_country);
+DECLARE_string(user_language);
 DECLARE_uint32(audio_flag);
 
 DEFINE_bool(staging_mode, 0,
@@ -265,7 +266,7 @@ uint32_t xeXGetGameRegion() {
       0x02FEu, 0x03FFu, 0x02FEu, 0x03FFu, 0x02FEu, 0x02FEu, 0xFFFFu, 0x03FFu,
       0x03FFu, 0x03FFu, 0x03FFu, 0x02FEu, 0x03FFu, 0x03FFu, 0x02FEu, 0x00FFu,
       0x03FFu, 0x03FFu, 0x03FFu, 0x03FFu, 0x03FFu, 0x03FFu, 0x03FFu};
-  auto country = static_cast<uint8_t>(cvars::user_country);
+  auto country = static_cast<uint8_t>(xboxkrnl::GetUserCountryValue());
   return country < xe::countof(table) ? table[country] : 0xFFFFu;
 }
 
@@ -273,7 +274,8 @@ dword_result_t XGetGameRegion_entry() { return xeXGetGameRegion(); }
 DECLARE_XAM_EXPORT1(XGetGameRegion, kNone, kStub);
 
 XLanguage xeGetLanguage(bool extended_languages_support) {
-  auto desired_language = static_cast<XLanguage>(cvars::user_language);
+  auto desired_language =
+      static_cast<XLanguage>(xboxkrnl::GetUserLanguageValue());
   uint32_t region = xeXGetGameRegion();
   auto max_languages = extended_languages_support ? XLanguage::kMaxLanguages
                                                   : XLanguage::kSChinese;

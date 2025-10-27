@@ -18,8 +18,10 @@
 
 #include "third_party/stb/stb_image.h"
 
-DECLARE_int32(user_language);
-DECLARE_int32(user_country);
+#include "xenia/kernel/xboxkrnl/xboxkrnl_xconfig.h"
+
+DECLARE_string(user_language);
+DECLARE_string(user_country);
 
 namespace xe {
 namespace kernel {
@@ -974,7 +976,7 @@ DECLARE_XAM_EXPORT1(XamUserGetUserFlagsFromXUID, kUserProfiles, kImplemented);
 dword_result_t XamUserGetOnlineLanguageFromXUID_entry(qword_t xuid) {
   const auto& user = kernel_state()->xam_state()->GetUserProfile(xuid);
   if (!user) {
-    return cvars::user_language;
+    return xboxkrnl::GetUserLanguageValue();
   }
   return user->GetLanguage();
 }
@@ -984,7 +986,7 @@ DECLARE_XAM_EXPORT1(XamUserGetOnlineLanguageFromXUID, kUserProfiles,
 dword_result_t XamUserGetOnlineCountryFromXUID_entry(qword_t xuid) {
   const auto& user = kernel_state()->xam_state()->GetUserProfile(xuid);
   if (!user) {
-    return cvars::user_country;
+    return xboxkrnl::GetUserCountryValue();
   }
   return user->GetCountry();
 }
