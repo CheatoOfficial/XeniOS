@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_PROFILE_DIALOGS_H_
-#define XENIA_APP_PROFILE_DIALOGS_H_
+#ifndef XENIA_UI_PROFILE_DIALOGS_H_
+#define XENIA_UI_PROFILE_DIALOGS_H_
 
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"

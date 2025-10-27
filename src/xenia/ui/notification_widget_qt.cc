@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/notification_widget_qt.h"
+#include "xenia/ui/notification_widget_qt.h"
 
 #include <QVBoxLayout>
 

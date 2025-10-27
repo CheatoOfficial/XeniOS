@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/profile_editor_dialog_qt.h"
+#include "xenia/ui/profile_editor_dialog_qt.h"
 
 #include <QFileDialog>
 #include <QGridLayout>

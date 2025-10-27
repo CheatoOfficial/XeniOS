@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/profile_dialog_qt.h"
+#include "xenia/ui/profile_dialog_qt.h"
 
 #include <QHBoxLayout>
 #include <QImage>
@@ -17,7 +17,6 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
-#include "xenia/app/profile_editor_dialog_qt.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/system.h"
 #include "xenia/emulator.h"
@@ -25,6 +24,7 @@
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/ui/profile_editor_dialog_qt.h"
 #include "xenia/ui/window_qt.h"
 
 namespace xe {

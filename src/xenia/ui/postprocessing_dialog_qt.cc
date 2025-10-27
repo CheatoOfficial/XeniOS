@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/postprocessing_dialog_qt.h"
+#include "xenia/ui/postprocessing_dialog_qt.h"
 
 #include <QApplication>
 #include <QEvent>

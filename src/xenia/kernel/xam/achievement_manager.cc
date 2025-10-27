@@ -8,13 +8,13 @@
  */
 
 #include "xenia/kernel/xam/achievement_manager.h"
-#include "xenia/app/notification_widget_qt.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/achievement_backends/gpd_achievement_backend.h"
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
+#include "xenia/ui/notification_widget_qt.h"
 #include "xenia/ui/window_qt.h"
 
 DEFINE_bool(show_achievement_notification, true,

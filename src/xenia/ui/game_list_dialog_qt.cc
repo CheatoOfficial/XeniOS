@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/game_list_dialog_qt.h"
+#include "xenia/ui/game_list_dialog_qt.h"
 
 #include <QCursor>
 #include <QDesktopServices>
@@ -27,8 +27,6 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
-#include "xenia/app/profile_dialog_qt.h"
-#include "xenia/app/profile_editor_dialog_qt.h"
 #include "xenia/base/chrono.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
@@ -47,6 +45,8 @@
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_title.h"
 #include "xenia/ui/achievements_dialog_qt.h"
+#include "xenia/ui/profile_dialog_qt.h"
+#include "xenia/ui/profile_editor_dialog_qt.h"
 
 namespace xe {
 namespace app {

@@ -15,7 +15,6 @@
 
 #include <QPointer>
 
-#include "xenia/app/profile_dialogs.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -23,6 +22,7 @@
 #include "xenia/ui/immediate_drawer.h"
 #include "xenia/ui/menu_item.h"
 #include "xenia/ui/presenter.h"
+#include "xenia/ui/profile_dialogs.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/window_listener.h"
 #include "xenia/ui/windowed_app_context.h"

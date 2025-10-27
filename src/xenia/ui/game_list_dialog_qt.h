@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_GAME_LIST_DIALOG_QT_H_
-#define XENIA_APP_GAME_LIST_DIALOG_QT_H_
+#ifndef XENIA_UI_GAME_LIST_DIALOG_QT_H_
+#define XENIA_UI_GAME_LIST_DIALOG_QT_H_
 
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>

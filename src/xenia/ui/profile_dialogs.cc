@@ -6,7 +6,7 @@
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
-#include "xenia/app/profile_dialogs.h"
+#include "xenia/ui/profile_dialogs.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/system.h"

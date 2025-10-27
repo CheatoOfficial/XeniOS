@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_POSTPROCESSING_DIALOG_QT_H_
-#define XENIA_APP_POSTPROCESSING_DIALOG_QT_H_
+#ifndef XENIA_UI_POSTPROCESSING_DIALOG_QT_H_
+#define XENIA_UI_POSTPROCESSING_DIALOG_QT_H_
 
 #include <QButtonGroup>
 #include <QCheckBox>

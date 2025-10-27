@@ -22,12 +22,6 @@
 #include "third_party/imgui/imgui.h"
 #include "third_party/stb/stb_image_write.h"
 #include "third_party/tomlplusplus/toml.hpp"
-#include "xenia/app/config_dialog_qt.h"
-#include "xenia/app/context_menu_widget_qt.h"
-#include "xenia/app/game_list_dialog_qt.h"
-#include "xenia/app/notification_widget_qt.h"
-#include "xenia/app/postprocessing_dialog_qt.h"
-#include "xenia/app/profile_dialog_qt.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
@@ -39,6 +33,12 @@
 #include "xenia/base/system.h"
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
+#include "xenia/ui/config_dialog_qt.h"
+#include "xenia/ui/context_menu_widget_qt.h"
+#include "xenia/ui/game_list_dialog_qt.h"
+#include "xenia/ui/notification_widget_qt.h"
+#include "xenia/ui/postprocessing_dialog_qt.h"
+#include "xenia/ui/profile_dialog_qt.h"
 
 #if XE_PLATFORM_WIN32
 #include <windows.h>

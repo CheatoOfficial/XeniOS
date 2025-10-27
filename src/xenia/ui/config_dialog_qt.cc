@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/config_dialog_qt.h"
+#include "xenia/ui/config_dialog_qt.h"
 
 #include <QFileDialog>
 #include <QFormLayout>

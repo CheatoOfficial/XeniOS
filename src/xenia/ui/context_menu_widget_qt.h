@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_CONTEXT_MENU_WIDGET_QT_H_
-#define XENIA_APP_CONTEXT_MENU_WIDGET_QT_H_
+#ifndef XENIA_UI_CONTEXT_MENU_WIDGET_QT_H_
+#define XENIA_UI_CONTEXT_MENU_WIDGET_QT_H_
 
 #include <QLabel>
 #include <QVBoxLayout>

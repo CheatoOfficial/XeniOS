@@ -7,7 +7,7 @@
  ******************************************************************************
  */
 
-#include "xenia/app/context_menu_widget_qt.h"
+#include "xenia/ui/context_menu_widget_qt.h"
 
 #include <QFrame>
 #include <QKeyEvent>

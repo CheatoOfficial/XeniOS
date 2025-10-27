@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_NOTIFICATION_WIDGET_QT_H_
-#define XENIA_APP_NOTIFICATION_WIDGET_QT_H_
+#ifndef XENIA_UI_NOTIFICATION_WIDGET_QT_H_
+#define XENIA_UI_NOTIFICATION_WIDGET_QT_H_
 
 #include <QLabel>
 #include <QTimer>

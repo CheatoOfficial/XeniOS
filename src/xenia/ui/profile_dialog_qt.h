@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_APP_PROFILE_DIALOG_QT_H_
-#define XENIA_APP_PROFILE_DIALOG_QT_H_
+#ifndef XENIA_UI_PROFILE_DIALOG_QT_H_
+#define XENIA_UI_PROFILE_DIALOG_QT_H_
 
 #include <QDialog>
 #include <QLabel>
