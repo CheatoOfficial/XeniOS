@@ -13,6 +13,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
@@ -59,6 +60,7 @@ class ConfigDialogQt : public QDialog {
     bool is_modified;
     QWidget* editor_widget =
         nullptr;  // The actual input widget (QLineEdit, QCheckBox, etc.)
+    QLabel* label_widget = nullptr;  // The label to bold when modified
   };
 
   void LoadConfigValues();
@@ -71,6 +73,7 @@ class ConfigDialogQt : public QDialog {
   void UpdateEditorFromPendingValue(ConfigVarInfo* var_info);
   void UpdatePendingValueFromEditor(ConfigVarInfo* var_info);
   std::string GetEditorValue(QWidget* editor, const std::string& var_name);
+  void UpdateLabelModifiedState(ConfigVarInfo* var_info);
 
   EmulatorWindow* emulator_window_;
   std::vector<ConfigVarInfo> config_vars_;

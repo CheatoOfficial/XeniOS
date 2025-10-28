@@ -156,6 +156,12 @@ jobs:
           cp assets/icon/512.png artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps/xenia_edge.png
           cp assets/icon/1024.png artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps/xenia_edge.png
 
+          # Copy optimized_settings directory next to the binary in AppDir
+          mkdir -p artifacts/xenia_edge/usr/bin
+          if [ -d "build/bin/Linux/Release/optimized_settings" ]; then
+            cp -r build/bin/Linux/Release/optimized_settings artifacts/xenia_edge/usr/bin/
+          fi
+
           # Run linuxdeploy with Qt plugin to deploy all Qt dependencies and create AppImage
           ~/linuxdeploy/linuxdeploy --appdir artifacts/xenia_edge \
             --executable $binary \

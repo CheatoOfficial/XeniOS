@@ -45,6 +45,7 @@
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 #include "xenia/kernel/xam/xdbf/gpd_info_title.h"
 #include "xenia/ui/achievements_dialog_qt.h"
+#include "xenia/ui/game_config_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/profile_editor_dialog_qt.h"
 
@@ -835,6 +836,12 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     });
   }
 
+  // Game config overrides option (enabled if we have a valid title_id)
+  QAction* config_action = nullptr;
+  if (title_id != 0) {
+    config_action = context_menu.addAction("Config Overrides...");
+  }
+
   // Separator before Remove option
   context_menu.addSeparator();
 
@@ -853,6 +860,23 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     OpenContainingFolder(path);
   } else if (selected == achievements_action && achievements_action) {
     // Achievements dialog will open in a separate call
+  } else if (selected == config_action && config_action) {
+    // Get the title name from the game entry
+    QString title_name;
+    for (const auto& entry : game_entries_) {
+      if (entry.title_id == title_id) {
+        title_name = QString::fromStdString(entry.title_name);
+        break;
+      }
+    }
+    if (title_name.isEmpty()) {
+      title_name = QString::fromStdString(fmt::format("{:08X}", title_id));
+    }
+
+    auto* dialog = new GameConfigDialogQt(this, emulator_window_, title_id,
+                                          title_name.toStdString());
+    dialog->exec();
+    delete dialog;
   } else if (selected == remove_action) {
     RemoveTitleFromDashboard(title_id);
   }

@@ -17,6 +17,9 @@
 toml::parse_result ParseFile(const std::filesystem::path& filename);
 
 namespace config {
+extern std::filesystem::path config_folder;
+extern std::string game_config_suffix;
+
 void SetupConfig(const std::filesystem::path& config_folder);
 std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id);
 void SaveConfig();

@@ -26,154 +26,16 @@
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
-#include "xenia/base/platform.h"
 #include "xenia/config.h"
+#include "xenia/ui/config_helpers.h"
 
 namespace xe {
 namespace app {
 
 namespace {
 
-// Known enum-like cvars with their valid options
-const std::map<std::string, std::vector<std::string>>& GetKnownEnumOptions() {
-  static const std::map<std::string, std::vector<std::string>> options = {
-#if XE_PLATFORM_WIN32
-      {"gpu", {"any", "d3d12", "vulkan", "null"}},
-      {"apu", {"any", "nop", "sdl", "xaudio2"}},
-      {"hid", {"any", "nop", "sdl", "winkey", "xinput"}},
-#elif XE_PLATFORM_LINUX
-      {"gpu", {"any", "vulkan", "null"}},
-      {"apu", {"any", "alsa", "nop", "sdl"}},
-      {"hid", {"any", "nop", "sdl"}},
-#else
-      {"gpu", {"any", "vulkan", "null"}},
-      {"apu", {"any", "nop", "sdl"}},
-      {"hid", {"any", "nop", "sdl"}},
-#endif
-      {"d3d12_readback_resolve",
-       {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
-      {"render_target_path_d3d12", {"any", "rtv", "rov"}},
-      {"render_target_path_vulkan", {"any", "fbo", "fsi"}},
-      {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},
-      {"postprocess_scaling_and_sharpening",
-       {"bilinear", "cas", "fsr", "nearest"}},
-      {"spirv_version_override", {"auto", "1.0", "1.3", "1.4", "1.5", "1.6"}},
-      {"xma_decoder", {"old", "new", "fake"}},
-      {"user_language",
-       {"English", "Japanese", "German", "French", "Spanish", "Italian",
-        "Korean", "TChinese", "Portuguese", "SChinese", "Polish", "Russian"}},
-      {"user_country",
-       {"UAE",
-        "Albania",
-        "Armenia",
-        "Argentina",
-        "Austria",
-        "Australia",
-        "Azerbaijan",
-        "Belgium",
-        "Bulgaria",
-        "Bahrain",
-        "Brunei",
-        "Bolivia",
-        "Brazil",
-        "Belarus",
-        "Belize",
-        "Canada",
-        "Switzerland",
-        "Chile",
-        "China",
-        "Colombia",
-        "Costa Rica",
-        "Czech Republic",
-        "Germany",
-        "Denmark",
-        "Dominican Republic",
-        "Algeria",
-        "Ecuador",
-        "Estonia",
-        "Egypt",
-        "Spain",
-        "Finland",
-        "Faroe Islands",
-        "France",
-        "Great Britain",
-        "Georgia",
-        "Greece",
-        "Guatemala",
-        "Hong Kong",
-        "Honduras",
-        "Croatia",
-        "Hungary",
-        "Indonesia",
-        "Ireland",
-        "Israel",
-        "India",
-        "Iraq",
-        "Iran",
-        "Iceland",
-        "Italy",
-        "Jamaica",
-        "Jordan",
-        "Japan",
-        "Kenya",
-        "Kyrgyzstan",
-        "Korea",
-        "Kuwait",
-        "Kazakhstan",
-        "Lebanon",
-        "Liechtenstein",
-        "Lithuania",
-        "Luxembourg",
-        "Latvia",
-        "Libya",
-        "Morocco",
-        "Monaco",
-        "Macedonia",
-        "Mongolia",
-        "Macau",
-        "Maldives",
-        "Mexico",
-        "Malaysia",
-        "Nicaragua",
-        "Netherlands",
-        "Norway",
-        "New Zealand",
-        "Oman",
-        "Panama",
-        "Peru",
-        "Philippines",
-        "Pakistan",
-        "Poland",
-        "Puerto Rico",
-        "Portugal",
-        "Paraguay",
-        "Qatar",
-        "Romania",
-        "Russia",
-        "Saudi Arabia",
-        "Sweden",
-        "Singapore",
-        "Slovenia",
-        "Slovakia",
-        "El Salvador",
-        "Syria",
-        "Thailand",
-        "Tunisia",
-        "Turkey",
-        "Trinidad",
-        "Taiwan",
-        "Ukraine",
-        "United States",
-        "Uruguay",
-        "Uzbekistan",
-        "Venezuela",
-        "Vietnam",
-        "Yemen",
-        "South Africa",
-        "Zimbabwe"}},
-  };
-  return options;
-}
+// Use the shared enum options from config_helpers.h
+using xe::ui::GetKnownEnumOptions;
 
 }  // namespace
 
@@ -351,6 +213,9 @@ void ConfigDialogQt::CreateCategoryPage(
       label->setToolTipDuration(5000);  // Show for 5 seconds
     }
 
+    // Store label reference for bold state updates
+    var_info->label_widget = label;
+
     // Create editor widget - right aligned
     QWidget* editor = CreateEditorWidget(var_info);
     var_info->editor_widget = editor;
@@ -485,6 +350,9 @@ void ConfigDialogQt::OnValueChanged() {
           GetEditorValue(var_info.editor_widget, var_info.name);
       var_info.pending_value = new_value;
       var_info.is_modified = (var_info.pending_value != var_info.current_value);
+
+      // Update label bold state
+      UpdateLabelModifiedState(&var_info);
     }
   }
 
@@ -498,6 +366,16 @@ void ConfigDialogQt::OnValueChanged() {
   } else {
     setWindowTitle("Configuration Manager");
   }
+}
+
+void ConfigDialogQt::UpdateLabelModifiedState(ConfigVarInfo* var_info) {
+  if (!var_info || !var_info->label_widget) {
+    return;
+  }
+
+  QFont font = var_info->label_widget->font();
+  font.setBold(var_info->is_modified);
+  var_info->label_widget->setFont(font);
 }
 
 void ConfigDialogQt::SaveConfigChanges() {
@@ -703,7 +581,12 @@ void ConfigDialogQt::ResetToDefaults() {
   }
 }
 
-void ConfigDialogQt::OnSaveClicked() { SaveConfigChanges(); }
+void ConfigDialogQt::OnSaveClicked() {
+  SaveConfigChanges();
+  if (!has_unsaved_changes_) {
+    accept();  // Close dialog after successful save
+  }
+}
 
 void ConfigDialogQt::OnCategorySelected(int index) {
   if (index >= 0 && index < settings_stack_->count()) {
