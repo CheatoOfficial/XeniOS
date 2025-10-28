@@ -676,7 +676,6 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
     return -1;
   }
 
-  XELOGI("NetDll_socket: returning handle {:08X}", socket->handle());
   return socket->handle();
 }
 DECLARE_XAM_EXPORT1(NetDll_socket, kNetworking, kImplemented);
@@ -934,7 +933,7 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
                                  pointer_t<x_fd_set> writefds,
                                  pointer_t<x_fd_set> exceptfds,
                                  lpvoid_t timeout_ptr) {
-  XELOGI("NetDll_select: nfds={}, timeout={:08X}", nfds.value(),
+  XELOGD("NetDll_select: nfds={}, timeout={:08X}", nfds.value(),
          timeout_ptr.guest_address());
 
   host_set host_readfds = {0};

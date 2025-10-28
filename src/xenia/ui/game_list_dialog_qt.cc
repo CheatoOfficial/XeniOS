@@ -532,7 +532,7 @@ void GameListDialogQt::TryLoadIcons() {
         game_entry.gamerscore_earned = stats.gamerscore_earned;
 
         if (stats.achievements_total > 0) {
-          XELOGI("Title {:08X}: {}/{} achievements, {}/{} gamerscore",
+          XELOGD("Title {:08X}: {}/{} achievements, {}/{} gamerscore",
                  game_entry.title_id, game_entry.achievements_unlocked,
                  game_entry.achievements_total, game_entry.gamerscore_earned,
                  game_entry.gamerscore_total);
@@ -554,7 +554,7 @@ void GameListDialogQt::TryLoadIcons() {
         // Create QPixmap from icon data
         QPixmap pixmap = CreateIconPixmap(icon_data);
         if (!pixmap.isNull()) {
-          XELOGI("Loaded icon for title {:08X}, size: {} bytes",
+          XELOGD("Loaded icon for title {:08X}, size: {} bytes",
                  game_entry.title_id, icon_data.size());
           title_icons_[game_entry.title_id] = pixmap;
         } else {
