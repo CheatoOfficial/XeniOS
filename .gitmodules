@@ -108,3 +108,4 @@
 [submodule "third_party/optimized-settings"]
 	path = third_party/optimized-settings
 	url = https://github.com/xenia-manager/optimized-settings.git
+	branch = main

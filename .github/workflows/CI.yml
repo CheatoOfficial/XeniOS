@@ -70,7 +70,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: third_party
-          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
+          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
 
       - name: Setup
         run: |
@@ -228,7 +228,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: third_party
-          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}
+          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
 
       - name: Setup
         run: |
