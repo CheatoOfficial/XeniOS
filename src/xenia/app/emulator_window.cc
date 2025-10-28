@@ -200,6 +200,18 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "Allows user to define how many titles is saved in list of "
              "recently played titles.",
              "General");
+
+#if XE_PLATFORM_LINUX
+DEFINE_bool(
+    use_mangohud, false,
+    "Enable MangoHUD overlay when launching games in separate processes.\n"
+    "MangoHUD must be installed on your system for this to work.",
+    "Linux");
+DEFINE_bool(use_gamemode, false,
+            "Use Feral GameMode when launching games in separate processes.\n"
+            "GameMode must be installed on your system for this to work.",
+            "Linux");
+#endif
 namespace xe {
 namespace app {
 
@@ -2238,8 +2250,23 @@ void EmulatorWindow::LaunchTitleInNewProcess(
 
   if (pid == 0) {
     // Child process
+
+    // Set MangoHUD environment variable if enabled
+    if (cvars::use_mangohud) {
+      setenv("MANGOHUD", "1", 1);
+    }
+
     std::vector<const char*> argv;
-    argv.push_back(executable_path.c_str());
+    std::string gamemode_cmd;
+
+    // If GameMode is enabled, use gamemoderun as the executable
+    if (cvars::use_gamemode) {
+      gamemode_cmd = "gamemoderun";
+      argv.push_back(gamemode_cmd.c_str());
+      argv.push_back(executable_path.c_str());
+    } else {
+      argv.push_back(executable_path.c_str());
+    }
 
     // Pass the config file if one is being used
     std::string config_arg;
@@ -2270,10 +2297,16 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     argv.push_back(nullptr);
 
     // Execute the new process
-    execv(executable_path.c_str(), const_cast<char**>(argv.data()));
+    if (cvars::use_gamemode) {
+      // Use execvp to search PATH for gamemoderun
+      execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
+    } else {
+      execv(executable_path.c_str(), const_cast<char**>(argv.data()));
+    }
 
-    // If execv returns, it failed
-    XELOGE("Failed to execute: {}", executable_path.string());
+    // If exec returns, it failed
+    XELOGE("Failed to execute: {}",
+           cvars::use_gamemode ? gamemode_cmd : executable_path.string());
     std::exit(1);
   } else if (pid < 0) {
     // Fork failed

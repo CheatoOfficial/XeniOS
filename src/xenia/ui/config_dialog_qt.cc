@@ -29,6 +29,10 @@
 #include "xenia/config.h"
 #include "xenia/ui/config_helpers.h"
 
+#if XE_PLATFORM_LINUX
+#include <unistd.h>
+#endif
+
 namespace xe {
 namespace app {
 
@@ -36,6 +40,28 @@ namespace {
 
 // Use the shared enum options from config_helpers.h
 using xe::ui::GetKnownEnumOptions;
+
+#if XE_PLATFORM_LINUX
+// Check if a command exists in PATH by searching each directory
+bool IsCommandAvailable(const std::string& command) {
+  std::string path_env = std::getenv("PATH") ? std::getenv("PATH") : "";
+  if (path_env.empty()) {
+    return false;
+  }
+
+  // Split PATH by ':'
+  std::istringstream path_stream(path_env);
+  std::string path_dir;
+  while (std::getline(path_stream, path_dir, ':')) {
+    std::filesystem::path full_path = std::filesystem::path(path_dir) / command;
+    if (std::filesystem::exists(full_path) &&
+        access(full_path.c_str(), X_OK) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
 
 }  // namespace
 
@@ -246,6 +272,23 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     checkbox->setChecked(var_info->pending_value == "true");
     connect(checkbox, &QCheckBox::checkStateChanged, this,
             &ConfigDialogQt::OnValueChanged);
+
+#if XE_PLATFORM_LINUX
+    // Disable Linux-specific options if the required tools aren't installed
+    if (var_info->name == "use_mangohud" && !IsCommandAvailable("mangohud")) {
+      checkbox->setEnabled(false);
+      checkbox->setToolTip(
+          "MangoHUD is not installed or not found in PATH. Install MangoHUD "
+          "to use this feature.");
+    } else if (var_info->name == "use_gamemode" &&
+               !IsCommandAvailable("gamemoderun")) {
+      checkbox->setEnabled(false);
+      checkbox->setToolTip(
+          "GameMode is not installed or not found in PATH. Install GameMode "
+          "to use this feature.");
+    }
+#endif
+
     return checkbox;
   } else if (enum_it != enum_options.end()) {
     // Dropdown for enum-like cvars
