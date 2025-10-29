@@ -157,7 +157,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
   }
 
   int ret = setsockopt(native_handle_, native_level, native_optname,
-                       (char*)optval_ptr, optlen);
+                       static_cast<char*>(optval_ptr), optlen);
   if (ret < 0) {
     XELOGE("XSocket::SetOption: setsockopt failed, errno={}", errno);
     return X_STATUS_UNSUCCESSFUL;
@@ -218,7 +218,7 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
   // privileges. Remap to port + 10000 to avoid privilege issues.
   // Note: sin_port is xe::be<uint16_t> which automatically handles endianness,
   // so we use it directly without ntohs/htons.
-  uint16_t original_port = uint16_t(name->sin_port);
+  const uint16_t original_port = uint16_t(name->sin_port);
   if (original_port < 1024) {
     uint16_t new_port = original_port + 10000;
     name->sin_port = new_port;

@@ -672,7 +672,8 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
     socket->Release();
 
     XThread::SetLastError(socket->GetLastWSAError());
-    XELOGI("NetDll_socket: failed with error");
+    XELOGE("NetDll_socket: failed with error {:08X}",
+           socket->GetLastWSAError());
     return -1;
   }
 
@@ -765,7 +766,8 @@ dword_result_t NetDll_ioctlsocket_entry(dword_t caller, dword_t socket_handle,
   X_STATUS status = socket->IOControl(cmd, arg_ptr);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
-    XELOGI("NetDll_ioctlsocket: failed");
+    XELOGE("NetDll_ioctlsocket: failed with error {:08X}",
+           socket->GetLastWSAError());
     return -1;
   }
 
@@ -1072,7 +1074,6 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
 
   N_XSOCKADDR_IN native_to(to_ptr);
   int ret = socket->SendTo(buf_ptr, buf_len, flags, &native_to, to_len);
-  XELOGD("NetDll_sendto: returned {}", ret);
   return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_sendto, kNetworking, kImplemented);

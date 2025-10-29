@@ -1885,7 +1885,12 @@ struct VECTOR_ROTATE_LEFT_V128
         } break;
         case INT32_TYPE: {
           if (e.IsFeatureEnabled(kX64EmitAVX512Ortho)) {
-            e.vprolvd(i.dest, i.src1, i.src2);
+            if (i.src2.is_constant) {
+              e.LoadConstantXmm(e.xmm0, i.src2.constant());
+              e.vprolvd(i.dest, i.src1, e.xmm0);
+            } else {
+              e.vprolvd(i.dest, i.src1, i.src2);
+            }
           } else if (e.IsFeatureEnabled(kX64EmitAVX2)) {
             Xmm temp = i.dest;
             if (i.dest == i.src1 || i.dest == i.src2) {

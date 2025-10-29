@@ -490,6 +490,73 @@ void EmulatorWindow::EmulatorWindowListener::OnMouseDoubleClick(
   emulator_window_.OnMouseDoubleClick(e);
 }
 
+void EmulatorWindow::XMPConfigDialog::OnDraw(ImGuiIO& io) {
+  // Center window horizontally, position in lower portion of screen
+  float window_width = 400.0f;
+  float window_height = 150.0f;
+  float x = (io.DisplaySize.x - window_width) * 0.5f;
+  float y = io.DisplaySize.y * 0.85f - window_height * 0.5f;
+
+  ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(window_width, window_height),
+                           ImGuiCond_FirstUseEver);
+
+  bool dialog_open = true;
+  if (!ImGui::Begin("Audio Player Menu", &dialog_open,
+                    ImGuiWindowFlags_NoCollapse |
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_HorizontalScrollbar)) {
+    Close();
+    ImGui::End();
+    return;
+  }
+
+  auto audio_player = emulator_window_.emulator_->audio_media_player();
+  using xmp_state = kernel::xam::apps::XmpApp::State;
+  if (audio_player) {
+    ImGui::Text("Audio player status:");
+    ImGui::SameLine();
+    switch (audio_player->GetState()) {
+      case xmp_state::kIdle:
+        ImGui::Text("Idle");
+        break;
+      case xmp_state::kPaused:
+        ImGui::Text("Paused");
+        break;
+      case xmp_state::kPlaying:
+        ImGui::Text("Playing");
+        break;
+      default:
+        break;
+    }
+
+    if (audio_player->IsPlaying()) {
+      if (ImGui::Button("Pause")) {
+        audio_player->Pause();
+      }
+    } else if (audio_player->IsPaused()) {
+      if (ImGui::Button("Resume")) {
+        audio_player->Continue();
+      }
+    }
+
+    volume_ =
+        emulator_window_.emulator_->audio_media_player()->GetVolume()->load();
+
+    if (ImGui::SliderFloat("Audio player volume", &volume_, 0.0f, 1.0f)) {
+      audio_player->SetVolume(volume_);
+    }
+  }
+
+  if (!dialog_open) {
+    ImGui::End();
+    emulator_window_.ToggleXMPConfigDialog();
+    return;
+  }
+
+  ImGui::End();
+}
+
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
@@ -1050,6 +1117,9 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
       context_menu->AddAction("Profiles Menu",
                               [this]() { ToggleProfilesConfigDialog(); });
 
+      context_menu->AddAction("XMP Audio Player",
+                              [this]() { ToggleXMPConfigDialog(); });
+
       // Show menu at mouse position
       QPoint global_pos = QCursor::pos();
       context_menu->ShowAt(global_pos);
@@ -1542,6 +1612,15 @@ void EmulatorWindow::OpenConfigDialog(const std::string& category) {
   config_dialog_qt_->show();
   config_dialog_qt_->raise();
   config_dialog_qt_->activateWindow();
+}
+
+void EmulatorWindow::ToggleXMPConfigDialog() {
+  if (!xmp_config_dialog_) {
+    xmp_config_dialog_ = std::unique_ptr<XMPConfigDialog>(
+        new XMPConfigDialog(imgui_drawer_.get(), *this));
+  } else {
+    xmp_config_dialog_.reset();
+  }
 }
 
 void EmulatorWindow::ToggleControllerVibration() {

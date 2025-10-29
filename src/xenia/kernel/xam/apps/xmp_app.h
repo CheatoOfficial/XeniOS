@@ -86,7 +86,7 @@ static_assert_size(XMP_GET_VOLUME, 0x8);
 
 struct XMP_SET_VOLUME {
   xe::be<uint32_t> xmp_client;
-  xe::be<uint32_t> value;
+  xe::be<float> value;
 };
 static_assert_size(XMP_SET_VOLUME, 0x8);
 

@@ -448,7 +448,7 @@ void AudioMediaPlayer::RemovePlaylist(uint32_t handle) {
 }
 
 X_STATUS AudioMediaPlayer::SetVolume(float volume) {
-  volume_ = std::min(volume, 1.0f);
+  volume_.store(std::min(volume, 1.0f));
 
   std::unique_lock<xe_mutex> guard(driver_mutex_);
   if (!driver_) {

@@ -262,7 +262,7 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       xe::store_and_swap<float>(
           memory_->TranslateVirtual(args->volume_ptr),
-          kernel_state_->emulator()->audio_media_player()->GetVolume());
+          kernel_state_->emulator()->audio_media_player()->GetVolume()->load());
       return X_E_SUCCESS;
     }
     case 0x0007000C: {
@@ -401,7 +401,7 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XMP_CREATE_USER_PLAYLIST_ENUMERATOR* args =
           reinterpret_cast<XMP_CREATE_USER_PLAYLIST_ENUMERATOR*>(buffer);
 
-      XELOGD("XMPSetPlaybackController({:08X}, {:08X}, {:08X})",
+      XELOGD("XMPCreateUserPlaylistEnumerator({:08X}, {:08X}, {:08X})",
              uint32_t(args->xmp_client), uint32_t(args->flags),
              uint32_t(args->unk_ptr));
       return X_E_SUCCESS;

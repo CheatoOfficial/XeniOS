@@ -113,6 +113,7 @@ class EmulatorWindow {
                  const xe::ui::RawImage& image);
 
   void ToggleProfilesConfigDialog();
+  void ToggleXMPConfigDialog();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
   void FileOpen();
   const std::vector<RecentTitleEntry>& GetRecentlyLaunchedTitles() const {
@@ -180,6 +181,26 @@ class EmulatorWindow {
   };
 
  public:
+  class XMPConfigDialog final : public ui::ImGuiDialog {
+   public:
+    XMPConfigDialog(ui::ImGuiDrawer* imgui_drawer,
+                    EmulatorWindow& emulator_window)
+        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {
+      if (emulator_window_.emulator_->audio_media_player()) {
+        volume_ = emulator_window_.emulator_->audio_media_player()
+                      ->GetVolume()
+                      ->load();
+      }
+    }
+
+   protected:
+    void OnDraw(ImGuiIO& io) override;
+
+   private:
+    EmulatorWindow& emulator_window_;
+    float volume_ = 0.0f;
+  };
+
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
                           uint32_t height, bool is_game_process = false);
@@ -282,6 +303,8 @@ class EmulatorWindow {
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.
   std::unique_ptr<ProfileConfigDialog> profile_config_dialog_;
+
+  std::unique_ptr<XMPConfigDialog> xmp_config_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
 
