@@ -43,7 +43,7 @@ DECLARE_string(cl);
 namespace xe {
 namespace kernel {
 
-constexpr std::chrono::milliseconds kDeferredOverlappedDelayMillis(100);
+constexpr std::chrono::milliseconds kDeferredOverlappedDelayMillis(25);
 
 // This is a global object initialized with the XboxkrnlModule.
 // It references the current kernel state object that all kernel methods should

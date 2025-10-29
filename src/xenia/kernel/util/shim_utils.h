@@ -656,6 +656,9 @@ using xe::cpu::ExportTag;
   DECLARE_EXPORT(xbdm, name, category, tags)
 #define DECLARE_XBDM_EXPORT1(name, category, tag) \
   DECLARE_EXPORT(xbdm, name, category, xe::cpu::ExportTag::tag)
+#define DECLARE_XBDM_EXPORT2(name, category, tag1, tag2) \
+  DECLARE_EXPORT(xbdm, name, category,                   \
+                 xe::cpu::ExportTag::tag1 | xe::cpu::ExportTag::tag2)
 
 #define DECLARE_XBDM_EMPTY_REGISTER_EXPORTS(group_name) \
   DECLARE_EMPTY_REGISTER_EXPORTS(xbdm, group_name)

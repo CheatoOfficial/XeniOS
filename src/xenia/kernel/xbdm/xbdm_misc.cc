@@ -111,7 +111,7 @@ dword_result_t DmCaptureStackBackTrace_entry(dword_t frames_to_capture,
 
   return XBDM_SUCCESSFUL;
 }
-DECLARE_XBDM_EXPORT1(DmCaptureStackBackTrace, kDebug, kStub);
+DECLARE_XBDM_EXPORT2(DmCaptureStackBackTrace, kDebug, kStub, kHighFrequency);
 
 dword_result_t DmWalkLoadedModules_entry(
     lpdword_t walk_modules_ptr, pointer_t<DMN_MODULE_LOAD> module_load_ptr) {

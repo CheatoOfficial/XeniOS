@@ -774,8 +774,8 @@ void CommandProcessor::MakeCoherent() {
   }
 
   // TODO(benvanik): notify resource cache of base->size and type.
-  XELOGD("Make {:08X} -> {:08X} ({}b) coherent, action = {}", base_host,
-         base_host + size_host, size_host, action);
+  XELOGGPU("Make {:08X} -> {:08X} ({}b) coherent, action = {}", base_host,
+           base_host + size_host, size_host, action);
 
   // Mark coherent.
   regs_volatile[XE_GPU_REG_COHER_STATUS_HOST] = 0;
