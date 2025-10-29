@@ -114,11 +114,22 @@ class EmulatorWindow {
 
   void ToggleProfilesConfigDialog();
   void ToggleXMPConfigDialog();
+  void ToggleConfigDialog();
+  void OpenConfigDialog(const std::string& category = "");
+  void ToggleControllerVibration();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
   void FileOpen();
   const std::vector<RecentTitleEntry>& GetRecentlyLaunchedTitles() const {
     return recently_launched_titles_;
   }
+
+  // Helper methods for updating cvars from Qt dialogs (public for Qt dialogs)
+  void UpdateAntiAliasingCvar(gpu::CommandProcessor::SwapPostEffect effect);
+  void UpdateScalingAndSharpeningCvar(
+      ui::Presenter::GuestOutputPaintConfig::Effect effect);
+  void UpdateFsrSharpnessCvar(float value);
+  void UpdateCasSharpnessCvar(float value);
+  void UpdateDitherCvar(bool value);
 
   // Types of button functions for hotkeys.
   enum class ButtonFunctions {
@@ -180,27 +191,6 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
- public:
-  class XMPConfigDialog final : public ui::ImGuiDialog {
-   public:
-    XMPConfigDialog(ui::ImGuiDrawer* imgui_drawer,
-                    EmulatorWindow& emulator_window)
-        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {
-      if (emulator_window_.emulator_->audio_media_player()) {
-        volume_ = emulator_window_.emulator_->audio_media_player()
-                      ->GetVolume()
-                      ->load();
-      }
-    }
-
-   protected:
-    void OnDraw(ImGuiIO& io) override;
-
-   private:
-    EmulatorWindow& emulator_window_;
-    float volume_ = 0.0f;
-  };
-
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
                           uint32_t height, bool is_game_process = false);
@@ -223,14 +213,6 @@ class EmulatorWindow {
   GetGuestOutputPaintConfigForCvars();
   void ApplyDisplayConfigForCvars();
 
-  // Helper methods for updating cvars from Qt dialog
-  void UpdateAntiAliasingCvar(gpu::CommandProcessor::SwapPostEffect effect);
-  void UpdateScalingAndSharpeningCvar(
-      ui::Presenter::GuestOutputPaintConfig::Effect effect);
-  void UpdateFsrSharpnessCvar(float value);
-  void UpdateCasSharpnessCvar(float value);
-  void UpdateDitherCvar(bool value);
-
   void OnKeyDown(ui::KeyEvent& e);
   void OnMouseDown(const ui::MouseEvent& e);
   void OnMouseDoubleClick(const ui::MouseEvent& e);
@@ -249,9 +231,6 @@ class EmulatorWindow {
   void GpuTraceFrame();
   void GpuClearCaches();
   void ToggleDisplayConfigDialog();
-  void ToggleConfigDialog();
-  void OpenConfigDialog(const std::string& category = "");
-  void ToggleControllerVibration();
   void ShowCompatibility();
   void ShowFAQ();
   void ShowBuildCommit();
@@ -299,12 +278,11 @@ class EmulatorWindow {
   QPointer<class ProfileDialogQt> profile_dialog_qt_;
   QPointer<class ConfigDialogQt> config_dialog_qt_;
   QPointer<class ContextMenuWidgetQt> context_menu_widget_qt_;
+  QPointer<class XmpDialogQt> xmp_dialog_qt_;
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.
   std::unique_ptr<ProfileConfigDialog> profile_config_dialog_;
-
-  std::unique_ptr<XMPConfigDialog> xmp_config_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
 
