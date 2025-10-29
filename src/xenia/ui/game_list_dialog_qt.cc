@@ -842,6 +842,16 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     config_action = context_menu.addAction("Config Overrides...");
   }
 
+  // Compatibility option (enabled if we have a valid title_id)
+  QMenu* compatibility_menu = nullptr;
+  QAction* compatibility_canary_action = nullptr;
+  QAction* compatibility_master_action = nullptr;
+  if (title_id != 0) {
+    compatibility_menu = context_menu.addMenu("Compatibility");
+    compatibility_canary_action = compatibility_menu->addAction("Canary");
+    compatibility_master_action = compatibility_menu->addAction("Master");
+  }
+
   // Separator before Remove option
   context_menu.addSeparator();
 
@@ -877,6 +887,22 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
                                           title_name.toStdString());
     dialog->exec();
     delete dialog;
+  } else if (selected == compatibility_canary_action &&
+             compatibility_canary_action) {
+    // Open Canary game compatibility page with this title ID
+    const std::string base_url =
+        "https://github.com/xenia-canary/game-compatibility/issues";
+    const std::string url =
+        fmt::format("{}?q=is%3Aissue+is%3Aopen+{:08X}", base_url, title_id);
+    QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
+  } else if (selected == compatibility_master_action &&
+             compatibility_master_action) {
+    // Open Master game compatibility page with this title ID
+    const std::string base_url =
+        "https://github.com/xenia-project/game-compatibility/issues";
+    const std::string url =
+        fmt::format("{}?q=is%3Aissue+is%3Aopen+{:08X}", base_url, title_id);
+    QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
   } else if (selected == remove_action) {
     RemoveTitleFromDashboard(title_id);
   }
