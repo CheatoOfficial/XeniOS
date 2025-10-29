@@ -527,6 +527,11 @@ dword_result_t NetDll_XNetXnAddrToMachineId_entry(dword_t caller,
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToMachineId, kNetworking, kStub);
 
+dword_result_t XNetLogonGetTitleID_entry(dword_t caller, lpvoid_t params) {
+  return kernel_state()->title_id();
+}
+DECLARE_XAM_EXPORT1(XNetLogonGetTitleID, kNetworking, kImplemented);
+
 void NetDll_XNetInAddrToString_entry(dword_t caller, dword_t in_addr,
                                      lpstring_t string_out,
                                      dword_t string_size) {
