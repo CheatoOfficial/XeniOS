@@ -791,17 +791,17 @@ dword_result_t XamParseGamerTileKey_entry(pointer_t<X_USER_DATA> key_ptr,
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  std::string tile_key = xe::to_utf8(string_util::read_u16string_and_swap(
+  const std::string tile_key = xe::to_utf8(string_util::read_u16string_and_swap(
       kernel_memory()->TranslateVirtual<const char16_t*>(
           key_ptr->data.unicode.ptr)));
 
   // Default key size is 24 bytes, but we need to include null terminator
-  if (tile_key.empty() || tile_key.size() != 25) {
+  if (tile_key.empty() || tile_key.size() != 24) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
   const bool is_valid_hex_string =
-      std::all_of(tile_key.begin(), --tile_key.end(),
+      std::all_of(tile_key.cbegin(), tile_key.cend(),
                   [](unsigned char c) { return std::isxdigit(c); });
 
   if (!is_valid_hex_string) {

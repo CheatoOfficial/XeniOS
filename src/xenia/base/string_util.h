@@ -435,6 +435,7 @@ inline std::u16string read_u16string_and_swap(const char16_t* string_ptr) {
   std::u16string output_str = {};
   output_str.resize(input_str.size() + 1);
   copy_and_swap_truncating(output_str.data(), input_str, input_str.size() + 1);
+  output_str.pop_back();  // Remove nullptr added by copy_and_swap.
   return output_str;
 }
 

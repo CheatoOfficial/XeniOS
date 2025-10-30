@@ -40,8 +40,8 @@ const char16_t* GpdInfoTitle::GetAchievementDescriptionPtr(const uint32_t id) {
     return nullptr;
   }
 
-  return reinterpret_cast<const char16_t*>(title_ptr +
-                                           GetAchievementTitle(id).length());
+  return reinterpret_cast<const char16_t*>(
+      title_ptr + GetAchievementTitle(id).length() + 1);
 }
 
 const char16_t* GpdInfoTitle::GetAchievementUnachievedDescriptionPtr(
@@ -52,7 +52,7 @@ const char16_t* GpdInfoTitle::GetAchievementUnachievedDescriptionPtr(
   }
 
   return reinterpret_cast<const char16_t*>(
-      title_ptr + GetAchievementDescription(id).length());
+      title_ptr + GetAchievementDescription(id).length() + 1);
 }
 
 std::u16string GpdInfoTitle::GetAchievementTitle(const uint32_t id) {

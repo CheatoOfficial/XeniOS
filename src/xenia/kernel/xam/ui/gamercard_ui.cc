@@ -177,6 +177,12 @@ static constexpr const char* CameraLocationOptions[] = {"Behind", "In Front",
 static constexpr const char* BrakeControlOptions[] = {"Trigger", "Button"};
 static constexpr const char* AcceleratorControlOptions[] = {"Trigger",
                                                             "Button"};
+static constexpr const char* GamerTypeOptions[] = {"None",
+                                                   nullptr,
+                                                   nullptr,
+                                                   "Xbox 360 Launch Team",
+                                                   "NXE Launch Team",
+                                                   "360 + NXE Launch Team"};
 
 constexpr std::array<UserSettingId, 19> UserSettingsToLoad = {
     UserSettingId::XPROFILE_GAMER_TYPE,
@@ -529,6 +535,10 @@ void GamercardUI::DrawGpdSettings(ImGuiIO& io) {
                       "Accelerator Control", AcceleratorControlOptions,
                       static_cast<int>(std::size(AcceleratorControlOptions)),
                       rightSideTextObjectAlignment);
+  DrawSettingComboBox(UserSettingId::XPROFILE_GAMER_TYPE, "Gamer Type",
+                      GamerTypeOptions,
+                      static_cast<int>(std::size(GamerTypeOptions)),
+                      rightSideTextObjectAlignment);
 }
 
 void GamercardUI::OnDraw(ImGuiIO& io) {
@@ -610,10 +620,10 @@ void GamercardUI::SaveAccountData() {
   account.SetSubscriptionTier(gamercardValues_.account_subscription_tier);
   account.ToggleLiveFlag(gamercardValues_.is_live_enabled);
 
-  std::u16string gamertag =
+  const std::u16string gamertag =
       xe::to_utf16(std::string(gamercardValues_.gamertag));
-  string_util::copy_truncating(account.gamertag, gamertag,
-                               std::size(account.gamertag));
+  string_util::copy_and_swap_truncating(account.gamertag, gamertag,
+                                        std::size(account.gamertag));
 
   if (std::memcmp(&account, &account_original, sizeof(X_XAMACCOUNTINFO)) != 0) {
     if (!is_signed_in_) {
