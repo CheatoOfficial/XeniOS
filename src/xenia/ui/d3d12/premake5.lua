@@ -24,16 +24,39 @@ if enableMiscSubprojects then
     links({
       "fmt",
       "imgui",
+      "xenia-apu",
       "xenia-base",
+      "xenia-core",
+      "xenia-gpu",
+      "xenia-hid",
+      "xenia-hid-skylander",
+      "xenia-kernel",  -- Required by xenia-hid
+      "xenia-patcher",
       "xenia-ui",
       "xenia-ui-d3d12",
+      "xenia-vfs",
     })
+    links({
+      "aes_128",
+      "capstone",
+      "dxbc",
+      "glslang-spirv",
+      "mspack",
+      "snappy",
+      "xxhash",
+    })
+    apu_transitive_deps()
     files({
       "../window_demo.cc",
       "d3d12_window_demo.cc",
-      project_root.."/src/xenia/ui/windowed_app_main_"..platform_suffix..".cc",
+      project_root.."/src/xenia/ui/windowed_app_main_qt.cc",
     })
     resincludedirs({
       project_root,
     })
+
+    filter("architecture:x86_64")
+      links({
+        "xenia-cpu-backend-x64",
+      })
 end

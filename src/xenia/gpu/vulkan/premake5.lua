@@ -67,13 +67,14 @@ if enableMiscSubprojects then
       "snappy",
       "xxhash",
     })
+    apu_transitive_deps()
     includedirs({
       project_root.."/third_party/Vulkan-Headers/include",
       project_root.."/third_party/glslang",  -- For glslang SPIRV headers
     })
     files({
       "vulkan_trace_viewer_main.cc",
-      "../../ui/windowed_app_main_"..platform_suffix..".cc",
+      "../../ui/windowed_app_main_qt.cc",
     })
 
     filter("architecture:x86_64")
@@ -133,6 +134,7 @@ if enableMiscSubprojects then
       "snappy",
       "xxhash",
     })
+    apu_transitive_deps()
     includedirs({
       project_root.."/third_party/Vulkan-Headers/include",
       project_root.."/third_party/glslang",  -- For glslang SPIRV headers

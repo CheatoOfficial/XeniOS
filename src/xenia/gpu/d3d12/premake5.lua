@@ -54,9 +54,10 @@ if enableMiscSubprojects then
       "snappy",
       "xxhash",
     })
+    apu_transitive_deps()
     files({
       "d3d12_trace_viewer_main.cc",
-      "../../ui/windowed_app_main_"..platform_suffix..".cc",
+      "../../ui/windowed_app_main_qt.cc",
     })
     -- Only create the .user file if it doesn't already exist.
     local user_file = project_root.."/build/xenia-gpu-d3d12-trace-viewer.vcxproj.user"
@@ -107,6 +108,7 @@ if enableMiscSubprojects then
       "snappy",
       "xxhash",
     })
+    apu_transitive_deps()
     files({
       "d3d12_trace_dump_main.cc",
       "../../base/console_app_main_"..platform_suffix..".cc",

@@ -40,6 +40,7 @@ project("xenia-app")
     "XBYAK_NO_OP_NAMES",
     "XBYAK_ENABLE_OMITTED_OPERAND",
   })
+  apu_transitive_deps()
   local_platform_files()
   files({
     "../base/main_init_"..platform_suffix..".cc",

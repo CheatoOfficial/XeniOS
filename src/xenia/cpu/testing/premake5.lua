@@ -6,6 +6,7 @@ test_suite("xenia-cpu-tests", project_root, ".", {
     "capstone",
     "fmt",
     "imgui",
+    "xenia-apu",  -- Explicitly link xenia-apu (transitively required by xenia-kernel)
     "xenia-base",
     "xenia-core",
     "xenia-cpu",
@@ -26,3 +27,6 @@ test_suite("xenia-cpu-tests", project_root, ".", {
     }
   },
 })
+
+-- xenia-kernel links to xenia-apu, which needs SDL on Linux
+apu_transitive_deps()

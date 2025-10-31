@@ -27,6 +27,7 @@ project("xenia-cpu-ppc-tests")
     "imgui",
     "mspack",
   })
+  apu_transitive_deps()
   -- Qt is required because xenia-kernel now uses Qt for achievements dialog
   filter("platforms:Linux")
     local qt_dir = os.getenv("QT_DIR")
