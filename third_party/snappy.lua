@@ -15,9 +15,11 @@ project("snappy")
     "snappy/snappy.h",
   })
 
+  -- Disable AVX requirement to prevent BMI2 instructions from being baked in at compile time
+  -- This allows Snappy to work on CPUs without BMI2 support (e.g., Sandy Bridge, Ivy Bridge)
   local snappy_dir = path.getabsolute("snappy")
   if not os.isfile(path.join(snappy_dir, "snappy-stubs-public.h")) then
     prebuildcommands({
-      "cmake -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF -DSNAPPY_REQUIRE_AVX=ON "..snappy_dir.." -B"..snappy_dir
+      "cmake -DSNAPPY_BUILD_TESTS=OFF -DSNAPPY_BUILD_BENCHMARKS=OFF "..snappy_dir.." -B"..snappy_dir
     })
   end
