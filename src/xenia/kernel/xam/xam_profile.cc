@@ -34,9 +34,6 @@ dword_result_t XamProfileFindAccount_entry(
 
   std::memcpy(account_ptr, &account, sizeof(X_XAMACCOUNTINFO));
 
-  xe::string_util::copy_and_swap_truncating(
-      account_ptr->gamertag, account->gamertag, sizeof(account->gamertag));
-
   if (device_id) {
     *device_id = 1;
   }

@@ -140,9 +140,6 @@ dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
     profile->xuid_offline = xuid;
     profile->device_id = 1;
     memcpy(&profile->account, &account, sizeof(X_XAMACCOUNTINFO));
-
-    xe::string_util::copy_and_swap_truncating(
-        profile->account.gamertag, account.gamertag, sizeof(account.gamertag));
   }
 
   *handle_ptr = e->handle();
