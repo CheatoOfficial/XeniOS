@@ -8,4 +8,12 @@ project("zstd")
     defines({
       "ZSTD_DISABLE_ASM",
     })
+  filter({"toolset:msc"})
+    defines({
+      -- Override STATIC_BMI2=1 assumption on Windows
+      -- MSVC incorrectly assumes AVX2 implies BMI2, but Sandy Bridge has AVX2 without BMI2
+      "STATIC_BMI2=0",
+      "DYNAMIC_BMI2=1",
+    })
+  filter({})
   project_zstd("zstd/lib/")
