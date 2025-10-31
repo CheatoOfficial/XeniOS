@@ -49,7 +49,12 @@ fatalwarnings("All")
 
 -- TODO(DrChat): Find a way to disable this on other architectures.
 if ARCH ~= "ppc64" then
-  filter("architecture:x86_64")
+  filter({"architecture:x86_64", "platforms:Windows"})
+    -- Use AVX instead of AVX2 on Windows to prevent MSVC from emitting BMI2 instructions
+    -- MSVC with /arch:AVX2 generates BMI2 unconditionally, breaking Sandy/Ivy Bridge CPUs
+    vectorextensions("AVX")
+  filter({"architecture:x86_64", "platforms:not Windows"})
+    -- On non-Windows (Linux/Clang), AVX2 is safe as it can be combined with -mno-bmi2
     vectorextensions("AVX2")
   filter({})
 end
