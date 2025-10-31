@@ -38,6 +38,7 @@ GetKnownEnumOptions() {
 #endif
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
+      {"readback_resolve", {"fast", "full", "none"}},
       {"render_target_path_d3d12", {"any", "rtv", "rov"}},
       {"render_target_path_vulkan", {"any", "fbo", "fsi"}},
       {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},

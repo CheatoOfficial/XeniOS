@@ -78,6 +78,13 @@ bool CanaryCvarCompat(const std::string& var_name, const std::string& value,
     return true;
   }
 
+  // readback_resolve: true/false -> readback_resolve: fast (default)
+  if (var_name == "readback_resolve" && (value == "true" || value == "false")) {
+    out_var_name = "readback_resolve";
+    out_value = "fast";
+    return true;
+  }
+
   // No translation needed
   out_var_name = var_name;
   out_value = value;
