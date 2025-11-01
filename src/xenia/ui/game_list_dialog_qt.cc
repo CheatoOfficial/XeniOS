@@ -834,6 +834,31 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     }
   }
 
+  // Title Updates folder option (enabled if we have a valid title_id and
+  // updates exist)
+  QAction* title_updates_action = nullptr;
+  if (title_id != 0) {
+    title_updates_action = context_menu.addAction("Title Updates");
+    // Title updates use xuid=0 and content type kInstaller
+    auto tu_path = profile_manager->GetProfileContentPath(
+        0, title_id, XContentType::kInstaller);
+    if (!std::filesystem::exists(tu_path)) {
+      title_updates_action->setEnabled(false);
+    }
+  }
+
+  // DLC folder option (enabled if we have a valid title_id and DLC exists)
+  QAction* dlc_action = nullptr;
+  if (title_id != 0) {
+    dlc_action = context_menu.addAction("DLC");
+    // DLC uses xuid=0 and content type kMarketplaceContent
+    auto dlc_path = profile_manager->GetProfileContentPath(
+        0, title_id, XContentType::kMarketplaceContent);
+    if (!std::filesystem::exists(dlc_path)) {
+      dlc_action->setEnabled(false);
+    }
+  }
+
   // Achievements option (enabled if user is logged in and we have a valid
   // title_id)
   QAction* achievements_action = nullptr;
@@ -893,6 +918,18 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     auto saves_path = profile_manager->GetProfileContentPath(
         xuid, title_id, XContentType::kSavedGame);
     std::thread path_open(LaunchFileExplorer, saves_path);
+    path_open.detach();
+  } else if (selected == title_updates_action && title_updates_action) {
+    // Open the title updates folder
+    auto tu_path = profile_manager->GetProfileContentPath(
+        0, title_id, XContentType::kInstaller);
+    std::thread path_open(LaunchFileExplorer, tu_path);
+    path_open.detach();
+  } else if (selected == dlc_action && dlc_action) {
+    // Open the DLC folder
+    auto dlc_path = profile_manager->GetProfileContentPath(
+        0, title_id, XContentType::kMarketplaceContent);
+    std::thread path_open(LaunchFileExplorer, dlc_path);
     path_open.detach();
   } else if (selected == achievements_action && achievements_action) {
     // Achievements dialog will open in a separate call
