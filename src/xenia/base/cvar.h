@@ -56,6 +56,10 @@ class IConfigVar : virtual public ICommandVar {
   virtual void LoadConfigValue(const toml::node* result) = 0;
   virtual void LoadGameConfigValue(const toml::node* result) = 0;
   virtual void ResetConfigValueToDefault() = 0;
+  // Save/restore mechanism for temporarily loading values without contaminating
+  // config
+  virtual void* SaveConfigValueState() const = 0;
+  virtual void RestoreConfigValueState(void* saved_state) = 0;
 };
 
 template <class T>
@@ -103,6 +107,8 @@ class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
   // one that will be stored when the global config is written next time. After
   // overriding, however, the next game config loaded may still change it.
   void OverrideConfigValue(T val);
+  void* SaveConfigValueState() const override;
+  void RestoreConfigValueState(void* saved_state) override;
 
  private:
   std::string category_;
@@ -321,6 +327,23 @@ void ConfigVar<T>::OverrideConfigValue(T val) {
 template <class T>
 void ConfigVar<T>::ResetConfigValueToDefault() {
   SetConfigValue(this->default_value_);
+}
+template <class T>
+void* ConfigVar<T>::SaveConfigValueState() const {
+  if (config_value_) {
+    return new T(*config_value_);
+  }
+  return nullptr;
+}
+template <class T>
+void ConfigVar<T>::RestoreConfigValueState(void* saved_state) {
+  if (saved_state) {
+    config_value_ = std::make_unique<T>(*static_cast<T*>(saved_state));
+    delete static_cast<T*>(saved_state);
+  } else {
+    config_value_.reset();
+  }
+  UpdateValue();
 }
 
 // CVars can be initialized before these, thus initialized on-demand using new.

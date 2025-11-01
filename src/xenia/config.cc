@@ -168,11 +168,19 @@ std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id) {
 
       const auto config_key_node = config.at_path(config_key);
       if (config_key_node) {
+        // Save the current config value state so we can restore it after
+        // parsing This prevents game-specific overrides from contaminating the
+        // parent process's global config when SaveConfig() is called later
+        void* saved_state = config_var->SaveConfigValueState();
+
         // Load the value into the cvar temporarily to validate and convert it
         config_var->LoadConfigValue(config_key_node.node());
 
         // Get the string representation from the cvar
         std::string value = config_var->config_value();
+
+        // Restore the original config value state
+        config_var->RestoreConfigValueState(saved_state);
 
         // Strip TOML quotes from string values (they're added by ToString for
         // TOML format)
