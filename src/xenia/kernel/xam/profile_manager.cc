@@ -162,27 +162,43 @@ void ProfileManager::SyncProfilesWithConfig() {
     LoadAccount(account_xuid);
   }
 
-  // Then logout all currently logged in profiles
-  std::vector<uint8_t> slots_to_logout;
-  for (const auto& [slot, profile] : logged_profiles_) {
-    slots_to_logout.push_back(slot);
-  }
-  for (uint8_t slot : slots_to_logout) {
-    Logout(slot, false);
-  }
-
-  // Now login profiles based on the current cvar values
+  // Build desired login state from current cvar values
   const std::string* profile_cvars[4] = {
       &cvars::logged_profile_slot_0_xuid, &cvars::logged_profile_slot_1_xuid,
       &cvars::logged_profile_slot_2_xuid, &cvars::logged_profile_slot_3_xuid};
 
+  std::map<uint8_t, uint64_t> desired_profiles;
   for (uint8_t slot = 0; slot < 4; slot++) {
     if (!profile_cvars[slot]->empty()) {
       uint64_t xuid =
           xe::string_util::from_string<uint64_t>(*profile_cvars[slot], true);
       if (xuid != 0) {
-        Login(xuid, slot, false);
+        desired_profiles[slot] = xuid;
       }
+    }
+  }
+
+  // Logout profiles that shouldn't be logged in anymore
+  std::vector<uint8_t> slots_to_logout;
+  for (const auto& [slot, profile] : logged_profiles_) {
+    auto desired_it = desired_profiles.find(slot);
+    if (desired_it == desired_profiles.end() ||
+        desired_it->second != profile->xuid()) {
+      // This slot should be logged out (either empty or different profile)
+      slots_to_logout.push_back(slot);
+    }
+  }
+  for (uint8_t slot : slots_to_logout) {
+    Logout(slot, false);
+  }
+
+  // Login profiles that aren't already logged in
+  for (const auto& [slot, xuid] : desired_profiles) {
+    auto current_profile = logged_profiles_.find(slot);
+    if (current_profile == logged_profiles_.end() ||
+        current_profile->second->xuid() != xuid) {
+      // This slot needs to be logged in (either empty or different profile)
+      Login(xuid, slot, false);
     }
   }
 
