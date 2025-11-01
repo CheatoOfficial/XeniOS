@@ -2394,16 +2394,25 @@ void EmulatorWindow::CheckChildProcessStatus() {
 
   // Detect transition from having child to no child
   if (had_child_last_check && !has_child_now) {
-    XELOGI("Child process exited, remounting profiles and reloading GPDs");
+    XELOGI("Child process exited, reloading config and profile state");
 
-    // Remount VFS for all logged-in profiles to pick up file changes from game
-    // process
+    // Reload config from disk to pick up any profile login changes made by
+    // child process
+    config::ReloadConfig();
+    XELOGI("Config reloaded from disk");
+
+    // Sync profile login state with the reloaded config
     if (emulator_ && emulator_->kernel_state() &&
         emulator_->kernel_state()->xam_state()) {
       auto profile_manager =
           emulator_->kernel_state()->xam_state()->profile_manager();
       if (profile_manager) {
-        // Remount VFS for each logged-in profile
+        // Sync profiles with config: logout current profiles and login based on
+        // config cvars
+        profile_manager->SyncProfilesWithConfig();
+        XELOGI("Profile login state synced with config");
+
+        // Remount VFS for all newly logged-in profiles
         for (uint8_t i = 0; i < 4; i++) {
           auto profile = profile_manager->GetProfile(i);
           if (profile) {
@@ -2427,6 +2436,7 @@ void EmulatorWindow::CheckChildProcessStatus() {
     // Reload the game list dialog if it's open
     if (game_list_dialog_qt_) {
       game_list_dialog_qt_->LoadGameList();
+      game_list_dialog_qt_->UpdateProfileButtonState();
       XELOGI("Game list dialog refreshed");
     }
 

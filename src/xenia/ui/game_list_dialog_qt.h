@@ -56,6 +56,7 @@ class GameListDialogQt : public QWidget {
 
   void LoadGameList();
   void RefreshIcons();
+  void UpdateProfileButtonState();
 
  private slots:
   void OnFilterTextChanged(const QString& text);
@@ -67,7 +68,6 @@ class GameListDialogQt : public QWidget {
   void OnProfileContextMenu(const QPoint& pos);
   void OnSelectionChanged();
   void UpdatePlayButtonState();
-  void UpdateProfileButtonState();
 
  protected:
   bool eventFilter(QObject* obj, QEvent* event) override;
