@@ -805,35 +805,55 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     launch_action = context_menu.addAction("Open");
   }
 
-  // Achievements option (enabled if user is logged in)
-  QAction* achievements_action = nullptr;
+  // Get the primary profile (same one shown in profile button)
   bool is_signedin = false;
   uint64_t xuid = 0;
 
-  // TODO: Handle multiple signed-in profiles better
-  // For now, just use the first logged-in profile we find
-  for (uint8_t user_index = 0; user_index < XUserMaxUserCount; user_index++) {
-    const auto profile = profile_manager->GetProfile(user_index);
-    if (profile) {
-      is_signedin = true;
-      xuid = profile->xuid();
-      break;
+  // Use the profile from slot 0 as primary (matches profile button logic)
+  const auto primary_profile =
+      profile_manager->GetProfile(static_cast<uint8_t>(0));
+  if (primary_profile) {
+    is_signedin = true;
+    xuid = primary_profile->xuid();
+  }
+
+  // Saves folder option (enabled if user is logged in, we have a valid
+  // title_id, and saves exist)
+  QAction* saves_action = nullptr;
+  if (title_id != 0) {
+    saves_action = context_menu.addAction("Saves");
+    if (!is_signedin) {
+      saves_action->setEnabled(false);
+    } else {
+      // Check if saves folder exists
+      auto saves_path = profile_manager->GetProfileContentPath(
+          xuid, title_id, XContentType::kSavedGame);
+      if (!std::filesystem::exists(saves_path)) {
+        saves_action->setEnabled(false);
+      }
     }
   }
 
-  if (is_signedin && title_id != 0) {
+  // Achievements option (enabled if user is logged in and we have a valid
+  // title_id)
+  QAction* achievements_action = nullptr;
+  if (title_id != 0) {
     achievements_action = context_menu.addAction("Achievements");
-    connect(achievements_action, &QAction::triggered, [=, this]() {
-      // Get the title name from the game entry
-      QString title_name;
-      for (const auto& entry : game_entries_) {
-        if (entry.title_id == title_id) {
-          title_name = QString::fromStdString(entry.title_name);
-          break;
+    if (!is_signedin) {
+      achievements_action->setEnabled(false);
+    } else {
+      connect(achievements_action, &QAction::triggered, [=, this]() {
+        // Get the title name from the game entry
+        QString title_name;
+        for (const auto& entry : game_entries_) {
+          if (entry.title_id == title_id) {
+            title_name = QString::fromStdString(entry.title_name);
+            break;
+          }
         }
-      }
-      ShowAchievementsDialog(xuid, title_id, title_name);
-    });
+        ShowAchievementsDialog(xuid, title_id, title_name);
+      });
+    }
   }
 
   // Game config overrides option (enabled if we have a valid title_id)
@@ -868,6 +888,12 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     }
   } else if (selected == open_folder_action && open_folder_action) {
     OpenContainingFolder(path);
+  } else if (selected == saves_action && saves_action) {
+    // Open the saves folder for the primary profile
+    auto saves_path = profile_manager->GetProfileContentPath(
+        xuid, title_id, XContentType::kSavedGame);
+    std::thread path_open(LaunchFileExplorer, saves_path);
+    path_open.detach();
   } else if (selected == achievements_action && achievements_action) {
     // Achievements dialog will open in a separate call
   } else if (selected == config_action && config_action) {
