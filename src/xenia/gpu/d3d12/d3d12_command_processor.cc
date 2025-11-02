@@ -3172,6 +3172,15 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
         void* readback_mapping;
         if (SUCCEEDED(
                 read_source->Map(0, &readback_range, &readback_mapping))) {
+          // Ensure the destination physical memory range is committed before
+          // writing to it.
+          VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
+          if (physical_heap) {
+            physical_heap->AllocFixed(written_address, written_length, 0,
+                                      kMemoryAllocationCommit,
+                                      kMemoryProtectRead | kMemoryProtectWrite);
+          }
+
           // chrispy: this memcpy needs to be optimized as much as possible
           auto physaddr = memory_->TranslatePhysical(written_address);
           memory::vastcpy(physaddr, (uint8_t*)readback_mapping, written_length);

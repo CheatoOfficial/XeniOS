@@ -2897,8 +2897,18 @@ bool VulkanCommandProcessor::IssueCopy() {
       if (dfn.vkMapMemory(device, rb.memories[read_index], 0, written_length, 0,
                           &mapped_data) == VK_SUCCESS) {
         if (mapped_data) {
-          memory::vastcpy(memory_->TranslatePhysical(written_address),
-                          static_cast<uint8_t*>(mapped_data), written_length);
+          // Ensure the destination physical memory range is committed before
+          // writing to it.
+          VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
+          if (physical_heap) {
+            physical_heap->AllocFixed(written_address, written_length, 0,
+                                      kMemoryAllocationCommit,
+                                      kMemoryProtectRead | kMemoryProtectWrite);
+          }
+
+          uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
+          memory::vastcpy(dest_ptr, static_cast<uint8_t*>(mapped_data),
+                          written_length);
         } else {
           XELOGE(
               "VulkanCommandProcessor: Failed to map readback buffer "
