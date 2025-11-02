@@ -2170,36 +2170,42 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   // Get the path to the current executable
   std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
 
-  // Handle launch_data.bin if present
+  // Handle launch_data.txt if present
   std::filesystem::path actual_path = path_to_file;
   std::string launch_module_arg;
 
   if (for_launch_data) {
-    // Read launch_data.bin to get the host_path and launch_path
-    FILE* file = xe::filesystem::OpenFile(
-        kernel::xam::kXamModuleLoaderDataFileName, "rb");
-    if (!file) {
-      XELOGE("launch_data.bin not found");
+    // Read launch_data.txt to get the host_path and launch_path
+    std::filesystem::path file_path(kernel::xam::kXamModuleLoaderDataFileName);
+    std::ifstream file(file_path);
+    if (!file.is_open()) {
+      XELOGE("launch_data.txt not found");
       return;
     }
 
-    // Read host_path (the disc/package path)
-    uint16_t host_path_length = 0;
-    fread(&host_path_length, sizeof(host_path_length), 1, file);
     std::string host_path;
-    host_path.resize(host_path_length);
-    fread(host_path.data(), host_path_length, 1, file);
-
-    // Read launch_path (the XEX to launch)
-    uint16_t launch_path_length = 0;
-    fread(&launch_path_length, sizeof(launch_path_length), 1, file);
     std::string launch_path;
-    launch_path.resize(launch_path_length);
-    fread(launch_path.data(), launch_path_length, 1, file);
+    std::string line;
 
-    fclose(file);
+    while (std::getline(file, line)) {
+      size_t eq_pos = line.find('=');
+      if (eq_pos == std::string::npos) {
+        continue;
+      }
 
-    // Delete launch_data.bin so new process doesn't try to process it
+      std::string key = line.substr(0, eq_pos);
+      std::string value = line.substr(eq_pos + 1);
+
+      if (key == "host_path") {
+        host_path = value;
+      } else if (key == "launch_path") {
+        launch_path = value;
+      }
+    }
+
+    file.close();
+
+    // Delete launch_data.txt so new process doesn't try to process it
     std::filesystem::remove(kernel::xam::kXamModuleLoaderDataFileName);
 
     // Use the host_path as the target and launch_path as --launch_module
@@ -2347,7 +2353,7 @@ void EmulatorWindow::LaunchTitleInNewProcess(
 #endif
 
   if (for_launch_data) {
-    XELOGI("Launched new process for launch_data.bin");
+    XELOGI("Launched new process for launch_data.txt");
   } else {
     XELOGI("Launched title in new process: {}", path_to_file.string());
   }
@@ -2442,13 +2448,13 @@ void EmulatorWindow::CheckChildProcessStatus() {
       XELOGI("Game list dialog refreshed");
     }
 
-    // Check for launch_data.bin
+    // Check for launch_data.txt
     FILE* file = xe::filesystem::OpenFile(
-        kernel::xam::kXamModuleLoaderDataFileName, "rb");
+        kernel::xam::kXamModuleLoaderDataFileName, "r");
     if (file) {
       fclose(file);
       XELOGI(
-          "launch_data.bin exists - cleaning up old child and launching new "
+          "launch_data.txt exists - cleaning up old child and launching new "
           "instance");
 
       // Force kill any remaining child processes before launching new one

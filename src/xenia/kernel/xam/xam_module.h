@@ -21,7 +21,7 @@ namespace kernel {
 namespace xam {
 
 static constexpr std::string_view kXamModuleLoaderDataFileName =
-    "launch_data.bin";
+    "launch_data.txt";
 
 class XamModule : public KernelModule {
  public:

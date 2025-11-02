@@ -594,11 +594,11 @@ bool EmulatorApp::OnInitialize() {
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
 
-  // Check if this is a game process (has target or launch_data.bin) or UI
+  // Check if this is a game process (has target or launch_data.txt) or UI
   // process
   bool has_launch_data = false;
   FILE* launch_data_file =
-      xe::filesystem::OpenFile(kernel::xam::kXamModuleLoaderDataFileName, "rb");
+      xe::filesystem::OpenFile(kernel::xam::kXamModuleLoaderDataFileName, "r");
   if (launch_data_file) {
     has_launch_data = true;
     fclose(launch_data_file);
@@ -850,7 +850,7 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     }
 
     // Store the host path in loader_data for potential restart with
-    // launch_data.bin
+    // launch_data.txt
     auto xam_for_path =
         emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
             "xam.xex");

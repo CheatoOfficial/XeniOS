@@ -9,7 +9,12 @@
 
 #include "xenia/kernel/xam/xam_module.h"
 
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+
 #include "xenia/base/math.h"
+#include "xenia/base/string_util.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/xam_private.h"
 
@@ -63,47 +68,59 @@ void XamModule::RegisterExportTable(xe::cpu::ExportResolver* export_resolver) {
 XamModule::~XamModule() {}
 
 void XamModule::LoadLoaderData() {
-  FILE* file = xe::filesystem::OpenFile(kXamModuleLoaderDataFileName, "rb");
+  std::filesystem::path file_path(kXamModuleLoaderDataFileName);
+  std::ifstream file(file_path);
 
-  if (!file) {
+  if (!file.is_open()) {
     loader_data_.launch_data_present = false;
     return;
   }
 
   loader_data_.launch_data_present = true;
 
-  auto string_read = [file]() {
-    uint16_t string_size = 0;
-    fread(&string_size, sizeof(string_size), 1, file);
+  std::string line;
+  while (std::getline(file, line)) {
+    // Find the '=' delimiter
+    size_t eq_pos = line.find('=');
+    if (eq_pos == std::string::npos) {
+      continue;  // Skip malformed lines
+    }
 
-    std::string result_string;
-    result_string.resize(string_size);
-    fread(result_string.data(), string_size, 1, file);
-    return result_string;
-  };
+    std::string key = line.substr(0, eq_pos);
+    std::string value = line.substr(eq_pos + 1);
 
-  loader_data_.host_path = string_read();
-  loader_data_.launch_path = string_read();
-
-  fread(&loader_data_.launch_flags, sizeof(loader_data_.launch_flags), 1, file);
-
-  uint16_t launch_data_size = 0;
-  fread(&launch_data_size, sizeof(launch_data_size), 1, file);
-
-  if (launch_data_size > 0) {
-    loader_data_.launch_data.resize(launch_data_size);
-    fread(loader_data_.launch_data.data(), launch_data_size, 1, file);
+    if (key == "host_path") {
+      loader_data_.host_path = value;
+    } else if (key == "launch_path") {
+      loader_data_.launch_path = value;
+    } else if (key == "launch_flags") {
+      loader_data_.launch_flags = std::stoul(value);
+    } else if (key == "launch_data") {
+      // Convert hex string back to bytes
+      if (!value.empty()) {
+        loader_data_.launch_data.clear();
+        for (size_t i = 0; i < value.length(); i += 2) {
+          if (i + 1 < value.length()) {
+            std::string byte_str = value.substr(i, 2);
+            uint8_t byte =
+                static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+            loader_data_.launch_data.push_back(byte);
+          }
+        }
+      }
+    }
   }
 
-  fclose(file);
+  file.close();
   // We read launch data. Let's remove it till next request.
   std::filesystem::remove(kXamModuleLoaderDataFileName);
 }
 
 void XamModule::SaveLoaderData() {
-  FILE* file = xe::filesystem::OpenFile(kXamModuleLoaderDataFileName, "wb");
+  std::filesystem::path file_path(kXamModuleLoaderDataFileName);
+  std::ofstream file(file_path);
 
-  if (!file) {
+  if (!file.is_open()) {
     return;
   }
 
@@ -126,26 +143,25 @@ void XamModule::SaveLoaderData() {
   }
 
   const std::string host_path_as_string = xe::path_to_utf8(host_path);
-  const uint16_t host_path_length =
-      static_cast<uint16_t>(host_path_as_string.size());
 
-  fwrite(&host_path_length, sizeof(host_path_length), 1, file);
-  fwrite(host_path_as_string.c_str(), host_path_length, 1, file);
+  // Write text format: one field per line
+  file << "host_path=" << host_path_as_string << "\n";
+  file << "launch_path=" << launch_path << "\n";
+  file << "launch_flags=" << loader_data_.launch_flags << "\n";
 
-  const uint16_t launch_path_length = static_cast<uint16_t>(launch_path.size());
-  fwrite(&launch_path_length, sizeof(launch_path_length), 1, file);
-  fwrite(launch_path.c_str(), launch_path_length, 1, file);
+  // Convert launch_data bytes to hex string
+  if (!loader_data_.launch_data.empty()) {
+    file << "launch_data=";
+    for (uint8_t byte : loader_data_.launch_data) {
+      file << std::hex << std::setw(2) << std::setfill('0')
+           << static_cast<unsigned>(byte);
+    }
+    file << "\n";
+  } else {
+    file << "launch_data=\n";
+  }
 
-  fwrite(&loader_data_.launch_flags, sizeof(loader_data_.launch_flags), 1,
-         file);
-
-  const uint16_t launch_data_size =
-      static_cast<uint16_t>(loader_data_.launch_data.size());
-  fwrite(&launch_data_size, sizeof(launch_data_size), 1, file);
-
-  fwrite(loader_data_.launch_data.data(), launch_data_size, 1, file);
-
-  fclose(file);
+  file.close();
 }
 
 }  // namespace xam
