@@ -48,9 +48,13 @@
 #include "xenia/ui/game_config_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/profile_editor_dialog_qt.h"
+#include "xenia/ui/qt_util.h"
 
 namespace xe {
 namespace app {
+
+using xe::ui::SafeQString;
+using xe::ui::SafeStdString;
 
 GameListDialogQt::GameListDialogQt(QWidget* parent,
                                    EmulatorWindow* emulator_window)
@@ -597,9 +601,8 @@ void GameListDialogQt::PopulateTable() {
 
     // Apply filter
     if (!filter_text.isEmpty()) {
-      QString title = QString::fromStdString(entry.title_name).toLower();
-      QString path =
-          QString::fromStdString(entry.path_to_file.string()).toLower();
+      QString title = SafeQString(entry.title_name).toLower();
+      QString path = SafeQString(entry.path_to_file.string()).toLower();
 
       if (!title.contains(filter_text) && !path.contains(filter_text)) {
         continue;
@@ -661,9 +664,20 @@ void GameListDialogQt::PopulateTable() {
     bool file_corrupted = entry.title_name.empty();
 
     // Title - large font
-    QString display_title = file_corrupted
-                                ? QString("File Corrupted")
-                                : QString::fromStdString(entry.title_name);
+    QString display_title;
+    if (file_corrupted) {
+      display_title = QString("File Corrupted");
+    } else {
+      // Use fromUtf8 with error handling for potentially invalid data
+      display_title =
+          QString::fromUtf8(entry.title_name.c_str(),
+                            static_cast<qsizetype>(entry.title_name.size()));
+      // If conversion failed or resulted in empty string, mark as corrupted
+      if (display_title.isEmpty()) {
+        display_title = QString("File Corrupted");
+        file_corrupted = true;
+      }
+    }
     auto* title_label = new QLabel(display_title);
     title_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -678,8 +692,7 @@ void GameListDialogQt::PopulateTable() {
 
     // Path - smaller font (only show if path is available)
     if (!entry.path_to_file.empty()) {
-      auto* path_label =
-          new QLabel(QString::fromStdString(entry.path_to_file.string()));
+      auto* path_label = new QLabel(SafeQString(entry.path_to_file.string()));
       path_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
       path_label->setAttribute(Qt::WA_TransparentForMouseEvents);
       QFont path_font = path_label->font();
@@ -721,8 +734,8 @@ void GameListDialogQt::PopulateTable() {
     row_layout->addWidget(title_container, 1);  // Stretch factor
 
     // Last played
-    auto* last_played_label = new QLabel(
-        QString::fromStdString(FormatLastPlayed(entry.last_run_time)));
+    auto* last_played_label =
+        new QLabel(SafeQString(FormatLastPlayed(entry.last_run_time)));
     last_played_label->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
     last_played_label->setMinimumWidth(200);
     last_played_label->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -734,7 +747,7 @@ void GameListDialogQt::PopulateTable() {
     // Store the path and title_id in the row for later retrieval
     table_widget_->setItem(row, 0, new QTableWidgetItem());
     table_widget_->item(row, 0)->setData(
-        Qt::UserRole, QString::fromStdString(entry.path_to_file.string()));
+        Qt::UserRole, SafeQString(entry.path_to_file.string()));
     table_widget_->item(row, 0)->setData(Qt::UserRole + 1, entry.title_id);
   }
 }
@@ -766,7 +779,7 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
     return;
   }
 
-  std::filesystem::path path = path_str.toStdString();
+  std::filesystem::path path = SafeStdString(path_str);
   LaunchGame(path, title_id);
 }
 
@@ -784,7 +797,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   QString path_str = item->data(Qt::UserRole).toString();
   uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
 
-  std::filesystem::path path = path_str.toStdString();
+  std::filesystem::path path = SafeStdString(path_str);
   bool has_path = !path_str.isEmpty();
 
   // Get profile manager
@@ -872,7 +885,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
         QString title_name;
         for (const auto& entry : game_entries_) {
           if (entry.title_id == title_id) {
-            title_name = QString::fromStdString(entry.title_name);
+            title_name = SafeQString(entry.title_name);
             break;
           }
         }
@@ -938,16 +951,16 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     QString title_name;
     for (const auto& entry : game_entries_) {
       if (entry.title_id == title_id) {
-        title_name = QString::fromStdString(entry.title_name);
+        title_name = SafeQString(entry.title_name);
         break;
       }
     }
     if (title_name.isEmpty()) {
-      title_name = QString::fromStdString(fmt::format("{:08X}", title_id));
+      title_name = SafeQString(fmt::format("{:08X}", title_id));
     }
 
     auto* dialog = new GameConfigDialogQt(this, emulator_window_, title_id,
-                                          title_name.toStdString());
+                                          SafeStdString(title_name));
     dialog->exec();
     delete dialog;
   } else if (selected == compatibility_canary_action &&
@@ -957,7 +970,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
         "https://github.com/xenia-canary/game-compatibility/issues";
     const std::string url =
         fmt::format("{}?q=is%3Aissue+is%3Aopen+{:08X}", base_url, title_id);
-    QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
+    QDesktopServices::openUrl(QUrl(SafeQString(url)));
   } else if (selected == compatibility_master_action &&
              compatibility_master_action) {
     // Open Master game compatibility page with this title ID
@@ -965,7 +978,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
         "https://github.com/xenia-project/game-compatibility/issues";
     const std::string url =
         fmt::format("{}?q=is%3Aissue+is%3Aopen+{:08X}", base_url, title_id);
-    QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
+    QDesktopServices::openUrl(QUrl(SafeQString(url)));
   } else if (selected == remove_action) {
     RemoveTitleFromDashboard(title_id);
   }
@@ -1139,7 +1152,7 @@ void GameListDialogQt::OnSelectionChanged() {
       QString path_str = item->data(Qt::UserRole).toString();
       uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
       if (!path_str.isEmpty()) {
-        selected_game_path_ = path_str.toStdString();
+        selected_game_path_ = SafeStdString(path_str);
         selected_game_title_id_ = title_id;
         UpdatePlayButtonState();
         return;
@@ -1226,8 +1239,7 @@ void GameListDialogQt::UpdateProfileButtonState() {
       auto accounts = profile_manager->GetAccounts();
       auto account_it = accounts->find(profile->xuid());
       if (account_it != accounts->end()) {
-        QString gamertag =
-            QString::fromStdString(account_it->second.GetGamertagString());
+        QString gamertag = SafeQString(account_it->second.GetGamertagString());
         profile_label_->setText(gamertag);
         profile_question_label_->setVisible(
             false);  // Hide question mark when logged in

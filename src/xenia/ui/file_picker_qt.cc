@@ -18,6 +18,7 @@
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
+#include "xenia/ui/qt_util.h"
 #include "xenia/ui/window_qt.h"
 
 #if XE_PLATFORM_WIN32
@@ -26,6 +27,8 @@
 
 namespace xe {
 namespace ui {
+
+using xe::ui::SafeQString;
 
 #if XE_PLATFORM_WIN32
 // Detect if running under Wine by checking for wine_get_version in ntdll
@@ -85,7 +88,7 @@ bool QtFilePicker::Show(Window* parent_window) {
   }
 
   // Use the custom title set via set_title(), or default based on mode
-  QString title = QString::fromStdString(this->title());
+  QString title = SafeQString(this->title());
 
   auto* qt_window =
       parent_window ? dynamic_cast<QtWindow*>(parent_window) : nullptr;

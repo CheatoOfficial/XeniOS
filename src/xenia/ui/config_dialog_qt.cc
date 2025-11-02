@@ -28,6 +28,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/config.h"
 #include "xenia/ui/config_helpers.h"
+#include "xenia/ui/qt_util.h"
 
 #if XE_PLATFORM_LINUX
 #include <unistd.h>
@@ -40,6 +41,8 @@ namespace {
 
 // Use the shared enum options from config_helpers.h
 using xe::ui::GetKnownEnumOptions;
+using xe::ui::SafeQString;
+using xe::ui::SafeStdString;
 
 #if XE_PLATFORM_LINUX
 // Check if a command exists in PATH by searching each directory
@@ -178,7 +181,7 @@ void ConfigDialogQt::SetupUI() {
 
   // Add categories in order
   for (const auto& category_name : category_order_) {
-    category_list_->addItem(QString::fromStdString(category_name));
+    category_list_->addItem(SafeQString(category_name));
     auto it = categories_.find(category_name);
     if (it != categories_.end()) {
       CreateCategoryPage(category_name, it->second);
@@ -227,14 +230,13 @@ void ConfigDialogQt::CreateCategoryPage(
 
   for (auto* var_info : vars) {
     // Create label with tooltip - left aligned
-    auto* label = new QLabel(QString::fromStdString(var_info->name));
+    auto* label = new QLabel(SafeQString(var_info->name));
     label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     if (!var_info->description.empty()) {
       // Format tooltip with rich text to enable word wrapping
       QString tooltip =
           QString("<p style='white-space: pre-wrap; max-width: 400px;'>%1</p>")
-              .arg(QString::fromStdString(var_info->description)
-                       .toHtmlEscaped());
+              .arg(SafeQString(var_info->description).toHtmlEscaped());
       label->setToolTip(tooltip);
       label->setToolTipDuration(5000);  // Show for 5 seconds
     }
@@ -297,7 +299,7 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
 
     int current_index = -1;
     for (size_t i = 0; i < options.size(); ++i) {
-      combo->addItem(QString::fromStdString(options[i]));
+      combo->addItem(SafeQString(options[i]));
       if (options[i] == var_info->pending_value) {
         current_index = static_cast<int>(i);
       }
@@ -318,22 +320,21 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     layout->setContentsMargins(0, 0, 0, 0);
 
     auto* line_edit = new QLineEdit();
-    line_edit->setText(QString::fromStdString(var_info->pending_value));
+    line_edit->setText(SafeQString(var_info->pending_value));
     connect(line_edit, &QLineEdit::textChanged, this,
             &ConfigDialogQt::OnValueChanged);
     layout->addWidget(line_edit);
 
     auto* browse_button = new QPushButton("Browse...");
-    connect(
-        browse_button, &QPushButton::clicked, [this, line_edit, var_info]() {
-          QString path = QFileDialog::getExistingDirectory(
-              this,
-              QString::fromStdString("Select Directory for " + var_info->name),
-              line_edit->text());
-          if (!path.isEmpty()) {
-            line_edit->setText(path);
-          }
-        });
+    connect(browse_button, &QPushButton::clicked,
+            [this, line_edit, var_info]() {
+              QString path = QFileDialog::getExistingDirectory(
+                  this, SafeQString("Select Directory for " + var_info->name),
+                  line_edit->text());
+              if (!path.isEmpty()) {
+                line_edit->setText(path);
+              }
+            });
     layout->addWidget(browse_button);
 
     return container;
@@ -358,7 +359,7 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
   } else {
     // Text input for all other types (string, double, etc.)
     auto* line_edit = new QLineEdit();
-    line_edit->setText(QString::fromStdString(var_info->pending_value));
+    line_edit->setText(SafeQString(var_info->pending_value));
     connect(line_edit, &QLineEdit::textChanged, this,
             &ConfigDialogQt::OnValueChanged);
     return line_edit;
@@ -370,16 +371,16 @@ std::string ConfigDialogQt::GetEditorValue(QWidget* editor,
   if (auto* checkbox = qobject_cast<QCheckBox*>(editor)) {
     return checkbox->isChecked() ? "true" : "false";
   } else if (auto* combo = qobject_cast<QComboBox*>(editor)) {
-    return combo->currentText().toStdString();
+    return SafeStdString(combo->currentText());
   } else if (auto* spinbox = qobject_cast<QSpinBox*>(editor)) {
     return std::to_string(spinbox->value());
   } else if (auto* line_edit = qobject_cast<QLineEdit*>(editor)) {
-    return line_edit->text().toStdString();
+    return SafeStdString(line_edit->text());
   } else if (auto* container = qobject_cast<QWidget*>(editor)) {
     // For path containers, find the QLineEdit child
     auto* line_edit = container->findChild<QLineEdit*>();
     if (line_edit) {
-      return line_edit->text().toStdString();
+      return SafeStdString(line_edit->text());
     }
   }
   return "";
@@ -548,7 +549,7 @@ void ConfigDialogQt::ResetToDefaults() {
           checkbox->setChecked(default_value == "true");
         } else if (auto* combo =
                        qobject_cast<QComboBox*>(var_info.editor_widget)) {
-          int index = combo->findText(QString::fromStdString(default_value));
+          int index = combo->findText(SafeQString(default_value));
           if (index >= 0) {
             combo->setCurrentIndex(index);
           }
@@ -561,12 +562,12 @@ void ConfigDialogQt::ResetToDefaults() {
           }
         } else if (auto* line_edit =
                        qobject_cast<QLineEdit*>(var_info.editor_widget)) {
-          line_edit->setText(QString::fromStdString(default_value));
+          line_edit->setText(SafeQString(default_value));
         } else if (auto* container =
                        qobject_cast<QWidget*>(var_info.editor_widget)) {
           auto* line_edit = container->findChild<QLineEdit*>();
           if (line_edit) {
-            line_edit->setText(QString::fromStdString(default_value));
+            line_edit->setText(SafeQString(default_value));
           }
         }
       }
@@ -655,8 +656,7 @@ void ConfigDialogQt::OnDiscardClicked() {
             checkbox->setChecked(var_info.current_value == "true");
           } else if (auto* combo =
                          qobject_cast<QComboBox*>(var_info.editor_widget)) {
-            int index =
-                combo->findText(QString::fromStdString(var_info.current_value));
+            int index = combo->findText(SafeQString(var_info.current_value));
             if (index >= 0) {
               combo->setCurrentIndex(index);
             }
@@ -669,13 +669,12 @@ void ConfigDialogQt::OnDiscardClicked() {
             }
           } else if (auto* line_edit =
                          qobject_cast<QLineEdit*>(var_info.editor_widget)) {
-            line_edit->setText(QString::fromStdString(var_info.current_value));
+            line_edit->setText(SafeQString(var_info.current_value));
           } else if (auto* container =
                          qobject_cast<QWidget*>(var_info.editor_widget)) {
             auto* line_edit = container->findChild<QLineEdit*>();
             if (line_edit) {
-              line_edit->setText(
-                  QString::fromStdString(var_info.current_value));
+              line_edit->setText(SafeQString(var_info.current_value));
             }
           }
         }

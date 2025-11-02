@@ -33,6 +33,7 @@
 #include "xenia/kernel/xam/achievement_manager.h"
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/ui/qt_util.h"
 
 namespace xe {
 namespace kernel {
@@ -44,6 +45,8 @@ struct Achievement;
 
 namespace xe {
 namespace ui {
+
+using xe::ui::SafeQString;
 
 AchievementsDialogQt::AchievementsDialogQt(
     QWidget* parent, kernel::KernelState* kernel_state,
@@ -401,7 +404,7 @@ QString AchievementsDialogQt::GetAchievementTitle(
   if (!title.empty() && title.back() == '\0') {
     title.pop_back();
   }
-  return QString::fromStdString(title);
+  return SafeQString(title);
 }
 
 QString AchievementsDialogQt::GetAchievementDescription(
@@ -415,7 +418,7 @@ QString AchievementsDialogQt::GetAchievementDescription(
       if (!desc.empty() && desc.back() == '\0') {
         desc.pop_back();
       }
-      return QString::fromStdString(desc);
+      return SafeQString(desc);
     } else {
       // Hide description when checkbox is not checked
       return QString();
@@ -428,7 +431,7 @@ QString AchievementsDialogQt::GetAchievementDescription(
   if (!desc.empty() && desc.back() == '\0') {
     desc.pop_back();
   }
-  return QString::fromStdString(desc);
+  return SafeQString(desc);
 }
 
 QString AchievementsDialogQt::GetUnlockedTime(
@@ -442,7 +445,7 @@ QString AchievementsDialogQt::GetUnlockedTime(
         chrono::WinSystemClock::to_sys(achievement.unlock_time.to_time_point());
     auto unlock_time = std::chrono::system_clock::to_time_t(unlock_tp);
 
-    return QString::fromStdString(
+    return SafeQString(
         fmt::format("{:%Y-%m-%d %H:%M}", fmt::localtime(unlock_time)));
   }
 

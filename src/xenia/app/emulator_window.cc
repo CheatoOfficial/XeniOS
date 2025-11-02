@@ -39,6 +39,7 @@
 #include "xenia/ui/notification_widget_qt.h"
 #include "xenia/ui/postprocessing_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
+#include "xenia/ui/qt_util.h"
 #include "xenia/ui/xmp_dialog_qt.h"
 
 #if XE_PLATFORM_WIN32
@@ -219,6 +220,7 @@ namespace app {
 using xe::ui::FileDropEvent;
 using xe::ui::KeyEvent;
 using xe::ui::MenuItem;
+using xe::ui::SafeQString;
 using xe::ui::UIEvent;
 
 using namespace xe::hid;
@@ -1113,9 +1115,9 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
   app_context_.CallInUIThread([this, notification_text]() {
     auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
     if (qt_window) {
-      auto* notification = new NotificationWidgetQt(
-          qt_window->qwindow(), "Screenshot Created!",
-          QString::fromStdString(notification_text), 3000);
+      auto* notification =
+          new NotificationWidgetQt(qt_window->qwindow(), "Screenshot Created!",
+                                   SafeQString(notification_text), 3000);
       notification->Show();
     }
   });
@@ -2151,7 +2153,7 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   // Show Qt message box
   QMessageBox msgBox;
   msgBox.setWindowTitle("Controller Hotkeys");
-  msgBox.setText(QString::fromStdString(msg));
+  msgBox.setText(SafeQString(msg));
   msgBox.setIcon(QMessageBox::Information);
   msgBox.setStandardButtons(QMessageBox::Ok);
   msgBox.exec();

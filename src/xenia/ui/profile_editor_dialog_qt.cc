@@ -30,11 +30,14 @@
 #include "xenia/kernel/xam/user_settings.h"
 #include "xenia/kernel/xam/user_tracker.h"
 #include "xenia/kernel/xam/xam_state.h"
+#include "xenia/ui/qt_util.h"
 
 namespace xe {
 namespace app {
 
 using namespace kernel::xam;
+using xe::ui::SafeQString;
+using xe::ui::SafeStdString;
 
 // Language names
 static const char* kLanguageNames[] = {nullptr,
@@ -361,7 +364,7 @@ void ProfileEditorDialogQt::SetupUI() {
   const auto profile = xam_state ? xam_state->GetUserProfile(xuid_) : nullptr;
 
   setWindowTitle(QString("Gamercard Editor - %1")
-                     .arg(QString::fromStdString(current_data_.gamertag)));
+                     .arg(SafeQString(current_data_.gamertag)));
   setModal(false);  // Non-modal like ProfileDialogQt
   setAttribute(Qt::WA_DeleteOnClose);
   setMinimumSize(900, 700);
@@ -416,8 +419,7 @@ void ProfileEditorDialogQt::SetupUI() {
 
   // Gamertag
   profile_layout->addWidget(new QLabel("Gamertag:"), row, 0);
-  gamertag_edit_ =
-      new QLineEdit(QString::fromStdString(current_data_.gamertag));
+  gamertag_edit_ = new QLineEdit(SafeQString(current_data_.gamertag));
   gamertag_edit_->setMaxLength(15);
   connect(gamertag_edit_, &QLineEdit::textChanged, this,
           &ProfileEditorDialogQt::UpdateGamertagValidation);
@@ -430,24 +432,21 @@ void ProfileEditorDialogQt::SetupUI() {
 
   // Gamer Name
   profile_layout->addWidget(new QLabel("Gamer Name:"), row, 0);
-  gamer_name_edit_ =
-      new QLineEdit(QString::fromStdString(current_data_.gamer_name));
+  gamer_name_edit_ = new QLineEdit(SafeQString(current_data_.gamer_name));
   gamer_name_edit_->setMaxLength(130);  // 0x104 bytes = 130 UTF-16 characters
   gamer_name_edit_->setEnabled(profile != nullptr);
   profile_layout->addWidget(gamer_name_edit_, row++, 1);
 
   // Gamer Motto
   profile_layout->addWidget(new QLabel("Gamer Motto:"), row, 0);
-  gamer_motto_edit_ =
-      new QLineEdit(QString::fromStdString(current_data_.gamer_motto));
+  gamer_motto_edit_ = new QLineEdit(SafeQString(current_data_.gamer_motto));
   gamer_motto_edit_->setMaxLength(22);  // 0x2C bytes = 22 UTF-16 characters
   gamer_motto_edit_->setEnabled(profile != nullptr);
   profile_layout->addWidget(gamer_motto_edit_, row++, 1);
 
   // Gamer Bio
   profile_layout->addWidget(new QLabel("Gamer Bio:"), row, 0);
-  gamer_bio_edit_ =
-      new QTextEdit(QString::fromStdString(current_data_.gamer_bio));
+  gamer_bio_edit_ = new QTextEdit(SafeQString(current_data_.gamer_bio));
   gamer_bio_edit_->setEnabled(profile != nullptr);
   gamer_bio_edit_->setMaximumHeight(100);
   // Limit bio to 500 characters (0x3E8 bytes = 500 UTF-16 characters)
@@ -503,15 +502,13 @@ void ProfileEditorDialogQt::SetupUI() {
 
   // Online XUID (read-only)
   online_layout->addWidget(new QLabel("Online XUID:"), row, 0);
-  online_xuid_edit_ =
-      new QLineEdit(QString::fromStdString(current_data_.online_xuid));
+  online_xuid_edit_ = new QLineEdit(SafeQString(current_data_.online_xuid));
   online_xuid_edit_->setReadOnly(true);
   online_layout->addWidget(online_xuid_edit_, row++, 1);
 
   // Online Domain (read-only)
   online_layout->addWidget(new QLabel("Online Domain:"), row, 0);
-  online_domain_edit_ =
-      new QLineEdit(QString::fromStdString(current_data_.online_domain));
+  online_domain_edit_ = new QLineEdit(SafeQString(current_data_.online_domain));
   online_domain_edit_->setReadOnly(true);
   online_layout->addWidget(online_domain_edit_, row++, 1);
 
@@ -731,7 +728,7 @@ void ProfileEditorDialogQt::LoadProfileIcon() {
 }
 
 bool ProfileEditorDialogQt::ValidateGamertagInput(const QString& text) {
-  std::string gamertag = text.toStdString();
+  std::string gamertag = SafeStdString(text);
   return ProfileManager::IsGamertagValid(gamertag);
 }
 
@@ -762,7 +759,7 @@ void ProfileEditorDialogQt::OnChangeIconClicked() {
     return;
   }
 
-  std::filesystem::path path = file_path.toStdString();
+  std::filesystem::path path = SafeStdString(file_path);
 
   if (!IsFilePngImage(path)) {
     QMessageBox::warning(this, "Invalid File",
@@ -820,7 +817,7 @@ void ProfileEditorDialogQt::SaveProfileData() {
   auto account = account_original;
 
   // Update gamertag
-  std::string gamertag_str = gamertag_edit_->text().toStdString();
+  std::string gamertag_str = SafeStdString(gamertag_edit_->text());
   std::u16string gamertag = xe::to_utf16(gamertag_str);
   string_util::copy_truncating(account.gamertag, gamertag,
                                std::size(account.gamertag));
@@ -864,7 +861,7 @@ void ProfileEditorDialogQt::SaveProfileData() {
                                    size_t max_utf16_chars) {
       // Convert QString to std::u16string using xe::to_utf16 for proper
       // conversion
-      std::string utf8_text = text.toStdString();
+      std::string utf8_text = SafeStdString(text);
       std::u16string new_value = xe::to_utf16(utf8_text);
 
       // Truncate if exceeds max length (in UTF-16 characters)

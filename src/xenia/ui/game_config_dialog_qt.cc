@@ -36,6 +36,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/config.h"
 #include "xenia/ui/config_helpers.h"
+#include "xenia/ui/qt_util.h"
 
 namespace xe {
 namespace app {
@@ -44,6 +45,8 @@ namespace {
 
 // Use the shared enum options from config_helpers.h
 using xe::ui::GetKnownEnumOptions;
+using xe::ui::SafeQString;
+using xe::ui::SafeStdString;
 
 // Helper to convert a RapidJSON value to string
 std::string JsonValueToString(const rapidjson::Value& value) {
@@ -114,8 +117,8 @@ GameConfigDialogQt::GameConfigDialogQt(QWidget* parent,
 GameConfigDialogQt::~GameConfigDialogQt() = default;
 
 void GameConfigDialogQt::SetupUI() {
-  setWindowTitle(QString::fromStdString(
-      fmt::format("Game Config Overrides - {}", game_title_)));
+  setWindowTitle(
+      SafeQString(fmt::format("Game Config Overrides - {}", game_title_)));
   setMinimumSize(800, 500);
   resize(900, 600);
 
@@ -253,8 +256,7 @@ void GameConfigDialogQt::LoadConfigOverrides() {
         overrides_table_->insertRow(row);
 
         // Column 0: Variable name (non-editable text)
-        auto* name_item =
-            new QTableWidgetItem(QString::fromStdString(var_name));
+        auto* name_item = new QTableWidgetItem(SafeQString(var_name));
         name_item->setFlags(name_item->flags() & ~Qt::ItemIsEditable);
         overrides_table_->setItem(row, 0, name_item);
 
@@ -276,9 +278,9 @@ void GameConfigDialogQt::LoadConfigOverrides() {
   } catch (const std::exception& e) {
     XELOGE("Failed to load game config {}: {}", xe::path_to_utf8(config_path),
            e.what());
-    QMessageBox::warning(this, "Error Loading Config",
-                         QString::fromStdString(fmt::format(
-                             "Failed to load game config: {}", e.what())));
+    QMessageBox::warning(
+        this, "Error Loading Config",
+        SafeQString(fmt::format("Failed to load game config: {}", e.what())));
   }
 
   has_unsaved_changes_ = false;
@@ -303,7 +305,7 @@ void GameConfigDialogQt::SaveConfigOverrides() {
       continue;
     }
 
-    std::string var_name = var_item->text().toStdString();
+    std::string var_name = SafeStdString(var_item->text());
 
     // Get value from the cell widget, not from a text item
     QWidget* value_widget = overrides_table_->cellWidget(row, 1);
@@ -391,9 +393,9 @@ void GameConfigDialogQt::SaveConfigOverrides() {
   } catch (const std::exception& e) {
     XELOGE("Failed to save game config {}: {}", xe::path_to_utf8(config_path),
            e.what());
-    QMessageBox::critical(this, "Error Saving Config",
-                          QString::fromStdString(fmt::format(
-                              "Failed to save game config: {}", e.what())));
+    QMessageBox::critical(
+        this, "Error Saving Config",
+        SafeQString(fmt::format("Failed to save game config: {}", e.what())));
   }
 }
 
@@ -412,7 +414,7 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
     auto* combo = new QComboBox();
     combo->addItem("true");
     combo->addItem("false");
-    combo->setCurrentText(QString::fromStdString(current_value));
+    combo->setCurrentText(SafeQString(current_value));
     connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             [this, combo]() {
               has_unsaved_changes_ = true;
@@ -432,7 +434,7 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
 
     int current_index = -1;
     for (size_t i = 0; i < options.size(); ++i) {
-      combo->addItem(QString::fromStdString(options[i]));
+      combo->addItem(SafeQString(options[i]));
       if (options[i] == current_value) {
         current_index = static_cast<int>(i);
       }
@@ -461,7 +463,7 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
     layout->setContentsMargins(0, 0, 0, 0);
 
     auto* line_edit = new QLineEdit();
-    line_edit->setText(QString::fromStdString(current_value));
+    line_edit->setText(SafeQString(current_value));
     connect(line_edit, &QLineEdit::textChanged, [this, container]() {
       has_unsaved_changes_ = true;
       // Find which row this widget belongs to and update its bold state
@@ -477,7 +479,7 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
     auto* browse_button = new QPushButton("Browse...");
     connect(browse_button, &QPushButton::clicked, [this, line_edit, var]() {
       QString path = QFileDialog::getExistingDirectory(
-          this, QString::fromStdString("Select Directory for " + var->name()),
+          this, SafeQString("Select Directory for " + var->name()),
           line_edit->text());
       if (!path.isEmpty()) {
         line_edit->setText(path);
@@ -515,7 +517,7 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
   } else {
     // Text input for all other types (string, double, etc.)
     auto* line_edit = new QLineEdit();
-    line_edit->setText(QString::fromStdString(current_value));
+    line_edit->setText(SafeQString(current_value));
     connect(line_edit, &QLineEdit::textChanged, [this, line_edit]() {
       has_unsaved_changes_ = true;
       // Find which row this widget belongs to and update its bold state
@@ -532,16 +534,16 @@ QWidget* GameConfigDialogQt::CreateEditorForCvar(
 
 std::string GameConfigDialogQt::GetEditorValue(QWidget* editor) {
   if (auto* combo = qobject_cast<QComboBox*>(editor)) {
-    return combo->currentText().toStdString();
+    return SafeStdString(combo->currentText());
   } else if (auto* spinbox = qobject_cast<QSpinBox*>(editor)) {
     return std::to_string(spinbox->value());
   } else if (auto* line_edit = qobject_cast<QLineEdit*>(editor)) {
-    return line_edit->text().toStdString();
+    return SafeStdString(line_edit->text());
   } else if (auto* container = qobject_cast<QWidget*>(editor)) {
     // For path containers, find the QLineEdit child
     auto* line_edit = container->findChild<QLineEdit*>();
     if (line_edit) {
-      return line_edit->text().toStdString();
+      return SafeStdString(line_edit->text());
     }
   }
   return "";
@@ -553,7 +555,7 @@ void GameConfigDialogQt::UpdateRowModifiedState(int row) {
     return;
   }
 
-  std::string var_name = name_item->text().toStdString();
+  std::string var_name = SafeStdString(name_item->text());
   QWidget* value_widget = overrides_table_->cellWidget(row, 1);
   if (!value_widget) {
     return;
@@ -599,8 +601,8 @@ void GameConfigDialogQt::OnAddOverrideClicked() {
     for (const auto& name : cvar_names) {
       auto* var = (*cvar::ConfigVars)[name];
       QString item_text =
-          QString::fromStdString(fmt::format("{} ({})", name, var->category()));
-      combo->addItem(item_text, QString::fromStdString(name));
+          SafeQString(fmt::format("{} ({})", name, var->category()));
+      combo->addItem(item_text, SafeQString(name));
     }
   }
 
@@ -632,7 +634,7 @@ void GameConfigDialogQt::OnAddOverrideClicked() {
       return;
     }
 
-    selected_var = (*cvar::ConfigVars)[var_name.toStdString()];
+    selected_var = (*cvar::ConfigVars)[SafeStdString(var_name)];
     if (!selected_var) {
       return;
     }
@@ -678,7 +680,7 @@ void GameConfigDialogQt::OnAddOverrideClicked() {
     QString value;
 
     if (current_editor) {
-      value = QString::fromStdString(GetEditorValue(current_editor));
+      value = SafeQString(GetEditorValue(current_editor));
     }
 
     if (var_name.isEmpty()) {
@@ -710,7 +712,7 @@ void GameConfigDialogQt::OnAddOverrideClicked() {
     // We need to create a new one since the dialog's editor will be destroyed
     if (selected_var) {
       QWidget* value_editor =
-          CreateEditorForCvar(selected_var, value.toStdString());
+          CreateEditorForCvar(selected_var, SafeStdString(value));
       overrides_table_->setCellWidget(row, 1, value_editor);
     }
 
@@ -784,7 +786,7 @@ void GameConfigDialogQt::LoadRecommendedSettings() {
   if (!parse_result) {
     QMessageBox::warning(
         this, "Error Parsing Settings",
-        QString::fromStdString(
+        SafeQString(
             fmt::format("Failed to parse recommended settings: {} at offset {}",
                         rapidjson::GetParseError_En(parse_result.Code()),
                         parse_result.Offset())));
@@ -827,7 +829,7 @@ void GameConfigDialogQt::LoadRecommendedSettings() {
     has_unsaved_changes_ = true;
     QMessageBox::information(
         this, "Settings Loaded",
-        QString::fromStdString(
+        SafeQString(
             fmt::format("Loaded {} recommended setting{} for this game.\n\n"
                         "Don't forget to save your changes!",
                         settings_applied, settings_applied == 1 ? "" : "s")));
@@ -855,13 +857,13 @@ bool GameConfigDialogQt::ApplyRecommendedSetting(const std::string& var_name,
   // Check if this setting is already in the table
   for (int row = 0; row < overrides_table_->rowCount(); ++row) {
     auto* item = overrides_table_->item(row, 0);
-    if (item && item->text().toStdString() == var_name) {
+    if (item && SafeStdString(item->text()) == var_name) {
       // Update the existing entry
       QWidget* value_widget = overrides_table_->cellWidget(row, 1);
       if (value_widget) {
         // Update the widget with the new value
         if (auto* combo = qobject_cast<QComboBox*>(value_widget)) {
-          int index = combo->findText(QString::fromStdString(value));
+          int index = combo->findText(SafeQString(value));
           if (index >= 0) {
             combo->setCurrentIndex(index);
           }
@@ -872,12 +874,12 @@ bool GameConfigDialogQt::ApplyRecommendedSetting(const std::string& var_name,
             XELOGW("Failed to parse integer value for {}: {}", var_name, value);
           }
         } else if (auto* line_edit = qobject_cast<QLineEdit*>(value_widget)) {
-          line_edit->setText(QString::fromStdString(value));
+          line_edit->setText(SafeQString(value));
         } else if (auto* container = qobject_cast<QWidget*>(value_widget)) {
           // For path containers, find the QLineEdit child
           auto* line_edit = container->findChild<QLineEdit*>();
           if (line_edit) {
-            line_edit->setText(QString::fromStdString(value));
+            line_edit->setText(SafeQString(value));
           }
         }
       }
@@ -890,7 +892,7 @@ bool GameConfigDialogQt::ApplyRecommendedSetting(const std::string& var_name,
   overrides_table_->insertRow(row);
 
   // Column 0: Variable name (non-editable text)
-  auto* name_item = new QTableWidgetItem(QString::fromStdString(var_name));
+  auto* name_item = new QTableWidgetItem(SafeQString(var_name));
   name_item->setFlags(name_item->flags() & ~Qt::ItemIsEditable);
   overrides_table_->setItem(row, 0, name_item);
 

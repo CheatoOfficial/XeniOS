@@ -21,6 +21,7 @@
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/cvar.h"
 #include "xenia/gpu/graphics_system.h"
+#include "xenia/ui/qt_util.h"
 
 DECLARE_bool(postprocess_dither);
 DECLARE_double(postprocess_ffx_cas_additional_sharpness);
@@ -30,6 +31,8 @@ DECLARE_string(postprocess_scaling_and_sharpening);
 
 namespace xe {
 namespace app {
+
+using xe::ui::SafeQString;
 
 PostProcessingDialogQt::PostProcessingDialogQt(QWidget* parent,
                                                EmulatorWindow* emulator_window)
@@ -446,8 +449,8 @@ void PostProcessingDialogQt::OnFsrSharpnessChanged(int value) {
   presenter->SetGuestOutputPaintConfigFromUIThread(config);
 
   // Update label
-  fsr_sharpness_value_label_->setText(QString::fromStdString(
-      fmt::format("{} %", static_cast<int>(fsr_sharpness * 100))));
+  fsr_sharpness_value_label_->setText(
+      SafeQString(fmt::format("{} %", static_cast<int>(fsr_sharpness * 100))));
 
   // Update cvar
   emulator_window_->UpdateFsrSharpnessCvar(fsr_sharpness);
@@ -477,8 +480,8 @@ void PostProcessingDialogQt::OnCasSharpnessChanged(int value) {
   presenter->SetGuestOutputPaintConfigFromUIThread(config);
 
   // Update label
-  cas_sharpness_value_label_->setText(QString::fromStdString(
-      fmt::format("{} %", static_cast<int>(cas_sharpness * 100))));
+  cas_sharpness_value_label_->setText(
+      SafeQString(fmt::format("{} %", static_cast<int>(cas_sharpness * 100))));
 
   // Update cvar
   emulator_window_->UpdateCasSharpnessCvar(cas_sharpness);

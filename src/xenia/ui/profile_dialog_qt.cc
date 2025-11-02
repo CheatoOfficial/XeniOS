@@ -25,10 +25,14 @@
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/xam_state.h"
 #include "xenia/ui/profile_editor_dialog_qt.h"
+#include "xenia/ui/qt_util.h"
 #include "xenia/ui/window_qt.h"
 
 namespace xe {
 namespace app {
+
+using xe::ui::SafeQString;
+using xe::ui::SafeStdString;
 
 ProfileDialogQt::ProfileDialogQt(QWidget* parent,
                                  EmulatorWindow* emulator_window)
@@ -206,7 +210,7 @@ void ProfileDialogQt::PopulateProfileList() {
     const uint8_t user_index =
         profile_manager->GetUserIndexAssignedToProfile(xuid);
 
-    QString gamertag = QString::fromStdString(account.GetGamertagString());
+    QString gamertag = SafeQString(account.GetGamertagString());
     QString status = (user_index == XUserIndexAny)
                          ? " (Not logged in)"
                          : fmt::format(" (Slot {})", user_index + 1).c_str();
@@ -327,8 +331,8 @@ void ProfileDialogQt::OnProfileContextMenu(const QPoint& pos) {
     // Login to slot submenu
     QMenu* login_slot_menu = context_menu.addMenu("Login to slot:");
     for (uint8_t i = 1; i <= XUserMaxUserCount; i++) {
-      QAction* slot_action = login_slot_menu->addAction(
-          QString::fromStdString(fmt::format("slot {}", i)));
+      QAction* slot_action =
+          login_slot_menu->addAction(SafeQString(fmt::format("slot {}", i)));
       connect(slot_action, &QAction::triggered, [=, this]() {
         profile_manager->Login(xuid, i - 1);
         RefreshProfiles();
@@ -382,8 +386,7 @@ void ProfileDialogQt::OnProfileContextMenu(const QPoint& pos) {
         return;
       }
 
-      QString gamertag =
-          QString::fromStdString(profile_it->second.GetGamertagString());
+      QString gamertag = SafeQString(profile_it->second.GetGamertagString());
 
       QMessageBox::StandardButton reply = QMessageBox::question(
           this, "Delete Profile",
@@ -442,7 +445,7 @@ void ProfileDialogQt::OnCreateProfileClicked() {
   }
 
   // Create the profile
-  std::string gamertag_string = gamertag.toStdString();
+  std::string gamertag_string = SafeStdString(gamertag);
   bool autologin = (profile_manager->GetAccountCount() == 0);
 
   if (profile_manager->CreateProfile(gamertag_string, autologin, false)) {

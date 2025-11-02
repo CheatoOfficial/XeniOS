@@ -21,10 +21,13 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/system.h"
+#include "xenia/ui/qt_util.h"
 #include "xenia/xbox.h"
 
 namespace xe {
 namespace ui {
+
+using xe::ui::SafeQString;
 
 ContentInstallDialogQt::ContentInstallDialogQt(
     QWidget* parent, const std::filesystem::path& content_root,
@@ -199,11 +202,11 @@ void ContentInstallDialogQt::UpdateProgress() {
 
     // Update name
     widgets.name_label->setText(
-        QString("Name: %1").arg(QString::fromStdString(entry.name_)));
+        QString("Name: %1").arg(SafeQString(entry.name_)));
 
     // Update path with link
     QString path_str =
-        QString::fromStdString(xe::path_to_utf8(entry.data_installation_path_));
+        SafeQString(xe::path_to_utf8(entry.data_installation_path_));
     widgets.path_label->setText(
         QString("Installation Path: <a href=\"%1\">%1</a>").arg(path_str));
 
@@ -212,8 +215,7 @@ void ContentInstallDialogQt::UpdateProgress() {
       auto it = XContentTypeMap.find(entry.content_type_);
       if (it != XContentTypeMap.end()) {
         widgets.type_label->setText(
-            QString("Content Type: %1")
-                .arg(QString::fromStdString(it->second)));
+            QString("Content Type: %1").arg(SafeQString(it->second)));
       }
     } else {
       widgets.type_label->setText("");
@@ -230,7 +232,7 @@ void ContentInstallDialogQt::UpdateProgress() {
                             entry.installation_result_);
     }
 
-    widgets.status_label->setText(QString::fromStdString(result));
+    widgets.status_label->setText(SafeQString(result));
 
     // Update progress bar
     if (entry.content_size_ > 0) {

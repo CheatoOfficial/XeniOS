@@ -16,9 +16,12 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
+#include "xenia/ui/qt_util.h"
 
 namespace xe {
 namespace app {
+
+using xe::ui::SafeQString;
 
 XmpDialogQt::XmpDialogQt(QWidget* parent, EmulatorWindow* emulator_window)
     : QDialog(parent), emulator_window_(emulator_window) {
@@ -246,8 +249,8 @@ void XmpDialogQt::UpdatePlayerState() {
   float volume = audio_player->GetVolume()->load();
   volume_slider_->blockSignals(true);
   volume_slider_->setValue(static_cast<int>(volume * 100));
-  volume_value_label_->setText(QString::fromStdString(
-      fmt::format("{}%", static_cast<int>(volume * 100))));
+  volume_value_label_->setText(
+      SafeQString(fmt::format("{}%", static_cast<int>(volume * 100))));
   volume_slider_->blockSignals(false);
 }
 
@@ -287,8 +290,7 @@ void XmpDialogQt::OnVolumeChanged(int value) {
   audio_player->SetVolume(volume);
 
   // Update label
-  volume_value_label_->setText(
-      QString::fromStdString(fmt::format("{}%", value)));
+  volume_value_label_->setText(SafeQString(fmt::format("{}%", value)));
 }
 
 }  // namespace app
