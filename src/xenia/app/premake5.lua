@@ -64,6 +64,8 @@ project("xenia-app")
   end
   filter(NOT_SINGLE_LIBRARY_FILTER)
     kind("WindowedApp")
+  filter({NOT_SINGLE_LIBRARY_FILTER, "platforms:Windows", "configurations:Debug"})
+    kind("ConsoleApp")
 
   -- `targetname` is broken if building from Gradle, works only for toggling the
   -- `lib` prefix, as Gradle uses LOCAL_MODULE_FILENAME, not a derivative of
