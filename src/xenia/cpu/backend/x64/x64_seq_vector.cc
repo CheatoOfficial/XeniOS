@@ -2919,15 +2919,24 @@ struct PACK : Sequence<PACK, I<OPCODE_PACK, V128Op, V128Op, V128Op>> {
       if (IsPackOutUnsigned(flags)) {
         if (IsPackOutSaturate(flags)) {
           // unsigned -> unsigned + saturate
-          auto src1 = GetInputRegOrConstant(e, i.src1, e.xmm3);
-          auto src2 = GetInputRegOrConstant(e, i.src2, e.xmm4);
-
 #if XE_PLATFORM_WIN32
           // Windows x64 ABI: __m128i is passed by implicit pointer
-          e.lea(e.GetNativeParam(0), e.StashXmm(0, src1));
-          e.lea(e.GetNativeParam(1), e.StashXmm(1, src2));
+          if (i.src1.is_constant) {
+            e.lea(e.GetNativeParam(0),
+                  e.StashConstantXmm(0, i.src1.constant()));
+          } else {
+            e.lea(e.GetNativeParam(0), e.StashXmm(0, i.src1));
+          }
+          if (i.src2.is_constant) {
+            e.lea(e.GetNativeParam(1),
+                  e.StashConstantXmm(1, i.src2.constant()));
+          } else {
+            e.lea(e.GetNativeParam(1), e.StashXmm(1, i.src2));
+          }
 #else
           // Linux/Mac System V ABI: __m128i passed in xmm0/xmm1, return in xmm0
+          auto src1 = GetInputRegOrConstant(e, i.src1, e.xmm3);
+          auto src2 = GetInputRegOrConstant(e, i.src2, e.xmm4);
           e.vmovaps(e.xmm0, src1);
           e.vmovaps(e.xmm1, src2);
 #endif
