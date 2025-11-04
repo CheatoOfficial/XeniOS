@@ -66,3 +66,27 @@ DEFINE_int32(
     "Set to higher number than query_occlusion_sample_lower_threshold. This "
     "value is ignored if query_occlusion_sample_lower_threshold is set to -1.",
     "GPU");
+
+// TODO(Triang3l): Make accuracy (ROV/FSI) the default when it's optimized
+// better (for instance, using static shader modifications to pass render
+// target parameters).
+DEFINE_string(
+    render_target_path, "performance",
+    "Render target emulation path to use across all GPU backends.\n"
+    "Use: [performance, accuracy]\n"
+    " performance:\n"
+    "  Host render targets and fixed-function blending and depth/stencil "
+    "testing, copying between render targets when needed.\n"
+    "  Lower accuracy (limited pixel format support).\n"
+    "  Performance limited primarily by render target layout changes requiring "
+    "copying, but generally higher.\n"
+    "  Maps to 'fbo' on Vulkan and 'rtv' on D3D12.\n"
+    " accuracy:\n"
+    "  Manual pixel packing, blending and depth/stencil testing, with free "
+    "render target layout changes.\n"
+    "  Requires GPU supporting fragment shader interlock (Vulkan) or "
+    "rasterizer-ordered views (D3D12).\n"
+    "  Highest accuracy (all pixel formats handled in software).\n"
+    "  Performance limited primarily by overdraw.\n"
+    "  Maps to 'fsi' on Vulkan and 'rov' on D3D12.",
+    "GPU");

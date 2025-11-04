@@ -38,33 +38,6 @@ DEFINE_bool(
     "working on UHD Graphics 630 as of March 2021 (driver 27.20.0100.8336).",
     "GPU");
 DEFINE_bool(no_discard_stencil_in_transfer_pipelines, false, "bleh", "GPU");
-// TODO(Triang3l): Make ROV the default when it's optimized better (for
-// instance, using static shader modifications to pass render target
-// parameters).
-DEFINE_string(
-    render_target_path_d3d12, "",
-    "Render target emulation path to use on Direct3D 12.\n"
-    "Use: [any, rtv, rov]\n"
-    " rtv:\n"
-    "  Host render targets and fixed-function blending and depth / stencil "
-    "testing, copying between render targets when needed.\n"
-    "  Lower accuracy (limited pixel format support).\n"
-    "  Performance limited primarily by render target layout changes requiring "
-    "copying, but generally higher.\n"
-    " rov:\n"
-    "  Manual pixel packing, blending and depth / stencil testing, with free "
-    "render target layout changes.\n"
-    "  Requires a GPU supporting rasterizer-ordered views.\n"
-    "  Highest accuracy (all pixel formats handled in software).\n"
-    "  Performance limited primarily by overdraw.\n"
-    "  On AMD drivers, currently causes shader compiler crashes in many "
-    "cases.\n"
-    " Any other value:\n"
-    "  Choose what is considered the most optimal for the system (currently "
-    "always RTV because the ROV path is much slower now, except for Intel "
-    "GPUs, which have a bug in stencil testing that causes Xbox 360 Direct3D 9 "
-    "clears not to work).",
-    "GPU");
 
 namespace xe {
 namespace gpu {
@@ -214,9 +187,9 @@ bool D3D12RenderTargetCache::Initialize() {
       command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
 
-  if (cvars::render_target_path_d3d12 == "rtv") {
+  if (cvars::render_target_path == "performance") {
     path_ = Path::kHostRenderTargets;
-  } else if (cvars::render_target_path_d3d12 == "rov") {
+  } else if (cvars::render_target_path == "accuracy") {
     path_ = Path::kPixelShaderInterlock;
   } else {
     // As of April 2021 (driver version 27.20.0100.9316), on Intel (tested on

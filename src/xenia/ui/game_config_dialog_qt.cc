@@ -63,32 +63,16 @@ std::string JsonValueToString(const rapidjson::Value& value) {
   return result;
 }
 
-// CanaryCvarCompat: Translate legacy Xenia Canary cvar names/values to current
-// ones Returns true if translation occurred, filling out_var_name and out_value
 bool CanaryCvarCompat(const std::string& var_name, const std::string& value,
                       std::string& out_var_name, std::string& out_value) {
-  // use_new_decoder: true -> xma_decoder: new
-  if (var_name == "use_new_decoder" && value == "true") {
-    out_var_name = "xma_decoder";
-    out_value = "new";
-    return true;
+  for (const auto& alias : xe::ui::GetCvarAliases()) {
+    if (var_name == alias.old_name && value == alias.old_value) {
+      out_var_name = alias.new_name;
+      out_value = alias.new_value;
+      return true;
+    }
   }
 
-  // use_old_decoder: true -> xma_decoder: old
-  if (var_name == "use_old_decoder" && value == "true") {
-    out_var_name = "xma_decoder";
-    out_value = "old";
-    return true;
-  }
-
-  // readback_resolve: true/false -> readback_resolve: fast (default)
-  if (var_name == "readback_resolve" && (value == "true" || value == "false")) {
-    out_var_name = "readback_resolve";
-    out_value = "fast";
-    return true;
-  }
-
-  // No translation needed
   out_var_name = var_name;
   out_value = value;
   return false;
@@ -253,6 +237,33 @@ void GameConfigDialogQt::LoadConfigOverrides() {
 
         // Add to table
         CreateRow(var_name, value);
+      }
+    }
+
+    // Check for legacy cvar names in the TOML that need migration
+    for (const auto& [category_name, category_table] : config) {
+      if (!category_table.is_table()) continue;
+
+      for (const auto& [key, value] : *category_table.as_table()) {
+        std::string var_name = std::string(key);
+        std::string var_value = value.value_or("");
+
+        if (var_value.length() >= 2 && var_value.front() == '"' &&
+            var_value.back() == '"') {
+          var_value = var_value.substr(1, var_value.length() - 2);
+        }
+
+        std::string translated_name;
+        std::string translated_value;
+        if (CanaryCvarCompat(var_name, var_value, translated_name,
+                             translated_value)) {
+          if (translated_name != var_name &&
+              !config_overrides_.count(translated_name)) {
+            config_overrides_[translated_name] = translated_value;
+            CreateRow(translated_name, translated_value);
+            has_unsaved_changes_ = true;
+          }
+        }
       }
     }
   } catch (const std::exception& e) {

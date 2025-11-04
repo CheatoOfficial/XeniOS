@@ -19,6 +19,27 @@
 namespace xe {
 namespace ui {
 
+struct CvarAlias {
+  std::string old_name;
+  std::string old_value;
+  std::string new_name;
+  std::string new_value;
+};
+
+inline const std::vector<CvarAlias>& GetCvarAliases() {
+  static const std::vector<CvarAlias> aliases = {
+      {"use_new_decoder", "true", "xma_decoder", "new"},
+      {"use_old_decoder", "true", "xma_decoder", "old"},
+      {"readback_resolve", "true", "readback_resolve", "fast"},
+      {"readback_resolve", "false", "readback_resolve", "fast"},
+      {"render_target_path_d3d12", "rtv", "render_target_path", "performance"},
+      {"render_target_path_d3d12", "rov", "render_target_path", "accuracy"},
+      {"render_target_path_vulkan", "fbo", "render_target_path", "performance"},
+      {"render_target_path_vulkan", "fsi", "render_target_path", "accuracy"},
+  };
+  return aliases;
+}
+
 // Known enum-like cvars with their valid options
 inline const std::map<std::string, std::vector<std::string>>&
 GetKnownEnumOptions() {
@@ -39,8 +60,7 @@ GetKnownEnumOptions() {
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
       {"readback_resolve", {"fast", "full", "none"}},
-      {"render_target_path_d3d12", {"any", "rtv", "rov"}},
-      {"render_target_path_vulkan", {"any", "fbo", "fsi"}},
+      {"render_target_path", {"performance", "accuracy"}},
       {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},
       {"postprocess_scaling_and_sharpening",
        {"bilinear", "cas", "fsr", "nearest"}},

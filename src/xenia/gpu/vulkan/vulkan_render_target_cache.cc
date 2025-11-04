@@ -19,6 +19,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/gpu/draw_util.h"
+#include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/spirv_builder.h"
 #include "xenia/gpu/spirv_compatibility.h"
@@ -28,27 +29,6 @@
 #include "xenia/gpu/vulkan/vulkan_command_processor.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/ui/vulkan/vulkan_util.h"
-
-DEFINE_string(
-    render_target_path_vulkan, "",
-    "Render target emulation path to use on Vulkan.\n"
-    "Use: [any, fbo, fsi]\n"
-    " fbo:\n"
-    "  Host framebuffers and fixed-function blending and depth / stencil "
-    "testing, copying between render targets when needed.\n"
-    "  Lower accuracy (limited pixel format support).\n"
-    "  Performance limited primarily by render target layout changes requiring "
-    "copying, but generally higher.\n"
-    " fsi:\n"
-    "  Manual pixel packing, blending and depth / stencil testing, with free "
-    "render target layout changes.\n"
-    "  Requires a GPU supporting fragment shader interlock.\n"
-    "  Highest accuracy (all pixel formats handled in software).\n"
-    "  Performance limited primarily by overdraw.\n"
-    " Any other value:\n"
-    "  Choose what is considered the most optimal for the system (currently "
-    "always FB because the FSI path is much slower now).",
-    "GPU");
 
 namespace xe {
 namespace gpu {
@@ -216,7 +196,7 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   const ui::vulkan::VulkanDevice::Properties& device_properties =
       vulkan_device->properties();
 
-  if (cvars::render_target_path_vulkan == "fsi") {
+  if (cvars::render_target_path == "accuracy") {
     path_ = Path::kPixelShaderInterlock;
   } else {
     path_ = Path::kHostRenderTargets;

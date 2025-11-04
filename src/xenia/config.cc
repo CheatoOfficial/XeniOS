@@ -17,6 +17,7 @@
 #include "xenia/base/string.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/base/system.h"
+#include "xenia/ui/config_helpers.h"
 
 toml::parse_result ParseFile(const std::filesystem::path& filename) {
   return toml::parse_file(xe::path_to_utf8(filename));
@@ -88,6 +89,38 @@ void PrintConfigToLog(const std::filesystem::path& file_path) {
   file.close();
 }
 
+void MigrateLegacyCvars(const toml::table& config) {
+  if (!cvar::ConfigVars) {
+    return;
+  }
+
+  for (const auto& [category_name, category_table] : config) {
+    if (!category_table.is_table()) continue;
+
+    for (const auto& [key, value] : *category_table.as_table()) {
+      std::string var_name = std::string(key);
+      std::string var_value = value.value_or("");
+
+      if (var_value.length() >= 2 && var_value.front() == '"' &&
+          var_value.back() == '"') {
+        var_value = var_value.substr(1, var_value.length() - 2);
+      }
+
+      for (const auto& alias : xe::ui::GetCvarAliases()) {
+        if (var_name == alias.old_name && var_value == alias.old_value) {
+          auto new_cvar = (*cvar::ConfigVars).find(alias.new_name);
+          if (new_cvar != (*cvar::ConfigVars).end()) {
+            auto config_var = static_cast<cvar::IConfigVar*>(new_cvar->second);
+            toml::value new_value(alias.new_value);
+            config_var->LoadConfigValue(&new_value);
+          }
+          break;
+        }
+      }
+    }
+  }
+}
+
 void ReadConfig(const std::filesystem::path& file_path,
                 bool update_if_no_version_stored) {
   if (!cvar::ConfigVars) {
@@ -115,6 +148,8 @@ void ReadConfig(const std::filesystem::path& file_path,
       config_var->LoadConfigValue(config_key_node.node());
     }
   }
+
+  MigrateLegacyCvars(config);
   uint32_t config_defaults_date = defaults_date_cvar->GetTypedConfigValue();
   if (update_if_no_version_stored || config_defaults_date) {
     cvar::IConfigVarUpdate::ApplyUpdates(config_defaults_date);
