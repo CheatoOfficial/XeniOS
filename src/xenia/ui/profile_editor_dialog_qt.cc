@@ -819,8 +819,8 @@ void ProfileEditorDialogQt::SaveProfileData() {
   // Update gamertag
   std::string gamertag_str = SafeStdString(gamertag_edit_->text());
   std::u16string gamertag = xe::to_utf16(gamertag_str);
-  string_util::copy_truncating(account.gamertag, gamertag,
-                               std::size(account.gamertag));
+  string_util::copy_and_swap_truncating(account.gamertag, gamertag,
+                                        sizeof(account.gamertag));
 
   // Update language and country
   account.SetLanguage(
