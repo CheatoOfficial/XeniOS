@@ -64,22 +64,27 @@
 #endif  // XE_PLATFORM_WIN32
 
 #if XE_PLATFORM_WIN32
-#define APU_OPTIONS "[any, nop, sdl, xaudio2]"
-#define GPU_OPTIONS "[any, d3d12, vulkan, null]"
-#define HID_OPTIONS "[any, nop, sdl, winkey, xinput]"
+#define APU_OPTIONS "[xaudio2, sdl, nop]"
+#define GPU_OPTIONS "[d3d12, vulkan, null]"
+#define HID_OPTIONS "[sdl, winkey, xinput, nop]"
+DEFINE_string(apu, "xaudio2", "Audio system. Use: " APU_OPTIONS, "APU");
+DEFINE_string(gpu, "d3d12", "Graphics system. Use: " GPU_OPTIONS, "GPU");
+DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 #elif XE_PLATFORM_LINUX
-#define APU_OPTIONS "[any, alsa, nop, sdl]"
-#define GPU_OPTIONS "[any, vulkan, null]"
-#define HID_OPTIONS "[any, nop, sdl]"
+#define APU_OPTIONS "[alsa, sdl, nop]"
+#define GPU_OPTIONS "[vulkan, null]"
+#define HID_OPTIONS "[sdl, nop]"
+DEFINE_string(apu, "alsa", "Audio system. Use: " APU_OPTIONS, "APU");
+DEFINE_string(gpu, "vulkan", "Graphics system. Use: " GPU_OPTIONS, "GPU");
+DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 #else
-#define APU_OPTIONS "[any, nop, sdl]"
-#define GPU_OPTIONS "[any, vulkan, null]"
-#define HID_OPTIONS "[any, nop, sdl]"
+#define APU_OPTIONS "[sdl, nop]"
+#define GPU_OPTIONS "[vulkan, null]"
+#define HID_OPTIONS "[sdl, nop]"
+DEFINE_string(apu, "sdl", "Audio system. Use: " APU_OPTIONS, "APU");
+DEFINE_string(gpu, "vulkan", "Graphics system. Use: " GPU_OPTIONS, "GPU");
+DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 #endif
-
-DEFINE_string(apu, "any", "Audio system. Use: " APU_OPTIONS, "APU");
-DEFINE_string(gpu, "any", "Graphics system. Use: " GPU_OPTIONS, "GPU");
-DEFINE_string(hid, "any", "Input system. Use: " HID_OPTIONS, "HID");
 
 DEFINE_path(
     storage_root, "",
@@ -247,7 +252,7 @@ class EmulatorApp final : public xe::ui::WindowedApp {
     }
 
     std::unique_ptr<T> Create(const std::string_view name, Args... args) {
-      if (!name.empty() && name != "any") {
+      if (!name.empty()) {
         auto it = std::find_if(
             creators_.cbegin(), creators_.cend(),
             [&name](const auto& f) { return name.compare(f.name) == 0; });
@@ -270,27 +275,6 @@ class EmulatorApp final : public xe::ui::WindowedApp {
                                               Args... args) {
       std::vector<std::unique_ptr<T>> instances;
 
-      // "Any" path
-      if (name.empty() || name == "any") {
-        for (const auto& creator : creators_) {
-          if (!creator.is_available()) {
-            continue;
-          }
-
-          // Skip xinput for "any" and use SDL
-          if (creator.name.compare("xinput") == 0) {
-            continue;
-          }
-
-          auto instance = creator.instantiate(std::forward<Args>(args)...);
-          if (instance) {
-            instances.emplace_back(std::move(instance));
-          }
-        }
-        return instances;
-      }
-
-      // "Specified" path. Winkey is always added on windows.
       if (name != "winkey") {
         auto it = std::find_if(
             creators_.cbegin(), creators_.cend(),
@@ -304,7 +288,6 @@ class EmulatorApp final : public xe::ui::WindowedApp {
         }
       }
 
-      // Always add winkey for passthrough.
       auto it = std::find_if(
           creators_.cbegin(), creators_.cend(),
           [&name](const auto& f) { return f.name.compare("winkey") == 0; });

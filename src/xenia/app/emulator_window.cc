@@ -40,6 +40,7 @@
 #include "xenia/ui/postprocessing_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/qt_util.h"
+#include "xenia/ui/simple_config_dialog_qt.h"
 #include "xenia/ui/xmp_dialog_qt.h"
 
 #if XE_PLATFORM_WIN32
@@ -1526,13 +1527,15 @@ void EmulatorWindow::ToggleProfilesConfigDialog() {
 }
 
 void EmulatorWindow::ToggleConfigDialog() {
-  if (!config_dialog_qt_) {
-    config_dialog_qt_ = new ConfigDialogQt(nullptr, this);
+  if (!simple_config_dialog_qt_) {
+    simple_config_dialog_qt_ = new SimpleConfigDialogQt(nullptr, this);
+  } else {
+    simple_config_dialog_qt_->ReloadConfigValues();
   }
 
-  config_dialog_qt_->show();
-  config_dialog_qt_->raise();
-  config_dialog_qt_->activateWindow();
+  simple_config_dialog_qt_->show();
+  simple_config_dialog_qt_->raise();
+  simple_config_dialog_qt_->activateWindow();
 }
 
 void EmulatorWindow::OpenConfigDialog(const std::string& category) {

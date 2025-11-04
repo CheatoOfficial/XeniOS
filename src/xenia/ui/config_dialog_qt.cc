@@ -525,7 +525,9 @@ void ConfigDialogQt::ResetToDefaults() {
     XELOGI("Resetting config to defaults (UI only)");
 
     for (auto& var_info : config_vars_) {
-      // Get the default value
+      if (var_info.name.find("logged_profile_slot_") != std::string::npos) {
+        continue;
+      }
       var_info.var->ResetConfigValueToDefault();
       std::string default_value;
 

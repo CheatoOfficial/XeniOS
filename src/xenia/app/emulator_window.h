@@ -277,6 +277,7 @@ class EmulatorWindow {
   QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
   QPointer<class ProfileDialogQt> profile_dialog_qt_;
+  QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;
   QPointer<class ConfigDialogQt> config_dialog_qt_;
   QPointer<class ContextMenuWidgetQt> context_menu_widget_qt_;
   QPointer<class XmpDialogQt> xmp_dialog_qt_;

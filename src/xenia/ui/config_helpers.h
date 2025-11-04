@@ -36,6 +36,19 @@ inline const std::vector<CvarAlias>& GetCvarAliases() {
       {"render_target_path_d3d12", "rov", "render_target_path", "accuracy"},
       {"render_target_path_vulkan", "fbo", "render_target_path", "performance"},
       {"render_target_path_vulkan", "fsi", "render_target_path", "accuracy"},
+#if XE_PLATFORM_WIN32
+      {"gpu", "any", "gpu", "d3d12"},
+      {"apu", "any", "apu", "xaudio2"},
+      {"hid", "any", "hid", "sdl"},
+#elif XE_PLATFORM_LINUX
+      {"gpu", "any", "gpu", "vulkan"},
+      {"apu", "any", "apu", "alsa"},
+      {"hid", "any", "hid", "sdl"},
+#else
+      {"gpu", "any", "gpu", "vulkan"},
+      {"apu", "any", "apu", "sdl"},
+      {"hid", "any", "hid", "sdl"},
+#endif
   };
   return aliases;
 }
@@ -45,17 +58,17 @@ inline const std::map<std::string, std::vector<std::string>>&
 GetKnownEnumOptions() {
   static const std::map<std::string, std::vector<std::string>> options = {
 #if XE_PLATFORM_WIN32
-      {"gpu", {"any", "d3d12", "vulkan", "null"}},
-      {"apu", {"any", "nop", "sdl", "xaudio2"}},
-      {"hid", {"any", "nop", "sdl", "winkey", "xinput"}},
+      {"gpu", {"d3d12", "vulkan", "null"}},
+      {"apu", {"xaudio2", "sdl", "nop"}},
+      {"hid", {"sdl", "winkey", "xinput", "nop"}},
 #elif XE_PLATFORM_LINUX
-      {"gpu", {"any", "vulkan", "null"}},
-      {"apu", {"any", "alsa", "nop", "sdl"}},
-      {"hid", {"any", "nop", "sdl"}},
+      {"gpu", {"vulkan", "null"}},
+      {"apu", {"alsa", "sdl", "nop"}},
+      {"hid", {"sdl", "nop"}},
 #else
-      {"gpu", {"any", "vulkan", "null"}},
-      {"apu", {"any", "nop", "sdl"}},
-      {"hid", {"any", "nop", "sdl"}},
+      {"gpu", {"vulkan", "null"}},
+      {"apu", {"nop", "sdl"}},
+      {"hid", {"sdl", "nop"}},
 #endif
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
