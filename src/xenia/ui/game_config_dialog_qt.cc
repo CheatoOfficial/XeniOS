@@ -252,27 +252,7 @@ void GameConfigDialogQt::LoadConfigOverrides() {
         original_overrides_[var_name] = value;  // Store original value
 
         // Add to table
-        int row = overrides_table_->rowCount();
-        overrides_table_->insertRow(row);
-
-        // Column 0: Variable name (non-editable text)
-        auto* name_item = new QTableWidgetItem(SafeQString(var_name));
-        name_item->setFlags(name_item->flags() & ~Qt::ItemIsEditable);
-        overrides_table_->setItem(row, 0, name_item);
-
-        // Column 1: Value editor widget based on type
-        QWidget* value_editor = CreateEditorForCvar(config_var, value);
-        overrides_table_->setCellWidget(row, 1, value_editor);
-
-        // Column 2: Delete button
-        auto* delete_button = new QPushButton("🗑", this);
-        delete_button->setMaximumWidth(30);
-        delete_button->setToolTip("Remove this override");
-        connect(delete_button, &QPushButton::clicked, [this, row]() {
-          overrides_table_->removeRow(row);
-          has_unsaved_changes_ = true;
-        });
-        overrides_table_->setCellWidget(row, 2, delete_button);
+        CreateRow(var_name, value);
       }
     }
   } catch (const std::exception& e) {
@@ -700,31 +680,7 @@ void GameConfigDialogQt::OnAddOverrideClicked() {
     }
 
     // Add new row
-    int row = overrides_table_->rowCount();
-    overrides_table_->insertRow(row);
-
-    // Column 0: Variable name (non-editable text)
-    auto* name_item = new QTableWidgetItem(var_name);
-    name_item->setFlags(name_item->flags() & ~Qt::ItemIsEditable);
-    overrides_table_->setItem(row, 0, name_item);
-
-    // Column 1: Use the editor widget we just created in the dialog
-    // We need to create a new one since the dialog's editor will be destroyed
-    if (selected_var) {
-      QWidget* value_editor =
-          CreateEditorForCvar(selected_var, SafeStdString(value));
-      overrides_table_->setCellWidget(row, 1, value_editor);
-    }
-
-    // Column 2: Delete button
-    auto* delete_button = new QPushButton("🗑", this);
-    delete_button->setMaximumWidth(30);
-    delete_button->setToolTip("Remove this override");
-    connect(delete_button, &QPushButton::clicked, [this, row]() {
-      overrides_table_->removeRow(row);
-      has_unsaved_changes_ = true;
-    });
-    overrides_table_->setCellWidget(row, 2, delete_button);
+    CreateRow(SafeStdString(var_name), SafeStdString(value));
 
     has_unsaved_changes_ = true;
   }
@@ -888,6 +844,13 @@ bool GameConfigDialogQt::ApplyRecommendedSetting(const std::string& var_name,
   }
 
   // Add new row since this setting doesn't exist yet
+  CreateRow(var_name, value);
+
+  return true;
+}
+
+void GameConfigDialogQt::CreateRow(const std::string& var_name,
+                                   const std::string& value) {
   int row = overrides_table_->rowCount();
   overrides_table_->insertRow(row);
 
@@ -897,20 +860,36 @@ bool GameConfigDialogQt::ApplyRecommendedSetting(const std::string& var_name,
   overrides_table_->setItem(row, 0, name_item);
 
   // Column 1: Value editor widget based on type
+  cvar::IConfigVar* config_var = nullptr;
+  if (cvar::ConfigVars &&
+      (*cvar::ConfigVars).find(var_name) != (*cvar::ConfigVars).end()) {
+    config_var = (*cvar::ConfigVars)[var_name];
+  }
   QWidget* value_editor = CreateEditorForCvar(config_var, value);
   overrides_table_->setCellWidget(row, 1, value_editor);
 
-  // Column 2: Delete button
+  // Column 2: Delete button (centered)
   auto* delete_button = new QPushButton("🗑", this);
   delete_button->setMaximumWidth(30);
   delete_button->setToolTip("Remove this override");
-  connect(delete_button, &QPushButton::clicked, [this, row]() {
-    overrides_table_->removeRow(row);
-    has_unsaved_changes_ = true;
-  });
-  overrides_table_->setCellWidget(row, 2, delete_button);
+  auto* button_container = new QWidget(this);
+  auto* button_layout = new QHBoxLayout(button_container);
+  button_layout->addWidget(delete_button);
+  button_layout->setAlignment(Qt::AlignCenter);
+  button_layout->setContentsMargins(0, 0, 0, 0);
+  overrides_table_->setCellWidget(row, 2, button_container);
 
-  return true;
+  // Connect after setting the cell widget so we can find the row dynamically
+  connect(delete_button, &QPushButton::clicked, [this, button_container]() {
+    // Find which row this button is in
+    for (int i = 0; i < overrides_table_->rowCount(); ++i) {
+      if (overrides_table_->cellWidget(i, 2) == button_container) {
+        overrides_table_->removeRow(i);
+        has_unsaved_changes_ = true;
+        break;
+      }
+    }
+  });
 }
 
 }  // namespace app

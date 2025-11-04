@@ -54,6 +54,7 @@ class GameConfigDialogQt : public QDialog {
                                const std::string& current_value);
   std::string GetEditorValue(QWidget* editor);
   void UpdateRowModifiedState(int row);
+  void CreateRow(const std::string& var_name, const std::string& value);
 
   EmulatorWindow* emulator_window_;
   uint32_t title_id_;
