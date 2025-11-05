@@ -2701,11 +2701,6 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
   disable_hotkeys_ = false;
 
-  if (profile_config_dialog_) {
-    profile_config_dialog_.reset();
-    emulator_->kernel_state()->xam_state()->xam_dialogs_shown_--;
-  }
-
   if (postprocessing_dialog_qt_) {
     postprocessing_dialog_qt_->deleteLater();
   }
@@ -2847,10 +2842,6 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
 }
 
 void EmulatorWindow::ClearDialogs() {
-  if (profile_config_dialog_) {
-    profile_config_dialog_.reset();
-  }
-
   if (postprocessing_dialog_qt_) {
     postprocessing_dialog_qt_->deleteLater();
   }

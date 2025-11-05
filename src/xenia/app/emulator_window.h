@@ -282,10 +282,6 @@ class EmulatorWindow {
   QPointer<class ContextMenuWidgetQt> context_menu_widget_qt_;
   QPointer<class XmpDialogQt> xmp_dialog_qt_;
 
-  // Storing pointers and toggling dialog state is useful for broadcasting
-  // messages back to guest.
-  std::unique_ptr<ProfileConfigDialog> profile_config_dialog_;
-
   std::vector<RecentTitleEntry> recently_launched_titles_;
 
   // Menu items that need to be enabled/disabled based on child process state
