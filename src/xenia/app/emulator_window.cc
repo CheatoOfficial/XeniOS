@@ -398,7 +398,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
   }
 
   // Create a thread to listen for controller hotkeys.
-  if (cvars::controller_hotkeys) {
+  // This thread is started when hid=sdl to prevent SDL analog input issues
+  // with Qt's event loop (e.g. in PGR4).
+  if (cvars::controller_hotkeys || cvars::hid == "sdl") {
     Gamepad_HotKeys_Listener =
         threading::Thread::Create({}, [&] { GamepadHotKeys(); });
     Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
