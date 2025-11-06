@@ -112,3 +112,4 @@
 [submodule "third_party/game-patches"]
 	path = third_party/game-patches
 	url = https://github.com/xenia-canary/game-patches.git
+	branch = main

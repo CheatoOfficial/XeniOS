@@ -86,6 +86,7 @@ class GameListDialogQt : public QWidget {
   void ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
                               const QString& title_name = "");
   std::string FormatLastPlayed(time_t timestamp);
+  std::vector<std::filesystem::path> FindPatchesForTitle(uint32_t title_id);
 
   EmulatorWindow* emulator_window_;
   std::vector<GameListEntry> game_entries_;

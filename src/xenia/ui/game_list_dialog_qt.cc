@@ -46,6 +46,7 @@
 #include "xenia/kernel/xam/xdbf/gpd_info_title.h"
 #include "xenia/ui/achievements_dialog_qt.h"
 #include "xenia/ui/game_config_dialog_qt.h"
+#include "xenia/ui/patches_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/profile_editor_dialog_qt.h"
 #include "xenia/ui/qt_util.h"
@@ -873,6 +874,50 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     }
   }
 
+  // Patches option (always shown if we have a valid title_id, greyed out if no
+  // patches)
+  QMenu* patches_menu = nullptr;
+  if (title_id != 0) {
+    auto available_patches = FindPatchesForTitle(title_id);
+    patches_menu = context_menu.addMenu("Patches");
+
+    if (available_patches.empty()) {
+      // No patches found - disable the menu
+      patches_menu->setEnabled(false);
+    } else {
+      // Patches found - populate the submenu
+      for (const auto& patch_path : available_patches) {
+        // Extract a display name from the filename
+        // Format: "TITLEID - Game Name (Version).patch.toml"
+        std::string filename = patch_path.filename().string();
+
+        // Remove the title ID prefix and " - "
+        std::string display_name = filename;
+        size_t dash_pos = filename.find(" - ");
+        if (dash_pos != std::string::npos) {
+          display_name = filename.substr(dash_pos + 3);
+        }
+
+        // Remove ".patch.toml" suffix
+        size_t suffix_pos = display_name.rfind(".patch.toml");
+        if (suffix_pos != std::string::npos) {
+          display_name = display_name.substr(0, suffix_pos);
+        }
+
+        QAction* patch_action =
+            patches_menu->addAction(SafeQString(display_name));
+
+        // Open patch management dialog
+        connect(patch_action, &QAction::triggered, [=, this]() {
+          auto* dialog =
+              new PatchesDialogQt(this, emulator_window_, title_id, patch_path);
+          dialog->exec();
+          delete dialog;
+        });
+      }
+    }
+  }
+
   // Achievements option (enabled if user is logged in and we have a valid
   // title_id)
   QAction* achievements_action = nullptr;
@@ -1440,6 +1485,79 @@ void GameListDialogQt::HideScrollbar() {
       "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
       "    background: none;"
       "}");
+}
+
+std::vector<std::filesystem::path> GameListDialogQt::FindPatchesForTitle(
+    uint32_t title_id) {
+  std::vector<std::filesystem::path> patches;
+  std::map<std::string, std::filesystem::path> unique_patches;
+
+  if (title_id == 0) {
+    return patches;
+  }
+
+  if (!emulator_window_ || !emulator_window_->emulator()) {
+    return patches;
+  }
+
+  // Create the title ID prefix to search for (e.g., "4D5307D5")
+  std::string title_id_prefix = fmt::format("{:08X}", title_id);
+
+  // Helper lambda to scan a directory for patches
+  auto scan_patch_directory = [&](const std::filesystem::path& dir,
+                                  bool allow_overwrite) {
+    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+      return;
+    }
+
+    try {
+      for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) {
+          continue;
+        }
+
+        auto filename = xe::path_to_utf8(entry.path().filename());
+
+        // Check if filename starts with the title ID and ends with .toml
+        if (filename.size() >= title_id_prefix.size() &&
+            filename.compare(0, title_id_prefix.size(), title_id_prefix) == 0 &&
+            filename.ends_with(".toml")) {
+          // Only add if we're allowed to overwrite or if not already present
+          if (allow_overwrite ||
+              unique_patches.find(filename) == unique_patches.end()) {
+            unique_patches[filename] = entry.path();
+          }
+        }
+      }
+    } catch (const std::filesystem::filesystem_error& e) {
+      XELOGE("Error scanning patches directory {}: {}", dir.string(), e.what());
+    }
+  };
+
+  // First, scan storage_root/patches (writable, user-managed patches)
+  auto storage_patches_dir =
+      emulator_window_->emulator()->storage_root() / "patches";
+  scan_patch_directory(storage_patches_dir, true);
+
+  // Second, scan executable_dir/game_patches (bundled, read-only patches)
+  auto executable_path = xe::filesystem::GetExecutablePath();
+  auto executable_dir = executable_path.parent_path();
+  auto bundled_patches_dir = executable_dir / "game_patches";
+  scan_patch_directory(bundled_patches_dir,
+                       false);  // Don't overwrite storage_root patches
+
+  // Convert map to vector and sort by filename
+  for (const auto& [filename, path] : unique_patches) {
+    patches.push_back(path);
+  }
+
+  std::sort(patches.begin(), patches.end(),
+            [](const std::filesystem::path& a, const std::filesystem::path& b) {
+              return xe::path_to_utf8(a.filename()) <
+                     xe::path_to_utf8(b.filename());
+            });
+
+  return patches;
 }
 
 void GameListDialogQt::ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
