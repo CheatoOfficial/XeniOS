@@ -1263,24 +1263,58 @@ const std::filesystem::path Emulator::GetNewDiscPath(
     std::string window_message) {
   std::filesystem::path path = "";
 
-  auto file_picker = xe::ui::FilePicker::Create();
-  file_picker->set_mode(ui::FilePicker::Mode::kOpen);
-  file_picker->set_type(ui::FilePicker::Type::kFile);
-  file_picker->set_multi_selection(false);
-  file_picker->set_title(!window_message.empty() ? window_message
-                                                 : "Select Content Package");
-  file_picker->set_extensions({
-      {"Supported Files", "*.iso;*.xex;*.xcp;*.*"},
-      {"Disc Image (*.iso)", "*.iso"},
-      {"Xbox Executable (*.xex)", "*.xex"},
-      {"All Files (*.*)", "*.*"},
-  });
-
-  if (file_picker->Show()) {
-    auto selected_files = file_picker->selected_files();
-    if (!selected_files.empty()) {
-      path = selected_files[0];
+  // Get the original game launch path from XAM loader data
+  std::filesystem::path initial_dir;
+  if (kernel_state_) {
+    auto xam =
+        kernel_state_->GetKernelModule<kernel::xam::XamModule>("xam.xex");
+    if (xam) {
+      const std::string& host_path = xam->loader_data().host_path;
+      if (!host_path.empty()) {
+        // Convert the stored host path to a filesystem path and get its parent
+        // directory
+        std::filesystem::path game_path = xe::to_path(host_path);
+        if (std::filesystem::exists(game_path)) {
+          initial_dir = game_path.parent_path();
+          XELOGI("Setting file picker initial directory to game directory: {}",
+                 initial_dir.string().c_str());
+        }
+      }
     }
+  }
+
+  // Must execute the file picker on the UI thread to avoid Qt crashes
+  if (display_window_) {
+    display_window_->app_context().CallInUIThreadSynchronous([&]() {
+      auto file_picker = xe::ui::FilePicker::Create();
+      file_picker->set_mode(ui::FilePicker::Mode::kOpen);
+      file_picker->set_type(ui::FilePicker::Type::kFile);
+      file_picker->set_multi_selection(false);
+      file_picker->set_title(
+          !window_message.empty() ? window_message : "Select Content Package");
+
+      // Set the initial directory to the game's directory if available
+      if (!initial_dir.empty() && std::filesystem::exists(initial_dir)) {
+        file_picker->set_initial_directory(initial_dir);
+      }
+
+      file_picker->set_extensions({
+          {"Supported Files", "*.iso;*.xex;*.xcp;*.*"},
+          {"Disc Image (*.iso)", "*.iso"},
+          {"Xbox Executable (*.xex)", "*.xex"},
+          {"All Files (*.*)", "*.*"},
+      });
+
+      if (file_picker->Show(display_window_)) {
+        auto selected_files = file_picker->selected_files();
+        if (!selected_files.empty()) {
+          path = selected_files[0];
+        }
+      }
+    });
+  } else {
+    // Cannot show file picker without a display window
+    XELOGE("Cannot show file picker: no display window available");
   }
   return path;
 }
