@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,9 +34,16 @@ namespace app {
 
 class EmulatorWindow;
 
+struct DiscInfo {
+  std::filesystem::path path;
+  std::string label;
+};
+
 struct GameListEntry {
   std::string title_name;
-  std::filesystem::path path_to_file;
+  std::filesystem::path path_to_file;  // Primary/first disc path
+  std::vector<DiscInfo>
+      all_discs;  // All discs with labels for multi-disc games
   time_t last_run_time;
   uint32_t title_id;
   std::vector<uint8_t> icon;
@@ -85,6 +93,8 @@ class GameListDialogQt : public QWidget {
   void RemoveTitleFromDashboard(uint32_t title_id);
   void ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,
                               const QString& title_name = "");
+  std::optional<std::filesystem::path> ShowDiscSelectionDialog(
+      const GameListEntry* entry);
   std::string FormatLastPlayed(time_t timestamp);
   std::vector<std::filesystem::path> FindPatchesForTitle(uint32_t title_id);
 

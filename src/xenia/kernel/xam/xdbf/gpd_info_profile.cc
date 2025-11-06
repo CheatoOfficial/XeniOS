@@ -9,6 +9,7 @@
 
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
 
@@ -136,13 +137,38 @@ void GpdInfoProfile::UpdateTitleInfo(const uint32_t title_id,
   memcpy(current_info, title_data, sizeof(X_XDBF_GPD_TITLE_PLAYED));
 }
 
-// Xenia-specific: Use custom string IDs to store file paths
+// Xenia-specific: Use custom string IDs to store file paths and optional labels
 // String IDs 0xFFFE0000 - 0xFFFEFFFF are reserved for Xenia extensions
-// For multi-disc titles, we store all paths in a single string separated by
-// newline (newline is invalid in filenames on both Windows and Linux) Format:
-// "path/to/disc1.iso\npath/to/disc2.iso\npath/to/disc3.iso"
+// For multi-disc titles, we store paths (with optional labels) separated by
+// newline Format: "label1::path1\npath2\nlabel3::path3"
+// - If a line contains '::', split on first '::' as label::path
+// - If no '::', the entire line is the path and label defaults to "Disc N"
+// - Labels cannot contain '::' sequence
 constexpr uint32_t kXeniaPathStringBase = 0xFFFE0000;
 constexpr char kPathDelimiter = '\n';
+constexpr std::string_view kLabelDelimiter = "::";
+
+// Helper to strip label from path string (format: "label::path" -> "path")
+static std::string StripLabel(const std::string& path_with_label) {
+  size_t delim_pos = path_with_label.find(kLabelDelimiter);
+  if (delim_pos != std::string::npos) {
+    return path_with_label.substr(delim_pos + kLabelDelimiter.size());
+  }
+  return path_with_label;
+}
+
+// Helper to parse label and path from string (format: "label::path" or just
+// "path") Returns pair of (label, path). If no label present, label will be
+// empty string.
+static std::pair<std::string, std::string> ParseLabelAndPath(
+    const std::string& line) {
+  size_t delim_pos = line.find(kLabelDelimiter);
+  if (delim_pos != std::string::npos) {
+    return {line.substr(0, delim_pos),
+            line.substr(delim_pos + kLabelDelimiter.size())};
+  }
+  return {"", line};
+}
 
 void GpdInfoProfile::SetTitlePath(uint32_t title_id,
                                   const std::filesystem::path& path) {
@@ -160,6 +186,15 @@ void GpdInfoProfile::AddTitlePath(uint32_t title_id,
     // No paths yet, this shouldn't happen in normal flow but handle it
     SetTitlePath(title_id, path);
     return;
+  }
+
+  // Check if this path already exists (ignoring labels)
+  auto existing_discs = GetTitleDiscs(title_id);
+  for (const auto& disc : existing_discs) {
+    if (disc.path == path) {
+      // Path already exists, don't add duplicate
+      return;
+    }
   }
 
   // Convert to UTF-8 for easier manipulation
@@ -191,6 +226,9 @@ std::optional<std::filesystem::path> GpdInfoProfile::GetTitlePath(
     paths_utf8 = paths_utf8.substr(0, delimiter_pos);
   }
 
+  // Strip label if present (format: "label::path")
+  paths_utf8 = StripLabel(paths_utf8);
+
   return std::filesystem::path(paths_utf8);
 }
 
@@ -213,7 +251,7 @@ std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
   while ((end = paths_utf8.find(kPathDelimiter, start)) != std::string::npos) {
     std::string path_str = paths_utf8.substr(start, end - start);
     if (!path_str.empty()) {
-      paths.push_back(std::filesystem::path(path_str));
+      paths.push_back(std::filesystem::path(StripLabel(path_str)));
     }
     start = end + 1;
   }
@@ -222,11 +260,158 @@ std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
   if (start < paths_utf8.length()) {
     std::string path_str = paths_utf8.substr(start);
     if (!path_str.empty()) {
-      paths.push_back(std::filesystem::path(path_str));
+      paths.push_back(std::filesystem::path(StripLabel(path_str)));
     }
   }
 
   return paths;
+}
+
+std::vector<GpdInfoProfile::DiscInfo> GpdInfoProfile::GetTitleDiscs(
+    uint32_t title_id) const {
+  std::vector<DiscInfo> discs;
+
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string data_u16 = GetString(string_id);
+
+  if (data_u16.empty()) {
+    return discs;
+  }
+
+  // Split by newline delimiter
+  std::string data_utf8 = xe::to_utf8(data_u16);
+  size_t start = 0;
+  size_t end = 0;
+  size_t disc_num = 1;
+
+  while ((end = data_utf8.find(kPathDelimiter, start)) != std::string::npos) {
+    std::string line = data_utf8.substr(start, end - start);
+    if (!line.empty()) {
+      DiscInfo disc;
+      auto [label, path_str] = ParseLabelAndPath(line);
+      disc.path = std::filesystem::path(path_str);
+      disc.label = label;  // Keep empty if no label in storage
+      discs.push_back(disc);
+      disc_num++;
+    }
+    start = end + 1;
+  }
+
+  // Add the last entry (or only entry if no delimiter)
+  if (start < data_utf8.length()) {
+    std::string line = data_utf8.substr(start);
+    if (!line.empty()) {
+      DiscInfo disc;
+      auto [label, path_str] = ParseLabelAndPath(line);
+      disc.path = std::filesystem::path(path_str);
+      disc.label = label;  // Keep empty if no label in storage
+      discs.push_back(disc);
+    }
+  }
+
+  return discs;
+}
+
+void GpdInfoProfile::SetDiscLabel(uint32_t title_id,
+                                  const std::filesystem::path& path,
+                                  const std::string& label) {
+  // Validate label doesn't contain delimiter
+  if (label.find(kLabelDelimiter) != std::string::npos) {
+    XELOGW("Disc label cannot contain '::' sequence");
+    return;
+  }
+
+  auto discs = GetTitleDiscs(title_id);
+  bool found = false;
+
+  // Update the label for the matching path
+  for (auto& disc : discs) {
+    if (disc.path == path) {
+      disc.label = label;
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    XELOGW("Path not found in disc list for title {:08X}", title_id);
+    return;
+  }
+
+  // Rebuild the string with updated labels
+  // Only include label:: prefix if the label is non-empty (custom label)
+  std::string combined;
+  for (size_t i = 0; i < discs.size(); i++) {
+    if (i > 0) {
+      combined += kPathDelimiter;
+    }
+
+    if (!discs[i].label.empty()) {
+      // Custom label present, include it
+      combined += discs[i].label;
+      combined += kLabelDelimiter;
+    }
+    // Always include the path
+    combined += xe::path_to_utf8(discs[i].path);
+  }
+
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string combined_u16 = xe::to_utf16(combined);
+  AddString(string_id, combined_u16);
+}
+
+std::string GpdInfoProfile::GetDiscLabel(
+    uint32_t title_id, const std::filesystem::path& path) const {
+  auto discs = GetTitleDiscs(title_id);
+  for (const auto& disc : discs) {
+    if (disc.path == path) {
+      return disc.label;
+    }
+  }
+  return "";
+}
+
+void GpdInfoProfile::RemoveDiscPath(uint32_t title_id,
+                                    const std::filesystem::path& path) {
+  auto discs = GetTitleDiscs(title_id);
+
+  // Find and remove the disc with the matching path
+  auto it =
+      std::find_if(discs.begin(), discs.end(),
+                   [&path](const DiscInfo& disc) { return disc.path == path; });
+
+  if (it == discs.end()) {
+    XELOGW("Path not found in disc list for title {:08X}", title_id);
+    return;
+  }
+
+  discs.erase(it);
+
+  // If no discs left, remove the entire entry
+  if (discs.empty()) {
+    const uint32_t string_id = kXeniaPathStringBase + title_id;
+    // Delete the string entry by setting it to empty
+    AddString(string_id, u"");
+    return;
+  }
+
+  // Rebuild the string without the removed disc
+  std::string combined;
+  for (size_t i = 0; i < discs.size(); i++) {
+    if (i > 0) {
+      combined += kPathDelimiter;
+    }
+
+    if (!discs[i].label.empty()) {
+      combined += discs[i].label;
+      combined += kLabelDelimiter;
+    }
+    combined += xe::path_to_utf8(discs[i].path);
+  }
+
+  const uint32_t string_id = kXeniaPathStringBase + title_id;
+  const std::u16string combined_u16 = xe::to_utf16(combined);
+  AddString(string_id, combined_u16);
 }
 
 }  // namespace xam

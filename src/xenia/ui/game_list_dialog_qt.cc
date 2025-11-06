@@ -11,13 +11,17 @@
 
 #include <QCursor>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QEvent>
 #include <QGraphicsOpacityEffect>
 #include <QHeaderView>
 #include <QImage>
+#include <QInputDialog>
+#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPalette>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QUrl>
 #include <chrono>
@@ -426,15 +430,21 @@ void GameListDialogQt::LoadGameList() {
         path_to_file = *gpd_path;
       }
 
-      // Check if there are multiple discs
-      auto all_paths = dashboard_gpd.GetTitlePaths(title_id);
-      if (all_paths.size() > 1) {
-        XELOGI("Title {:08X} has {} discs", title_id, all_paths.size());
+      // Get all discs with labels for multi-disc games
+      auto all_discs_gpd = dashboard_gpd.GetTitleDiscs(title_id);
+      std::vector<DiscInfo> all_discs;
+      for (const auto& disc : all_discs_gpd) {
+        all_discs.push_back({disc.path, disc.label});
+      }
+
+      if (all_discs.size() > 1) {
+        XELOGI("Title {:08X} has {} discs", title_id, all_discs.size());
       }
 
       // Add to our map (without icon for now)
-      titles_by_id[title_id] = {title_name, path_to_file, last_played, title_id,
-                                std::vector<uint8_t>()};
+      titles_by_id[title_id] = {title_name, path_to_file,
+                                all_discs,  last_played,
+                                title_id,   std::vector<uint8_t>()};
     }
   }
 
@@ -678,6 +688,11 @@ void GameListDialogQt::PopulateTable() {
       if (display_title.isEmpty()) {
         display_title = QString("File Corrupted");
         file_corrupted = true;
+      } else {
+        // Add disc count for multi-disc games
+        if (entry.all_discs.size() > 1) {
+          display_title += QString(" (%1 discs)").arg(entry.all_discs.size());
+        }
       }
     }
     auto* title_label = new QLabel(display_title);
@@ -781,8 +796,26 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
     return;
   }
 
-  std::filesystem::path path = SafeStdString(path_str);
-  LaunchGame(path, title_id);
+  // Check if this is a multi-disc game
+  const GameListEntry* entry = nullptr;
+  for (const auto& e : game_entries_) {
+    if (e.title_id == title_id) {
+      entry = &e;
+      break;
+    }
+  }
+
+  if (entry && entry->all_discs.size() > 1) {
+    // Show disc selection dialog
+    auto selected_path = ShowDiscSelectionDialog(entry);
+    if (selected_path.has_value()) {
+      LaunchGame(selected_path.value(), title_id);
+    }
+  } else {
+    // Single disc game, launch directly
+    std::filesystem::path path = SafeStdString(path_str);
+    LaunchGame(path, title_id);
+  }
 }
 
 void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
@@ -809,12 +842,43 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
 
   QMenu context_menu;
 
+  // Find the game entry to check for multi-disc
+  const GameListEntry* entry = nullptr;
+  for (const auto& e : game_entries_) {
+    if (e.title_id == title_id) {
+      entry = &e;
+      break;
+    }
+  }
+
   // Always show launch/open option, but change text based on path availability
   QAction* launch_action = nullptr;
+  QMenu* launch_menu = nullptr;
   QAction* open_folder_action = nullptr;
 
   if (has_path) {
-    launch_action = context_menu.addAction("Launch");
+    // Check if this is a multi-disc game
+    if (entry && entry->all_discs.size() > 1) {
+      // Create a submenu for disc selection
+      launch_menu = context_menu.addMenu("Launch");
+      size_t disc_num = 1;
+      for (const auto& disc : entry->all_discs) {
+        QString disc_label = disc.label.empty()
+                                 ? QString("Disc %1").arg(disc_num)
+                                 : SafeQString(disc.label);
+        QAction* disc_action = launch_menu->addAction(disc_label);
+        disc_num++;
+
+        // Capture disc.path by value in lambda
+        connect(disc_action, &QAction::triggered,
+                [this, disc_path = disc.path, title_id]() {
+                  LaunchGame(disc_path, title_id);
+                });
+      }
+    } else {
+      // Single disc game, just add a launch action
+      launch_action = context_menu.addAction("Launch");
+    }
     open_folder_action = context_menu.addAction("Open containing folder");
   } else {
     launch_action = context_menu.addAction("Open");
@@ -1160,7 +1224,25 @@ void GameListDialogQt::RemoveTitleFromDashboard(uint32_t title_id) {
 
 void GameListDialogQt::OnPlayClicked() {
   if (!selected_game_path_.empty()) {
-    LaunchGame(selected_game_path_, selected_game_title_id_);
+    // Check if this is a multi-disc game
+    const GameListEntry* entry = nullptr;
+    for (const auto& e : game_entries_) {
+      if (e.title_id == selected_game_title_id_) {
+        entry = &e;
+        break;
+      }
+    }
+
+    if (entry && entry->all_discs.size() > 1) {
+      // Show disc selection dialog
+      auto selected_path = ShowDiscSelectionDialog(entry);
+      if (selected_path.has_value()) {
+        LaunchGame(selected_path.value(), selected_game_title_id_);
+      }
+    } else {
+      // Single disc game, launch directly
+      LaunchGame(selected_game_path_, selected_game_title_id_);
+    }
   } else {
     // No path available for selected game - show message and open file picker
     LaunchGameWithFilePicker();
@@ -1558,6 +1640,161 @@ std::vector<std::filesystem::path> GameListDialogQt::FindPatchesForTitle(
             });
 
   return patches;
+}
+
+std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
+    const GameListEntry* entry) {
+  if (!entry || entry->all_discs.size() <= 1) {
+    return std::nullopt;
+  }
+
+  QDialog disc_dialog(this);
+  disc_dialog.setWindowTitle("Select Disc");
+  disc_dialog.setMinimumWidth(500);
+
+  auto* layout = new QVBoxLayout(&disc_dialog);
+
+  auto* label = new QLabel(SafeQString(
+      fmt::format("This game has {} discs. Select which disc to launch:",
+                  entry->all_discs.size())));
+  label->setWordWrap(true);
+  layout->addWidget(label);
+
+  auto* list_widget = new QListWidget();
+  size_t disc_num = 1;
+  for (const auto& disc : entry->all_discs) {
+    QString disc_label = disc.label.empty() ? QString("Disc %1").arg(disc_num)
+                                            : SafeQString(disc.label);
+    auto* list_item = new QListWidgetItem(disc_label);
+    list_item->setData(Qt::UserRole, SafeQString(disc.path.string()));
+    list_widget->addItem(list_item);
+    disc_num++;
+  }
+  list_widget->setCurrentRow(0);
+  layout->addWidget(list_widget);
+
+  auto* button_layout = new QHBoxLayout();
+
+  auto* rename_button = new QPushButton("Rename...");
+  auto* delete_button = new QPushButton("Delete");
+  button_layout->addWidget(rename_button);
+  button_layout->addWidget(delete_button);
+  button_layout->addStretch();
+
+  auto* launch_button = new QPushButton("Launch");
+  auto* cancel_button = new QPushButton("Cancel");
+
+  connect(launch_button, &QPushButton::clicked, &disc_dialog, &QDialog::accept);
+  connect(cancel_button, &QPushButton::clicked, &disc_dialog, &QDialog::reject);
+  connect(list_widget, &QListWidget::itemDoubleClicked, &disc_dialog,
+          &QDialog::accept);
+
+  // Delete button handler
+  connect(delete_button, &QPushButton::clicked,
+          [this, list_widget, entry, &disc_dialog]() {
+            auto* selected_item = list_widget->currentItem();
+            if (!selected_item) {
+              return;
+            }
+
+            QString path_str = selected_item->data(Qt::UserRole).toString();
+            std::filesystem::path disc_path = SafeStdString(path_str);
+
+            auto result =
+                QMessageBox::question(this, "Delete Disc Entry",
+                                      QString("Are you sure you want to remove "
+                                              "this disc from the list?\n\n%1")
+                                          .arg(selected_item->text()),
+                                      QMessageBox::Yes | QMessageBox::No);
+
+            if (result == QMessageBox::Yes) {
+              if (emulator_window_ && emulator_window_->emulator()) {
+                auto kernel_state =
+                    emulator_window_->emulator()->kernel_state();
+                if (kernel_state) {
+                  auto profile_manager =
+                      kernel_state->xam_state()->profile_manager();
+                  auto profile =
+                      profile_manager->GetProfile(static_cast<uint8_t>(0));
+                  if (profile) {
+                    profile->RemoveDiscPath(entry->title_id, disc_path);
+
+                    // Remove from list widget
+                    delete list_widget->takeItem(list_widget->currentRow());
+
+                    // If no more discs, close the dialog
+                    if (list_widget->count() == 0) {
+                      disc_dialog.reject();
+                    }
+
+                    // Reload the game list to refresh
+                    const_cast<GameListDialogQt*>(this)->LoadGameList();
+                  }
+                }
+              }
+            }
+          });
+
+  // Rename button handler
+  connect(rename_button, &QPushButton::clicked, [this, list_widget, entry]() {
+    auto* selected_item = list_widget->currentItem();
+    if (!selected_item) {
+      return;
+    }
+
+    QString current_label = selected_item->text();
+    QString path_str = selected_item->data(Qt::UserRole).toString();
+    std::filesystem::path disc_path = SafeStdString(path_str);
+
+    bool ok;
+    QString new_label = QInputDialog::getText(
+        this, "Rename Disc",
+        "Enter new label for this disc:", QLineEdit::Normal, current_label,
+        &ok);
+
+    if (ok && !new_label.isEmpty()) {
+      std::string label_std = SafeStdString(new_label);
+
+      // Validate label doesn't contain ::
+      if (label_std.find("::") != std::string::npos) {
+        QMessageBox::warning(this, "Invalid Label",
+                             "Label cannot contain '::' sequence");
+        return;
+      }
+
+      // Update the label in the GPD
+      if (emulator_window_ && emulator_window_->emulator()) {
+        auto kernel_state = emulator_window_->emulator()->kernel_state();
+        if (kernel_state) {
+          auto profile_manager = kernel_state->xam_state()->profile_manager();
+          auto profile = profile_manager->GetProfile(static_cast<uint8_t>(0));
+          if (profile) {
+            profile->SetDiscLabel(entry->title_id, disc_path, label_std);
+
+            // Update the list item
+            selected_item->setText(SafeQString(label_std));
+
+            // Reload the game list to refresh
+            const_cast<GameListDialogQt*>(this)->LoadGameList();
+          }
+        }
+      }
+    }
+  });
+
+  button_layout->addWidget(launch_button);
+  button_layout->addWidget(cancel_button);
+  layout->addLayout(button_layout);
+
+  if (disc_dialog.exec() == QDialog::Accepted) {
+    auto* selected_item = list_widget->currentItem();
+    if (selected_item) {
+      QString selected_path = selected_item->data(Qt::UserRole).toString();
+      return std::filesystem::path(SafeStdString(selected_path));
+    }
+  }
+
+  return std::nullopt;
 }
 
 void GameListDialogQt::ShowAchievementsDialog(uint64_t xuid, uint32_t title_id,

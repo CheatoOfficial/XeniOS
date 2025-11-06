@@ -107,10 +107,16 @@ std::u16string GpdInfo::GetString(uint32_t id) const {
 }
 
 void GpdInfo::AddString(uint32_t id, std::u16string string_data) {
-  Entry* entry = GetEntry(static_cast<uint16_t>(GpdSection::kString), id);
-
-  if (entry != nullptr) {
-    return;
+  // Check if the string already exists with the same value
+  const Entry* existing_entry =
+      GetEntry(static_cast<uint16_t>(GpdSection::kString), id);
+  if (existing_entry) {
+    std::u16string existing_string = string_util::read_u16string_and_swap(
+        reinterpret_cast<const char16_t*>(existing_entry->data.data()));
+    if (existing_string == string_data) {
+      // String hasn't changed, no need to update
+      return;
+    }
   }
 
   const uint32_t entry_size =

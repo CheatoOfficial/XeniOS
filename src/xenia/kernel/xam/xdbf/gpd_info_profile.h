@@ -47,6 +47,18 @@ class GpdInfoProfile : public GpdInfo {
   std::optional<std::filesystem::path> GetTitlePath(uint32_t title_id) const;
   std::vector<std::filesystem::path> GetTitlePaths(uint32_t title_id) const;
 
+  // Disc label management (stored separately from paths)
+  struct DiscInfo {
+    std::filesystem::path path;
+    std::string label;  // User-controllable label
+  };
+  std::vector<DiscInfo> GetTitleDiscs(uint32_t title_id) const;
+  void SetDiscLabel(uint32_t title_id, const std::filesystem::path& path,
+                    const std::string& label);
+  std::string GetDiscLabel(uint32_t title_id,
+                           const std::filesystem::path& path) const;
+  void RemoveDiscPath(uint32_t title_id, const std::filesystem::path& path);
+
  private:
   X_XDBF_GPD_TITLE_PLAYED FillTitlePlayedData(const SpaInfo* title_data) const;
 };
