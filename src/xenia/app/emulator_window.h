@@ -251,6 +251,9 @@ class EmulatorWindow {
   void FillRecentlyLaunchedTitlesMenu(xe::ui::MenuItem* recent_menu);
   void LoadRecentlyLaunchedTitles();
 
+  // Get initial directory for file pickers based on recently played games
+  std::filesystem::path GetFilePickerInitialDirectory() const;
+
   void ClearDialogs();
 
   Emulator* emulator_;

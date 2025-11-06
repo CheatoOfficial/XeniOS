@@ -1178,6 +1178,12 @@ void EmulatorWindow::FileOpen() {
   file_picker->set_type(ui::FilePicker::Type::kFile);
   file_picker->set_multi_selection(false);
   file_picker->set_title("Select Content Package");
+
+  auto initial_dir = GetFilePickerInitialDirectory();
+  if (!initial_dir.empty()) {
+    file_picker->set_initial_directory(initial_dir);
+  }
+
   file_picker->set_extensions({
       {"Supported Files", "*.iso;*.xex;*.zar;*.*"},
       {"Disc Image (*.iso)", "*.iso"},
@@ -1208,6 +1214,12 @@ void EmulatorWindow::InstallContent() {
   file_picker->set_type(ui::FilePicker::Type::kFile);
   file_picker->set_multi_selection(true);
   file_picker->set_title("Select Content Package(s)");
+
+  auto initial_dir = GetFilePickerInitialDirectory();
+  if (!initial_dir.empty()) {
+    file_picker->set_initial_directory(initial_dir);
+  }
+
   file_picker->set_extensions({
       {"All Files (*.*)", "*.*"},
   });
@@ -1256,6 +1268,12 @@ void EmulatorWindow::ExtractZarchive() {
   file_picker->set_type(ui::FilePicker::Type::kFile);
   file_picker->set_multi_selection(true);
   file_picker->set_title("Select Zar Package");
+
+  auto initial_dir = GetFilePickerInitialDirectory();
+  if (!initial_dir.empty()) {
+    file_picker->set_initial_directory(initial_dir);
+  }
+
   file_picker->set_extensions({
       {"Zarchive Files (*.zar)", "*.zar"},
   });
@@ -1342,6 +1360,11 @@ void EmulatorWindow::CreateZarchive() {
   file_picker->set_type(ui::FilePicker::Type::kDirectory);
   file_picker->set_multi_selection(true);
   file_picker->set_title("Select Contents");
+
+  auto initial_dir = GetFilePickerInitialDirectory();
+  if (!initial_dir.empty()) {
+    file_picker->set_initial_directory(initial_dir);
+  }
 
   if (file_picker->Show(window_.get())) {
     content_dirs = file_picker->selected_files();
@@ -2755,6 +2778,20 @@ void EmulatorWindow::FillRecentlyLaunchedTitlesMenu(
                                              LaunchTitleInNewProcess(path);
                                            }));
   }
+}
+
+std::filesystem::path EmulatorWindow::GetFilePickerInitialDirectory() const {
+  // Return the directory of the most recently played game if available
+  if (!recently_launched_titles_.empty()) {
+    const auto& recent_path = recently_launched_titles_[0].path_to_file;
+    if (std::filesystem::exists(recent_path)) {
+      auto parent_dir = recent_path.parent_path();
+      if (!parent_dir.empty() && std::filesystem::exists(parent_dir)) {
+        return parent_dir;
+      }
+    }
+  }
+  return std::filesystem::path();
 }
 
 void EmulatorWindow::LoadRecentlyLaunchedTitles() {
