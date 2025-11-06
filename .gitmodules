@@ -109,3 +109,6 @@
 	path = third_party/optimized-settings
 	url = https://github.com/xenia-manager/optimized-settings.git
 	branch = main
+[submodule "third_party/game-patches"]
+	path = third_party/game-patches
+	url = https://github.com/xenia-canary/game-patches.git
