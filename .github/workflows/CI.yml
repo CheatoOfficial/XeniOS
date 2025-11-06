@@ -156,11 +156,11 @@ jobs:
           cp assets/icon/512.png artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps/xenia_edge.png
           cp assets/icon/1024.png artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps/xenia_edge.png
 
-          # Copy optimized_settings directory next to the binary in AppDir
+          # Copy all necessary files (excluding build artifacts) next to the binary in AppDir
           mkdir -p artifacts/xenia_edge/usr/bin
-          if [ -d "build/bin/Linux/Release/optimized_settings" ]; then
-            cp -r build/bin/Linux/Release/optimized_settings artifacts/xenia_edge/usr/bin/
-          fi
+          # Copy directories (optimized_settings, game_patches, etc.)
+          find build/bin/Linux/Release -maxdepth 1 -type d ! -name Release -exec cp -r {} artifacts/xenia_edge/usr/bin/ \;
+          # Copy any additional runtime files if needed (currently just directories are copied)
 
           # Run linuxdeploy with Qt plugin to deploy all Qt dependencies and create AppImage
           ~/linuxdeploy/linuxdeploy --appdir artifacts/xenia_edge \
