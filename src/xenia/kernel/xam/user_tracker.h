@@ -86,6 +86,8 @@ class UserTracker {
   // Titles
   void AddTitleToPlayedList();
   void AddTitleToPlayedList(uint64_t xuid, const std::filesystem::path& path);
+  void AddDiscPathToAllTrackedUsers(uint32_t title_id,
+                                    const std::filesystem::path& path);
   void RemoveTitleFromPlayedList(uint64_t xuid, uint32_t title_id);
   std::vector<TitleInfo> GetPlayedTitles(uint64_t xuid) const;
   std::optional<TitleInfo> GetUserTitleInfo(uint64_t xuid,
@@ -116,6 +118,10 @@ class UserTracker {
   void UpdateMissingAchievemntsIcons();
 
   void FlushUserData(const uint64_t xuid);
+
+  // Helper to add disc path with auto-labeling to a single user profile
+  void AddDiscPathToUserProfile(UserProfile* user, uint32_t title_id,
+                                const std::filesystem::path& path);
 
   SpaInfo* spa_data_ = nullptr;
   std::filesystem::path current_title_path_;

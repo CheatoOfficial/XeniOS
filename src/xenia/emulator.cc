@@ -51,8 +51,18 @@
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_host_notification.h"
+#include "xenia/ui/qt_util.h"
 #include "xenia/ui/window.h"
+#include "xenia/ui/window_qt.h"
 #include "xenia/ui/windowed_app_context.h"
+
+#include <QDialog>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QVBoxLayout>
 #include "xenia/vfs/device.h"
 #include "xenia/vfs/devices/disc_image_device.h"
 #include "xenia/vfs/devices/disc_zarchive_device.h"
@@ -1263,6 +1273,36 @@ const std::filesystem::path Emulator::GetNewDiscPath(
     std::string window_message) {
   std::filesystem::path path = "";
 
+  // Get the title ID and check for saved disc paths
+  uint32_t current_title_id = !title_id_.has_value() ? 0 : title_id_.value();
+  std::vector<kernel::xam::GpdInfoProfile::DiscInfo> saved_discs;
+
+  if (kernel_state_ && current_title_id != 0) {
+    auto xam_state = kernel_state_->xam_state();
+    if (xam_state) {
+      auto profile_manager = xam_state->profile_manager();
+      if (profile_manager && profile_manager->IsAnyProfileSignedIn()) {
+        // Try to get the first signed-in profile
+        for (uint8_t i = 0; i < 4; i++) {
+          auto profile = profile_manager->GetProfile(i);
+          if (profile) {
+            const auto& dashboard_gpd = profile->dashboard_gpd();
+            saved_discs = dashboard_gpd.GetTitleDiscs(current_title_id);
+            if (!saved_discs.empty()) {
+              // Sort discs alphanumerically by label
+              std::sort(saved_discs.begin(), saved_discs.end(),
+                        [](const kernel::xam::GpdInfoProfile::DiscInfo& a,
+                           const kernel::xam::GpdInfoProfile::DiscInfo& b) {
+                          return a.label < b.label;
+                        });
+              break;  // Found saved discs, use them
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Get the original game launch path from XAM loader data
   std::filesystem::path initial_dir;
   if (kernel_state_) {
@@ -1286,6 +1326,123 @@ const std::filesystem::path Emulator::GetNewDiscPath(
   // Must execute the file picker on the UI thread to avoid Qt crashes
   if (display_window_) {
     display_window_->app_context().CallInUIThreadSynchronous([&]() {
+      // Get Qt window as parent for proper dialog centering
+      QWidget* parent_widget = nullptr;
+      auto* qt_window = dynamic_cast<ui::QtWindow*>(display_window_);
+      if (qt_window) {
+        parent_widget = qt_window->qwindow();
+      }
+
+      // Show error message dialog if the message contains "ERROR:"
+      bool had_error = false;
+      if (window_message.find("ERROR:") != std::string::npos) {
+        had_error = true;
+        // Extract just the error part (everything after "ERROR:")
+        size_t error_pos = window_message.find("ERROR:");
+        std::string error_message = window_message.substr(error_pos + 7);
+
+        // Trim leading/trailing whitespace and newlines
+        size_t start = error_message.find_first_not_of(" \t\n\r");
+        size_t end = error_message.find_last_not_of(" \t\n\r");
+        if (start != std::string::npos && end != std::string::npos) {
+          error_message = error_message.substr(start, end - start + 1);
+        }
+
+        XELOGI("GetNewDiscPath: Showing error dialog with message: '{}'",
+               error_message);
+
+        // Show a QMessageBox with the error
+        QMessageBox msgBox(parent_widget);
+        msgBox.setWindowTitle("Disc Swap Error");
+        msgBox.setText(xe::ui::SafeQString(error_message));
+        msgBox.setIcon(QMessageBox::Critical);
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.exec();
+
+        // Use the original message before ERROR: as the title
+        window_message = window_message.substr(0, error_pos);
+      }
+
+      // If we have multiple saved disc paths, show disc selection dialog
+      if (saved_discs.size() > 1) {
+        QDialog disc_dialog(parent_widget);
+        disc_dialog.setWindowTitle("Select Disc");
+        disc_dialog.setMinimumWidth(500);
+
+        auto* layout = new QVBoxLayout(&disc_dialog);
+
+        auto* label = new QLabel(xe::ui::SafeQString(
+            window_message.empty()
+                ? fmt::format(
+                      "This game has {} discs. Select which disc to load:",
+                      saved_discs.size())
+                : window_message + fmt::format("\n\nThis game has {} discs. "
+                                               "Select which disc to load:",
+                                               saved_discs.size())));
+        label->setWordWrap(true);
+        layout->addWidget(label);
+
+        auto* list_widget = new QListWidget();
+        size_t disc_num = 1;
+        for (const auto& disc : saved_discs) {
+          QString disc_label = disc.label.empty()
+                                   ? QString("Disc %1").arg(disc_num)
+                                   : xe::ui::SafeQString(disc.label);
+          auto* list_item = new QListWidgetItem(disc_label);
+          list_item->setData(Qt::UserRole,
+                             xe::ui::SafeQString(disc.path.string()));
+          list_widget->addItem(list_item);
+          disc_num++;
+        }
+        list_widget->setCurrentRow(0);
+        layout->addWidget(list_widget);
+
+        auto* button_layout = new QHBoxLayout();
+
+        auto* browse_button = new QPushButton("Browse...");
+        button_layout->addWidget(browse_button);
+        button_layout->addStretch();
+
+        auto* select_button = new QPushButton("Select");
+        auto* cancel_button = new QPushButton("Cancel");
+
+        button_layout->addWidget(select_button);
+        button_layout->addWidget(cancel_button);
+        layout->addLayout(button_layout);
+
+        QObject::connect(select_button, &QPushButton::clicked, &disc_dialog,
+                         &QDialog::accept);
+        QObject::connect(cancel_button, &QPushButton::clicked, &disc_dialog,
+                         &QDialog::reject);
+        QObject::connect(list_widget, &QListWidget::itemDoubleClicked,
+                         &disc_dialog, &QDialog::accept);
+
+        bool use_file_picker = false;
+        QObject::connect(browse_button, &QPushButton::clicked,
+                         [&disc_dialog, &use_file_picker]() {
+                           use_file_picker = true;
+                           disc_dialog.accept();
+                         });
+
+        if (disc_dialog.exec() == QDialog::Accepted && !use_file_picker) {
+          auto* selected_item = list_widget->currentItem();
+          if (selected_item) {
+            QString selected_path_str =
+                selected_item->data(Qt::UserRole).toString();
+            path =
+                std::filesystem::path(xe::ui::SafeStdString(selected_path_str));
+            XELOGI("GetNewDiscPath: Selected disc from saved paths: {}",
+                   path.string());
+            return;  // Skip file picker
+          }
+        } else if (!use_file_picker) {
+          // User clicked Cancel - return empty path (will show error and
+          // re-prompt with disc selector)
+          return;
+        }
+        // If use_file_picker is true, fall through to file picker
+      }
+
       auto file_picker = xe::ui::FilePicker::Create();
       file_picker->set_mode(ui::FilePicker::Mode::kOpen);
       file_picker->set_type(ui::FilePicker::Type::kFile);

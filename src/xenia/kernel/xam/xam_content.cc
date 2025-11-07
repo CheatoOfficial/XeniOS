@@ -23,6 +23,7 @@
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/vfs/devices/stfs_xbox.h"
+#include "xenia/vfs/devices/xcontent_container_device.h"
 #include "xenia/xbox.h"
 
 DEFINE_int32(
@@ -626,7 +627,10 @@ dword_result_t XamSwapDisc_entry(
   kernel_state()->GetExecutableModule()->GetOptHeader(XEX_HEADER_EXECUTION_INFO,
                                                       &info);
 
-  if (info->disc_number > info->disc_count) {
+  // Validate the requested disc number
+  if (disc_number < 1 || disc_number > info->disc_count) {
+    XELOGE("XamSwapDisc: Invalid disc number {} (valid range: 1-{})",
+           uint32_t(disc_number), uint8_t(info->disc_count));
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -656,14 +660,131 @@ dword_result_t XamSwapDisc_entry(
   std::u16string text_message = xe::load_and_swap<std::u16string>(
       kernel_state()->memory()->TranslateVirtual(error_message->stringTextPtr));
 
-  const std::filesystem::path new_disc_path =
-      kernel_state()->emulator()->GetNewDiscPath(xe::to_utf8(text_message));
-  XELOGI("GetNewDiscPath returned path {}.", new_disc_path.string().c_str());
+  std::string error_dialog_message;
 
-  // TODO(Gliniak): Implement checking if inserted file is requested one
-  kernel_state()->emulator()->MountPath(new_disc_path, mount_path);
+  // Loop until user provides the correct disc
+  while (true) {
+    const std::filesystem::path new_disc_path =
+        kernel_state()->emulator()->GetNewDiscPath(
+            xe::to_utf8(text_message) + "\n\n" + error_dialog_message);
+    XELOGI("XamSwapDisc: GetNewDiscPath returned path {}.",
+           new_disc_path.string().c_str());
+
+    // Clear the error message for next iteration
+    error_dialog_message.clear();
+
+    // Check if user cancelled the disc selection - don't proceed with wrong
+    // disc
+    if (new_disc_path.empty()) {
+      XELOGI("XamSwapDisc: User cancelled disc selection, prompting again...");
+      error_dialog_message =
+          "ERROR: Disc swap cancelled.\n\n"
+          "The game requires the correct disc to continue.\n"
+          "Please select the requested disc.";
+      continue;  // Ask again
+    }
+
+    // Mount the new disc
+    auto mount_result =
+        kernel_state()->emulator()->MountPath(new_disc_path, mount_path);
+    if (mount_result != X_ERROR_SUCCESS) {
+      XELOGE("XamSwapDisc: Failed to mount disc at path: {}",
+             new_disc_path.string());
+      error_dialog_message =
+          "ERROR: Failed to mount the selected disc image.\n"
+          "Please select a valid disc image file.";
+      continue;  // Ask again
+    }
+
+    // Validate the mounted disc
+    auto* device = filesystem->GetDevice(mount_path);
+    if (!device) {
+      XELOGE("XamSwapDisc: Failed to get mounted device");
+      filesystem->UnregisterDevice(mount_path);
+      error_dialog_message =
+          "ERROR: Failed to access the mounted disc.\n"
+          "Please try again with a different file.";
+      continue;  // Ask again
+    }
+
+    // Try to cast to XContentContainerDevice to access disc metadata
+    auto* container_device =
+        dynamic_cast<vfs::XContentContainerDevice*>(device);
+    if (container_device) {
+      const auto* header = container_device->GetContainerHeader();
+      if (header) {
+        const auto& exec_info = header->content_metadata.execution_info;
+
+        // Validate disc number matches what was requested
+        if (exec_info.disc_number != disc_number) {
+          XELOGE(
+              "XamSwapDisc: Disc number mismatch! Requested disc {}, but "
+              "mounted disc is disc {}.",
+              uint32_t(disc_number), uint8_t(exec_info.disc_number));
+          filesystem->UnregisterDevice(mount_path);
+          error_dialog_message = fmt::format(
+              "ERROR: Wrong Disc!\n\n"
+              "Requested: Disc {}\n"
+              "Inserted: Disc {}\n\n"
+              "Please insert the correct disc.",
+              uint32_t(disc_number), uint8_t(exec_info.disc_number));
+          continue;  // Ask again
+        }
+
+        // Validate title ID matches
+        if (exec_info.title_id != info->title_id) {
+          XELOGE(
+              "XamSwapDisc: Title ID mismatch! Expected {:08X}, but mounted "
+              "disc has {:08X}.",
+              uint32_t(info->title_id), uint32_t(exec_info.title_id));
+          filesystem->UnregisterDevice(mount_path);
+          error_dialog_message = fmt::format(
+              "ERROR: Wrong Game!\n\n"
+              "This disc does not belong to the current game.\n\n"
+              "Expected Title ID: {:08X}\n"
+              "Inserted Title ID: {:08X}\n\n"
+              "Please insert the correct disc.",
+              uint32_t(info->title_id), uint32_t(exec_info.title_id));
+          continue;  // Ask again
+        }
+
+        // Validate disc count matches
+        if (exec_info.disc_count != info->disc_count) {
+          XELOGW(
+              "XamSwapDisc: Disc count mismatch! Expected {} discs, but "
+              "mounted disc indicates {} discs",
+              uint8_t(info->disc_count), uint8_t(exec_info.disc_count));
+        }
+
+        XELOGI(
+            "XamSwapDisc: Successfully validated and mounted disc {} of {} "
+            "(Title ID: {:08X}, Media ID: {:08X})",
+            uint8_t(exec_info.disc_number), uint8_t(exec_info.disc_count),
+            uint32_t(exec_info.title_id), uint32_t(exec_info.media_id));
+
+        // Add the disc path to all tracked users' GPDs with proper label
+        auto xam_state = kernel_state()->xam_state();
+        if (xam_state) {
+          auto user_tracker = xam_state->user_tracker();
+          if (user_tracker) {
+            user_tracker->AddDiscPathToAllTrackedUsers(info->title_id,
+                                                       new_disc_path);
+          }
+        }
+
+        // Success - break out of the loop
+        break;
+      }
+    } else {
+      XELOGW(
+          "XamSwapDisc: Mounted device is not an XContentContainerDevice, "
+          "skipping validation");
+      // For non-container devices, accept them (backward compatibility)
+      break;
+    }
+  }
+
   completion_event();
-
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSwapDisc, kContent, kSketchy);

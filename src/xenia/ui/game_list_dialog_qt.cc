@@ -437,7 +437,12 @@ void GameListDialogQt::LoadGameList() {
         all_discs.push_back({disc.path, disc.label});
       }
 
+      // Sort discs alphanumerically by label
       if (all_discs.size() > 1) {
+        std::sort(all_discs.begin(), all_discs.end(),
+                  [](const DiscInfo& a, const DiscInfo& b) {
+                    return a.label < b.label;
+                  });
         XELOGI("Title {:08X} has {} discs", title_id, all_discs.size());
       }
 
