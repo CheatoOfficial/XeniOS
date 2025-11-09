@@ -110,6 +110,9 @@ class ProfileManager {
 
   bool UpdateAccount(const uint64_t xuid, const X_XAMACCOUNTINFO* account);
 
+  // Clears the title path from all profiles' dashboard GPDs
+  bool ClearTitlePath(uint32_t title_id);
+
   static bool IsGamertagValid(const std::string gamertag);
 
  private:

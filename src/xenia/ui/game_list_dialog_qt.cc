@@ -1105,6 +1105,39 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
     if (emulator_window_->HasRunningChildProcess()) {
       return;
     }
+
+    // Check if the file exists
+    if (!std::filesystem::exists(path)) {
+      // Show warning popup
+      QMessageBox::warning(
+          this, "Game File Not Found",
+          QString("The game file does not exist:\n\n%1\n\n"
+                  "The path will be removed from the game list.\n"
+                  "Please select the correct game file.")
+              .arg(SafeQString(path.string())));
+
+      // Remove the bad path from all dashboard GPDs using ProfileManager
+      if (title_id != 0) {
+        auto kernel_state = emulator_window_->emulator()->kernel_state();
+        if (kernel_state) {
+          auto xam_state = kernel_state->xam_state();
+          if (xam_state) {
+            auto profile_manager = xam_state->profile_manager();
+            if (profile_manager) {
+              profile_manager->ClearTitlePath(title_id);
+            }
+          }
+        }
+      }
+
+      // Reload the game list to reflect the removed path
+      LoadGameList();
+
+      // Open file picker
+      emulator_window_->FileOpen();
+      return;
+    }
+
     emulator_window_->LaunchTitleInNewProcess(path, false, title_id);
     // Widget stays visible at all times
   }
@@ -1116,7 +1149,7 @@ void GameListDialogQt::LaunchGameWithFilePicker() {
                            "The installation path for this game is not known.\n"
                            "Please select the game file to launch it.");
 
-  // Open file picker (same as File/Open)
+  // Open file picker
   if (emulator_window_) {
     emulator_window_->FileOpen();
   }

@@ -663,6 +663,72 @@ bool ProfileManager::DeleteProfile(const uint64_t xuid) {
   return true;
 }
 
+bool ProfileManager::ClearTitlePath(uint32_t title_id) {
+  if (title_id == 0) {
+    return false;
+  }
+
+  auto content_root = kernel_state_->emulator()->content_root();
+  auto profiles_directory = xe::filesystem::FilterByName(
+      xe::filesystem::ListDirectories(content_root),
+      std::regex("[0-9A-F]{16}"));
+
+  bool modified_any = false;
+
+  for (const auto& profile_dir : profiles_directory) {
+    const std::string profile_xuid = xe::path_to_utf8(profile_dir.name);
+    if (profile_xuid == fmt::format("{:016X}", 0)) {
+      continue;  // Skip shared content directory
+    }
+
+    // Construct path to dashboard GPD
+    std::filesystem::path dashboard_gpd_path =
+        profile_dir.path / profile_dir.name / kDashboardStringID /
+        fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
+        profile_dir.name / fmt::format("{:08X}.gpd", kDashboardID);
+
+    if (!std::filesystem::exists(dashboard_gpd_path)) {
+      continue;
+    }
+
+    // Read dashboard GPD file
+    std::ifstream file(dashboard_gpd_path, std::ios::binary);
+    if (!file.is_open()) {
+      continue;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> gpd_data(file_size);
+    file.read(reinterpret_cast<char*>(gpd_data.data()), file_size);
+    file.close();
+
+    // Parse dashboard GPD
+    GpdInfoProfile dashboard_gpd(gpd_data);
+    if (!dashboard_gpd.IsValid()) {
+      continue;
+    }
+
+    // Clear the path for this title
+    dashboard_gpd.SetTitlePath(title_id, std::filesystem::path());
+
+    // Write back the modified GPD
+    std::vector<uint8_t> serialized_gpd = dashboard_gpd.Serialize();
+
+    std::ofstream out_file(dashboard_gpd_path, std::ios::binary);
+    if (out_file.is_open()) {
+      out_file.write(reinterpret_cast<const char*>(serialized_gpd.data()),
+                     serialized_gpd.size());
+      out_file.close();
+      modified_any = true;
+    }
+  }
+
+  return modified_any;
+}
+
 bool ProfileManager::IsGamertagValid(const std::string gamertag) {
   if (gamertag.empty()) {
     return false;
