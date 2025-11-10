@@ -568,6 +568,7 @@ def get_pr_number():
 def git_submodule_update():
     """Runs a git submodule init and update.
     """
+    # First, update all submodules to their recorded commits
     shell_call([
         "git",
         "-c",
@@ -577,6 +578,18 @@ def git_submodule_update():
         "--init",
         "--depth=1",
         "-j", f"{os.cpu_count()}",
+        ])
+
+    # Then update only submodules that track branches to their latest
+    # Currently: optimized-settings and game-patches track 'main'
+    for submodule in ["third_party/optimized-settings", "third_party/game-patches"]:
+        shell_call([
+            "git",
+            "submodule",
+            "update",
+            "--remote",
+            "--depth=1",
+            submodule
         ])
 
 
