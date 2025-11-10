@@ -874,10 +874,11 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
         QAction* disc_action = launch_menu->addAction(disc_label);
         disc_num++;
 
-        // Capture disc.path by value in lambda
+        // Capture disc.path by value in lambda (copy to local variable first)
+        std::filesystem::path disc_path_copy = disc.path;
         connect(disc_action, &QAction::triggered,
-                [this, disc_path = disc.path, title_id]() {
-                  LaunchGame(disc_path, title_id);
+                [this, disc_path_copy, title_id]() {
+                  LaunchGame(disc_path_copy, title_id);
                 });
       }
     } else {
@@ -976,13 +977,15 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
         QAction* patch_action =
             patches_menu->addAction(SafeQString(display_name));
 
-        // Open patch management dialog
-        connect(patch_action, &QAction::triggered, [=, this]() {
-          auto* dialog =
-              new PatchesDialogQt(this, emulator_window_, title_id, patch_path);
-          dialog->exec();
-          delete dialog;
-        });
+        // Open patch management dialog - capture patch_path by value
+        std::filesystem::path patch_path_copy = patch_path;
+        connect(patch_action, &QAction::triggered,
+                [this, title_id, patch_path_copy]() {
+                  auto* dialog = new PatchesDialogQt(this, emulator_window_,
+                                                     title_id, patch_path_copy);
+                  dialog->exec();
+                  delete dialog;
+                });
       }
     }
   }
@@ -995,17 +998,20 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     if (!is_signedin) {
       achievements_action->setEnabled(false);
     } else {
-      connect(achievements_action, &QAction::triggered, [=, this]() {
-        // Get the title name from the game entry
-        QString title_name;
-        for (const auto& entry : game_entries_) {
-          if (entry.title_id == title_id) {
-            title_name = SafeQString(entry.title_name);
-            break;
-          }
+      // Get the title name from the game entry before connecting
+      std::string title_name_str;
+      for (const auto& entry : game_entries_) {
+        if (entry.title_id == title_id) {
+          title_name_str = entry.title_name;
+          break;
         }
-        ShowAchievementsDialog(xuid, title_id, title_name);
-      });
+      }
+
+      connect(achievements_action, &QAction::triggered,
+              [this, xuid, title_id, title_name_str]() {
+                ShowAchievementsDialog(xuid, title_id,
+                                       SafeQString(title_name_str));
+              });
     }
   }
 
@@ -1063,19 +1069,19 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     // Achievements dialog will open in a separate call
   } else if (selected == config_action && config_action) {
     // Get the title name from the game entry
-    QString title_name;
+    std::string title_name_str;
     for (const auto& entry : game_entries_) {
       if (entry.title_id == title_id) {
-        title_name = SafeQString(entry.title_name);
+        title_name_str = entry.title_name;
         break;
       }
     }
-    if (title_name.isEmpty()) {
-      title_name = SafeQString(fmt::format("{:08X}", title_id));
+    if (title_name_str.empty()) {
+      title_name_str = fmt::format("{:08X}", title_id);
     }
 
     auto* dialog = new GameConfigDialogQt(this, emulator_window_, title_id,
-                                          SafeStdString(title_name));
+                                          title_name_str);
     dialog->exec();
     delete dialog;
   } else if (selected == compatibility_canary_action &&
@@ -1692,9 +1698,10 @@ std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
 
   auto* layout = new QVBoxLayout(&disc_dialog);
 
-  auto* label = new QLabel(SafeQString(
+  std::string label_text =
       fmt::format("This game has {} discs. Select which disc to launch:",
-                  entry->all_discs.size())));
+                  entry->all_discs.size());
+  auto* label = new QLabel(SafeQString(label_text));
   label->setWordWrap(true);
   layout->addWidget(label);
 
