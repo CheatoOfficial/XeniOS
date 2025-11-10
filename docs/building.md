@@ -98,7 +98,7 @@ get helpful spacers/movs in the disassembly.
 
 Linux support is extremely experimental and presently incomplete.
 
-The build script uses Clang 19. GCC while it should work in theory, is not easily
+The build script uses Clang 21. GCC while it should work in theory, is not easily
 interchangeable right now.
 
 * Normal building via `xb build` uses CMake+Ninja.

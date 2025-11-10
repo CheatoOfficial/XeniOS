@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@main
       - name: Setup
         env:
-          LLVM_VERSION: 19
+          LLVM_VERSION: 21
         run: |
           UBUNTU_BASE=$(lsb_release -cs)
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
@@ -76,9 +76,9 @@ jobs:
         run: |
           UBUNTU_BASE=$(lsb_release -cs)
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo apt-add-repository "deb http://apt.llvm.org/${UBUNTU_BASE}/ llvm-toolchain-${UBUNTU_BASE}-20 main"
+          sudo apt-add-repository "deb http://apt.llvm.org/${UBUNTU_BASE}/ llvm-toolchain-${UBUNTU_BASE}-21 main"
           sudo apt-get -y update
-          sudo apt-get -y install mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-20 ninja-build spirv-tools libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libxcb-shape0 libfontconfig1-dev libxtst-dev
+          sudo apt-get -y install mesa-vulkan-drivers valgrind libc++-dev libc++abi-dev libsdl2-dev libvulkan-dev libx11-xcb-dev clang-21 ninja-build spirv-tools libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libxcb-shape0 libfontconfig1-dev libxtst-dev
 
           # Install Qt 6.9.2 via aqtinstall
           if [ '${{ steps.cache-qt-linux.outputs.cache-hit }}' != 'true' ]; then
@@ -120,8 +120,8 @@ jobs:
           fi
       - name: Build
         env:
-          CC: clang-20
-          CXX: clang++-20
+          CC: clang-21
+          CXX: clang++-21
         run: ./xenia-build.py build --config=Release
       - name: Prepare artifacts
         id: prepare_artifacts
