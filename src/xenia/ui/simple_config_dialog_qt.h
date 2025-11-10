@@ -52,8 +52,10 @@ class SimpleConfigDialogQt : public QDialog {
   };
 
   void LoadConfigValues();
+  void LoadDefaultValues();
   void SaveConfigChanges();
   void SetupUI();
+  void UpdateUIFromConfigVars();
   void UpdatePendingValueFromEditor(ConfigOption* option);
   void UpdateLabelModifiedState(ConfigOption* option);
   std::string GetEditorValue(QWidget* editor, const std::string& cvar_name);

@@ -219,13 +219,16 @@ void SimpleConfigDialogQt::SetupUI() {
   auto* other_group = new QGroupBox("Other", this);
   auto* other_layout = new QFormLayout(other_group);
 
-  auto* license_check = new QCheckBox(this);
+  auto* license_combo = new QComboBox(this);
+  license_combo->addItem("None", 0);
+  license_combo->addItem("Full", 1);
+  license_combo->addItem("All", -1);
   options_["license_mask"].cvar_name = "license_mask";
-  options_["license_mask"].editor_widget = license_check;
-  options_["license_mask"].label_widget = new QLabel("Enable License:", this);
-  connect(license_check, &QCheckBox::checkStateChanged, this,
-          &SimpleConfigDialogQt::OnValueChanged);
-  other_layout->addRow(options_["license_mask"].label_widget, license_check);
+  options_["license_mask"].editor_widget = license_combo;
+  options_["license_mask"].label_widget = new QLabel("License:", this);
+  connect(license_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, &SimpleConfigDialogQt::OnValueChanged);
+  other_layout->addRow(options_["license_mask"].label_widget, license_combo);
 
   auto* discord_check = new QCheckBox(this);
   options_["discord"].cvar_name = "discord";
@@ -294,8 +297,78 @@ void SimpleConfigDialogQt::SetupUI() {
 }
 
 void SimpleConfigDialogQt::LoadConfigValues() {
+  // Reload the global config from file to ensure we're not reading stale values
+  // that may have been contaminated by game-specific config dialogs
+  config::ReloadConfig();
+
+  UpdateUIFromConfigVars();
+
+  // Reset all labels to non-bold since values now match what's in config
+  for (auto& [cvar_name, option] : options_) {
+    if (option.label_widget) {
+      QFont font = option.label_widget->font();
+      font.setBold(false);
+      option.label_widget->setFont(font);
+    }
+  }
+
+  has_unsaved_changes_ = false;
+}
+
+void SimpleConfigDialogQt::LoadDefaultValues() {
   if (!cvar::ConfigVars) {
     return;
+  }
+
+  // Reset all cvars to their default values in memory
+  for (auto& [name, var] : *cvar::ConfigVars) {
+    if (name.find("logged_profile_slot_") != std::string::npos) {
+      continue;
+    }
+    auto config_var = static_cast<cvar::IConfigVar*>(var);
+    config_var->ResetConfigValueToDefault();
+  }
+
+  // Now update the UI from the in-memory default values (without reloading from
+  // disk). Note: UpdateUIFromConfigVars sets both current_value and
+  // pending_value to the default, but we want current_value to remain as the
+  // original file value so we can show what changed. So we need to restore
+  // current_value after.
+
+  // Save the original current_values (from file)
+  std::map<std::string, std::string> original_values;
+  for (auto& [cvar_name, option] : options_) {
+    original_values[cvar_name] = option.current_value;
+  }
+
+  UpdateUIFromConfigVars();
+
+  // Restore the original current_values and update label bold state
+  for (auto& [cvar_name, option] : options_) {
+    option.current_value = original_values[cvar_name];
+    bool is_modified = (option.pending_value != option.current_value);
+
+    if (option.label_widget) {
+      QFont font = option.label_widget->font();
+      font.setBold(is_modified);
+      option.label_widget->setFont(font);
+    }
+  }
+
+  has_unsaved_changes_ = true;
+}
+
+void SimpleConfigDialogQt::UpdateUIFromConfigVars() {
+  if (!cvar::ConfigVars) {
+    return;
+  }
+
+  // Block signals during programmatic UI updates to prevent OnValueChanged from
+  // firing prematurely and reading partially-updated state
+  for (auto& [cvar_name, option] : options_) {
+    if (option.editor_widget) {
+      option.editor_widget->blockSignals(true);
+    }
   }
 
   for (auto& [cvar_name, option] : options_) {
@@ -374,23 +447,33 @@ void SimpleConfigDialogQt::LoadConfigValues() {
       option.pending_value = value;
 
       if (auto* combo = qobject_cast<QComboBox*>(option.editor_widget)) {
-        int index = combo->findText(SafeQString(value));
-        if (index >= 0) {
-          combo->setCurrentIndex(index);
+        if (cvar_name == "license_mask") {
+          // license_mask uses integer data, not text
+          int int_value = std::stoi(value);
+          int index = combo->findData(int_value);
+          if (index >= 0) {
+            combo->setCurrentIndex(index);
+          }
+        } else {
+          int index = combo->findText(SafeQString(value));
+          if (index >= 0) {
+            combo->setCurrentIndex(index);
+          }
         }
       } else if (auto* check = qobject_cast<QCheckBox*>(option.editor_widget)) {
-        if (cvar_name == "license_mask") {
-          check->setChecked(value == "1");
-        } else {
-          check->setChecked(value == "true");
-        }
+        check->setChecked(value == "true");
       } else if (auto* spin = qobject_cast<QSpinBox*>(option.editor_widget)) {
         spin->setValue(std::stoi(value));
       }
     }
   }
 
-  has_unsaved_changes_ = false;
+  // Unblock signals after all updates are complete
+  for (auto& [cvar_name, option] : options_) {
+    if (option.editor_widget) {
+      option.editor_widget->blockSignals(false);
+    }
+  }
 }
 
 void SimpleConfigDialogQt::SaveConfigChanges() {
@@ -518,20 +601,7 @@ void SimpleConfigDialogQt::OnResetClicked() {
       QMessageBox::Yes | QMessageBox::No);
 
   if (reply == QMessageBox::Yes) {
-    if (!cvar::ConfigVars) {
-      return;
-    }
-
-    for (auto& [name, var] : *cvar::ConfigVars) {
-      if (name.find("logged_profile_slot_") != std::string::npos) {
-        continue;
-      }
-      auto config_var = static_cast<cvar::IConfigVar*>(var);
-      config_var->ResetConfigValueToDefault();
-    }
-
-    LoadConfigValues();
-    has_unsaved_changes_ = true;
+    LoadDefaultValues();
   }
 }
 
@@ -569,16 +639,12 @@ void SimpleConfigDialogQt::UpdateLabelModifiedState(ConfigOption* option) {
 std::string SimpleConfigDialogQt::GetEditorValue(QWidget* editor,
                                                  const std::string& cvar_name) {
   if (auto* combo = qobject_cast<QComboBox*>(editor)) {
-    if (cvar_name == "draw_resolution_scale") {
+    if (cvar_name == "draw_resolution_scale" || cvar_name == "license_mask") {
       return std::to_string(combo->currentData().toInt());
     }
     return SafeStdString(combo->currentText());
   } else if (auto* check = qobject_cast<QCheckBox*>(editor)) {
-    if (cvar_name == "license_mask") {
-      return check->isChecked() ? "1" : "0";
-    } else {
-      return check->isChecked() ? "true" : "false";
-    }
+    return check->isChecked() ? "true" : "false";
   } else if (auto* spin = qobject_cast<QSpinBox*>(editor)) {
     return std::to_string(spin->value());
   }
