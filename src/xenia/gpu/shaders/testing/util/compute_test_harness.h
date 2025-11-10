@@ -83,6 +83,15 @@ class ComputeTestHarness {
                     data.size() * sizeof(T), set);
   }
 
+  // Set multisampled texture data (creates MSAA texture and uploads data)
+  template <typename T>
+  void SetTexture2DMS(uint32_t binding, uint32_t width, uint32_t height,
+                      vk::Format format, const std::vector<T>& data,
+                      vk::SampleCountFlagBits samples, uint32_t set = 0) {
+    SetTexture2DMSRaw(binding, width, height, format, data.data(),
+                      data.size() * sizeof(T), samples, set);
+  }
+
   // Allocate output image (creates writable 2D image)
   void AllocateOutputImage2D(uint32_t binding, uint32_t width, uint32_t height,
                              vk::Format format, uint32_t set = 0);
@@ -147,6 +156,9 @@ class ComputeTestHarness {
   void SetTexture2DRaw(uint32_t binding, uint32_t width, uint32_t height,
                        vk::Format format, const void* data, size_t byte_size,
                        uint32_t set);
+  void SetTexture2DMSRaw(uint32_t binding, uint32_t width, uint32_t height,
+                         vk::Format format, const void* data, size_t byte_size,
+                         vk::SampleCountFlagBits samples, uint32_t set);
   void SetPushConstantsRaw(const void* data, size_t byte_size);
 
   bool CreateShaderModule(const std::vector<uint32_t>& spirv);
@@ -174,6 +186,7 @@ class ComputeTestHarness {
     uint32_t width = 0;
     uint32_t height = 0;
     vk::Format format = vk::Format::eUndefined;
+    vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1;
     bool is_storage = false;
   };
 

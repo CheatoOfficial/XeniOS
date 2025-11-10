@@ -46,19 +46,35 @@ class VulkanTestDevice {
   void Unmap(const vk::raii::DeviceMemory& memory);
 
   // Image helpers
-  vk::raii::Image CreateImage(uint32_t width, uint32_t height,
-                              vk::Format format, vk::ImageTiling tiling,
-                              vk::ImageUsageFlags usage,
-                              vk::MemoryPropertyFlags mem_props);
+  vk::raii::Image CreateImage(
+      uint32_t width, uint32_t height, vk::Format format,
+      vk::ImageTiling tiling, vk::ImageUsageFlags usage,
+      vk::MemoryPropertyFlags mem_props,
+      vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1);
 
   vk::raii::DeviceMemory AllocateMemory(const vk::raii::Image& image,
                                         vk::MemoryPropertyFlags mem_props);
 
-  vk::raii::ImageView CreateImageView(const vk::raii::Image& image,
-                                      vk::Format format,
-                                      vk::ImageAspectFlags aspect_flags);
+  vk::raii::ImageView CreateImageView(
+      const vk::raii::Image& image, vk::Format format,
+      vk::ImageAspectFlags aspect_flags,
+      vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1);
 
   vk::raii::Sampler CreateSampler();
+
+  // Graphics pipeline helpers
+  vk::raii::ShaderModule CreateShaderModule(const std::vector<uint32_t>& spirv);
+  vk::raii::RenderPass CreateRenderPass(vk::Format depth_format,
+                                        vk::SampleCountFlagBits samples);
+  vk::raii::Framebuffer CreateFramebuffer(
+      const vk::raii::RenderPass& render_pass,
+      const vk::raii::ImageView& depth_view, uint32_t width, uint32_t height);
+
+  // Render a depth gradient pattern into an MSAA depth texture
+  void RenderDepthPattern(const vk::raii::Image& depth_image,
+                          const vk::raii::ImageView& depth_view, uint32_t width,
+                          uint32_t height, vk::Format depth_format,
+                          vk::SampleCountFlagBits samples);
 
   // Command buffer helpers
   vk::raii::CommandBuffer BeginSingleTimeCommands();

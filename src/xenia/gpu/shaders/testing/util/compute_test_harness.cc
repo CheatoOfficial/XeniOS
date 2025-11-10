@@ -391,6 +391,45 @@ void ComputeTestHarness::SetTexture2DRaw(uint32_t binding, uint32_t width,
   info.width = width;
   info.height = height;
   info.format = format;
+  info.samples = vk::SampleCountFlagBits::e1;
+  info.is_storage = false;
+  images_[{set, binding}] = std::move(info);
+
+  UpdateDescriptorSets();
+}
+
+void ComputeTestHarness::SetTexture2DMSRaw(uint32_t binding, uint32_t width,
+                                           uint32_t height, vk::Format format,
+                                           const void* data, size_t byte_size,
+                                           vk::SampleCountFlagBits samples,
+                                           uint32_t set) {
+  // MSAA depth textures require depth format and rendering
+  auto image =
+      device_->CreateImage(width, height, format, vk::ImageTiling::eOptimal,
+                           vk::ImageUsageFlagBits::eSampled |
+                               vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                           vk::MemoryPropertyFlagBits::eDeviceLocal, samples);
+
+  auto memory =
+      device_->AllocateMemory(image, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  auto view = device_->CreateImageView(
+      image, format, vk::ImageAspectFlagBits::eDepth, samples);
+
+  // Render depth pattern using graphics pipeline
+  device_->RenderDepthPattern(image, view, width, height, format, samples);
+
+  auto sampler = device_->CreateSampler();
+
+  ImageInfo info;
+  info.image = std::move(image);
+  info.memory = std::move(memory);
+  info.view = std::move(view);
+  info.sampler = std::move(sampler);
+  info.width = width;
+  info.height = height;
+  info.format = format;
+  info.samples = samples;
   info.is_storage = false;
   images_[{set, binding}] = std::move(info);
 
@@ -432,6 +471,7 @@ void ComputeTestHarness::AllocateOutputImage2D(uint32_t binding, uint32_t width,
   info.width = width;
   info.height = height;
   info.format = format;
+  info.samples = vk::SampleCountFlagBits::e1;
   info.is_storage = true;
   images_[{set, binding}] = std::move(info);
 

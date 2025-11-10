@@ -11,6 +11,7 @@
 
 #include <cstring>
 #include "xenia/base/logging.h"
+#include "xenia/gpu/shaders/testing/util/depth_pattern_shaders.h"
 
 namespace xe {
 namespace gpu {
@@ -170,12 +171,15 @@ void VulkanTestDevice::Unmap(const vk::raii::DeviceMemory& memory) {
   memory.unmapMemory();
 }
 
-vk::raii::Image VulkanTestDevice::CreateImage(
-    uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,
-    vk::ImageUsageFlags usage, vk::MemoryPropertyFlags mem_props) {
+vk::raii::Image VulkanTestDevice::CreateImage(uint32_t width, uint32_t height,
+                                              vk::Format format,
+                                              vk::ImageTiling tiling,
+                                              vk::ImageUsageFlags usage,
+                                              vk::MemoryPropertyFlags mem_props,
+                                              vk::SampleCountFlagBits samples) {
   vk::ImageCreateInfo image_info({}, vk::ImageType::e2D, format,
-                                 vk::Extent3D(width, height, 1), 1, 1,
-                                 vk::SampleCountFlagBits::e1, tiling, usage);
+                                 vk::Extent3D(width, height, 1), 1, 1, samples,
+                                 tiling, usage);
 
   return vk::raii::Image(*device_, image_info);
 }
@@ -194,7 +198,9 @@ vk::raii::DeviceMemory VulkanTestDevice::AllocateMemory(
 
 vk::raii::ImageView VulkanTestDevice::CreateImageView(
     const vk::raii::Image& image, vk::Format format,
-    vk::ImageAspectFlags aspect_flags) {
+    vk::ImageAspectFlags aspect_flags, vk::SampleCountFlagBits samples) {
+  // MSAA textures always use e2D view type (samples are part of image, not
+  // array layers)
   vk::ImageViewCreateInfo view_info(
       {}, *image, vk::ImageViewType::e2D, format, {},
       vk::ImageSubresourceRange(aspect_flags, 0, 1, 0, 1));
@@ -340,6 +346,150 @@ void VulkanTestDevice::DownloadFromImage(const vk::raii::Image& image,
   EndSingleTimeCommands(cmd);
 
   DownloadFromBuffer(staging_buffer, staging_memory, data, size);
+}
+
+vk::raii::ShaderModule VulkanTestDevice::CreateShaderModule(
+    const std::vector<uint32_t>& spirv) {
+  vk::ShaderModuleCreateInfo create_info({}, spirv.size() * sizeof(uint32_t),
+                                         spirv.data());
+  return vk::raii::ShaderModule(*device_, create_info);
+}
+
+vk::raii::RenderPass VulkanTestDevice::CreateRenderPass(
+    vk::Format depth_format, vk::SampleCountFlagBits samples) {
+  vk::AttachmentDescription depth_attachment(
+      {}, depth_format, samples, vk::AttachmentLoadOp::eClear,
+      vk::AttachmentStoreOp::eStore, vk::AttachmentLoadOp::eDontCare,
+      vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
+      vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+  vk::AttachmentReference depth_ref(
+      0, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+  vk::SubpassDescription subpass;
+  subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+  subpass.pDepthStencilAttachment = &depth_ref;
+
+  vk::RenderPassCreateInfo create_info({}, depth_attachment, subpass);
+  return vk::raii::RenderPass(*device_, create_info);
+}
+
+vk::raii::Framebuffer VulkanTestDevice::CreateFramebuffer(
+    const vk::raii::RenderPass& render_pass,
+    const vk::raii::ImageView& depth_view, uint32_t width, uint32_t height) {
+  vk::FramebufferCreateInfo create_info({}, *render_pass, *depth_view, width,
+                                        height, 1);
+  return vk::raii::Framebuffer(*device_, create_info);
+}
+
+void VulkanTestDevice::RenderDepthPattern(const vk::raii::Image& depth_image,
+                                          const vk::raii::ImageView& depth_view,
+                                          uint32_t width, uint32_t height,
+                                          vk::Format depth_format,
+                                          vk::SampleCountFlagBits samples) {
+  // Use precompiled GLSL shaders
+  std::vector<uint32_t> vert_spirv(
+      depth_pattern_vert_spv,
+      depth_pattern_vert_spv +
+          sizeof(depth_pattern_vert_spv) / sizeof(uint32_t));
+  std::vector<uint32_t> frag_spirv(
+      depth_pattern_frag_spv,
+      depth_pattern_frag_spv +
+          sizeof(depth_pattern_frag_spv) / sizeof(uint32_t));
+
+  auto vert_module = CreateShaderModule(vert_spirv);
+  auto frag_module = CreateShaderModule(frag_spirv);
+
+  auto render_pass = CreateRenderPass(depth_format, samples);
+  auto framebuffer = CreateFramebuffer(render_pass, depth_view, width, height);
+
+  // Create pipeline layout (no descriptors needed)
+  vk::PipelineLayoutCreateInfo layout_info;
+  auto pipeline_layout = vk::raii::PipelineLayout(*device_, layout_info);
+
+  // Shader stages
+  vk::PipelineShaderStageCreateInfo vert_stage(
+      {}, vk::ShaderStageFlagBits::eVertex, *vert_module, "main");
+  vk::PipelineShaderStageCreateInfo frag_stage(
+      {}, vk::ShaderStageFlagBits::eFragment, *frag_module, "main");
+  std::vector<vk::PipelineShaderStageCreateInfo> stages = {vert_stage,
+                                                           frag_stage};
+
+  // Vertex input (none - generated in shader)
+  vk::PipelineVertexInputStateCreateInfo vertex_input;
+
+  // Input assembly
+  vk::PipelineInputAssemblyStateCreateInfo input_assembly(
+      {}, vk::PrimitiveTopology::eTriangleList);
+
+  // Viewport
+  vk::Viewport viewport(0, 0, static_cast<float>(width),
+                        static_cast<float>(height), 0.0f, 1.0f);
+  vk::Rect2D scissor({0, 0}, {width, height});
+  vk::PipelineViewportStateCreateInfo viewport_state({}, viewport, scissor);
+
+  // Rasterization
+  vk::PipelineRasterizationStateCreateInfo rasterization(
+      {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
+      vk::FrontFace::eCounterClockwise, false, 0.0f, 0.0f, 0.0f, 1.0f);
+
+  // Multisample
+  vk::PipelineMultisampleStateCreateInfo multisample({}, samples);
+
+  // Depth stencil
+  vk::PipelineDepthStencilStateCreateInfo depth_stencil({}, true, true,
+                                                        vk::CompareOp::eAlways);
+
+  // Color blend (no color attachments)
+  vk::PipelineColorBlendStateCreateInfo color_blend;
+
+  // Create pipeline
+  vk::GraphicsPipelineCreateInfo pipeline_info(
+      {}, stages, &vertex_input, &input_assembly, {}, &viewport_state,
+      &rasterization, &multisample, &depth_stencil, &color_blend, {},
+      *pipeline_layout, *render_pass);
+
+  auto pipeline = vk::raii::Pipeline(*device_, nullptr, pipeline_info);
+
+  // Render
+  auto cmd = BeginSingleTimeCommands();
+
+  // Transition image to depth attachment
+  vk::ImageMemoryBarrier barrier(
+      {}, vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+      vk::ImageLayout::eUndefined,
+      vk::ImageLayout::eDepthStencilAttachmentOptimal, VK_QUEUE_FAMILY_IGNORED,
+      VK_QUEUE_FAMILY_IGNORED, *depth_image,
+      vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1));
+
+  cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                      vk::PipelineStageFlagBits::eEarlyFragmentTests, {}, {},
+                      {}, barrier);
+
+  // Begin render pass
+  vk::ClearValue clear_value;
+  clear_value.depthStencil.depth = 0.0f;
+  clear_value.depthStencil.stencil = 0;
+  vk::RenderPassBeginInfo render_pass_info(*render_pass, *framebuffer,
+                                           vk::Rect2D({0, 0}, {width, height}),
+                                           clear_value);
+
+  cmd.beginRenderPass(render_pass_info, vk::SubpassContents::eInline);
+  cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
+  cmd.draw(3, 1, 0, 0);  // Draw fullscreen triangle
+  cmd.endRenderPass();
+
+  // Transition to shader read
+  barrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+  barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+  barrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+  barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+  cmd.pipelineBarrier(vk::PipelineStageFlagBits::eLateFragmentTests,
+                      vk::PipelineStageFlagBits::eComputeShader, {}, {}, {},
+                      barrier);
+
+  EndSingleTimeCommands(cmd);
 }
 
 }  // namespace testing
