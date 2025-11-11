@@ -9,9 +9,9 @@ drivers.
 ### Windows
 
 * Windows 10 or later
-* [Visual Studio 2022](https://www.visualstudio.com/downloads/)
+* [Visual Studio 2022 or 2026](https://www.visualstudio.com/downloads/)
 * CMake 3.10+ (or C++ CMake tools for Windows)
-* Windows 11 SDK version 10.0.22000.0 (for Visual Studio 2022, this or any newer version)
+* Windows 11 SDK version 10.0.22000.0 or newer
 * [Python 3.9+ 64-bit](https://www.python.org/downloads/)
   * Ensure Python is in PATH.
 * [Vulkan SDK](https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe)
@@ -21,8 +21,9 @@ drivers.
     ```
     pip install aqtinstall
     python -m aqt install-qt windows desktop 6.9.2 win64_msvc2022_64 -O C:\Qt
+    # Note: msvc2022_64 is compatible with with VS2026
     ```
-  * The build script will automatically detect it if installed at `C:\Qt\6.9.2\msvc2022_64`
+  * The build script will automatically detect it if installed in `C:\Qt`
 
 ```
 git clone https://github.com/has207/xenia-edge.git

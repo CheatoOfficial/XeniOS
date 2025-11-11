@@ -224,7 +224,10 @@ def import_vs_environment():
     if vswhere:
         vswhere = jsonloads(vswhere)
     if vswhere and len(vswhere) > 0:
-        version = int(vswhere[0].get("catalog", {}).get("productLineVersion", 2022))
+        # Map internal version to year version: 17->2022, 18->2026, etc.
+        internal_version = int(vswhere[0].get("catalog", {}).get("productLineVersion", 17))
+        version_map = {17: 2022, 18: 2026}
+        version = version_map.get(internal_version, 2022)
         install_path = vswhere[0].get("installationPath", None)
 
     vsdevcmd_path = os.path.join(install_path, "Common7", "Tools", "VsDevCmd.bat")

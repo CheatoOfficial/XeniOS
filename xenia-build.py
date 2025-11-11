@@ -112,7 +112,10 @@ def import_vs_environment():
     if vswhere:
         vswhere = jsonloads(vswhere)
     if vswhere and len(vswhere) > 0:
-        version = int(vswhere[0].get("catalog", {}).get("productLineVersion", VSVERSION_MINIMUM))
+        # Map internal version to year version: 17->2022, 18->2026, etc.
+        internal_version = int(vswhere[0].get("catalog", {}).get("productLineVersion", 17))
+        version_map = {17: 2022, 18: 2026}
+        version = version_map.get(internal_version, VSVERSION_MINIMUM)
         install_path = vswhere[0].get("installationPath", None)
 
     vsdevcmd_path = os.path.join(install_path, "Common7", "Tools", "VsDevCmd.bat")
@@ -229,14 +232,16 @@ def setup_qt():
         qt_version_dir = os.path.join(qt_base, version_dirs[0])
 
         if sys.platform == "win32":
-            # Look for msvc compiler directory (e.g., msvc2022_64, msvc2019_64)
+            # Look for msvc compiler directory (e.g., msvc2026_64, msvc2022_64, msvc2019_64)
             compiler_dirs = [d for d in os.listdir(qt_version_dir)
                              if os.path.isdir(os.path.join(qt_version_dir, d)) and d.startswith("msvc")]
             if not compiler_dirs:
                 return False
 
-            # Prefer msvc2022_64 if available, otherwise use the first available
-            if "msvc2022_64" in compiler_dirs:
+            # Prefer msvc2026_64 if available, then msvc2022_64, otherwise use the latest available
+            if "msvc2026_64" in compiler_dirs:
+                compiler_dir = "msvc2026_64"
+            elif "msvc2022_64" in compiler_dirs:
                 compiler_dir = "msvc2022_64"
             else:
                 compiler_dirs.sort(reverse=True)
@@ -723,8 +728,13 @@ def run_platform_premake(target_os_override=None, cc=None, devenv=None):
         if target_os == "macosx":
             devenv = "xcode4"
         elif target_os == "windows":
-            vs_version = os.getenv("VSVERSION", VSVERSION_MINIMUM)
-            devenv = f"vs{vs_version}"
+            vs_version = int(os.getenv("VSVERSION", str(VSVERSION_MINIMUM)))
+            # Premake doesn't support vs2026 yet, so use vs2022 for VS2026
+            # VS2022 project files are compatible with VS2026
+            if vs_version >= 2026:
+                devenv = "vs2022"
+            else:
+                devenv = f"vs{vs_version}"
         elif target_os == "android":
             devenv = "androidndk"
         else:
