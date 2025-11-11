@@ -28,12 +28,12 @@ bool SharedMemory::InitializeCommon() {
       ((kBufferSize >> page_size_log2_) + 63) / 64;
   num_system_page_flags_ = static_cast<uint32_t>(num_system_page_flags_entries);
 
-  // in total on windows the page flags take up 2048 entries per fields, with 3
-  // fields and 8 bytes per entry thats 49152 bytes. having page alignment for
-  // them is probably beneficial, we do waste 16384 bytes with this alloc though
+  // Allocate double-buffered valid flags (2x) plus gpu_resolved and gpu_written
+  // (1x each) = 4 total arrays. With 2048 entries per array and 8 bytes per
+  // entry, that's 65536 bytes total (adds 16KB for double buffering).
 
   uint64_t* system_page_flags_base = (uint64_t*)memory::AllocFixed(
-      nullptr, num_system_page_flags_ * 3 * sizeof(uint64_t),
+      nullptr, num_system_page_flags_ * 4 * sizeof(uint64_t),
       memory::AllocationType::kReserveCommit, memory::PageAccess::kReadWrite);
 
   if (!system_page_flags_base) {
@@ -41,16 +41,26 @@ bool SharedMemory::InitializeCommon() {
     return false;
   }
 
-  system_page_flags_valid_ = system_page_flags_base,
+  // Set up double buffer for valid flags
+  valid_buffer_a_ = system_page_flags_base;
+  valid_buffer_b_ = system_page_flags_base + num_system_page_flags_;
   system_page_flags_valid_and_gpu_resolved_ =
-      system_page_flags_base + (num_system_page_flags_),
-  system_page_flags_valid_and_gpu_written_ =
       system_page_flags_base + (num_system_page_flags_ * 2);
-  memset(system_page_flags_valid_, 0, 8 * num_system_page_flags_entries);
+  system_page_flags_valid_and_gpu_written_ =
+      system_page_flags_base + (num_system_page_flags_ * 3);
+
+  // Initialize both valid buffers to zero
+  memset(valid_buffer_a_, 0, 8 * num_system_page_flags_entries);
+  memset(valid_buffer_b_, 0, 8 * num_system_page_flags_entries);
   memset(system_page_flags_valid_and_gpu_resolved_, 0,
          8 * num_system_page_flags_entries);
   memset(system_page_flags_valid_and_gpu_written_, 0,
          8 * num_system_page_flags_entries);
+
+  // Initialize atomics - buffer_a is active, buffer_b is staging
+  active_valid_flags_.store(valid_buffer_a_, std::memory_order_relaxed);
+  staging_valid_flags_.store(valid_buffer_b_, std::memory_order_relaxed);
+
   memory_invalidation_callback_handle_ =
       memory_.RegisterPhysicalMemoryInvalidationCallback(
           MemoryInvalidationCallbackThunk, this);
@@ -104,9 +114,17 @@ void SharedMemory::ShutdownCommon() {
   host_gpu_memory_sparse_allocated_.clear();
   host_gpu_memory_sparse_allocated_.shrink_to_fit();
   host_gpu_memory_sparse_granularity_log2_ = UINT32_MAX;
-  memory::DeallocFixed(system_page_flags_valid_, 0,
-                       memory::DeallocationType::kRelease);
-  system_page_flags_valid_ = nullptr;
+
+  // Free the double-buffered allocation (valid_buffer_a_ is the base pointer)
+  if (valid_buffer_a_) {
+    memory::DeallocFixed(valid_buffer_a_, 0,
+                         memory::DeallocationType::kRelease);
+    valid_buffer_a_ = nullptr;
+    valid_buffer_b_ = nullptr;
+    active_valid_flags_.store(nullptr, std::memory_order_relaxed);
+    staging_valid_flags_.store(nullptr, std::memory_order_relaxed);
+  }
+
   system_page_flags_valid_and_gpu_resolved_ = nullptr;
   system_page_flags_valid_and_gpu_written_ = nullptr;
   num_system_page_flags_ = 0;
@@ -133,11 +151,26 @@ void SharedMemory::ClearCache() {
 }
 
 void SharedMemory::SetSystemPageBlocksValidWithGpuDataWritten() {
-  auto global_lock = global_critical_region_.Acquire();
+  // Lock-free implementation using double buffering.
+  // Get the staging buffer (not currently being read)
+  uint64_t* staging = staging_valid_flags_.load(std::memory_order_acquire);
 
-  for (unsigned i = 0; i < num_system_page_flags_; ++i) {
-    system_page_flags_valid_[i] = system_page_flags_valid_and_gpu_written_[i];
-  }
+  // Copy GPU-written flags to the staging buffer using optimized vastcpy.
+  // This can happen without blocking readers who are using the active buffer.
+  // Size is always 16KB (2048 entries * 8 bytes) which is perfect for vastcpy.
+  uint32_t copy_size = num_system_page_flags_ * sizeof(uint64_t);
+  memory::vastcpy(
+      reinterpret_cast<uint8_t*>(staging),
+      reinterpret_cast<uint8_t*>(system_page_flags_valid_and_gpu_written_),
+      copy_size);
+
+  // Atomically swap buffers - readers will instantly see the new data
+  // Use acq_rel ordering: acquire the old value, release the new one
+  uint64_t* old_active =
+      active_valid_flags_.exchange(staging, std::memory_order_acq_rel);
+
+  // The old active buffer becomes the new staging buffer
+  staging_valid_flags_.store(old_active, std::memory_order_release);
 }
 
 SharedMemory::GlobalWatchHandle SharedMemory::RegisterGlobalWatch(
@@ -339,7 +372,9 @@ void SharedMemory::MakeRangeValid(uint32_t start, uint32_t length,
         valid_bits &= (uint64_t(1) << ((valid_page_last & 63) + 1)) - 1;
       }
       // SystemPageFlagsBlock& block = system_page_flags_[i];
-      system_page_flags_valid_[i] |= valid_bits;
+      uint64_t* valid_flags =
+          active_valid_flags_.load(std::memory_order_relaxed);
+      valid_flags[i] |= valid_bits;
       if (written_by_gpu) {
         system_page_flags_valid_and_gpu_written_[i] |= valid_bits;
       } else {
@@ -455,9 +490,13 @@ void SharedMemory::TryFindUploadRange(const uint32_t& block_first,
                                       uint32_t& range_start,
                                       unsigned int& current_upload_range,
                                       std::pair<uint32_t, uint32_t>* uploads) {
+  // Load the active valid flags buffer - using relaxed ordering since we're
+  // already under the global lock when called from RequestRange
+  uint64_t* valid_flags = active_valid_flags_.load(std::memory_order_relaxed);
+
   for (uint32_t i = block_first; i <= block_last; ++i) {
     // const SystemPageFlagsBlock& block = system_page_flags_[i];
-    uint64_t block_valid = system_page_flags_valid_[i];
+    uint64_t block_valid = valid_flags[i];
     uint64_t block_resolved = 0;
 
     if (any_data_resolved) {
@@ -597,7 +636,8 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
     if (i == block_last && (page_last & 63) != 63) {
       invalidate_bits &= (uint64_t(1) << ((page_last & 63) + 1)) - 1;
     }
-    system_page_flags_valid_[i] &= ~invalidate_bits;
+    uint64_t* valid_flags = active_valid_flags_.load(std::memory_order_relaxed);
+    valid_flags[i] &= ~invalidate_bits;
     system_page_flags_valid_and_gpu_resolved_[i] &= ~invalidate_bits;
     system_page_flags_valid_and_gpu_written_[i] &= ~invalidate_bits;
   }
@@ -620,11 +660,12 @@ void SharedMemory::PrepareForTraceDownload() {
   uint32_t fire_watches_range_start = UINT32_MAX;
   uint32_t gpu_written_range_start = UINT32_MAX;
   auto global_lock = global_critical_region_.Acquire();
+  uint64_t* valid_flags = active_valid_flags_.load(std::memory_order_relaxed);
   for (uint32_t i = 0; i < num_system_page_flags_; ++i) {
     // SystemPageFlagsBlock& page_flags_block = system_page_flags_[i];
-    uint64_t previously_valid_block = system_page_flags_valid_[i];
+    uint64_t previously_valid_block = valid_flags[i];
     uint64_t gpu_written_block = system_page_flags_valid_and_gpu_written_[i];
-    system_page_flags_valid_[i] = gpu_written_block;
+    valid_flags[i] = gpu_written_block;
 
     // Fire watches on the invalidated pages.
     uint64_t fire_watches_block = previously_valid_block & ~gpu_written_block;

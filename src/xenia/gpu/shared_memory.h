@@ -10,6 +10,8 @@
 #ifndef XENIA_GPU_SHARED_MEMORY_H_
 #define XENIA_GPU_SHARED_MEMORY_H_
 
+#include <atomic>
+
 #include "xenia/memory.h"
 
 namespace xe {
@@ -214,8 +216,15 @@ class SharedMemory {
   //  used to quickly extract ranges.
   // std::vector<SystemPageFlagsBlock> system_page_flags_;
 
-  uint64_t *system_page_flags_valid_ = nullptr,
-           *system_page_flags_valid_and_gpu_written_ = nullptr,
+  // Double-buffered valid flags for lock-free reads during frame-end clears.
+  // Writers still use the lock for read-modify-write operations, but readers
+  // can access the active buffer without blocking.
+  uint64_t* valid_buffer_a_ = nullptr;
+  uint64_t* valid_buffer_b_ = nullptr;
+  std::atomic<uint64_t*> active_valid_flags_{nullptr};
+  std::atomic<uint64_t*> staging_valid_flags_{nullptr};
+
+  uint64_t *system_page_flags_valid_and_gpu_written_ = nullptr,
            *system_page_flags_valid_and_gpu_resolved_ = nullptr;
   unsigned num_system_page_flags_ = 0;
   static std::pair<uint32_t, uint32_t> MemoryInvalidationCallbackThunk(

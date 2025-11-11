@@ -43,9 +43,10 @@ DEFINE_bool(
     "of the guest thread that wrote the new read position.",
     "GPU");
 
-DEFINE_bool(clear_memory_page_state, false,
-            "Refresh state of memory pages to enable gpu written data. (Use "
-            "for 'Team Ninja' Games to fix missing character models)",
+DEFINE_bool(clear_memory_page_state, true,
+            "Refresh state of memory pages to enable gpu written data. "
+            "Uses mostly lock-free double-buffering for minimal overhead. "
+            "(Disable for minor performance boost, but may break rendering)",
             "GPU");
 
 DEFINE_string(
