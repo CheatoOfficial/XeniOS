@@ -116,15 +116,9 @@ DECLARE_bool(force_mount_devkit);
 DEFINE_transient_path(target, "",
                       "Specifies the target .xex or .iso to execute.",
                       "General");
-#ifndef XE_PLATFORM_WIN32
 DEFINE_transient_bool(portable, false,
                       "Specifies if Xenia should run in portable mode.",
                       "General");
-#else
-DEFINE_transient_bool(portable, true,
-                      "Specifies if Xenia should run in portable mode.",
-                      "General");
-#endif
 
 DECLARE_bool(debug);
 
