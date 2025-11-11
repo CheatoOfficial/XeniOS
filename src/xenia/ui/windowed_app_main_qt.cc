@@ -246,9 +246,9 @@ int main(int argc, char** argv) {
     }
 
     // Use Windows-specific initialization which properly sets up logging
-    xe::InitializeWin32App(app->GetName());
+    xe::InitializeWin32App(app->GetName(), is_game_process);
 #else
-    xe::InitializeLogging(app->GetName());
+    xe::InitializeLogging(app->GetName(), is_game_process);
 #endif
 
     if (app->OnInitialize()) {

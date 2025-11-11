@@ -438,33 +438,21 @@ void InitializeLogging(const std::string_view app_name, bool is_game_process) {
     logger_->AddLogSink(std::make_unique<AndroidLogSink>(app_name));
   }
 #else
-  FILE* log_file = nullptr;
-  if (cvars::log_file.empty()) {
-    // Default log file name based on process type
-    std::string file_name;
-    if (is_game_process) {
-      file_name = fmt::format("{}_game.log", app_name);
+  // Only enable file logging for game processes, not the UI process
+  if (is_game_process) {
+    FILE* log_file = nullptr;
+    if (cvars::log_file.empty()) {
+      // Default log file name for game process
+      std::string file_name = fmt::format("{}.log", app_name);
+      auto file_path = xe::filesystem::GetExecutableFolder() / file_name;
+      log_file = xe::filesystem::OpenFile(file_path, "wt");
     } else {
-      file_name = fmt::format("{}.log", app_name);
-    }
-    auto file_path = xe::filesystem::GetExecutableFolder() / file_name;
-    log_file = xe::filesystem::OpenFile(file_path, "wt");
-  } else {
-    // User specified log file
-    if (is_game_process) {
-      // Game process with explicit log file - prepend "game_"
-      std::filesystem::path log_path(cvars::log_file);
-      std::string filename = "game_" + log_path.filename().string();
-      auto modified_path = log_path.parent_path() / filename;
-      xe::filesystem::CreateParentFolder(modified_path);
-      log_file = xe::filesystem::OpenFile(modified_path, "wt");
-    } else {
-      // UI process uses log file as-is
+      // User specified log file - use as-is for game process
       xe::filesystem::CreateParentFolder(cvars::log_file);
       log_file = xe::filesystem::OpenFile(cvars::log_file, "wt");
     }
+    logger_->AddLogSink(std::make_unique<FileLogSink>(log_file, true));
   }
-  logger_->AddLogSink(std::make_unique<FileLogSink>(log_file, true));
 
   if (cvars::log_to_stdout) {
     logger_->AddLogSink(std::make_unique<FileLogSink>(stdout, false));
