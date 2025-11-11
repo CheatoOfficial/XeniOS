@@ -96,9 +96,7 @@ bool QtFilePicker::Show(Window* parent_window) {
   // Use static QFileDialog function to avoid Qt container ABI issues on Windows
   QString initial_dir;
   if (!initial_directory().empty()) {
-    std::string dir_str = initial_directory().string();
-    initial_dir =
-        QString::fromUtf8(dir_str.c_str(), static_cast<int>(dir_str.size()));
+    initial_dir = SafeQString(xe::path_to_utf8(initial_directory()));
   }
 
   // Don't apply file filters - show all files

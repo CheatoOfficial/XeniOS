@@ -21,6 +21,7 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/tomlplusplus/toml.hpp"
 #include "xenia/app/emulator_window.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/ui/qt_util.h"
 
@@ -51,7 +52,7 @@ void PatchesDialogQt::SetupUI() {
   auto* main_layout = new QVBoxLayout(this);
 
   // Extract display name from patch file
-  std::string filename = patch_file_.filename().string();
+  std::string filename = xe::path_to_utf8(patch_file_.filename());
   std::string display_name = filename;
 
   // Remove title ID prefix and " - "
@@ -120,23 +121,25 @@ void PatchesDialogQt::LoadPatchFile() {
   patches_.clear();
 
   if (!std::filesystem::exists(patch_file_)) {
-    XELOGE("Patch file does not exist: {}", patch_file_.filename().string());
+    XELOGE("Patch file does not exist: {}",
+           xe::path_to_utf8(patch_file_.filename()));
     return;
   }
 
   try {
-    auto patch_toml = toml::parse_file(patch_file_.string());
+    auto patch_toml = toml::parse_file(xe::path_to_utf8(patch_file_));
 
     // Check if there's a patch array
     if (!patch_toml.contains("patch")) {
-      XELOGE("No patches found in file: {}", patch_file_.filename().string());
+      XELOGE("No patches found in file: {}",
+             xe::path_to_utf8(patch_file_.filename()));
       return;
     }
 
     auto patches_array = patch_toml["patch"].as_array();
     if (!patches_array) {
       XELOGE("'patch' is not an array in file: {}",
-             patch_file_.filename().string());
+             xe::path_to_utf8(patch_file_.filename()));
       return;
     }
 
@@ -221,8 +224,8 @@ void PatchesDialogQt::LoadPatchFile() {
     }
 
   } catch (const toml::parse_error& err) {
-    XELOGE("Failed to parse patch file {}: {}", patch_file_.filename().string(),
-           err.what());
+    XELOGE("Failed to parse patch file {}: {}",
+           xe::path_to_utf8(patch_file_.filename()), err.what());
 
     auto* error_label =
         new QLabel(QString("Error loading patches: %1").arg(err.what()),
@@ -303,7 +306,8 @@ bool PatchesDialogQt::UpdateSinglePatchEnabledLine(
 
 void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
   if (!std::filesystem::exists(patch_file_)) {
-    XELOGE("Patch file does not exist: {}", patch_file_.filename().string());
+    XELOGE("Patch file does not exist: {}",
+           xe::path_to_utf8(patch_file_.filename()));
     return;
   }
 
@@ -326,7 +330,7 @@ void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
           std::filesystem::copy_options::overwrite_existing);
 
       XELOGI("Copied bundled patch to storage_root: {}",
-             patch_file_.filename().string());
+             xe::path_to_utf8(patch_file_.filename()));
     }
 
     // Now read from and write to the storage_root version
@@ -336,7 +340,7 @@ void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
     std::ifstream infile(write_path);
     if (!infile.is_open()) {
       XELOGE("Failed to open patch file for reading: {}",
-             write_path.filename().string());
+             xe::path_to_utf8(write_path.filename()));
       return;
     }
 
@@ -350,7 +354,7 @@ void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
     // Update only the specific patch's is_enabled value
     if (!UpdateSinglePatchEnabledLine(lines, patch_index, new_value)) {
       XELOGE("Failed to update patch #{} enabled state in {}", patch_index + 1,
-             write_path.filename().string());
+             xe::path_to_utf8(write_path.filename()));
       return;
     }
 
@@ -358,7 +362,7 @@ void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
     std::ofstream outfile(write_path, std::ios::out | std::ios::trunc);
     if (!outfile.is_open()) {
       XELOGE("Failed to open patch file for writing: {}",
-             write_path.filename().string());
+             xe::path_to_utf8(write_path.filename()));
       return;
     }
 
@@ -371,7 +375,7 @@ void PatchesDialogQt::SavePatchToggle(size_t patch_index, bool new_value) {
     outfile.close();
 
     XELOGI("Updated patch #{} in {}", patch_index + 1,
-           write_path.filename().string());
+           xe::path_to_utf8(write_path.filename()));
 
     // Update info label to show changes pending
     info_label_->setText(

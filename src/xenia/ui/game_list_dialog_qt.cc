@@ -619,7 +619,8 @@ void GameListDialogQt::PopulateTable() {
     // Apply filter
     if (!filter_text.isEmpty()) {
       QString title = SafeQString(entry.title_name).toLower();
-      QString path = SafeQString(entry.path_to_file.string()).toLower();
+      QString path =
+          SafeQString(xe::path_to_utf8(entry.path_to_file)).toLower();
 
       if (!title.contains(filter_text) && !path.contains(filter_text)) {
         continue;
@@ -714,7 +715,8 @@ void GameListDialogQt::PopulateTable() {
 
     // Path - smaller font (only show if path is available)
     if (!entry.path_to_file.empty()) {
-      auto* path_label = new QLabel(SafeQString(entry.path_to_file.string()));
+      auto* path_label =
+          new QLabel(SafeQString(xe::path_to_utf8(entry.path_to_file)));
       path_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
       path_label->setAttribute(Qt::WA_TransparentForMouseEvents);
       QFont path_font = path_label->font();
@@ -769,7 +771,7 @@ void GameListDialogQt::PopulateTable() {
     // Store the path and title_id in the row for later retrieval
     table_widget_->setItem(row, 0, new QTableWidgetItem());
     table_widget_->item(row, 0)->setData(
-        Qt::UserRole, SafeQString(entry.path_to_file.string()));
+        Qt::UserRole, SafeQString(xe::path_to_utf8(entry.path_to_file)));
     table_widget_->item(row, 0)->setData(Qt::UserRole + 1, entry.title_id);
   }
 }
@@ -959,7 +961,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
       for (const auto& patch_path : available_patches) {
         // Extract a display name from the filename
         // Format: "TITLEID - Game Name (Version).patch.toml"
-        std::string filename = patch_path.filename().string();
+        std::string filename = xe::path_to_utf8(patch_path.filename());
 
         // Remove the title ID prefix and " - "
         std::string display_name = filename;
@@ -1120,7 +1122,7 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
           QString("The game file does not exist:\n\n%1\n\n"
                   "The path will be removed from the game list.\n"
                   "Please select the correct game file.")
-              .arg(SafeQString(path.string())));
+              .arg(SafeQString(xe::path_to_utf8(path))));
 
       // Remove the bad path from all dashboard GPDs using ProfileManager
       if (title_id != 0) {
@@ -1656,7 +1658,8 @@ std::vector<std::filesystem::path> GameListDialogQt::FindPatchesForTitle(
         }
       }
     } catch (const std::filesystem::filesystem_error& e) {
-      XELOGE("Error scanning patches directory {}: {}", dir.string(), e.what());
+      XELOGE("Error scanning patches directory {}: {}", xe::path_to_utf8(dir),
+             e.what());
     }
   };
 
@@ -1711,7 +1714,7 @@ std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
     QString disc_label = disc.label.empty() ? QString("Disc %1").arg(disc_num)
                                             : SafeQString(disc.label);
     auto* list_item = new QListWidgetItem(disc_label);
-    list_item->setData(Qt::UserRole, SafeQString(disc.path.string()));
+    list_item->setData(Qt::UserRole, SafeQString(xe::path_to_utf8(disc.path)));
     list_widget->addItem(list_item);
     disc_num++;
   }
