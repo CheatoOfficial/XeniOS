@@ -14,15 +14,6 @@
 #include "xenia/ui/imgui_guest_notification.h"
 #include "xenia/ui/imgui_notification.h"
 
-#if XE_PLATFORM_WIN32
-#include <playsoundapi.h>
-#endif
-
-DEFINE_string(notification_sound_path, "",
-              "Path (including filename) to selected notification sound. Sound "
-              "MUST be in wav format!",
-              "General");
-
 namespace xe {
 namespace ui {
 
@@ -46,19 +37,6 @@ void ImGuiGuestNotification::UpdateNotificationState() {
       // TODO(Gliniak): Implement delayed notifications.
       current_stage_ = NotificationStage::FazeIn;
       notification_draw_progress_ = 0.2f;
-#if XE_PLATFORM_WIN32
-      if (!cvars::notification_sound_path.empty()) {
-        auto notification_sound_path = cvars::notification_sound_path;
-        if (std::filesystem::exists(notification_sound_path)) {
-          PlaySound(std::wstring(notification_sound_path.begin(),
-                                 notification_sound_path.end())
-                        .c_str(),
-                    NULL,
-                    SND_FILENAME | SND_NODEFAULT | SND_NOSTOP | SND_ASYNC);
-        }
-      }
-#endif
-
       break;
     case NotificationStage::FazeIn: {
       SetCreationTime(Clock::QueryHostUptimeMillis());

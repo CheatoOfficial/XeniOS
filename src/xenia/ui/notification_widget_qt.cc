@@ -9,16 +9,29 @@
 
 #include "xenia/ui/notification_widget_qt.h"
 
+#include <QUrl>
 #include <QVBoxLayout>
+#include <filesystem>
+
+#include "xenia/base/cvar.h"
+#include "xenia/base/string.h"
+#include "xenia/ui/qt_util.h"
+
+DEFINE_path(notification_sound_path, "",
+            "Path (including filename) to selected notification sound. "
+            "Supports WAV, MP3, OGG, FLAC, and other common formats.",
+            "UI");
 
 namespace xe {
 namespace app {
+
+using xe::ui::SafeQString;
 
 NotificationWidgetQt::NotificationWidgetQt(QWidget* parent,
                                            const QString& title,
                                            const QString& message,
                                            int duration_ms)
-    : QWidget(parent) {
+    : QWidget(parent), media_player_(nullptr), audio_output_(nullptr) {
   setAttribute(Qt::WA_DeleteOnClose);
   setAttribute(Qt::WA_TransparentForMouseEvents);
   setAutoFillBackground(true);
@@ -57,6 +70,19 @@ NotificationWidgetQt::NotificationWidgetQt(QWidget* parent,
     deleteLater();  // Ensure widget is actually destroyed
   });
   auto_close_timer_->setInterval(duration_ms);
+
+  // Setup media player for notification sound
+  if (!cvars::notification_sound_path.empty()) {
+    std::filesystem::path sound_path = cvars::notification_sound_path;
+    if (std::filesystem::exists(sound_path)) {
+      media_player_ = new QMediaPlayer(this);
+      audio_output_ = new QAudioOutput(this);
+      media_player_->setAudioOutput(audio_output_);
+      media_player_->setSource(
+          QUrl::fromLocalFile(SafeQString(xe::path_to_utf8(sound_path))));
+      audio_output_->setVolume(1.0);
+    }
+  }
 }
 
 void NotificationWidgetQt::Show() {
@@ -74,6 +100,11 @@ void NotificationWidgetQt::Show() {
   show();
   raise();
   auto_close_timer_->start();
+
+  // Play sound if configured
+  if (media_player_) {
+    media_player_->play();
+  }
 }
 
 }  // namespace app

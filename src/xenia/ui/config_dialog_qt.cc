@@ -312,8 +312,9 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &ConfigDialogQt::OnValueChanged);
     return combo;
-  } else if (dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
-                 var_info->var)) {
+  } else if (auto* path_var =
+                 dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(
+                     var_info->var)) {
     // Path input with browse button
     auto* container = new QWidget();
     auto* layout = new QHBoxLayout(container);
@@ -328,9 +329,20 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     auto* browse_button = new QPushButton("Browse...");
     connect(browse_button, &QPushButton::clicked,
             [this, line_edit, var_info]() {
-              QString path = QFileDialog::getExistingDirectory(
-                  this, SafeQString("Select Directory for " + var_info->name),
-                  line_edit->text());
+              QString path;
+              // Special case for notification_sound_path - file picker with
+              // audio filters
+              if (var_info->name == "notification_sound_path") {
+                path = QFileDialog::getOpenFileName(
+                    this, "Select Notification Sound", line_edit->text(),
+                    "Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a *.aac *.wma "
+                    "*.opus);;All Files (*)");
+              } else {
+                // Default: directory picker
+                path = QFileDialog::getExistingDirectory(
+                    this, SafeQString("Select Directory for " + var_info->name),
+                    line_edit->text());
+              }
               if (!path.isEmpty()) {
                 line_edit->setText(path);
               }

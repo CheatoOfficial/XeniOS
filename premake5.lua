@@ -176,6 +176,7 @@ filter("platforms:Linux")
       path.join(qt_dir, "include/QtCore"),
       path.join(qt_dir, "include/QtGui"),
       path.join(qt_dir, "include/QtWidgets"),
+      path.join(qt_dir, "include/QtMultimedia"),
     })
     libdirs({
       path.join(qt_dir, "lib"),
@@ -191,6 +192,7 @@ filter("platforms:Linux")
       "Qt6Core",
       "Qt6Gui",
       "Qt6Widgets",
+      "Qt6Multimedia",
     })
   end
 
@@ -332,6 +334,7 @@ filter("platforms:Windows")
       path.join(qt_dir, "include/QtCore"),
       path.join(qt_dir, "include/QtGui"),
       path.join(qt_dir, "include/QtWidgets"),
+      path.join(qt_dir, "include/QtMultimedia"),
     })
     libdirs({
       path.join(qt_dir, "lib"),
@@ -344,6 +347,7 @@ filter({"platforms:Windows", "configurations:Release"})
       "Qt6Core",
       "Qt6Gui",
       "Qt6Widgets",
+      "Qt6Multimedia",
     })
   end
 
@@ -353,6 +357,7 @@ filter({"platforms:Windows", "configurations:Debug or Checked"})
       "Qt6Cored",
       "Qt6Guid",
       "Qt6Widgetsd",
+      "Qt6Multimediad",
     })
   end
 

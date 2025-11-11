@@ -20,7 +20,7 @@ drivers.
   * Install using aqtinstall:
     ```
     pip install aqtinstall
-    python -m aqt install-qt windows desktop 6.9.2 win64_msvc2022_64 -O C:\Qt
+    python -m aqt install-qt windows desktop 6.9.2 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
     # Note: msvc2022_64 is compatible with with VS2026
     ```
   * The build script will automatically detect it if installed in `C:\Qt`
@@ -127,7 +127,7 @@ You can install Qt from your distribution's package manager, or use aqtinstall:
 
 ```sh
 pip install aqtinstall
-aqt install-qt linux desktop 6.9.2 linux_gcc_64 -O /opt/Qt
+aqt install-qt linux desktop 6.9.2 linux_gcc_64 -m qtmultimedia -O /opt/Qt
 ```
 
 If using aqtinstall, add Qt to your environment:
