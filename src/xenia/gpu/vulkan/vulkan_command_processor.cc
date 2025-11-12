@@ -2970,6 +2970,28 @@ bool VulkanCommandProcessor::IssueCopy() {
   ReadbackResolveMode readback_mode = GetReadbackResolveMode();
   if (readback_mode != ReadbackResolveMode::kDisabled &&
       !texture_cache_->IsDrawResolutionScaled() && written_length > 0) {
+    // Early check: if destination memory is not accessible, skip all the
+    // expensive GPU readback work.
+    VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
+    bool memory_accessible = false;
+    if (physical_heap) {
+      HeapAllocationInfo alloc_info;
+      if (physical_heap->QueryRegionInfo(written_address, &alloc_info) &&
+          (alloc_info.state & kMemoryAllocationCommit) &&
+          (alloc_info.protect & kMemoryProtectWrite)) {
+        uint32_t end_address = written_address + written_length;
+        uint32_t region_end = alloc_info.base_address + alloc_info.region_size;
+        if (end_address <= region_end) {
+          memory_accessible = true;
+        }
+      }
+    }
+
+    if (!memory_accessible) {
+      // Destination memory not accessible, skip readback entirely
+      return true;
+    }
+
     // Create a key for this specific resolve operation
     uint64_t resolve_key =
         MakeReadbackResolveKey(written_address, written_length);
@@ -3107,15 +3129,7 @@ bool VulkanCommandProcessor::IssueCopy() {
       if (dfn.vkMapMemory(device, rb.memories[read_index], 0, written_length, 0,
                           &mapped_data) == VK_SUCCESS) {
         if (mapped_data) {
-          // Ensure the destination physical memory range is committed before
-          // writing to it.
-          VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
-          if (physical_heap) {
-            physical_heap->AllocFixed(written_address, written_length, 0,
-                                      kMemoryAllocationCommit,
-                                      kMemoryProtectRead | kMemoryProtectWrite);
-          }
-
+          // Memory accessibility already checked at the start of this function
           uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
           memory::vastcpy(dest_ptr, static_cast<uint8_t*>(mapped_data),
                           written_length);
