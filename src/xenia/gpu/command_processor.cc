@@ -58,12 +58,20 @@ DEFINE_string(
     "GPU");
 
 DEFINE_bool(
-    readback_memexport, false,
+    readback_memexport, true,
     "Read data written by memory export in shaders on the CPU. "
-    "This may be needed in some games (but many only access exported data on "
-    "the GPU, and this flag isn't needed to handle such behavior), but causes "
-    "mid-frame synchronization, so it has a huge performance impact.",
+    "This is needed in some games but many only access exported data on "
+    "the GPU, so can be disabled for minor optimization. When "
+    "combined with readback_memexport_fast, performance impact is minimal.",
     "GPU");
+
+DEFINE_bool(readback_memexport_fast, true,
+            "Use fast (double-buffered, 1 frame delayed) readback for "
+            "memexport instead\n"
+            "of immediate GPU sync. Removes main performance penalty when "
+            "readback_memexport\n"
+            "is enabled at the expense of accuracy.",
+            "GPU");
 
 namespace xe {
 namespace gpu {

@@ -278,6 +278,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
                  bool major_mode_explicit) override;
   bool IssueCopy() override;
 
+  void IssueDraw_MemexportReadbackFullPath(uint32_t memexport_total_size);
+  void IssueDraw_MemexportReadbackFastPath(uint32_t memexport_total_size);
+
   void InitializeTrace() override;
 
  private:
@@ -757,10 +760,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Map: (written_address << 32 | written_length) -> ReadbackBuffer
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
 
-  // Simple single buffer for memexport (always syncs, no double-buffering)
+  // Simple single buffer for memexport (full mode - always syncs, no
+  // double-buffering)
   VkBuffer memexport_readback_buffer_ = VK_NULL_HANDLE;
   VkDeviceMemory memexport_readback_buffer_memory_ = VK_NULL_HANDLE;
   uint32_t memexport_readback_buffer_size_ = 0;
+
+  // Per-memexport double-buffered readback for fast mode (delayed sync)
+  std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
 };
 
 }  // namespace vulkan

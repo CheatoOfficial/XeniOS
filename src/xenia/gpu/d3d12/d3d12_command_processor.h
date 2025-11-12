@@ -324,6 +324,8 @@ class D3D12CommandProcessor final : public CommandProcessor {
   bool IssueCopy() override;
   XE_NOINLINE
   bool IssueCopy_ReadbackResolvePath();
+  void IssueDraw_MemexportReadbackFullPath(uint32_t memexport_total_size);
+  void IssueDraw_MemexportReadbackFastPath(uint32_t memexport_total_size);
   void InitializeTrace() override;
 
  private:
@@ -702,9 +704,13 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // Map: (written_address << 32 | written_length) -> ReadbackBuffer
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
 
-  // Simple single buffer for memexport (always syncs, no double-buffering)
+  // Simple single buffer for memexport (full mode - always syncs, no
+  // double-buffering)
   ID3D12Resource* memexport_readback_buffer_ = nullptr;
   uint32_t memexport_readback_buffer_size_ = 0;
+
+  // Per-memexport double-buffered readback for fast mode (delayed sync)
+  std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
 
   // The current fixed-function drawing state.
   D3D12_VIEWPORT ff_viewport_;
