@@ -30,6 +30,7 @@ class Surface {
     // Android.
     kTypeIndex_AndroidNativeWindow,
     // GNU/Linux.
+    kTypeIndex_WaylandWindow,
     kTypeIndex_XcbWindow,
     // Windows.
     kTypeIndex_Win32Hwnd,
@@ -38,6 +39,7 @@ class Surface {
   enum : TypeFlags {
     kTypeFlag_AndroidNativeWindow = TypeFlags(1)
                                     << kTypeIndex_AndroidNativeWindow,
+    kTypeFlag_WaylandWindow = TypeFlags(1) << kTypeIndex_WaylandWindow,
     kTypeFlag_XcbWindow = TypeFlags(1) << kTypeIndex_XcbWindow,
     kTypeFlag_Win32Hwnd = TypeFlags(1) << kTypeIndex_Win32Hwnd,
   };

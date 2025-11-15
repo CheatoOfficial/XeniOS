@@ -10,6 +10,7 @@
 #ifndef XENIA_UI_SURFACE_GNULINUX_H_
 #define XENIA_UI_SURFACE_GNULINUX_H_
 
+#include <wayland-client.h>
 #include <xcb/xcb.h>
 
 #include "xenia/ui/surface.h"
@@ -31,6 +32,30 @@ class XcbWindowSurface final : public Surface {
  private:
   xcb_connection_t* connection_;
   xcb_window_t window_;
+};
+
+class WaylandWindowSurface final : public Surface {
+ public:
+  explicit WaylandWindowSurface(wl_display* display, wl_surface* surface,
+                                uint32_t width, uint32_t height)
+      : display_(display), surface_(surface), width_(width), height_(height) {}
+  TypeIndex GetType() const override { return kTypeIndex_WaylandWindow; }
+  wl_display* display() const { return display_; }
+  wl_surface* surface() const { return surface_; }
+
+  void SetSize(uint32_t width, uint32_t height) {
+    width_ = width;
+    height_ = height;
+  }
+
+ protected:
+  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override;
+
+ private:
+  wl_display* display_;
+  wl_surface* surface_;
+  uint32_t width_;
+  uint32_t height_;
 };
 
 }  // namespace ui

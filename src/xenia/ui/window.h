@@ -155,7 +155,8 @@ class Window {
   static std::unique_ptr<Window> Create(WindowedAppContext& app_context,
                                         const std::string_view title,
                                         uint32_t desired_logical_width,
-                                        uint32_t desired_logical_height);
+                                        uint32_t desired_logical_height,
+                                        bool is_game_process = false);
 
   virtual ~Window();
 

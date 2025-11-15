@@ -171,10 +171,16 @@ filter("platforms:Linux")
   toolset("clang")
   local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
+    -- Extract Qt version from path (e.g., /opt/Qt/6.9.2/gcc_64 -> 6.9.2)
+    local qt_version = path.getname(path.getdirectory(qt_dir))
     includedirs({
       path.join(qt_dir, "include"),
       path.join(qt_dir, "include/QtCore"),
+      path.join(qt_dir, "include/QtCore", qt_version),
+      path.join(qt_dir, "include/QtCore", qt_version, "QtCore"),
       path.join(qt_dir, "include/QtGui"),
+      path.join(qt_dir, "include/QtGui", qt_version),
+      path.join(qt_dir, "include/QtGui", qt_version, "QtGui"),
       path.join(qt_dir, "include/QtWidgets"),
       path.join(qt_dir, "include/QtMultimedia"),
     })

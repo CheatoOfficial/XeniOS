@@ -31,7 +31,8 @@ class QtWindow : public Window {
 
  public:
   QtWindow(WindowedAppContext& app_context, const std::string_view title,
-           uint32_t desired_logical_width, uint32_t desired_logical_height);
+           uint32_t desired_logical_width, uint32_t desired_logical_height,
+           bool is_game_process = false);
   ~QtWindow() override;
 
   QMainWindow* qwindow() const { return qwindow_; }
@@ -83,6 +84,7 @@ class QtWindow : public Window {
   QWidget* drawing_widget_ = nullptr;
 
   bool in_size_update_ = false;
+  bool is_game_process_ = false;
 
   // Cursor auto-hide support
   QTimer* cursor_auto_hide_timer_ = nullptr;

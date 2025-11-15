@@ -15,6 +15,7 @@
 #include <QGuiApplication>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QMargins>
 #include <QMenuBar>
 #include <QMouseEvent>
 #include <QPixmap>
@@ -35,6 +36,12 @@
 #include "xenia/ui/surface_gnulinux.h"
 #elif defined(XE_PLATFORM_WIN32)
 #include "xenia/ui/surface_win.h"
+#endif
+
+#if defined(XE_PLATFORM_LINUX)
+// Include Qt private headers for Wayland support on Linux only
+// (path is relative to QtGui/<version>/QtGui which is in include path)
+#include <qpa/qplatformwindow_p.h>
 #endif
 
 // Initialize Qt resources - must be outside of namespace scope
@@ -156,16 +163,17 @@ std::unique_ptr<MenuItem> MenuItem::Create(Type type, const std::string& text,
 std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context,
                                        const std::string_view title,
                                        uint32_t desired_logical_width,
-                                       uint32_t desired_logical_height) {
+                                       uint32_t desired_logical_height,
+                                       bool is_game_process) {
   return std::make_unique<QtWindow>(app_context, title, desired_logical_width,
-                                    desired_logical_height);
+                                    desired_logical_height, is_game_process);
 }
 
 QtWindow::QtWindow(WindowedAppContext& app_context,
                    const std::string_view title, uint32_t desired_logical_width,
-                   uint32_t desired_logical_height)
-    : Window(app_context, title, desired_logical_width,
-             desired_logical_height) {}
+                   uint32_t desired_logical_height, bool is_game_process)
+    : Window(app_context, title, desired_logical_width, desired_logical_height),
+      is_game_process_(is_game_process) {}
 
 QtWindow::~QtWindow() {
   EnterDestructor();
@@ -383,6 +391,56 @@ std::unique_ptr<Surface> QtWindow::CreateSurfaceImpl(
   }
 
 #if defined(XE_PLATFORM_LINUX)
+  XELOGI(
+      "CreateSurfaceImpl: is_game_process={}, platform={}, "
+      "allowed_types=0x{:x}",
+      is_game_process_, QGuiApplication::platformName().toStdString(),
+      allowed_types);
+
+  // UI process on Wayland: Don't create surfaces, Qt handles rendering natively
+  if (!is_game_process_ && QGuiApplication::platformName() == "wayland") {
+    XELOGI(
+        "CreateSurfaceImpl: UI process on Wayland, skipping surface creation "
+        "(Qt renders natively)");
+    return nullptr;
+  }
+
+  // Game process on Wayland: Use native Wayland surfaces for Vulkan
+  if (is_game_process_ && (allowed_types & Surface::kTypeFlag_WaylandWindow)) {
+    XELOGI(
+        "CreateSurfaceImpl: Attempting Wayland surface creation for game "
+        "process");
+    auto* waylandApp =
+        qApp->nativeInterface<QNativeInterface::QWaylandApplication>();
+    if (waylandApp) {
+      wl_display* display = waylandApp->display();
+      if (display) {
+        QWindow* window = drawing_widget_->windowHandle();
+        if (window) {
+          auto* waylandWindow = window->nativeInterface<
+              QNativeInterface::Private::QWaylandWindow>();
+          if (waylandWindow) {
+            wl_surface* surface = waylandWindow->surface();
+            if (surface) {
+              uint32_t width = drawing_widget_->width();
+              uint32_t height = drawing_widget_->height();
+              XELOGI(
+                  "CreateSurfaceImpl: Created Wayland surface (game process), "
+                  "size={}x{}",
+                  width, height);
+              return std::make_unique<WaylandWindowSurface>(display, surface,
+                                                            width, height);
+            }
+          }
+        }
+        XELOGW(
+            "CreateSurfaceImpl: Failed to get Wayland surface, falling back to "
+            "XCB");
+      }
+    }
+  }
+
+  // Use XCB for UI process or as fallback
   if (allowed_types & Surface::kTypeFlag_XcbWindow) {
     auto* x11App = qApp->nativeInterface<QNativeInterface::QX11Application>();
     if (!x11App) {

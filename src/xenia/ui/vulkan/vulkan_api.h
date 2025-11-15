@@ -28,8 +28,12 @@
 #endif
 
 #if XE_PLATFORM_GNU_LINUX
+// Support both XCB (X11) and Wayland on Linux
 #ifndef VK_USE_PLATFORM_XCB_KHR
 #define VK_USE_PLATFORM_XCB_KHR
+#endif
+#ifndef VK_USE_PLATFORM_WAYLAND_KHR
+#define VK_USE_PLATFORM_WAYLAND_KHR
 #endif
 #endif
 

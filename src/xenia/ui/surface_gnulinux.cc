@@ -27,5 +27,13 @@ bool XcbWindowSurface::GetSizeImpl(uint32_t& width_out,
   return true;
 }
 
+bool WaylandWindowSurface::GetSizeImpl(uint32_t& width_out,
+                                       uint32_t& height_out) const {
+  // Return the size provided during construction/updates
+  width_out = width_;
+  height_out = height_;
+  return width_ > 0 && height_ > 0;
+}
+
 }  // namespace ui
 }  // namespace xe

@@ -25,9 +25,18 @@
 #endif
 
 int main(int argc, char** argv) {
+  // Check if we have a target file argument (game process) or not (UI process)
+  bool is_game_process = argc > 1;
+
 #if XE_PLATFORM_LINUX
-  // Force X11 backend (Vulkan needs XCB, not Wayland)
-  qputenv("QT_QPA_PLATFORM", "xcb");
+  // UI process: Force X11 backend for proper Qt rendering
+  // Game process: Allow Wayland for Vulkan rendering
+  if (!is_game_process) {
+    qputenv("QT_QPA_PLATFORM", "xcb");
+  } else {
+    // Clear QT_QPA_PLATFORM for game process to allow auto-detection
+    qunsetenv("QT_QPA_PLATFORM");
+  }
 #endif
 
   QApplication qt_app(argc, argv);
@@ -214,9 +223,7 @@ int main(int argc, char** argv) {
       "}");
 
   // Set different application name for game processes so they show as separate
-  // dock entries. Check if we have a target file argument (game process) or not
-  // (UI process).
-  bool is_game_process = argc > 1;
+  // dock entries
   if (is_game_process) {
     qt_app.setApplicationName("Xbox 360 Game");
     qt_app.setDesktopFileName("xenia-game");

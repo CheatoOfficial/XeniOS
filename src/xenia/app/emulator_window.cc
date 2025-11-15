@@ -238,7 +238,8 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
       app_context_(app_context),
       is_game_process_(is_game_process),
       window_listener_(*this),
-      window_(ui::Window::Create(app_context, kBaseTitle, width, height)),
+      window_(ui::Window::Create(app_context, kBaseTitle, width, height,
+                                 is_game_process)),
       imgui_drawer_(
           std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)) {
   base_title_ = std::string(kBaseTitle) +
