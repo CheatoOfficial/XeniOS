@@ -194,14 +194,16 @@ static void first_vastcpy(CacheLine* XE_RESTRICT physaddr,
                           CacheLine* XE_RESTRICT rdmapping,
                           uint32_t written_length) {
   VastCpyDispatch dispatch_to_use = nullptr;
+  // Both variants support non-temporal stores which avoid
+  // polluting L1/L2/L3 caches, at one point vastcpy_impl_repmovs was
+  // also included as it does have slightly better throughput than
+  // the AVX path but it is less optimal due to the cache pollution
+  // issue.
   if (amd64::GetFeatureFlags() & amd64::kX64EmitMovdir64M) {
     XELOGI("Selecting MOVDIR64M vastcpy.");
     dispatch_to_use = vastcpy_impl_movdir64m;
-  } else if (amd64::GetFeatureFlags() & amd64::kX64FastRepMovs) {
-    XELOGI("Selecting rep movs vastcpy.");
-    dispatch_to_use = vastcpy_impl_repmovs;
   } else {
-    XELOGI("Selecting generic AVX vastcpy.");
+    XELOGI("Selecting generic AVX vastcpy (non-temporal stores).");
     dispatch_to_use = vastcpy_impl_avx;
   }
 
