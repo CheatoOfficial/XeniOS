@@ -238,6 +238,18 @@ bool QtWindow::OpenImpl() {
   if (IsFullscreen()) {
     qwindow_->showFullScreen();
   } else {
+    // Resize window to desired dimensions
+    qwindow_->resize(GetDesiredLogicalWidth(), GetDesiredLogicalHeight());
+
+    // Center window on screen
+    QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen) {
+      QRect screen_geometry = screen->availableGeometry();
+      int x = (screen_geometry.width() - GetDesiredLogicalWidth()) / 2;
+      int y = (screen_geometry.height() - GetDesiredLogicalHeight()) / 2;
+      qwindow_->move(x, y);
+    }
+
     qwindow_->show();
   }
 
@@ -666,7 +678,13 @@ void QtWindow::OnCloseEvent(QCloseEvent* event) {
 
 void QtWindow::OnResizeEvent(QResizeEvent* event) {
   WindowDestructionReceiver destruction_receiver(this);
-  HandleSizeUpdate(destruction_receiver);
+  // Use the event's size which is more reliable than reading widget dimensions
+  if (!in_size_update_ && event) {
+    in_size_update_ = true;
+    OnActualSizeUpdate(uint32_t(event->size().width()),
+                       uint32_t(event->size().height()), destruction_receiver);
+    in_size_update_ = false;
+  }
 }
 
 void QtWindow::OnKeyPressEvent(QKeyEvent* event) {

@@ -15,6 +15,8 @@
 
 #include <QPointer>
 
+class QTimer;
+
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -76,6 +78,7 @@ class EmulatorWindow {
   ui::WindowedAppContext& app_context() const { return app_context_; }
   ui::Window* window() const { return window_.get(); }
   ui::ImGuiDrawer* imgui_drawer() const { return imgui_drawer_.get(); }
+  bool is_game_process() const { return is_game_process_; }
 
   ui::Presenter* GetGraphicsSystemPresenter() const;
   void SetupGraphicsSystemPresenterPainting();
@@ -180,6 +183,7 @@ class EmulatorWindow {
     void OnClosing(ui::UIEvent& e) override;
     void OnFileDrop(ui::FileDropEvent& e) override;
     void OnGotFocus(ui::UISetupEvent& e) override;
+    void OnResize(ui::UISetupEvent& e) override;
 
     void OnKeyDown(ui::KeyEvent& e) override;
 
@@ -256,10 +260,18 @@ class EmulatorWindow {
 
   void ClearDialogs();
 
+  // Timer callback for saving window size after resize is complete
+  void SaveWindowSizeConfig();
+
   Emulator* emulator_;
   ui::WindowedAppContext& app_context_;
   bool is_game_process_;
   EmulatorWindowListener window_listener_;
+
+  // Timer for debouncing resize events (save config after resize is done)
+  std::unique_ptr<QTimer> resize_save_timer_;
+  uint32_t pending_resize_width_ = 0;
+  uint32_t pending_resize_height_ = 0;
 
 #if XE_PLATFORM_LINUX
   std::vector<pid_t> child_processes_;

@@ -238,6 +238,48 @@ std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id) {
   return args;
 }
 
+void SaveGameConfig(uint32_t title_id, const toml::table& config_table) {
+  const auto game_config_path =
+      config_folder / "config" /
+      (fmt::format("{:08X}", title_id) + game_config_suffix);
+
+  try {
+    xe::filesystem::CreateParentFolder(game_config_path);
+    std::ofstream file(game_config_path);
+    if (!file.is_open()) {
+      throw std::runtime_error("Failed to open file for writing");
+    }
+
+    file << "# Game-specific config overrides\n";
+    file << "# Title ID: " << fmt::format("{:08X}", title_id) << "\n\n";
+    file << config_table << "\n";
+    file.close();
+
+    XELOGI("Saved game config for title {:08X}", title_id);
+  } catch (const std::exception& e) {
+    XELOGE("Failed to save game config {}: {}",
+           xe::path_to_utf8(game_config_path), e.what());
+    throw;
+  }
+}
+
+toml::table LoadGameConfig(uint32_t title_id) {
+  const auto game_config_path =
+      config_folder / "config" /
+      (fmt::format("{:08X}", title_id) + game_config_suffix);
+
+  toml::table config_table;
+  if (std::filesystem::exists(game_config_path)) {
+    try {
+      config_table = toml::parse_file(game_config_path.string());
+    } catch (const std::exception& e) {
+      XELOGE("Failed to parse game config {}: {}",
+             xe::path_to_utf8(game_config_path), e.what());
+    }
+  }
+  return config_table;
+}
+
 void ReloadConfig() {
   if (config_path.empty()) {
     return;

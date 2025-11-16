@@ -120,6 +120,18 @@ DEFINE_transient_bool(portable, false,
                       "Specifies if Xenia should run in portable mode.",
                       "General");
 
+DECLARE_uint32(window_size_ui_x);
+DECLARE_uint32(window_size_ui_y);
+
+DEFINE_CVar(window_size_game_x, 0,
+            "Game window width in pixels (0 = use internal resolution). "
+            "Command-line only.",
+            "Display", true, uint32_t);
+DEFINE_CVar(window_size_game_y, 0,
+            "Game window height in pixels (0 = use internal resolution). "
+            "Command-line only.",
+            "Display", true, uint32_t);
+
 DECLARE_bool(debug);
 
 DEFINE_bool(discord, true, "Enable Discord rich presence", "General");
@@ -598,14 +610,22 @@ bool EmulatorApp::OnInitialize() {
   // Determine window size based on process type
   uint32_t window_width, window_height;
   if (is_game_process) {
-    // Game process - use full resolution from settings
+    // Game process - use internal resolution or command-line override
     auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
     window_width = res.first;
     window_height = res.second;
+
+    // Override with command-line args if set (transient cvars)
+    if (cvars::window_size_game_x != 0) {
+      window_width = cvars::window_size_game_x;
+    }
+    if (cvars::window_size_game_y != 0) {
+      window_height = cvars::window_size_game_y;
+    }
   } else {
-    // UI process - sized to comfortably hold configuration manager (900x700)
-    window_width = 950;
-    window_height = 750;
+    // UI process - use persistent cvars (defaults to 950x750)
+    window_width = cvars::window_size_ui_x;
+    window_height = cvars::window_size_ui_y;
   }
 
   // Main emulator display window.

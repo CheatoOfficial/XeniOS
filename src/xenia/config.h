@@ -22,7 +22,9 @@ extern std::string game_config_suffix;
 
 void SetupConfig(const std::filesystem::path& config_folder);
 std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id);
+toml::table LoadGameConfig(uint32_t title_id);
 void SaveConfig();
+void SaveGameConfig(uint32_t title_id, const toml::table& config_table);
 void ReloadConfig();
 void SetConfigSavedCallback(std::function<void()> callback);
 }  // namespace config

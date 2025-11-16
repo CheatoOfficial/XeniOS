@@ -117,6 +117,9 @@ DECLARE_string(readback_resolve);
 
 DECLARE_bool(readback_memexport);
 
+DEFINE_uint32(window_size_ui_x, 950, "UI window width in pixels.", "Display");
+DEFINE_uint32(window_size_ui_y, 750, "UI window height in pixels.", "Display");
+
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
 
@@ -242,6 +245,15 @@ EmulatorWindow::EmulatorWindow(Emulator* emulator,
                                  is_game_process)),
       imgui_drawer_(
           std::make_unique<ui::ImGuiDrawer>(window_.get(), kZOrderImGui)) {
+  // Set up resize save timer for both UI and game processes
+  resize_save_timer_ = std::make_unique<QTimer>();
+  resize_save_timer_->setSingleShot(true);
+  QObject::connect(resize_save_timer_.get(), &QTimer::timeout,
+                   [this]() { SaveWindowSizeConfig(); });
+
+  // Initialize pending dimensions with current window size
+  pending_resize_width_ = width;
+  pending_resize_height_ = height;
   base_title_ = std::string(kBaseTitle) +
 #ifdef DEBUG
 #if _NO_DEBUG_HEAP == 1
@@ -476,6 +488,67 @@ void EmulatorWindow::EmulatorWindowListener::OnGotFocus(ui::UISetupEvent& e) {
   // have focus
   if (!emulator_window_.is_game_process_) {
     emulator_window_.CheckChildProcessStatus();
+  }
+}
+
+void EmulatorWindow::EmulatorWindowListener::OnResize(ui::UISetupEvent& e) {
+  // Persist window size for both UI and game processes
+  auto window = emulator_window_.window();
+  if (window && emulator_window_.resize_save_timer_) {
+    // Update pending dimensions with current window size
+    emulator_window_.pending_resize_width_ = window->GetActualLogicalWidth();
+    emulator_window_.pending_resize_height_ = window->GetActualLogicalHeight();
+
+    // Reset the timer - it will fire 300ms after the last resize event
+    emulator_window_.resize_save_timer_->stop();
+    emulator_window_.resize_save_timer_->start(300);  // 300ms delay
+  }
+}
+
+void EmulatorWindow::SaveWindowSizeConfig() {
+  if (is_game_process_) {
+    // Game process - save to game-specific config
+    if (!emulator_ || !emulator_->is_title_open()) {
+      return;  // No title loaded yet
+    }
+
+    uint32_t title_id = emulator_->title_id();
+    if (title_id == 0) {
+      return;
+    }
+
+    // Load existing config, update both values, save once
+    toml::table config_table = config::LoadGameConfig(title_id);
+
+    // Ensure Display category exists
+    if (!config_table.contains("Display")) {
+      config_table.insert("Display", toml::table{});
+    }
+
+    auto* display_table = config_table["Display"].as_table();
+    if (display_table) {
+      display_table->insert_or_assign(
+          "window_size_game_x", static_cast<int64_t>(pending_resize_width_));
+      display_table->insert_or_assign(
+          "window_size_game_y", static_cast<int64_t>(pending_resize_height_));
+    }
+
+    config::SaveGameConfig(title_id, config_table);
+  } else {
+    // UI process - save to main config
+    if (cvars::window_size_ui_x != pending_resize_width_ ||
+        cvars::window_size_ui_y != pending_resize_height_) {
+      XELOGI("UI window resized: {}x{} -> {}x{}", cvars::window_size_ui_x,
+             cvars::window_size_ui_y, pending_resize_width_,
+             pending_resize_height_);
+
+      // Update the cvars using OVERRIDE to properly set config values
+      OVERRIDE_uint32(window_size_ui_x, pending_resize_width_);
+      OVERRIDE_uint32(window_size_ui_y, pending_resize_height_);
+
+      // Save the config to persist the changes
+      config::SaveConfig();
+    }
   }
 }
 

@@ -197,13 +197,8 @@ void GameConfigDialogQt::LoadConfigOverrides() {
   original_overrides_.clear();
   overrides_table_->setRowCount(0);
 
-  auto config_path = GetGameConfigPath();
-  if (!std::filesystem::exists(config_path)) {
-    return;
-  }
-
   try {
-    const auto config = ParseFile(config_path);
+    const auto config = config::LoadGameConfig(title_id_);
 
     // Use the same logic as LoadGameConfigAsArgs
     if (!cvar::ConfigVars) {
@@ -267,8 +262,7 @@ void GameConfigDialogQt::LoadConfigOverrides() {
       }
     }
   } catch (const std::exception& e) {
-    XELOGE("Failed to load game config {}: {}", xe::path_to_utf8(config_path),
-           e.what());
+    XELOGE("Failed to load game config for {:08X}: {}", title_id_, e.what());
     QMessageBox::warning(
         this, "Error Loading Config",
         SafeQString(fmt::format("Failed to load game config: {}", e.what())));
@@ -278,14 +272,6 @@ void GameConfigDialogQt::LoadConfigOverrides() {
 }
 
 void GameConfigDialogQt::SaveConfigOverrides() {
-  auto config_path = GetGameConfigPath();
-
-  // Create config directory if it doesn't exist
-  auto config_dir = config_path.parent_path();
-  if (!std::filesystem::exists(config_dir)) {
-    std::filesystem::create_directories(config_dir);
-  }
-
   // Build a TOML structure from current table contents
   toml::table config_table;
   std::map<std::string, toml::table> category_tables;
@@ -360,20 +346,9 @@ void GameConfigDialogQt::SaveConfigOverrides() {
     config_table.insert_or_assign(category, table);
   }
 
-  // Save to file
+  // Save to file using config::SaveGameConfig
   try {
-    std::ofstream file(config_path);
-    if (!file.is_open()) {
-      throw std::runtime_error("Failed to open file for writing");
-    }
-
-    file << "# Game-specific config overrides for " << game_title_ << "\n";
-    file << "# Title ID: " << fmt::format("{:08X}", title_id_) << "\n\n";
-    file << config_table << "\n";
-    file.close();
-
-    XELOGI("Saved game config overrides for {:08X} with {} entries", title_id_,
-           overrides_table_->rowCount());
+    config::SaveGameConfig(title_id_, config_table);
 
     has_unsaved_changes_ = false;
 
@@ -382,8 +357,6 @@ void GameConfigDialogQt::SaveConfigOverrides() {
         "Game configuration overrides have been saved successfully.\n\n"
         "These settings will be applied the next time you launch this game.");
   } catch (const std::exception& e) {
-    XELOGE("Failed to save game config {}: {}", xe::path_to_utf8(config_path),
-           e.what());
     QMessageBox::critical(
         this, "Error Saving Config",
         SafeQString(fmt::format("Failed to save game config: {}", e.what())));
