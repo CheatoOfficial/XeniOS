@@ -754,9 +754,15 @@ class VulkanCommandProcessor final : public CommandProcessor {
     VkBuffer buffers[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkDeviceMemory memories[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     uint32_t sizes[2] = {0, 0};
+    void* mapped_data[2] = {nullptr, nullptr};  // Persistent mappings
     uint32_t current_index = 0;
     uint64_t last_used_frame = 0;
   };
+
+  // Helper to evict old readback buffers from a cache map
+  void EvictOldReadbackBuffers(
+      std::unordered_map<uint64_t, ReadbackBuffer>& buffer_map);
+
   // Map: (written_address << 32 | written_length) -> ReadbackBuffer
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
 

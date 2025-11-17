@@ -43,7 +43,6 @@ enum class ReadbackResolveMode {
 
 void SaveGPUSetting(GPUSetting setting, uint64_t value);
 bool GetGPUSetting(GPUSetting setting);
-ReadbackResolveMode GetReadbackResolveMode();
 void SetReadbackResolveMode(const std::string& mode);
 
 class GraphicsSystem;
@@ -104,6 +103,11 @@ class CommandProcessor {
   void CallInThread(std::function<void()> fn);
 
   virtual void ClearCaches();
+
+  // Get cached readback resolve mode (avoids string parsing every frame)
+  ReadbackResolveMode GetReadbackResolveMode() const {
+    return cached_readback_resolve_mode_;
+  }
 
   // "Desired" is for the external thread managing the post-processing effect.
   SwapPostEffect GetDesiredSwapPostEffect() const {
@@ -167,7 +171,7 @@ class CommandProcessor {
   static constexpr uint32_t kReadbackBufferSizeIncrement = 16 * 1024 * 1024;
 
   // Eviction policy constants for readback buffer cache
-  static constexpr size_t kMaxReadbackBuffers = 64;
+  static constexpr size_t kMaxReadbackBuffers = 256;
   static constexpr uint64_t kReadbackBufferEvictionAgeFrames = 60;
 
   // Progressive alignment for readback buffers to avoid wasting memory
@@ -328,6 +332,10 @@ class CommandProcessor {
   // "Desired" is for the external thread managing the post-processing effect.
   SwapPostEffect swap_post_effect_desired_ = SwapPostEffect::kNone;
   SwapPostEffect swap_post_effect_actual_ = SwapPostEffect::kNone;
+
+  // Cached readback resolve mode (parsed once from string cvar)
+  ReadbackResolveMode cached_readback_resolve_mode_ =
+      ReadbackResolveMode::kFast;
 
  private:
   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};

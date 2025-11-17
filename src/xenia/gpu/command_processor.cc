@@ -99,7 +99,7 @@ bool GetGPUSetting(GPUSetting setting) {
   return false;
 }
 
-ReadbackResolveMode GetReadbackResolveMode() {
+static ReadbackResolveMode ParseReadbackResolveMode() {
   const std::string& mode = cvars::readback_resolve;
   if (mode == "full") {
     return ReadbackResolveMode::kFull;
@@ -129,6 +129,8 @@ CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
       write_ptr_index_event_(xe::threading::Event::CreateAutoResetEvent(false)),
       write_ptr_index_(0) {
   assert_not_null(write_ptr_index_event_);
+  // Parse and cache readback resolve mode once
+  cached_readback_resolve_mode_ = ParseReadbackResolveMode();
 }
 
 CommandProcessor::~CommandProcessor() = default;

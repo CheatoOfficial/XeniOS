@@ -1622,6 +1622,13 @@ void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
 
   for (auto& pair : readback_buffers_) {
+    for (int i = 0; i < 2; i++) {
+      if (pair.second.buffers[i] != nullptr) {
+        if (pair.second.mapped_data[i] != nullptr) {
+          pair.second.buffers[i]->Unmap(0, nullptr);
+        }
+      }
+    }
     ui::d3d12::util::ReleaseAndNull(pair.second.buffers[0]);
     ui::d3d12::util::ReleaseAndNull(pair.second.buffers[1]);
   }
@@ -3051,6 +3058,31 @@ void D3D12CommandProcessor::InitializeTrace() {
   }
 }
 
+void D3D12CommandProcessor::EvictOldReadbackBuffers(
+    std::unordered_map<uint64_t, ReadbackBuffer>& buffer_map) {
+  if (frame_current_ <= kReadbackBufferEvictionAgeFrames) {
+    return;
+  }
+
+  for (auto it = buffer_map.begin(); it != buffer_map.end();) {
+    if (it->second.last_used_frame <
+        frame_current_ - kReadbackBufferEvictionAgeFrames) {
+      // Unmap and release both buffers
+      for (int i = 0; i < 2; i++) {
+        if (it->second.buffers[i] != nullptr) {
+          if (it->second.mapped_data[i] != nullptr) {
+            it->second.buffers[i]->Unmap(0, nullptr);
+          }
+          it->second.buffers[i]->Release();
+        }
+      }
+      it = buffer_map.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 bool D3D12CommandProcessor::IssueCopy() {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
@@ -3098,8 +3130,11 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
       }
 
       // Create a key for this specific resolve operation
+      // We only copy on cache miss now, so no need for frame bucketing
+      // to avoid stale data - we never copy stale data anymore
       uint64_t resolve_key =
           MakeReadbackResolveKey(written_address, written_length);
+
       ReadbackBuffer& rb = readback_buffers_[resolve_key];
       rb.last_used_frame = frame_current_;
 
@@ -3119,11 +3154,26 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
                 provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
                 D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
                 IID_PPV_ARGS(&buffer)))) {
+          // Unmap and release old buffer
           if (rb.buffers[write_index] != nullptr) {
+            if (rb.mapped_data[write_index] != nullptr) {
+              rb.buffers[write_index]->Unmap(0, nullptr);
+              rb.mapped_data[write_index] = nullptr;
+            }
             rb.buffers[write_index]->Release();
           }
           rb.buffers[write_index] = buffer;
           rb.sizes[write_index] = size;
+
+          // Map the new buffer persistently
+          D3D12_RANGE read_range = {0, size};
+          if (SUCCEEDED(
+                  buffer->Map(0, &read_range, &rb.mapped_data[write_index]))) {
+            // Successfully mapped
+          } else {
+            XELOGE("Failed to persistently map readback buffer");
+            rb.mapped_data[write_index] = nullptr;
+          }
         } else {
           XELOGE("Failed to create a {} MB readback buffer", size >> 20);
           return true;
@@ -3155,10 +3205,12 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
       // Read from the appropriate buffer
       ID3D12Resource* read_source = rb.buffers[read_index];
 
+      bool is_cache_miss = false;
       // If using delayed sync but previous buffer doesn't exist, use current
       // buffer with sync as fallback
       if (use_delayed_sync &&
           (read_source == nullptr || written_length > rb.sizes[read_index])) {
+        is_cache_miss = true;
         read_source = rb.buffers[write_index];
         read_index = write_index;
         if (!AwaitAllQueueOperationsCompletion()) {
@@ -3166,21 +3218,19 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
         }
       }
 
-      if (read_source != nullptr && written_length <= rb.sizes[read_index]) {
-        D3D12_RANGE readback_range;
-        readback_range.Begin = 0;
-        readback_range.End = written_length;
-        void* readback_mapping;
-        if (SUCCEEDED(
-                read_source->Map(0, &readback_range, &readback_mapping))) {
-          // Memory accessibility already checked at the start of this function
-          // chrispy: this memcpy needs to be optimized as much as possible
-          auto physaddr = memory_->TranslatePhysical(written_address);
-          memory::vastcpy(physaddr, (uint8_t*)readback_mapping, written_length);
-          D3D12_RANGE readback_write_range = {};
-          read_source->Unmap(0, &readback_write_range);
-        }
+      // Only copy on cache miss (when we have fresh data from GPU sync)
+      // On cache hit, we'd be copying stale data from previous frame
+      if (is_cache_miss && read_source != nullptr &&
+          written_length <= rb.sizes[read_index] &&
+          rb.mapped_data[read_index] != nullptr) {
+        auto physaddr = memory_->TranslatePhysical(written_address);
+        memory::vastcpy(physaddr, (uint8_t*)rb.mapped_data[read_index],
+                        written_length);
       }
+
+      // Swap buffer index for next time this specific resolve address is used
+      // This way next time we write to the other buffer and read from this one
+      rb.current_index = 1 - rb.current_index;
     }
   } else {
     return false;
@@ -3258,11 +3308,26 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
             &ui::d3d12::util::kHeapPropertiesReadback,
             provider.GetHeapFlagCreateNotZeroed(), &buffer_desc,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer)))) {
+      // Unmap and release old buffer
       if (rb.buffers[write_index] != nullptr) {
+        if (rb.mapped_data[write_index] != nullptr) {
+          rb.buffers[write_index]->Unmap(0, nullptr);
+          rb.mapped_data[write_index] = nullptr;
+        }
         rb.buffers[write_index]->Release();
       }
       rb.buffers[write_index] = buffer;
       rb.sizes[write_index] = size;
+
+      // Map the new buffer persistently
+      D3D12_RANGE read_range = {0, size};
+      if (SUCCEEDED(
+              buffer->Map(0, &read_range, &rb.mapped_data[write_index]))) {
+        // Successfully mapped
+      } else {
+        XELOGE("Failed to persistently map memexport readback buffer");
+        rb.mapped_data[write_index] = nullptr;
+      }
     } else {
       XELOGE("Failed to create a {} MB memexport readback buffer", size >> 20);
       return;
@@ -3284,36 +3349,37 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
 
   // Use delayed sync (read from previous frame's buffer)
   uint32_t read_index = 1 - write_index;
-  ID3D12Resource* read_source = rb.buffers[read_index];
 
+  bool is_cache_miss = false;
   // If previous buffer doesn't exist or is too small, fall back to sync
   // This happens on first use or buffer resize - subsequent frames will be fast
-  if (read_source == nullptr || memexport_total_size > rb.sizes[read_index]) {
-    read_source = rb.buffers[write_index];
+  if (rb.buffers[read_index] == nullptr ||
+      memexport_total_size > rb.sizes[read_index]) {
+    is_cache_miss = true;
     read_index = write_index;
     if (!AwaitAllQueueOperationsCompletion()) {
       return;
     }
   }
 
-  // Read from buffer (previous frame if available, current frame with sync as
-  // fallback)
-  D3D12_RANGE readback_range;
-  readback_range.Begin = 0;
-  readback_range.End = memexport_total_size;
-  void* readback_mapping;
-  if (SUCCEEDED(read_source->Map(0, &readback_range, &readback_mapping))) {
+  // Only copy on cache miss (when we have fresh data from GPU sync)
+  // On cache hit, we'd be copying stale data from previous frame
+  if (is_cache_miss && rb.buffers[read_index] != nullptr &&
+      memexport_total_size <= rb.sizes[read_index] &&
+      rb.mapped_data[read_index] != nullptr) {
     const uint8_t* readback_bytes =
-        reinterpret_cast<const uint8_t*>(readback_mapping);
+        static_cast<const uint8_t*>(rb.mapped_data[read_index]);
     for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
       memory::vastcpy(
           memory_->TranslatePhysical(memexport_range.base_address_dwords << 2),
           const_cast<uint8_t*>(readback_bytes), memexport_range.size_bytes);
       readback_bytes += memexport_range.size_bytes;
     }
-    D3D12_RANGE readback_write_range = {};
-    read_source->Unmap(0, &readback_write_range);
   }
+
+  // Swap buffer index for next time this specific memexport address is used
+  // This way next time we write to the other buffer and read from this one
+  rb.current_index = 1 - rb.current_index;
 }
 
 void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
@@ -3499,61 +3565,6 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
   if (is_opening_frame) {
     frame_open_ = true;
 
-    // Swap all readback buffers for delayed sync (one frame behind)
-    for (auto& pair : readback_buffers_) {
-      pair.second.current_index = 1 - pair.second.current_index;
-    }
-
-    // Evict old readback buffers only when map gets too large to prevent
-    // unbounded memory growth. Don't do this every frame as it's expensive.
-    if (readback_buffers_.size() > kMaxReadbackBuffers) {
-      for (auto it = readback_buffers_.begin();
-           it != readback_buffers_.end();) {
-        // Evict if not used recently
-        if (frame_current_ > kReadbackBufferEvictionAgeFrames &&
-            it->second.last_used_frame <
-                frame_current_ - kReadbackBufferEvictionAgeFrames) {
-          // Release both buffers
-          if (it->second.buffers[0] != nullptr) {
-            it->second.buffers[0]->Release();
-          }
-          if (it->second.buffers[1] != nullptr) {
-            it->second.buffers[1]->Release();
-          }
-          it = readback_buffers_.erase(it);
-        } else {
-          ++it;
-        }
-      }
-    }
-
-    // Swap all memexport readback buffers for delayed sync (one frame behind)
-    for (auto& pair : memexport_readback_buffers_) {
-      pair.second.current_index = 1 - pair.second.current_index;
-    }
-
-    // Evict old memexport readback buffers
-    if (memexport_readback_buffers_.size() > kMaxReadbackBuffers) {
-      for (auto it = memexport_readback_buffers_.begin();
-           it != memexport_readback_buffers_.end();) {
-        // Evict if not used recently
-        if (frame_current_ > kReadbackBufferEvictionAgeFrames &&
-            it->second.last_used_frame <
-                frame_current_ - kReadbackBufferEvictionAgeFrames) {
-          // Release both buffers
-          if (it->second.buffers[0] != nullptr) {
-            it->second.buffers[0]->Release();
-          }
-          if (it->second.buffers[1] != nullptr) {
-            it->second.buffers[1]->Release();
-          }
-          it = memexport_readback_buffers_.erase(it);
-        } else {
-          ++it;
-        }
-      }
-    }
-
     // Reset bindings that depend on the data stored in the pools.
     std::memset(current_float_constant_map_vertex_, 0,
                 sizeof(current_float_constant_map_vertex_));
@@ -3698,6 +3709,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // Submission already closed now, so minus 1.
     closed_frame_submissions_[(frame_current_++) % kQueueFrames] =
         submission_current_ - 1;
+
+    // Evict old readback buffers once per frame
+    EvictOldReadbackBuffers(readback_buffers_);
+    EvictOldReadbackBuffers(memexport_readback_buffers_);
 
     if (cache_clear_requested_ && AwaitAllQueueOperationsCompletion()) {
       cache_clear_requested_ = false;
