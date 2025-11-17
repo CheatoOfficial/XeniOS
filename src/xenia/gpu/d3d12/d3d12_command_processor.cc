@@ -3370,9 +3370,17 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
     const uint8_t* readback_bytes =
         static_cast<const uint8_t*>(rb.mapped_data[read_index]);
     for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
-      memory::vastcpy(
-          memory_->TranslatePhysical(memexport_range.base_address_dwords << 2),
-          const_cast<uint8_t*>(readback_bytes), memexport_range.size_bytes);
+      uint8_t* dest_ptr =
+          memory_->TranslatePhysical(memexport_range.base_address_dwords << 2);
+      // vastcpy requires 64-byte alignment for non-temporal stores.
+      // If addresses aren't aligned, fall back to memcpy.
+      if ((reinterpret_cast<uintptr_t>(dest_ptr) & 63) == 0 &&
+          (reinterpret_cast<uintptr_t>(readback_bytes) & 63) == 0) {
+        memory::vastcpy(dest_ptr, const_cast<uint8_t*>(readback_bytes),
+                        memexport_range.size_bytes);
+      } else {
+        std::memcpy(dest_ptr, readback_bytes, memexport_range.size_bytes);
+      }
       readback_bytes += memexport_range.size_bytes;
     }
   }
