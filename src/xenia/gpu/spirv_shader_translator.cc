@@ -2171,6 +2171,21 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
       }
     }
   }
+
+  // Depth output.
+  output_or_var_fragment_depth_ = spv::NoResult;
+  if (current_shader().writes_depth()) {
+    if (!edram_fragment_shader_interlock_) {
+      // Create gl_FragDepth output.
+      output_or_var_fragment_depth_ =
+          builder_->createVariable(spv::NoPrecision, spv::StorageClassOutput,
+                                   type_float_, "gl_FragDepth");
+      builder_->addDecoration(output_or_var_fragment_depth_,
+                              spv::DecorationBuiltIn,
+                              static_cast<int>(spv::BuiltIn::FragDepth));
+      main_interface_.push_back(output_or_var_fragment_depth_);
+    }
+  }
 }
 
 void SpirvShaderTranslator::StartFragmentShaderInMain() {
@@ -2227,6 +2242,14 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
       var_main_fsi_color_written_ = builder_->createVariable(
           spv::NoPrecision, spv::StorageClassFunction, type_uint_,
           "xe_var_fsi_color_written", const_uint_0_);
+    }
+
+    // Initialize depth output variable with fragment shader interlock.
+    output_or_var_fragment_depth_ = spv::NoResult;
+    if (current_shader().writes_depth()) {
+      output_or_var_fragment_depth_ = builder_->createVariable(
+          spv::NoPrecision, spv::StorageClassFunction, type_float_,
+          "xe_var_fragment_depth", const_float_0_);
     }
   }
 
@@ -2844,8 +2867,26 @@ void SpirvShaderTranslator::StoreResult(const InstructionResult& result,
             var_main_memexport_data_written_);
       }
     } break;
+    case InstructionStorageTarget::kDepth: {
+      // Writes X to scalar gl_FragDepth or to a variable for FSI, no
+      // additional swizzling needed.
+      assert_true(used_write_mask == 0b0001);
+      assert_true(current_shader().writes_depth());
+      target_pointer = output_or_var_fragment_depth_;
+      // Depth outside [0, 1] needs to be clamped for safety, similar to D3D12.
+      // Though 20e4 float depth can store values between 1 and 2, it's a very
+      // unusual case. In Vulkan, gl_FragDepth can accept any values when the
+      // depth buffer is floating-point, but we clamp for consistency.
+      // Clamp the depth value to [0, 1] if not already saturated.
+      if (value != spv::NoResult && !result.is_clamped) {
+        value = builder_->createTriBuiltinCall(
+            type_float_, ext_inst_glsl_std_450_, GLSLstd450NClamp, value,
+            const_float_0_, const_float_1_);
+      }
+    } break;
     default:
-      // TODO(Triang3l): All storage targets.
+      // All storage targets should be handled above.
+      assert_unhandled_case(result.storage_target);
       break;
   }
   if (target_pointer == spv::NoResult) {
