@@ -30,6 +30,8 @@ DECLARE_int32(query_occlusion_sample_lower_threshold);
 
 DECLARE_int32(query_occlusion_sample_upper_threshold);
 
+DECLARE_bool(occlusion_query_enable);
+
 DECLARE_bool(disassemble_pm4);
 
 DECLARE_string(render_target_path);

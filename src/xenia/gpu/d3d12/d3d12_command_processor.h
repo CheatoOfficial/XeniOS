@@ -76,6 +76,12 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   void RestoreEdramSnapshot(const void* snapshot) override;
 
+  void PrepareForWait() override;
+  void ReturnFromWait() override;
+  bool SupportsGuestOcclusionQueries() const override {
+    return use_host_occlusion_queries_;
+  }
+
   ui::d3d12::D3D12Provider& GetD3D12Provider() const {
     return *static_cast<ui::d3d12::D3D12Provider*>(
         graphics_system_->provider());
@@ -501,6 +507,18 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   void WriteGammaRampSRV(bool is_pwl, D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
 
+  bool InitializeOcclusionQueryResources();
+  void ShutdownOcclusionQueryResources();
+  bool BeginGuestOcclusionQuery(uint32_t sample_count_address);
+  bool EndGuestOcclusionQuery(uint32_t sample_count_address,
+                              xenos::xe_gpu_depth_sample_counts* sample_counts);
+  void ProcessReadyOcclusionQueries(uint64_t completed_submission);
+  bool AcquireOcclusionQueryIndex(uint32_t& host_index_out);
+  void DisableHostOcclusionQueries();
+  uint64_t NormalizeOcclusionSamples(uint64_t samples) const;
+  void WriteGuestOcclusionResult(
+      xenos::xe_gpu_depth_sample_counts* sample_counts, uint64_t samples);
+
   bool device_removed_ = false;
 
   bool cache_clear_requested_ = false;
@@ -682,6 +700,42 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // Kept in NON_PIXEL_SHADER_RESOURCE state.
   Microsoft::WRL::ComPtr<ID3D12Resource> fxaa_source_texture_;
   uint64_t fxaa_source_texture_submission_ = 0;
+
+  // Occlusion query resources.
+  Microsoft::WRL::ComPtr<ID3D12QueryHeap> occlusion_query_heap_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> occlusion_query_readback_;
+  uint64_t* occlusion_query_readback_mapping_ = nullptr;  // Persistent mapping
+  uint32_t occlusion_query_cursor_ = 0;
+  bool use_host_occlusion_queries_ = false;
+  struct ActiveOcclusionQuery {
+    uint32_t sample_count_address = 0;
+    uint32_t query_id = 0;  // VIZ_QUERY ID (0-63)
+    uint32_t host_index = UINT32_MAX;
+    bool valid = false;
+    bool cache_serviced = false;  // True if using cached result, no D3D12 query
+  } active_occlusion_query_;
+
+  // Pending async queries (resolved when submission completes)
+  struct PendingOcclusionQuery {
+    uint32_t host_index;
+    uint64_t submission;
+    uint32_t sample_count_address;
+    xenos::xe_gpu_depth_sample_counts*
+        sample_counts;  // Cached pointer (nullptr for cache-only updates)
+    uint32_t query_id;
+  };
+  std::deque<PendingOcclusionQuery> pending_occlusion_queries_;
+
+  // Query statistics (logged every 100 frames)
+  struct OcclusionQueryStats {
+    uint64_t queries_begun = 0;
+    uint64_t queries_ended = 0;
+    uint64_t queries_failed = 0;
+    uint64_t queries_resolved_sync = 0;  // Required GPU stall
+    uint64_t cursor_wraps = 0;
+    uint32_t max_cursor_value = 0;
+    uint64_t last_log_frame = 0;
+  } occlusion_query_stats_;
 
   // Unsubmitted barrier batch.
   std::vector<D3D12_RESOURCE_BARRIER> barriers_;

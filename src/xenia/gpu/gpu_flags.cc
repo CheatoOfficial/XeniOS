@@ -67,6 +67,11 @@ DEFINE_int32(
     "value is ignored if query_occlusion_sample_lower_threshold is set to -1.",
     "GPU");
 
+DEFINE_bool(occlusion_query_enable, false,
+            "Use hardware occlusion queries instead of fake results. More "
+            "accurate but causes GPU stalls and performance issues.",
+            "GPU");
+
 // TODO(Triang3l): Make accuracy (ROV/FSI) the default when it's optimized
 // better (for instance, using static shader modifications to pass render
 // target parameters).

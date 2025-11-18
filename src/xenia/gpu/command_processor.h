@@ -45,6 +45,11 @@ void SaveGPUSetting(GPUSetting setting, uint64_t value);
 bool GetGPUSetting(GPUSetting setting);
 void SetReadbackResolveMode(const std::string& mode);
 
+// Occlusion query pool size for both D3D12 and Vulkan backends.
+// Queries complete synchronously with GPU stalls.
+// 512 slots = 4KB of readback buffer memory.
+constexpr uint32_t kMaxOcclusionQueries = 512;
+
 class GraphicsSystem;
 class Shader;
 
@@ -276,6 +281,7 @@ class CommandProcessor {
     return false;
   }
   virtual bool IssueCopy() { return false; }
+  virtual bool SupportsGuestOcclusionQueries() const { return false; }
 
   // "Actual" is for the command processor thread, to be read by the
   // implementations.
