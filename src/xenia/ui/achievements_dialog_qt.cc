@@ -446,7 +446,7 @@ QString AchievementsDialogQt::GetUnlockedTime(
     auto unlock_time = std::chrono::system_clock::to_time_t(unlock_tp);
 
     return SafeQString(
-        fmt::format("{:%Y-%m-%d %H:%M}", fmt::localtime(unlock_time)));
+        fmt::format("{:%Y-%m-%d %H:%M}", *std::localtime(&unlock_time)));
   }
 
   return "Unknown time";
