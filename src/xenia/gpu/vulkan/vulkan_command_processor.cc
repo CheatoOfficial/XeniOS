@@ -2955,6 +2955,17 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFastPath(
     }
 
     // Clean up old buffer if exists
+    // Must wait for GPU to finish using the buffer before destroying it
+    if (rb.buffers[write_index] != VK_NULL_HANDLE) {
+      if (!AwaitAllQueueOperationsCompletion()) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to wait for GPU before "
+            "destroying old memexport readback buffer");
+        dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        dfn.vkFreeMemory(device, new_memory, nullptr);
+        return;
+      }
+    }
     if (rb.mapped_data[write_index] != nullptr) {
       dfn.vkUnmapMemory(device, rb.memories[write_index]);
       rb.mapped_data[write_index] = nullptr;
@@ -3014,9 +3025,12 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFastPath(
     }
   }
 
-  // Only copy on cache miss (when we have fresh data from GPU sync)
-  // On cache hit, we'd be copying stale data from previous frame
-  if (is_cache_miss && rb.buffers[read_index] != VK_NULL_HANDLE &&
+  // TODO(has207): figure out why not copying only on cache hit
+  // doesn't work on vulkan but works in d3d12.
+  // DISABLED:// Only copy on cache miss (when we have fresh data from GPU sync)
+  // DISABLED:// On cache hit, we'd be copying stale data from previous frame
+  // DISABLED://if (is_cache_miss && rb.buffers[read_index] != VK_NULL_HANDLE &&
+  if (rb.buffers[read_index] != VK_NULL_HANDLE &&
       memexport_total_size <= rb.sizes[read_index] &&
       rb.mapped_data[read_index] != nullptr) {
     const uint8_t* readback_bytes =
@@ -3191,6 +3205,17 @@ bool VulkanCommandProcessor::IssueCopy() {
       }
 
       // Clean up old buffer if exists
+      // Must wait for GPU to finish using the buffer before destroying it
+      if (rb.buffers[write_index] != VK_NULL_HANDLE) {
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to wait for GPU before "
+              "destroying old readback buffer");
+          dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+          dfn.vkFreeMemory(device, new_memory, nullptr);
+          return true;
+        }
+      }
       if (rb.mapped_data[write_index] != nullptr) {
         dfn.vkUnmapMemory(device, rb.memories[write_index]);
         rb.mapped_data[write_index] = nullptr;
@@ -3261,9 +3286,12 @@ bool VulkanCommandProcessor::IssueCopy() {
       }
     }
 
+    // TODO(has207): figure out why not copying only on cache hit
+    // doesn't work on vulkan but works in d3d12.
     // Only copy on cache miss (when we have fresh data from GPU sync)
     // On cache hit, we'd be copying stale data from previous frame
-    if (is_cache_miss && rb.buffers[read_index] != VK_NULL_HANDLE &&
+    // if (is_cache_miss && rb.buffers[read_index] != VK_NULL_HANDLE &&
+    if (rb.buffers[read_index] != VK_NULL_HANDLE &&
         written_length <= rb.sizes[read_index] &&
         rb.mapped_data[read_index] != nullptr) {
       uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);
