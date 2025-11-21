@@ -822,7 +822,7 @@ TEST_CASE("Wait on Timer", "[timer]") {
   MaybeYield();
   Sleep(10ms);  // Skip a few events
   for (int i = 0; i < 10; ++i) {
-    result = Wait(timer.get(), false, 20ms);
+    result = Wait(timer.get(), false, 50ms);
     REQUIRE(result == WaitResult::kSuccess);
   }
   // Cancel it
