@@ -10,7 +10,7 @@ REM ============================================================================
 CALL :check_python
 IF %_RESULT% NEQ 0 (
   ECHO.
-  ECHO Python 3.9+ must be installed and on PATH:
+  ECHO Python 3.10+ must be installed and on PATH:
   ECHO https://www.python.org/
   GOTO :eof
 )

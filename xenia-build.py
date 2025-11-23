@@ -297,7 +297,7 @@ def main():
         print("WARNING: The source tree is unversioned. Version info will be omitted from all binaries!\n")
 
     # Check python version.
-    python_minimum_ver = 3,9
+    python_minimum_ver = 3,10
     if not sys.version_info[:2] >= (python_minimum_ver[0], python_minimum_ver[1]) or not sys.maxsize > 2**32:
         print(f"ERROR: Python {python_minimum_ver[0]}.{python_minimum_ver[1]}+ 64-bit must be installed and on PATH")
         sys.exit(1)
@@ -566,10 +566,10 @@ def get_pr_number():
     Returns the pull request number if the workflow is triggered by a PR, otherwise None.
     """
     github_ref = os.getenv('GITHUB_REF')
-    
+
     if github_ref and github_ref.startswith('refs/pull/'):
         return github_ref.split('/')[2]
-    
+
 def git_submodule_update():
     """Runs a git submodule init and update.
     """

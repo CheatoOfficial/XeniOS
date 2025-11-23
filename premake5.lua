@@ -256,14 +256,15 @@ filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
   })
 CLANG_BIN = os.getenv("CC") or _OPTIONS["cc"] or "clang"
 if os.istarget("linux") and string.contains(CLANG_BIN, "clang") then
-  if tonumber(string.match(os.outputof(CLANG_BIN.." --version"), "version (%d%d)")) >= 20 then
+  CLANG_VER = tonumber(string.match(os.outputof(CLANG_BIN.." --version"), "version (%d%d)"))
+  if CLANG_VER >= 20 then
     filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
       disablewarnings({
         "deprecated-literal-operator",   -- Needed only for tabulate
         "nontrivial-memcall",
       })
   end
-  if tonumber(string.match(os.outputof(CLANG_BIN.." --version"), "version (%d%d)")) >= 21 then
+  if CLANG_VER >= 21 then
     filter({"language:C++", "toolset:clang"}) -- "platforms:Linux"
       disablewarnings({
         "character-conversion",          -- Needed for utfcpp third-party library

@@ -9,7 +9,7 @@ foreach ($pythonExecutable in $pythonExecutables) {
 }
 # Neither found, error and exit
 if (!$pythonPath) {
-    Throw "ERROR: Python 3.9+ 64-bit must be installed and on PATH:`nhttps://www.python.org/"
+    Throw "ERROR: Python 3.10+ 64-bit must be installed and on PATH:`nhttps://www.python.org/"
 }
 
 & $pythonPath "$($PSScriptRoot)/xenia-build.py" $args
