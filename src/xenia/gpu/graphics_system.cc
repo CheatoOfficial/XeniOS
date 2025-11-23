@@ -378,6 +378,11 @@ void GraphicsSystem::ClearCaches() {
       [&]() { command_processor_->ClearCaches(); });
 }
 
+void GraphicsSystem::InvalidateGpuMemory() {
+  command_processor_->CallInThread(
+      [&]() { command_processor_->InvalidateGpuMemory(); });
+}
+
 void GraphicsSystem::InitializeShaderStorage(
     const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
   if (!cvars::store_shaders) {

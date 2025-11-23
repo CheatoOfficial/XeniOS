@@ -66,6 +66,10 @@ void D3D12CommandProcessor::ClearCaches() {
   cache_clear_requested_ = true;
 }
 
+void D3D12CommandProcessor::InvalidateGpuMemory() {
+  shared_memory_->InvalidateAllPages();
+}
+
 void D3D12CommandProcessor::InitializeShaderStorage(
     const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
   CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking);

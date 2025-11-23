@@ -94,6 +94,8 @@ class GraphicsSystem {
 
   virtual void ClearCaches();
 
+  void InvalidateGpuMemory();
+
   void InitializeShaderStorage(const std::filesystem::path& cache_root,
                                uint32_t title_id, bool blocking);
 

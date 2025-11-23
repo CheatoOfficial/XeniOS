@@ -1582,6 +1582,7 @@ void EmulatorWindow::GpuTraceFrame() {
 
 void EmulatorWindow::GpuClearCaches() {
   emulator()->graphics_system()->ClearCaches();
+  emulator()->graphics_system()->InvalidateGpuMemory();
 }
 
 void EmulatorWindow::SetFullscreen(bool fullscreen) {

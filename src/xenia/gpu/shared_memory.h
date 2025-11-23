@@ -30,6 +30,8 @@ class SharedMemory {
   virtual void ClearCache();
   virtual void SetSystemPageBlocksValidWithGpuDataWritten();
 
+  void InvalidateAllPages();
+
   typedef void (*GlobalWatchCallback)(
       const global_unique_lock_type& global_lock, void* context,
       uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu);

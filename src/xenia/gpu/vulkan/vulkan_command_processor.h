@@ -141,6 +141,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   ~VulkanCommandProcessor();
 
   void ClearCaches() override;
+  void InvalidateGpuMemory() override;
 
   void TracePlaybackWroteMemory(uint32_t base_ptr, uint32_t length) override;
 

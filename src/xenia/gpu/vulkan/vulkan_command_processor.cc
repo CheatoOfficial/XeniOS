@@ -100,6 +100,10 @@ void VulkanCommandProcessor::ClearCaches() {
   cache_clear_requested_ = true;
 }
 
+void VulkanCommandProcessor::InvalidateGpuMemory() {
+  shared_memory_->InvalidateAllPages();
+}
+
 void VulkanCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
                                                       uint32_t length) {
   shared_memory_->MemoryInvalidationCallback(base_ptr, length, true);

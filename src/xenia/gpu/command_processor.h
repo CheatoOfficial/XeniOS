@@ -108,6 +108,7 @@ class CommandProcessor {
   void CallInThread(std::function<void()> fn);
 
   virtual void ClearCaches();
+  virtual void InvalidateGpuMemory();
 
   // Get cached readback resolve mode (avoids string parsing every frame)
   ReadbackResolveMode GetReadbackResolveMode() const {

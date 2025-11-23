@@ -271,6 +271,8 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
 
 void CommandProcessor::ClearCaches() {}
 
+void CommandProcessor::InvalidateGpuMemory() {}
+
 void CommandProcessor::SetDesiredSwapPostEffect(
     SwapPostEffect swap_post_effect) {
   if (swap_post_effect_desired_ == swap_post_effect) {

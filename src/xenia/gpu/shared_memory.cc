@@ -130,6 +130,25 @@ void SharedMemory::ShutdownCommon() {
   num_system_page_flags_ = 0;
 }
 
+void SharedMemory::InvalidateAllPages() {
+  auto global_lock = global_critical_region_.Acquire();
+
+  // Clear all valid flags in both active and staging buffers
+  uint64_t* active = active_valid_flags_.load(std::memory_order_relaxed);
+  uint64_t* staging = staging_valid_flags_.load(std::memory_order_relaxed);
+
+  std::memset(active, 0, num_system_page_flags_ * sizeof(uint64_t));
+  std::memset(staging, 0, num_system_page_flags_ * sizeof(uint64_t));
+  std::memset(system_page_flags_valid_and_gpu_written_, 0,
+              num_system_page_flags_ * sizeof(uint64_t));
+  std::memset(system_page_flags_valid_and_gpu_resolved_, 0,
+              num_system_page_flags_ * sizeof(uint64_t));
+
+  // Mark all blocks as dirty and set dirty flag
+  dirty_blocks_.store(0xFFFFFFFF, std::memory_order_relaxed);
+  gpu_written_data_dirty_.store(true, std::memory_order_relaxed);
+}
+
 void SharedMemory::ClearCache() {
   // Keeping GPU-written data, so "invalidated by GPU".
   FireWatches(0, (kBufferSize - 1) >> page_size_log2_, true);
