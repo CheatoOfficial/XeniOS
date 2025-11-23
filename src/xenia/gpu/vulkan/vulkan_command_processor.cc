@@ -104,6 +104,11 @@ void VulkanCommandProcessor::InvalidateGpuMemory() {
   shared_memory_->InvalidateAllPages();
 }
 
+void VulkanCommandProcessor::ClearReadbackBuffers() {
+  readback_buffers_.clear();
+  memexport_readback_buffers_.clear();
+}
+
 void VulkanCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
                                                       uint32_t length) {
   shared_memory_->MemoryInvalidationCallback(base_ptr, length, true);

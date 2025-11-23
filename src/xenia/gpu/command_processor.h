@@ -109,6 +109,7 @@ class CommandProcessor {
 
   virtual void ClearCaches();
   virtual void InvalidateGpuMemory();
+  virtual void ClearReadbackBuffers();
 
   // Get cached readback resolve mode (avoids string parsing every frame)
   ReadbackResolveMode GetReadbackResolveMode() const {

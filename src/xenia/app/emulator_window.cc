@@ -1581,8 +1581,13 @@ void EmulatorWindow::GpuTraceFrame() {
 }
 
 void EmulatorWindow::GpuClearCaches() {
-  emulator()->graphics_system()->ClearCaches();
-  emulator()->graphics_system()->InvalidateGpuMemory();
+  auto graphics_system = emulator()->graphics_system();
+  graphics_system->ClearCaches();
+  graphics_system->InvalidateGpuMemory();
+
+  graphics_system->command_processor()->CallInThread([graphics_system]() {
+    graphics_system->command_processor()->ClearReadbackBuffers();
+  });
 }
 
 void EmulatorWindow::SetFullscreen(bool fullscreen) {
