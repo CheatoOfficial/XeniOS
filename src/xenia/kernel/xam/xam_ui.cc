@@ -1018,9 +1018,27 @@ dword_result_t XamShowAchievementsUI_entry(dword_t user_index,
   auto* qt_window = dynamic_cast<xe::ui::QtWindow*>(emulator->display_window());
   if (qt_window && qt_window->qwindow()) {
     auto* kernel = kernel_state();
+    // Increment dialog counter to notify the system that UI is active
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+    kernel_state()->xam_state()->xam_dialogs_shown_++;
+
     app_context.CallInUIThread([qt_window, kernel, info, user]() {
       auto* dialog = new xe::ui::AchievementsDialogQt(
           qt_window->qwindow(), kernel, &info.value(), user);
+
+      // Connect to the dialog's destroyed signal to decrement counter when
+      // closed
+      QObject::connect(dialog, &QObject::destroyed, [kernel]() {
+        kernel->xam_state()->xam_dialogs_shown_--;
+        // Delay the notification to give games time to process
+        auto run = []() -> void {
+          xe::threading::Sleep(std::chrono::milliseconds(100));
+          kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+        };
+        std::thread thread(run);
+        thread.detach();
+      });
+
       dialog->show();
       dialog->raise();
       dialog->activateWindow();
