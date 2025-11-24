@@ -9,6 +9,23 @@ if _ACTION == "cmake" then
   require("third_party/premake-cmake/cmake")
 end
 
+-- Helper function to extract Qt version from qconfig.pri
+function get_qt_version(qt_dir)
+  local qconfig_path = path.join(qt_dir, "mkspecs/qconfig.pri")
+  local qconfig_file = io.open(qconfig_path, "r")
+  if qconfig_file then
+    for line in qconfig_file:lines() do
+      local version = line:match("^QT_VERSION%s*=%s*(.+)$")
+      if version then
+        qconfig_file:close()
+        return version:gsub("^%s*", ""):gsub("%s*$", "")  -- trim whitespace
+      end
+    end
+    qconfig_file:close()
+  end
+  error("Could not read Qt version from " .. qconfig_path)
+end
+
 location(build_root)
 targetdir(build_bin)
 objdir(build_obj)
@@ -171,8 +188,7 @@ filter("platforms:Linux")
   toolset("clang")
   local qt_dir = os.getenv("QT_DIR")
   if qt_dir then
-    -- Extract Qt version from path (e.g., /opt/Qt/6.9.2/gcc_64 -> 6.9.2)
-    local qt_version = path.getname(path.getdirectory(qt_dir))
+    local qt_version = get_qt_version(qt_dir)
     includedirs({
       path.join(qt_dir, "include"),
       path.join(qt_dir, "include/QtCore"),
