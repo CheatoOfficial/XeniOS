@@ -385,36 +385,35 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   if (raw_name_ptr) {
     auto path = raw_name_ptr.value();
     if (path.empty()) {
+      // Empty path means exit to dashboard - don't save loader data
       loader_data.launch_path = "game:\\default.xex";
     } else {
+      // Non-empty path means launching another title - save loader data
       loader_data.launch_path = xe::path_to_utf8(path);
       loader_data.launch_data_present = true;
+      xam->SaveLoaderData();
     }
-
-    xam->SaveLoaderData();
 
     if (loader_data.launch_data_present) {
       // Notify the UI that a restart with launch data is requested.
-      // The UI layer will show an appropriate dialog and handle termination.
-      // If no UI handler is set, just terminate immediately.
+      // The callback can show a notification, but we terminate immediately
+      // to prevent the game from calling this function repeatedly.
       auto on_launch_data_restart =
           kernel_state()->emulator()->on_launch_data_restart();
       if (on_launch_data_restart) {
         on_launch_data_restart();
-        // The callback will handle termination
-        return;
       }
 
-      // Fallback: if no UI handler, log and terminate
-      XELOGW(
-          "XamLoaderLaunchTitle: restart with launch data requested, but no UI "
-          "handler set");
+      // Terminate immediately when launch data is present
+      XELOGI("XamLoaderLaunchTitle: terminating to launch new title");
+      kernel_state()->TerminateTitle();
+      // This function does not return
     }
   } else {
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
   }
 
-  // This function does not return.
+  // Exit to dashboard - this function does not return.
   kernel_state()->TerminateTitle();
 }
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitle, kNone, kSketchy);
