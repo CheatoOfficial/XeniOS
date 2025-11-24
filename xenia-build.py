@@ -921,6 +921,7 @@ def discover_commands(subparsers):
     """
     commands = {
         "setup": SetupCommand(subparsers),
+        "fetchdata": FetchDataCommand(subparsers),
         "pull": PullCommand(subparsers),
         "premake": PremakeCommand(subparsers),
         "build": BuildCommand(subparsers),
@@ -1007,6 +1008,30 @@ class SetupCommand(Command):
         print("\nSuccess!" if ret == 0 else "\nError!")
 
         return ret
+
+
+class FetchDataCommand(Command):
+    """'fetchdata' command.
+    """
+
+    def __init__(self, subparsers, *args, **kwargs):
+        super(FetchDataCommand, self).__init__(
+            subparsers,
+            name="fetchdata",
+            help_short="Fetches data repositories (game-patches, optimized-settings).",
+            *args, **kwargs)
+
+    def execute(self, args, pass_args, cwd):
+        print("Fetching data repositories...\n")
+
+        if git_is_repository():
+            fetch_data_repos()
+        else:
+            print("WARNING: Git not available or not a repository.")
+            return 1
+
+        print("\nSuccess!")
+        return 0
 
 
 class PullCommand(Command):

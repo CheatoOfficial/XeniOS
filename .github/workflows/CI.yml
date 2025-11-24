@@ -118,6 +118,9 @@ jobs:
             ./xenia-build.py premake
             cp third_party/premake-core/bin/release/premake5 tools/build/bin
           fi
+
+          # Fetch data repos (game-patches, optimized-settings)
+          ./xenia-build.py fetchdata
       - name: Build
         env:
           CC: clang-21
@@ -264,6 +267,9 @@ jobs:
           if ($cacheHit -ne 'true') {
             git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = )(?!third_party\/(FidelityFX-(CAS|FSR)|premake-(androidndk|cmake|export-compile-commands))).+' .gitmodules).Matches.Value
           }
+
+          # Fetch data repos (game-patches, optimized-settings)
+          python xenia-build.py fetchdata
 
       - name: Build
         run: python xenia-build.py build --config=Release --target=xenia-app

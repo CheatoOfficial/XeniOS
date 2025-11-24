@@ -162,16 +162,16 @@ project("xenia-app")
     -- Use absolute path to avoid issues with relative paths
     local optimized_settings_src = path.translate(path.getabsolute(path.join(project_root, ".data_repos", "optimized-settings", "settings")), "\\")
     postbuildcommands {
-      'echo Copying optimized_settings from "' .. optimized_settings_src .. '" to "$(TargetDir)optimized_settings\\"',
-      'if exist "' .. optimized_settings_src .. '" (xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\") else (echo Warning: optimized-settings not found at ' .. optimized_settings_src .. ' - run: python xenia-build.py fetchdata)'
+      'if not exist "$(TargetDir)optimized_settings" mkdir "$(TargetDir)optimized_settings"',
+      'xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\"'
     }
 
   -- Copy game-patches TOML files next to executable
   filter("platforms:Windows")
     local game_patches_src = path.translate(path.getabsolute(path.join(project_root, ".data_repos", "game-patches", "patches")), "\\")
     postbuildcommands {
-      'echo Copying game_patches from "' .. game_patches_src .. '" to "$(TargetDir)game_patches\\"',
-      'if exist "' .. game_patches_src .. '" (xcopy /I /Y /Q "' .. game_patches_src .. '\\*.toml" "$(TargetDir)game_patches\\") else (echo Warning: game-patches not found at ' .. game_patches_src .. ' - run: python xenia-build.py fetchdata)'
+      'if not exist "$(TargetDir)game_patches" mkdir "$(TargetDir)game_patches"',
+      'xcopy /I /Y /Q "' .. game_patches_src .. '\\*.toml" "$(TargetDir)game_patches\\"'
     }
 
   filter("platforms:Linux")
