@@ -585,17 +585,69 @@ def git_submodule_update():
         "-j", f"{os.cpu_count()}",
         ])
 
-    # Then update only submodules that track branches to their latest
-    # Currently: optimized-settings and game-patches track 'main'
-    for submodule in ["third_party/optimized-settings", "third_party/game-patches"]:
-        shell_call([
-            "git",
-            "submodule",
-            "update",
-            "--remote",
-            "--depth=1",
-            submodule
-        ])
+
+def fetch_data_repos():
+    """Fetches data repositories (game-patches, optimized-settings) into .data_repos/.
+
+    These repos are cloned fresh or updated to their latest versions. They are not
+    submodules to avoid constant submodule updates in the main repo.
+    """
+    print("- fetching data repositories...")
+
+    data_dir = ".data_repos"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    # Define data repos
+    data_repos = [
+        {
+            "name": "game-patches",
+            "url": "https://github.com/xenia-canary/game-patches.git",
+            "branch": "main"
+        },
+        {
+            "name": "optimized-settings",
+            "url": "https://github.com/xenia-manager/optimized-settings.git",
+            "branch": "main"
+        }
+    ]
+
+    # Clone or update each repo
+    for repo in data_repos:
+        repo_path = os.path.join(data_dir, repo["name"])
+
+        if os.path.exists(repo_path):
+            print(f"  - updating {repo['name']}...")
+            try:
+                shell_call([
+                    "git",
+                    "-C", repo_path,
+                    "pull",
+                    "--depth=1",
+                    "origin", repo["branch"]
+                ])
+            except Exception as e:
+                print(f"    Warning: Failed to update {repo['name']}: {e}")
+                print(f"    Removing and re-cloning...")
+                rmtree(repo_path)
+                shell_call([
+                    "git",
+                    "clone",
+                    "--depth=1",
+                    "--branch", repo["branch"],
+                    repo["url"],
+                    repo_path
+                ])
+        else:
+            print(f"  - cloning {repo['name']}...")
+            shell_call([
+                "git",
+                "clone",
+                "--depth=1",
+                "--branch", repo["branch"],
+                repo["url"],
+                repo_path
+            ])
 
 
 def get_cc(cc=None):
@@ -946,6 +998,7 @@ class SetupCommand(Command):
         print("- git submodule init / update...")
         if git_is_repository():
             git_submodule_update()
+            fetch_data_repos()
         else:
             print("WARNING: Git not available or not a repository. Dependencies may be missing.")
 

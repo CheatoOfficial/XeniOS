@@ -160,22 +160,22 @@ project("xenia-app")
   -- Copy optimized-settings JSON files next to executable
   filter("platforms:Windows")
     -- Use absolute path to avoid issues with relative paths
-    local optimized_settings_src = path.translate(path.getabsolute(path.join(project_root, "third_party", "optimized-settings", "settings")), "\\")
+    local optimized_settings_src = path.translate(path.getabsolute(path.join(project_root, ".data_repos", "optimized-settings", "settings")), "\\")
     postbuildcommands {
       'echo Copying optimized_settings from "' .. optimized_settings_src .. '" to "$(TargetDir)optimized_settings\\"',
-      'if exist "' .. optimized_settings_src .. '" (xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\") else (echo Warning: optimized-settings not found at ' .. optimized_settings_src .. ')'
+      'if exist "' .. optimized_settings_src .. '" (xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\") else (echo Warning: optimized-settings not found at ' .. optimized_settings_src .. ' - run: python xenia-build.py fetchdata)'
     }
 
   -- Copy game-patches TOML files next to executable
   filter("platforms:Windows")
-    local game_patches_src = path.translate(path.getabsolute(path.join(project_root, "third_party", "game-patches", "patches")), "\\")
+    local game_patches_src = path.translate(path.getabsolute(path.join(project_root, ".data_repos", "game-patches", "patches")), "\\")
     postbuildcommands {
       'echo Copying game_patches from "' .. game_patches_src .. '" to "$(TargetDir)game_patches\\"',
-      'if exist "' .. game_patches_src .. '" (xcopy /I /Y /Q "' .. game_patches_src .. '\\*.toml" "$(TargetDir)game_patches\\") else (echo Warning: game-patches not found at ' .. game_patches_src .. ')'
+      'if exist "' .. game_patches_src .. '" (xcopy /I /Y /Q "' .. game_patches_src .. '\\*.toml" "$(TargetDir)game_patches\\") else (echo Warning: game-patches not found at ' .. game_patches_src .. ' - run: python xenia-build.py fetchdata)'
     }
 
   filter("platforms:Linux")
-    local optimized_settings_src = path.getabsolute(path.join(project_root, "third_party", "optimized-settings", "settings"))
+    local optimized_settings_src = path.getabsolute(path.join(project_root, ".data_repos", "optimized-settings", "settings"))
     local optimized_settings_dst = path.getabsolute(path.join(project_root, "build", "bin", "Linux")) .. "/%{cfg.buildcfg}/optimized_settings"
     postbuildcommands {
       '{MKDIR} ' .. optimized_settings_dst,
@@ -183,7 +183,7 @@ project("xenia-app")
     }
 
   filter("platforms:Linux")
-    local game_patches_src = path.getabsolute(path.join(project_root, "third_party", "game-patches", "patches"))
+    local game_patches_src = path.getabsolute(path.join(project_root, ".data_repos", "game-patches", "patches"))
     local game_patches_dst = path.getabsolute(path.join(project_root, "build", "bin", "Linux")) .. "/%{cfg.buildcfg}/game_patches"
     postbuildcommands {
       '{MKDIR} ' .. game_patches_dst,
