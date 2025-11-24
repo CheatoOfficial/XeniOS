@@ -52,7 +52,7 @@ AchievementsDialogQt::AchievementsDialogQt(
     QWidget* parent, kernel::KernelState* kernel_state,
     const kernel::xam::TitleInfo* title_info,
     const kernel::xam::UserProfile* profile)
-    : QDialog(parent),
+    : GamepadDialog(parent, kernel_state->emulator()->input_system()),
       kernel_state_(kernel_state),
       title_info_(title_info),
       profile_(profile),

@@ -11,7 +11,6 @@
 #define XENIA_UI_ACHIEVEMENTS_DIALOG_QT_H_
 
 #include <QCheckBox>
-#include <QDialog>
 #include <QLabel>
 #include <QPixmap>
 #include <QProgressBar>
@@ -22,6 +21,8 @@
 #include <map>
 #include <memory>
 #include <vector>
+
+#include "xenia/ui/gamepad_dialog_qt.h"
 
 namespace xe {
 namespace kernel {
@@ -37,7 +38,7 @@ class UserProfile;
 namespace xe {
 namespace ui {
 
-class AchievementsDialogQt : public QDialog {
+class AchievementsDialogQt : public GamepadDialog {
   Q_OBJECT
 
  public:
