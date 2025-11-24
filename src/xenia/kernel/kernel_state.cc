@@ -850,6 +850,7 @@ void KernelState::UnloadUserModule(const object_ref<UserModule>& module,
 
 void KernelState::TerminateTitle() {
   XELOGI("KernelState::TerminateTitle");
+  xe::FlushLog();
   std::quick_exit(EXIT_SUCCESS);
 }
 

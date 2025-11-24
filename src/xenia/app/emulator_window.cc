@@ -447,6 +447,7 @@ void EmulatorWindow::OnEmulatorInitialized() {
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
   // Game process: exit immediately without cleanup to avoid Vulkan hangs
   if (emulator_window_.is_game_process_) {
+    xe::FlushLog();
     std::quick_exit(0);
   }
 

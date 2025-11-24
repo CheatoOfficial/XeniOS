@@ -77,6 +77,10 @@ void InitializeLogging(const std::string_view app_name,
                        bool is_game_process = false);
 void ShutdownLogging();
 
+// Flushes all log sinks immediately.
+// Useful before quick_exit() to ensure logs are written.
+void FlushLog();
+
 namespace logging {
 
 constexpr char kPrefixCharError = '!';
