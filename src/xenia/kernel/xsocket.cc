@@ -126,7 +126,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
 
   int native_optname = optname;
 
-  if (level == 0xFFFF) {
+  if (native_level == 0xFFFF) {
     assert_false(!supported_socket_options.contains(optname));
 
     if (supported_socket_options.contains(optname)) {
@@ -142,7 +142,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     }
   }
 
-  int ret = setsockopt(native_handle_, native_level, native_optname,
+  int ret = setsockopt(native_handle_, level, native_optname,
                        static_cast<char*>(optval_ptr), optlen);
   if (ret < 0) {
     // TODO: WSAGetLastError()
@@ -151,7 +151,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
   }
 
   // SO_BROADCAST
-  if (level == 0xFFFF && optname == 0x0020) {
+  if (native_level == 0xFFFF && optname == 0x0020) {
     broadcast_socket_ = true;
   }
 
