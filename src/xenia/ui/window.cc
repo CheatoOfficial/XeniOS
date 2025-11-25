@@ -501,6 +501,10 @@ bool Window::OnActualSizeUpdate(
   actual_physical_height_ = new_physical_height;
   // The listeners may reference the presenter, update the presenter first.
   if (presenter_surface_) {
+    // Update surface size for surfaces that cache dimensions (e.g., Wayland).
+    // This must be done before OnSurfaceResizeFromUIThread so the presenter
+    // gets the correct size when it queries the surface.
+    presenter_surface_->SetSize(new_physical_width, new_physical_height);
     presenter_->OnSurfaceResizeFromUIThread();
   }
   UISetupEvent e(this);

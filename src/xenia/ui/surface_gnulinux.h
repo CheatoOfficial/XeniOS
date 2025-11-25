@@ -43,7 +43,7 @@ class WaylandWindowSurface final : public Surface {
   wl_display* display() const { return display_; }
   wl_surface* surface() const { return surface_; }
 
-  void SetSize(uint32_t width, uint32_t height) {
+  void SetSize(uint32_t width, uint32_t height) override {
     width_ = width;
     height_ = height;
   }

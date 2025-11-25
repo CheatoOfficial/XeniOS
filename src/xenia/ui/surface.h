@@ -71,6 +71,11 @@ class Surface {
     return true;
   }
 
+  // Updates the cached size for surfaces that don't query size dynamically.
+  // Called by the window when resizing. Default implementation is a no-op
+  // for surfaces that query their size dynamically (e.g., XCB, Win32).
+  virtual void SetSize(uint32_t width, uint32_t height) {}
+
  protected:
   Surface() = default;
 
