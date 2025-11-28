@@ -37,7 +37,8 @@ enum class GPUSetting { ClearMemoryPageState, ReadbackMemexport };
 
 enum class ReadbackResolveMode {
   kDisabled,  // No readback (none)
-  kFast,      // Delayed sync, 1 frame behind (fast)
+  kFast,      // Delayed sync, skip copy on cache hit (fast)
+  kSlow,      // Delayed sync, copy every frame (slow)
   kFull       // Immediate sync with GPU stall (full)
 };
 

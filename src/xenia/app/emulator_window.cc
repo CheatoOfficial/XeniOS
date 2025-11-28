@@ -2204,6 +2204,8 @@ void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
 void EmulatorWindow::CycleReadbackResolve() {
   const std::string& current = cvars::readback_resolve;
   if (current == "fast") {
+    gpu::SetReadbackResolveMode("slow");
+  } else if (current == "slow") {
     gpu::SetReadbackResolveMode("full");
   } else if (current == "full") {
     gpu::SetReadbackResolveMode("none");

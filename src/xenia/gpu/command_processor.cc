@@ -52,7 +52,8 @@ DEFINE_bool(clear_memory_page_state, true,
 DEFINE_string(
     readback_resolve, "fast",
     "Controls CPU readback of render-to-texture resolve results.\n"
-    " fast: Read from previous frame (1 frame delay, no GPU stall - default)\n"
+    " fast: Read from previous frame, skip copy on cache hit (default)\n"
+    " slow: Read from previous frame, copy every frame\n"
     " full: Wait for GPU to finish (accurate but slow, GPU-CPU sync stall)\n"
     " none: Disable readback completely (some games render better without it)",
     "GPU");
@@ -103,6 +104,8 @@ static ReadbackResolveMode ParseReadbackResolveMode() {
   const std::string& mode = cvars::readback_resolve;
   if (mode == "full") {
     return ReadbackResolveMode::kFull;
+  } else if (mode == "slow") {
+    return ReadbackResolveMode::kSlow;
   } else if (mode == "none") {
     return ReadbackResolveMode::kDisabled;
   } else {

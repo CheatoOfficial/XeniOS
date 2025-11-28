@@ -3264,7 +3264,8 @@ bool VulkanCommandProcessor::IssueCopy() {
     deferred_command_buffer_.CmdVkCopyBuffer(
         shared_memory_buffer, rb.buffers[write_index], 1, &copy_region);
 
-    bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast);
+    bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast ||
+                             readback_mode == ReadbackResolveMode::kSlow);
     uint32_t read_index = write_index;
 
     if (use_delayed_sync) {
@@ -3295,12 +3296,9 @@ bool VulkanCommandProcessor::IssueCopy() {
       }
     }
 
-    // TODO(has207): figure out why not copying only on cache hit
-    // doesn't work on vulkan but works in d3d12.
-    // Only copy on cache miss (when we have fresh data from GPU sync)
-    // On cache hit, we'd be copying stale data from previous frame
-    // if (is_cache_miss && rb.buffers[read_index] != VK_NULL_HANDLE &&
-    if (rb.buffers[read_index] != VK_NULL_HANDLE &&
+    bool should_copy =
+        (readback_mode == ReadbackResolveMode::kFast) ? is_cache_miss : true;
+    if (should_copy && rb.buffers[read_index] != VK_NULL_HANDLE &&
         written_length <= rb.sizes[read_index] &&
         rb.mapped_data[read_index] != nullptr) {
       uint8_t* dest_ptr = memory_->TranslatePhysical(written_address);

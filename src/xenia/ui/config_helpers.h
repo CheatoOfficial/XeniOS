@@ -72,7 +72,7 @@ GetKnownEnumOptions() {
 #endif
       {"d3d12_readback_resolve",
        {"kCopy", "kComputeLuminance", "kComputeRGBA16"}},
-      {"readback_resolve", {"fast", "full", "none"}},
+      {"readback_resolve", {"fast", "slow", "full", "none"}},
       {"render_target_path", {"performance", "accuracy"}},
       {"postprocess_antialiasing", {"off", "fxaa", "fxaa_extreme"}},
       {"postprocess_scaling_and_sharpening",
