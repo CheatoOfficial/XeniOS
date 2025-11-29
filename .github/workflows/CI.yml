@@ -166,6 +166,7 @@ jobs:
           # Copy any additional runtime files if needed (currently just directories are copied)
 
           # Run linuxdeploy with Qt plugin to deploy all Qt dependencies and create AppImage
+          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
           ~/linuxdeploy/linuxdeploy --appdir artifacts/xenia_edge \
             --executable $binary \
             --desktop-file assets/xenia_edge.desktop \
