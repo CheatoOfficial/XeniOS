@@ -780,13 +780,12 @@ def run_platform_premake(target_os_override=None, cc=None, devenv=None):
         if target_os == "macosx":
             devenv = "xcode4"
         elif target_os == "windows":
-            vs_version = int(os.getenv("VSVERSION", str(VSVERSION_MINIMUM)))
-            # Premake doesn't support vs2026 yet, so use vs2022 for VS2026
-            # VS2022 project files are compatible with VS2026
-            if vs_version >= 2026:
-                devenv = "vs2022"
-            else:
-                devenv = f"vs{vs_version}"
+            vs_version = os.getenv("VSVERSION", VSVERSION_MINIMUM)
+            # VS 2026 preview reports as vs18, map to vs2022 for premake
+            # as it doesn't yet have a vs2026 target
+            if vs_version == "18":
+                vs_version = "2022"
+            devenv = f"vs{vs_version}"
         elif target_os == "android":
             devenv = "androidndk"
         else:
