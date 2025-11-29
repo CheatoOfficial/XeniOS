@@ -49,6 +49,11 @@ std::filesystem::path GetExecutablePath() {
 }
 
 std::filesystem::path GetExecutableFolder() {
+  // When running from an AppImage use the AppImage directory instead of
+  // the temporary mount point
+  if (const char* appimage_path = std::getenv("APPIMAGE")) {
+    return std::filesystem::path(appimage_path).parent_path();
+  }
   return GetExecutablePath().parent_path();
 }
 
