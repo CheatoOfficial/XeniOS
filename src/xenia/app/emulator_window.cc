@@ -217,9 +217,9 @@ DEFINE_bool(use_gamemode, false,
             "GameMode must be installed on your system for this to work.",
             "Linux");
 #endif
-DEFINE_bool(disable_doubleclick_fullscreen, false,
-            "Allows the user to disable the behavior where a fast double-click "
-            "causes Xenia to enter fullscreen mode.",
+DEFINE_bool(disable_game_window_mouse, false,
+            "Disables mouse interactions in the game window, including "
+            "double-click to fullscreen and right-click context menu.",
             "General");
 
 namespace xe {
@@ -1088,6 +1088,10 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
   if (e.button() == ui::MouseEvent::Button::kRight) {
+    if (cvars::disable_game_window_mouse) {
+      return;
+    }
+
     // If menu is already open, close it instead of opening a new one
     if (context_menu_widget_qt_) {
       context_menu_widget_qt_->close();
@@ -1229,7 +1233,7 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
 }
 
 void EmulatorWindow::OnMouseDoubleClick(const ui::MouseEvent& e) {
-  if (cvars::disable_doubleclick_fullscreen) {
+  if (cvars::disable_game_window_mouse) {
     return;
   }
   // Don't toggle fullscreen if any ImGui dialogs are open
