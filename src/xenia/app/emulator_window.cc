@@ -206,7 +206,6 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "Allows user to define how many titles is saved in list of "
              "recently played titles.",
              "General");
-
 #if XE_PLATFORM_LINUX
 DEFINE_bool(
     use_mangohud, false,
@@ -218,6 +217,11 @@ DEFINE_bool(use_gamemode, false,
             "GameMode must be installed on your system for this to work.",
             "Linux");
 #endif
+DEFINE_bool(disable_doubleclick_fullscreen, false,
+            "Allows the user to disable the behavior where a fast double-click "
+            "causes Xenia to enter fullscreen mode.",
+            "General");
+
 namespace xe {
 namespace app {
 
@@ -1225,6 +1229,9 @@ void EmulatorWindow::SaveImage(const std::filesystem::path& filepath,
 }
 
 void EmulatorWindow::OnMouseDoubleClick(const ui::MouseEvent& e) {
+  if (cvars::disable_doubleclick_fullscreen) {
+    return;
+  }
   // Don't toggle fullscreen if any ImGui dialogs are open
   // This allows users to double-click to select text in dialog input fields
   if (imgui_drawer_ && imgui_drawer_->HasOpenDialogs()) {
