@@ -36,6 +36,7 @@ class VulkanSharedMemory : public SharedMemory {
 
   bool Initialize();
   void Shutdown(bool from_destructor = false);
+  void ClearCache() override;
 
   void CompletedSubmissionUpdated();
   void EndSubmission();
