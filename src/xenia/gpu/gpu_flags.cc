@@ -95,3 +95,8 @@ DEFINE_string(
     "  Performance limited primarily by overdraw.\n"
     "  Maps to 'fsi' on Vulkan and 'rov' on D3D12.",
     "GPU");
+
+DEFINE_bool(submit_on_primary_buffer_end, true,
+            "Submit the command buffer when a PM4 primary buffer ends if it's "
+            "possible to submit immediately to try to reduce frame latency.",
+            "GPU");

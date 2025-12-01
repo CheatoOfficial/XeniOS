@@ -33,12 +33,8 @@ DEFINE_bool(d3d12_bindless, true,
             "but may make debugging more complicated.",
             "D3D12");
 
-DEFINE_bool(d3d12_submit_on_primary_buffer_end, true,
-            "Submit the command list when a PM4 primary buffer ends if it's "
-            "possible to submit immediately to try to reduce frame latency.",
-            "D3D12");
-
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(submit_on_primary_buffer_end);
 DECLARE_bool(readback_memexport_fast);
 
 namespace xe {
@@ -2604,7 +2600,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 }
 
 void D3D12CommandProcessor::OnPrimaryBufferEnd() {
-  if (cvars::d3d12_submit_on_primary_buffer_end && submission_open_ &&
+  if (cvars::submit_on_primary_buffer_end && submission_open_ &&
       CanEndSubmissionImmediately()) {
     EndSubmission(false);
   }

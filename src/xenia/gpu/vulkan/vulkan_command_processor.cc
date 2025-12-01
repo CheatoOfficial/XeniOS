@@ -37,6 +37,7 @@
 
 DECLARE_bool(clear_memory_page_state);
 DECLARE_bool(readback_memexport_fast);
+DECLARE_bool(submit_on_primary_buffer_end);
 
 namespace xe {
 namespace gpu {
@@ -1705,6 +1706,14 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
   EndSubmission(true);
+}
+
+void VulkanCommandProcessor::OnPrimaryBufferEnd() {
+  if (cvars::submit_on_primary_buffer_end && submission_open_ &&
+      !scratch_buffer_used_ && !active_occlusion_query_.valid &&
+      CanEndSubmissionImmediately()) {
+    EndSubmission(false);
+  }
 }
 
 bool VulkanCommandProcessor::PushBufferMemoryBarrier(
@@ -3987,6 +3996,11 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
   }
 
   return true;
+}
+
+bool VulkanCommandProcessor::CanEndSubmissionImmediately() {
+  return !submission_open_ || !pipeline_cache_ ||
+         !pipeline_cache_->IsCreatingPipelines();
 }
 
 bool VulkanCommandProcessor::EndSubmission(bool is_swap) {

@@ -38,6 +38,10 @@ inline const std::vector<CvarAlias>& GetCvarAliases() {
       {"render_target_path_vulkan", "fsi", "render_target_path", "accuracy"},
       {"disable_doubleclick_fullscreen", "true", "disable_game_window_mouse",
        "true"},
+      {"d3d12_submit_on_primary_buffer_end", "true",
+       "submit_on_primary_buffer_end", "true"},
+      {"d3d12_submit_on_primary_buffer_end", "false",
+       "submit_on_primary_buffer_end", "false"},
 #if XE_PLATFORM_WIN32
       {"gpu", "any", "gpu", "d3d12"},
       {"apu", "any", "apu", "xaudio2"},
