@@ -3256,7 +3256,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
 
       ReadbackResolveMode readback_mode = GetReadbackResolveMode();
       bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast ||
-                               readback_mode == ReadbackResolveMode::kSlow);
+                               readback_mode == ReadbackResolveMode::kSome);
       uint32_t read_index = write_index;
 
       if (use_delayed_sync) {
@@ -3286,11 +3286,11 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
       }
 
       // Copy to guest memory
-      // "fast" mode: only copy on cache miss (saves CPU)
-      // "slow" mode: always copy (1 frame behind, no GPU stall)
+      // "some" mode: only copy on cache miss (saves CPU)
+      // "fast" mode: always copy (1 frame behind, no GPU stall)
       // "full" mode: always copy (GPU sync already done above)
       bool should_copy =
-          (readback_mode == ReadbackResolveMode::kFast) ? is_cache_miss : true;
+          (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
       if (should_copy && read_source != nullptr &&
           written_length <= rb.sizes[read_index] &&
           rb.mapped_data[read_index] != nullptr) {

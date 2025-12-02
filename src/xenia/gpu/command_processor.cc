@@ -14,6 +14,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/profiling.h"
+#include "xenia/config.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/gpu/packet_disassembler.h"
@@ -52,8 +53,8 @@ DEFINE_bool(clear_memory_page_state, true,
 DEFINE_string(
     readback_resolve, "fast",
     "Controls CPU readback of render-to-texture resolve results.\n"
-    " fast: Read from previous frame, skip copy on cache hit (default)\n"
-    " slow: Read from previous frame, copy every frame\n"
+    " fast: Read from previous frame, copy every frame (default)\n"
+    " some: Read from previous frame, skip copy on cache hit\n"
     " full: Wait for GPU to finish (accurate but slow, GPU-CPU sync stall)\n"
     " none: Disable readback completely (some games render better without it)",
     "GPU");
@@ -104,8 +105,8 @@ static ReadbackResolveMode ParseReadbackResolveMode() {
   const std::string& mode = cvars::readback_resolve;
   if (mode == "full") {
     return ReadbackResolveMode::kFull;
-  } else if (mode == "slow") {
-    return ReadbackResolveMode::kSlow;
+  } else if (mode == "some") {
+    return ReadbackResolveMode::kSome;
   } else if (mode == "none") {
     return ReadbackResolveMode::kDisabled;
   } else {
@@ -114,7 +115,7 @@ static ReadbackResolveMode ParseReadbackResolveMode() {
   }
 }
 
-void SetReadbackResolveMode(const std::string& mode) {
+static void SetReadbackResolveCvar(const std::string& mode) {
   OVERRIDE_string(readback_resolve, mode);
 }
 
@@ -277,6 +278,47 @@ void CommandProcessor::ClearCaches() {}
 void CommandProcessor::InvalidateGpuMemory() {}
 
 void CommandProcessor::ClearReadbackBuffers() {}
+
+void CommandProcessor::SetReadbackResolveMode(ReadbackResolveMode mode) {
+  if (cached_readback_resolve_mode_ == mode) {
+    return;
+  }
+  // Update cached value
+  cached_readback_resolve_mode_ = mode;
+  // Update cvar string for UI display
+  const char* mode_str = "fast";
+  switch (mode) {
+    case ReadbackResolveMode::kDisabled:
+      mode_str = "none";
+      break;
+    case ReadbackResolveMode::kSome:
+      mode_str = "some";
+      break;
+    case ReadbackResolveMode::kFull:
+      mode_str = "full";
+      break;
+    default:
+      break;
+  }
+  SetReadbackResolveCvar(mode_str);
+
+  // Save to per-game config if a title is loaded
+  uint32_t title_id = kernel_state_ ? kernel_state_->title_id() : 0;
+  if (title_id != 0) {
+    toml::table config_table = config::LoadGameConfig(title_id);
+
+    if (!config_table.contains("GPU")) {
+      config_table.insert("GPU", toml::table{});
+    }
+
+    auto* gpu_table = config_table["GPU"].as_table();
+    if (gpu_table) {
+      gpu_table->insert_or_assign("readback_resolve", mode_str);
+    }
+
+    config::SaveGameConfig(title_id, config_table);
+  }
+}
 
 void CommandProcessor::SetDesiredSwapPostEffect(
     SwapPostEffect swap_post_effect) {

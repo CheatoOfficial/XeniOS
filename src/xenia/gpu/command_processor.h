@@ -37,14 +37,13 @@ enum class GPUSetting { ClearMemoryPageState, ReadbackMemexport };
 
 enum class ReadbackResolveMode {
   kDisabled,  // No readback (none)
-  kFast,      // Delayed sync, skip copy on cache hit (fast)
-  kSlow,      // Delayed sync, copy every frame (slow)
+  kSome,      // Delayed sync, skip copy on cache hit (some)
+  kFast,      // Delayed sync, copy every frame (fast)
   kFull       // Immediate sync with GPU stall (full)
 };
 
 void SaveGPUSetting(GPUSetting setting, uint64_t value);
 bool GetGPUSetting(GPUSetting setting);
-void SetReadbackResolveMode(const std::string& mode);
 
 // Occlusion query pool size for both D3D12 and Vulkan backends.
 // Queries complete synchronously with GPU stalls.
@@ -116,6 +115,9 @@ class CommandProcessor {
   ReadbackResolveMode GetReadbackResolveMode() const {
     return cached_readback_resolve_mode_;
   }
+
+  // Set readback resolve mode (updates both cvar and cached value)
+  void SetReadbackResolveMode(ReadbackResolveMode mode);
 
   // "Desired" is for the external thread managing the post-processing effect.
   SwapPostEffect GetDesiredSwapPostEffect() const {

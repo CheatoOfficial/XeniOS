@@ -2213,16 +2213,29 @@ void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
 }
 
 void EmulatorWindow::CycleReadbackResolve() {
-  const std::string& current = cvars::readback_resolve;
-  if (current == "fast") {
-    gpu::SetReadbackResolveMode("slow");
-  } else if (current == "slow") {
-    gpu::SetReadbackResolveMode("full");
-  } else if (current == "full") {
-    gpu::SetReadbackResolveMode("none");
-  } else {
-    gpu::SetReadbackResolveMode("fast");
+  auto* graphics_system = emulator_->graphics_system();
+  if (!graphics_system) return;
+  auto* command_processor = graphics_system->command_processor();
+  if (!command_processor) return;
+
+  gpu::ReadbackResolveMode current =
+      command_processor->GetReadbackResolveMode();
+  gpu::ReadbackResolveMode next;
+  switch (current) {
+    case gpu::ReadbackResolveMode::kDisabled:
+      next = gpu::ReadbackResolveMode::kSome;
+      break;
+    case gpu::ReadbackResolveMode::kSome:
+      next = gpu::ReadbackResolveMode::kFast;
+      break;
+    case gpu::ReadbackResolveMode::kFast:
+      next = gpu::ReadbackResolveMode::kFull;
+      break;
+    default:
+      next = gpu::ReadbackResolveMode::kDisabled;
+      break;
   }
+  command_processor->SetReadbackResolveMode(next);
 }
 
 void EmulatorWindow::DisplayHotKeysConfig() {

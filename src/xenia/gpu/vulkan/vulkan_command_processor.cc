@@ -3274,7 +3274,7 @@ bool VulkanCommandProcessor::IssueCopy() {
         shared_memory_buffer, rb.buffers[write_index], 1, &copy_region);
 
     bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast ||
-                             readback_mode == ReadbackResolveMode::kSlow);
+                             readback_mode == ReadbackResolveMode::kSome);
     uint32_t read_index = write_index;
 
     if (use_delayed_sync) {
@@ -3306,7 +3306,7 @@ bool VulkanCommandProcessor::IssueCopy() {
     }
 
     bool should_copy =
-        (readback_mode == ReadbackResolveMode::kFast) ? is_cache_miss : true;
+        (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
     if (should_copy && rb.buffers[read_index] != VK_NULL_HANDLE &&
         written_length <= rb.sizes[read_index] &&
         rb.mapped_data[read_index] != nullptr) {
