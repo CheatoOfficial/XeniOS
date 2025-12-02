@@ -116,6 +116,8 @@ class EmulatorWindow {
   void ToggleProfilesConfigDialog();
   void ToggleXMPConfigDialog();
   void ToggleConfigDialog();
+  void ToggleControllerHotkeysDialog();
+  std::vector<std::pair<std::string, bool>> GetControllerHotkeysList();
   void OpenConfigDialog(const std::string& category = "");
   void ToggleControllerVibration();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
@@ -242,7 +244,6 @@ class EmulatorWindow {
   void GamepadHotKeys();
   void ToggleGPUSetting(gpu::GPUSetting setting);
   void CycleReadbackResolve();
-  void DisplayHotKeysConfig();
 
   static std::string CanonicalizeFileExtension(
       const std::filesystem::path& path);
@@ -287,6 +288,7 @@ class EmulatorWindow {
 
   QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
   QPointer<class PerformanceTuningDialogQt> performance_tuning_dialog_qt_;
+  QPointer<class ControllerHotkeysDialogQt> controller_hotkeys_dialog_qt_;
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
   QPointer<class ProfileDialogQt> profile_dialog_qt_;
   QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;

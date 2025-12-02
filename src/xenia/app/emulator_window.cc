@@ -35,6 +35,7 @@
 #include "xenia/config.h"
 #include "xenia/ui/config_dialog_qt.h"
 #include "xenia/ui/context_menu_widget_qt.h"
+#include "xenia/ui/controller_hotkeys_dialog_qt.h"
 #include "xenia/ui/game_list_dialog_qt.h"
 #include "xenia/ui/notification_widget_qt.h"
 #include "xenia/ui/performance_tuning_dialog_qt.h"
@@ -1136,8 +1137,8 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
       context_menu->AddAction(vibration_text,
                               [this]() { ToggleControllerVibration(); });
 
-      context_menu->AddAction("Show Controller Hotkeys",
-                              [this]() { DisplayHotKeysConfig(); });
+      context_menu->AddAction("Controller Hotkeys...",
+                              [this]() { ToggleControllerHotkeysDialog(); });
 
       context_menu->AddSeparator();
 
@@ -2231,9 +2232,24 @@ void EmulatorWindow::CycleReadbackResolve() {
   command_processor->SetReadbackResolveMode(next);
 }
 
-void EmulatorWindow::DisplayHotKeysConfig() {
-  std::string msg = "";
-  std::string msg_passthru = "";
+void EmulatorWindow::ToggleControllerHotkeysDialog() {
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (!qt_window) {
+    return;
+  }
+
+  if (!controller_hotkeys_dialog_qt_) {
+    controller_hotkeys_dialog_qt_ =
+        new ControllerHotkeysDialogQt(qt_window->qwindow(), this);
+    controller_hotkeys_dialog_qt_->show();
+  } else {
+    controller_hotkeys_dialog_qt_->deleteLater();
+  }
+}
+
+std::vector<std::pair<std::string, bool>>
+EmulatorWindow::GetControllerHotkeysList() {
+  std::vector<std::pair<std::string, bool>> result;
 
   bool guide_enabled = !IsUseNexusForGameBarEnabled() && cvars::guide_button;
 
@@ -2246,46 +2262,18 @@ void EmulatorWindow::DisplayHotKeysConfig() {
           "Back");
     }
 
+    bool enabled = true;
     if (emulator_->is_title_open() && !val.title_passthru) {
-      pretty_text += " (Disabled)";
+      enabled = false;
     }
-
     if (val.title_passthru && !cvars::controller_hotkeys) {
-      pretty_text += " (Disabled)";
+      enabled = false;
     }
 
-    if (val.title_passthru) {
-      msg += pretty_text + "\n";
-    } else {
-      msg_passthru += pretty_text + "\n";
-    }
+    result.push_back({pretty_text, enabled});
   }
 
-  // Add Title
-  msg.insert(0, "Gameplay Hotkeys\n");
-
-  // Prepend non-passthru hotkeys
-  msg_passthru += "\n";
-  msg.insert(0, msg_passthru);
-  msg += "\n";
-
-  msg += "Readback Resolve: " + cvars::readback_resolve;
-  msg += "\n";
-
-  msg += "Clear Memory Page State: " +
-         xe::string_util::BoolToString(cvars::clear_memory_page_state);
-  msg += "\n";
-
-  msg += "Controller Hotkeys: " +
-         xe::string_util::BoolToString(cvars::controller_hotkeys);
-
-  // Show Qt message box
-  QMessageBox msgBox;
-  msgBox.setWindowTitle("Controller Hotkeys");
-  msgBox.setText(SafeQString(msg));
-  msgBox.setIcon(QMessageBox::Information);
-  msgBox.setStandardButtons(QMessageBox::Ok);
-  msgBox.exec();
+  return result;
 }
 
 std::string EmulatorWindow::CanonicalizeFileExtension(
