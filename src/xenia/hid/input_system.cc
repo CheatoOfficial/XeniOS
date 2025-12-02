@@ -176,6 +176,12 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                    X_INPUT_KEYSTROKE* out_keystroke) {
   SCOPE_profile_cpu_f("hid");
 
+  // If UI is blocking input, return empty keystroke to the game
+  if (ui_input_blockers_.load() > 0) {
+    std::memset(out_keystroke, 0, sizeof(X_INPUT_KEYSTROKE));
+    return X_ERROR_EMPTY;
+  }
+
   std::vector<InputDriver*> filtered_drivers = FilterDrivers(flags);
 
   bool any_connected = false;
