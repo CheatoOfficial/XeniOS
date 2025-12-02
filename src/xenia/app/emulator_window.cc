@@ -2145,14 +2145,39 @@ void EmulatorWindow::GamepadHotKeys() {
 }
 
 void EmulatorWindow::ToggleGPUSetting(gpu::GPUSetting setting) {
+  const char* cvar_name = nullptr;
+  bool new_value = false;
+
   switch (setting) {
     case GPUSetting::ClearMemoryPageState:
-      SaveGPUSetting(GPUSetting::ClearMemoryPageState,
-                     !cvars::clear_memory_page_state);
+      new_value = !cvars::clear_memory_page_state;
+      SaveGPUSetting(GPUSetting::ClearMemoryPageState, new_value);
+      cvar_name = "clear_memory_page_state";
       break;
     case GPUSetting::ReadbackMemexport:
-      SaveGPUSetting(GPUSetting::ReadbackMemexport, !cvars::readback_memexport);
+      new_value = !cvars::readback_memexport;
+      SaveGPUSetting(GPUSetting::ReadbackMemexport, new_value);
+      cvar_name = "readback_memexport";
       break;
+  }
+
+  // Save to per-game config if a title is loaded
+  if (cvar_name && emulator_ && emulator_->is_title_open()) {
+    uint32_t title_id = emulator_->title_id();
+    if (title_id != 0) {
+      toml::table config_table = config::LoadGameConfig(title_id);
+
+      if (!config_table.contains("GPU")) {
+        config_table.insert("GPU", toml::table{});
+      }
+
+      auto* gpu_table = config_table["GPU"].as_table();
+      if (gpu_table) {
+        gpu_table->insert_or_assign(cvar_name, new_value);
+      }
+
+      config::SaveGameConfig(title_id, config_table);
+    }
   }
 }
 
