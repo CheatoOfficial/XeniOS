@@ -128,6 +128,15 @@ bool XmaContextNew::Work() {
 
   RingBuffer output_rb = PrepareOutputRingBuffer(&data);
 
+  if (data.IsConsumeOnlyContext()) {
+    Consume(&output_rb, &data);
+    if (data.output_buffer_read_offset == data.output_buffer_write_offset) {
+      Clear();
+    }
+    data.Store(context_ptr);
+    return true;
+  }
+
   const int32_t minimum_subframe_decode_count =
       (data.subframe_decode_count * 2) - 1;
 
@@ -257,7 +266,8 @@ void XmaContextNew::SwapInputBuffer(XMA_CONTEXT_DATA* data) {
   data->input_buffer_read_offset = kBitsPerPacketHeader;
 }
 
-void XmaContextNew::Consume(RingBuffer* output_rb, XMA_CONTEXT_DATA* data) {
+void XmaContextNew::Consume(RingBuffer* XE_RESTRICT output_rb,
+                            const XMA_CONTEXT_DATA* const XE_RESTRICT data) {
   if (!current_frame_remaining_subframes_) {
     return;
   }

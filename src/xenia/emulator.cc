@@ -886,6 +886,10 @@ X_STATUS Emulator::InstallContentPackage(
       vfs::XContentContainerDevice::CreateContentDevice("", path);
 
   if (!device || !device->Initialize()) {
+    installation_info.installation_state_ = InstallState::failed;
+    installation_info.installation_error_message_ =
+        "Device initialization failed!";
+    installation_info.installation_result_ = X_STATUS_ACCESS_DENIED;
     XELOGE("Failed to initialize device");
     return X_STATUS_INVALID_PARAMETER;
   }
