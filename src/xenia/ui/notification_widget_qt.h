@@ -24,7 +24,8 @@ class NotificationWidgetQt : public QWidget {
 
  public:
   NotificationWidgetQt(QWidget* parent, const QString& title,
-                       const QString& message, int duration_ms = 3000);
+                       const QString& message, int duration_ms = 3000,
+                       bool is_achievement = false);
   ~NotificationWidgetQt() override = default;
 
   void Show();

@@ -42,6 +42,7 @@ inline const std::vector<CvarAlias>& GetCvarAliases() {
        "submit_on_primary_buffer_end", "true"},
       {"d3d12_submit_on_primary_buffer_end", "false",
        "submit_on_primary_buffer_end", "false"},
+      {"notification_sound_path", "*", "achievement_sound_path", "*"},
 #if XE_PLATFORM_WIN32
       {"gpu", "any", "gpu", "d3d12"},
       {"apu", "any", "apu", "xaudio2"},

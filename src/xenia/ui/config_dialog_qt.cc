@@ -330,11 +330,11 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     connect(browse_button, &QPushButton::clicked,
             [this, line_edit, var_info]() {
               QString path;
-              // Special case for notification_sound_path - file picker with
+              // Special case for achievement_sound_path - file picker with
               // audio filters
-              if (var_info->name == "notification_sound_path") {
+              if (var_info->name == "achievement_sound_path") {
                 path = QFileDialog::getOpenFileName(
-                    this, "Select Notification Sound", line_edit->text(),
+                    this, "Select Achievement Sound", line_edit->text(),
                     "Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a *.aac *.wma "
                     "*.opus);;All Files (*)");
               } else {

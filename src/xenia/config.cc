@@ -107,11 +107,19 @@ void MigrateLegacyCvars(const toml::table& config) {
       }
 
       for (const auto& alias : xe::ui::GetCvarAliases()) {
-        if (var_name == alias.old_name && var_value == alias.old_value) {
+        // Support wildcard "*" to match any value and copy it as-is
+        bool name_matches = (var_name == alias.old_name);
+        bool value_matches =
+            (alias.old_value == "*") || (var_value == alias.old_value);
+
+        if (name_matches && value_matches) {
           auto new_cvar = (*cvar::ConfigVars).find(alias.new_name);
           if (new_cvar != (*cvar::ConfigVars).end()) {
             auto config_var = static_cast<cvar::IConfigVar*>(new_cvar->second);
-            toml::value new_value(alias.new_value);
+            // If new_value is "*", copy the original value as-is
+            std::string final_value =
+                (alias.new_value == "*") ? var_value : alias.new_value;
+            toml::value new_value(final_value);
             config_var->LoadConfigValue(&new_value);
           }
           break;

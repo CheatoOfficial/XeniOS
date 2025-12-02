@@ -155,7 +155,8 @@ void AchievementManager::ShowAchievementEarnedNotification(
     if (qt_window) {
       auto* notification = new app::NotificationWidgetQt(
           qt_window->qwindow(), QString("Achievement unlocked"),
-          QString::fromUtf8(description.c_str()), 4500);
+          QString::fromUtf8(description.c_str()), 4500,
+          true);  // is_achievement = true, plays sound if configured
       notification->Show();
     }
   });
