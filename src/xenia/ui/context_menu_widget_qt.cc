@@ -14,10 +14,18 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 
+#include "xenia/hid/input_system.h"
+
 namespace xe {
 namespace app {
 
-ContextMenuWidgetQt::ContextMenuWidgetQt(QWidget* parent) : QWidget(parent) {
+ContextMenuWidgetQt::ContextMenuWidgetQt(QWidget* parent,
+                                         hid::InputSystem* input_system)
+    : QWidget(parent),
+      input_system_(input_system),
+      poll_timer_(nullptr),
+      focused_index_(-1),
+      prev_buttons_(0) {
   setAttribute(Qt::WA_DeleteOnClose);
   setAutoFillBackground(true);
   setAttribute(Qt::WA_StyledBackground, true);
@@ -32,6 +40,27 @@ ContextMenuWidgetQt::ContextMenuWidgetQt(QWidget* parent) : QWidget(parent) {
 
   // Install global event filter to close menu on clicks outside
   qApp->installEventFilter(this);
+
+  // Start gamepad polling if input system is available
+  if (input_system_) {
+    // Block input to the game while this menu is open
+    input_system_->AddUIInputBlocker();
+
+    poll_timer_ = new QTimer(this);
+    connect(poll_timer_, &QTimer::timeout, this,
+            &ContextMenuWidgetQt::PollGamepad);
+    poll_timer_->start(16);  // ~60fps polling
+  }
+}
+
+ContextMenuWidgetQt::~ContextMenuWidgetQt() {
+  if (poll_timer_) {
+    poll_timer_->stop();
+  }
+  if (input_system_) {
+    // Unblock input to the game
+    input_system_->RemoveUIInputBlocker();
+  }
 }
 
 void ContextMenuWidgetQt::AddAction(const QString& text,
@@ -64,6 +93,14 @@ void ContextMenuWidgetQt::AddAction(const QString& text,
       setStyleSheet("background: transparent; border: none;");
     }
 
+    void SetFocused(bool focused) {
+      if (focused) {
+        setStyleSheet("background-color: rgb(74, 74, 74); border: none;");
+      } else {
+        setStyleSheet("background: transparent; border: none;");
+      }
+    }
+
    protected:
     void mousePressEvent(QMouseEvent* event) override {
       if (event->button() == Qt::LeftButton && callback_) {
@@ -76,11 +113,11 @@ void ContextMenuWidgetQt::AddAction(const QString& text,
     }
 
     void enterEvent(QEnterEvent* event) override {
-      setStyleSheet("background-color: rgb(74, 74, 74);");
+      setStyleSheet("background-color: rgb(74, 74, 74); border: none;");
     }
 
     void leaveEvent(QEvent* event) override {
-      setStyleSheet("background: transparent;");
+      setStyleSheet("background: transparent; border: none;");
     }
 
    private:
@@ -89,6 +126,7 @@ void ContextMenuWidgetQt::AddAction(const QString& text,
 
   auto* clickable = new ClickableItem(text, shortcut, this, callback);
   layout_->addWidget(clickable);
+  menu_items_.push_back({clickable, callback});
 }
 
 void ContextMenuWidgetQt::AddSeparator() {
@@ -126,13 +164,42 @@ void ContextMenuWidgetQt::ShowAt(const QPoint& global_pos) {
   show();
   raise();
   setFocus(Qt::PopupFocusReason);
+
+  // If we have gamepad support, start with first item focused
+  if (input_system_ && !menu_items_.empty()) {
+    UpdateFocusedItem(0);
+  }
 }
 
 void ContextMenuWidgetQt::keyPressEvent(QKeyEvent* event) {
-  if (event->key() == Qt::Key_Escape) {
-    close();
+  switch (event->key()) {
+    case Qt::Key_Escape:
+      close();
+      break;
+    case Qt::Key_Up:
+      if (!menu_items_.empty()) {
+        int new_index = focused_index_ <= 0
+                            ? static_cast<int>(menu_items_.size()) - 1
+                            : focused_index_ - 1;
+        UpdateFocusedItem(new_index);
+      }
+      break;
+    case Qt::Key_Down:
+      if (!menu_items_.empty()) {
+        int new_index =
+            focused_index_ >= static_cast<int>(menu_items_.size()) - 1
+                ? 0
+                : focused_index_ + 1;
+        UpdateFocusedItem(new_index);
+      }
+      break;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+      ActivateFocusedItem();
+      break;
+    default:
+      QWidget::keyPressEvent(event);
   }
-  QWidget::keyPressEvent(event);
 }
 
 bool ContextMenuWidgetQt::eventFilter(QObject* obj, QEvent* event) {
@@ -155,6 +222,80 @@ bool ContextMenuWidgetQt::eventFilter(QObject* obj, QEvent* event) {
     }
   }
   return false;
+}
+
+void ContextMenuWidgetQt::PollGamepad() {
+  if (!input_system_ || menu_items_.empty()) {
+    return;
+  }
+
+  // Poll first connected controller
+  // Use GetStateForUI to bypass the input blocker (we ARE the UI)
+  for (uint32_t i = 0; i < 4; ++i) {
+    hid::X_INPUT_STATE state;
+    if (input_system_->GetStateForUI(i, 1, &state) == 0) {
+      uint16_t buttons = state.gamepad.buttons;
+      uint16_t pressed = buttons & ~prev_buttons_;  // Edge detection
+
+      // D-pad navigation
+      if (pressed & 0x0001) {  // D-pad up
+        int new_index = focused_index_ <= 0
+                            ? static_cast<int>(menu_items_.size()) - 1
+                            : focused_index_ - 1;
+        UpdateFocusedItem(new_index);
+      }
+      if (pressed & 0x0002) {  // D-pad down
+        int new_index =
+            focused_index_ >= static_cast<int>(menu_items_.size()) - 1
+                ? 0
+                : focused_index_ + 1;
+        UpdateFocusedItem(new_index);
+      }
+
+      // A button to select
+      if (pressed & 0x1000) {
+        ActivateFocusedItem();
+      }
+
+      // B button to close
+      if (pressed & 0x2000) {
+        close();
+      }
+
+      prev_buttons_ = buttons;
+      break;  // Only use first connected controller
+    }
+  }
+}
+
+void ContextMenuWidgetQt::UpdateFocusedItem(int index) {
+  if (index < 0 || index >= static_cast<int>(menu_items_.size())) {
+    return;
+  }
+
+  // Clear previous focus
+  if (focused_index_ >= 0 &&
+      focused_index_ < static_cast<int>(menu_items_.size())) {
+    auto* prev_item = menu_items_[focused_index_].first;
+    prev_item->setStyleSheet("background: transparent; border: none;");
+  }
+
+  // Set new focus
+  focused_index_ = index;
+  auto* item = menu_items_[focused_index_].first;
+  item->setStyleSheet("background-color: rgb(74, 74, 74); border: none;");
+}
+
+void ContextMenuWidgetQt::ActivateFocusedItem() {
+  if (focused_index_ >= 0 &&
+      focused_index_ < static_cast<int>(menu_items_.size())) {
+    auto callback = menu_items_[focused_index_].second;
+    close();
+    if (callback) {
+      // Call callback after menu is closed to avoid event conflicts
+      QTimer::singleShot(0, callback);
+    }
+  }
 }
 
 }  // namespace app

@@ -20,8 +20,10 @@ namespace xe {
 namespace app {
 
 ControllerHotkeysDialogQt::ControllerHotkeysDialogQt(
-    QWidget* parent, EmulatorWindow* emulator_window)
-    : QDialog(parent), emulator_window_(emulator_window) {
+    QWidget* parent, EmulatorWindow* emulator_window,
+    hid::InputSystem* input_system)
+    : ui::GamepadDialog(parent, input_system),
+      emulator_window_(emulator_window) {
   SetupUI();
 
   // Position near top, centered horizontally

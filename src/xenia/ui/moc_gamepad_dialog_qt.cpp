@@ -1,5 +1,5 @@
 /****************************************************************************
-** Meta object code from reading C++ file 'context_menu_widget_qt.h'
+** Meta object code from reading C++ file 'gamepad_dialog_qt.h'
 **
 ** Created by: The Qt Meta Object Compiler version 69 (Qt 6.9.2)
 **
@@ -7,7 +7,7 @@
 *****************************************************************************/
 
 #include <QtCore/qmetatype.h>
-#include "context_menu_widget_qt.h"
+#include "gamepad_dialog_qt.h"
 
 #include <QtCore/qtmochelpers.h>
 
@@ -15,7 +15,7 @@
 
 #include <QtCore/qxptype_traits.h>
 #if !defined(Q_MOC_OUTPUT_REVISION)
-#error "The header file 'context_menu_widget_qt.h' doesn't include <QObject>."
+#error "The header file 'gamepad_dialog_qt.h' doesn't include <QObject>."
 #elif Q_MOC_OUTPUT_REVISION != 69
 #error "This file was generated using the moc from 6.9.2. It"
 #error "cannot be used with the include files from this version of Qt."
@@ -30,14 +30,14 @@ QT_WARNING_PUSH
 QT_WARNING_DISABLE_DEPRECATED
 QT_WARNING_DISABLE_GCC("-Wuseless-cast")
 namespace {
-struct qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t {};
+struct qt_meta_tag_ZN2xe2ui13GamepadDialogE_t {};
 }  // unnamed namespace
 
 template <>
-constexpr inline auto xe::app::ContextMenuWidgetQt::qt_create_metaobjectdata<
-    qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>() {
+constexpr inline auto xe::ui::GamepadDialog::qt_create_metaobjectdata<
+    qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>() {
   namespace QMC = QtMocConstants;
-  QtMocHelpers::StringRefStorage qt_stringData{"xe::app::ContextMenuWidgetQt",
+  QtMocHelpers::StringRefStorage qt_stringData{"xe::ui::GamepadDialog",
                                                "PollGamepad", ""};
 
   QtMocHelpers::UintData qt_methods{
@@ -46,25 +46,25 @@ constexpr inline auto xe::app::ContextMenuWidgetQt::qt_create_metaobjectdata<
   };
   QtMocHelpers::UintData qt_properties{};
   QtMocHelpers::UintData qt_enums{};
-  return QtMocHelpers::metaObjectData<
-      ContextMenuWidgetQt, qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>(
+  return QtMocHelpers::metaObjectData<GamepadDialog,
+                                      qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>(
       QMC::MetaObjectFlag{}, qt_stringData, qt_methods, qt_properties,
       qt_enums);
 }
-Q_CONSTINIT const QMetaObject xe::app::ContextMenuWidgetQt::staticMetaObject = { {
-    QMetaObject::SuperData::link<QWidget::staticMetaObject>(),
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.stringdata,
-    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.data,
+Q_CONSTINIT const QMetaObject xe::ui::GamepadDialog::staticMetaObject = { {
+    QMetaObject::SuperData::link<QDialog::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>.data,
     qt_static_metacall,
     nullptr,
-    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.metaTypes,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>.metaTypes,
     nullptr
 } };
 
-void xe::app::ContextMenuWidgetQt::qt_static_metacall(QObject* _o,
-                                                      QMetaObject::Call _c,
-                                                      int _id, void** _a) {
-  auto* _t = static_cast<ContextMenuWidgetQt*>(_o);
+void xe::ui::GamepadDialog::qt_static_metacall(QObject* _o,
+                                               QMetaObject::Call _c, int _id,
+                                               void** _a) {
+  auto* _t = static_cast<GamepadDialog*>(_o);
   if (_c == QMetaObject::InvokeMetaMethod) {
     switch (_id) {
       case 0:
@@ -76,21 +76,21 @@ void xe::app::ContextMenuWidgetQt::qt_static_metacall(QObject* _o,
   (void)_a;
 }
 
-const QMetaObject* xe::app::ContextMenuWidgetQt::metaObject() const {
+const QMetaObject* xe::ui::GamepadDialog::metaObject() const {
   return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject()
                                     : &staticMetaObject;
 }
 
-void* xe::app::ContextMenuWidgetQt::qt_metacast(const char* _clname) {
+void* xe::ui::GamepadDialog::qt_metacast(const char* _clname) {
   if (!_clname) return nullptr;
-  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app19ContextMenuWidgetQtE_t>.strings))
+  if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe2ui13GamepadDialogE_t>.strings))
     return static_cast<void*>(this);
-  return QWidget::qt_metacast(_clname);
+  return QDialog::qt_metacast(_clname);
 }
 
-int xe::app::ContextMenuWidgetQt::qt_metacall(QMetaObject::Call _c, int _id,
-                                              void** _a) {
-  _id = QWidget::qt_metacall(_c, _id, _a);
+int xe::ui::GamepadDialog::qt_metacall(QMetaObject::Call _c, int _id,
+                                       void** _a) {
+  _id = QDialog::qt_metacall(_c, _id, _a);
   if (_id < 0) return _id;
   if (_c == QMetaObject::InvokeMetaMethod) {
     if (_id < 1) qt_static_metacall(this, _c, _id, _a);

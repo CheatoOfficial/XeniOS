@@ -10,7 +10,6 @@
 #ifndef XENIA_UI_PROFILE_DIALOG_QT_H_
 #define XENIA_UI_PROFILE_DIALOG_QT_H_
 
-#include <QDialog>
 #include <QLabel>
 #include <QListWidget>
 #include <QPixmap>
@@ -19,6 +18,7 @@
 #include <map>
 #include <memory>
 
+#include "xenia/ui/gamepad_dialog_qt.h"
 #include "xenia/xbox.h"
 
 namespace xe {
@@ -26,11 +26,12 @@ namespace app {
 
 class EmulatorWindow;
 
-class ProfileDialogQt : public QDialog {
+class ProfileDialogQt : public ui::GamepadDialog {
   Q_OBJECT
 
  public:
-  ProfileDialogQt(QWidget* parent, EmulatorWindow* emulator_window);
+  ProfileDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+                  hid::InputSystem* input_system);
   ~ProfileDialogQt() override;
 
   void RefreshProfiles();

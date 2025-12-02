@@ -23,8 +23,10 @@ namespace app {
 
 using xe::ui::SafeQString;
 
-XmpDialogQt::XmpDialogQt(QWidget* parent, EmulatorWindow* emulator_window)
-    : QDialog(parent), emulator_window_(emulator_window) {
+XmpDialogQt::XmpDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+                         hid::InputSystem* input_system)
+    : ui::GamepadDialog(parent, input_system),
+      emulator_window_(emulator_window) {
   SetupUI();
 
   // Position near top, centered horizontally
@@ -53,7 +55,7 @@ void XmpDialogQt::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void XmpDialogQt::showEvent(QShowEvent* event) {
-  QDialog::showEvent(event);
+  GamepadDialog::showEvent(event);
   UpdatePlayerState();
 }
 

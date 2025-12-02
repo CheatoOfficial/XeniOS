@@ -12,7 +12,6 @@
 
 #include <QButtonGroup>
 #include <QCheckBox>
-#include <QDialog>
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
@@ -21,6 +20,7 @@
 #include <QVBoxLayout>
 
 #include "xenia/gpu/command_processor.h"
+#include "xenia/ui/gamepad_dialog_qt.h"
 #include "xenia/ui/presenter.h"
 
 namespace xe {
@@ -28,11 +28,12 @@ namespace app {
 
 class EmulatorWindow;
 
-class PostProcessingDialogQt : public QDialog {
+class PostProcessingDialogQt : public ui::GamepadDialog {
   Q_OBJECT
 
  public:
-  PostProcessingDialogQt(QWidget* parent, EmulatorWindow* emulator_window);
+  PostProcessingDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+                         hid::InputSystem* input_system);
   ~PostProcessingDialogQt() override;
 
  private slots:

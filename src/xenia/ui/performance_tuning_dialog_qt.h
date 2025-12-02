@@ -12,23 +12,25 @@
 
 #include <QButtonGroup>
 #include <QCheckBox>
-#include <QDialog>
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QVBoxLayout>
 
+#include "xenia/ui/gamepad_dialog_qt.h"
+
 namespace xe {
 namespace app {
 
 class EmulatorWindow;
 
-class PerformanceTuningDialogQt : public QDialog {
+class PerformanceTuningDialogQt : public ui::GamepadDialog {
   Q_OBJECT
 
  public:
-  PerformanceTuningDialogQt(QWidget* parent, EmulatorWindow* emulator_window);
+  PerformanceTuningDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+                            hid::InputSystem* input_system);
   ~PerformanceTuningDialogQt() override;
 
  private slots:

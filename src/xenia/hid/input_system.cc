@@ -9,6 +9,8 @@
 
 #include "xenia/base/logging.h"
 
+#include <cstring>
+
 #include "xenia/hid/input_system.h"
 
 #include "xenia/base/profiling.h"
@@ -119,6 +121,19 @@ X_RESULT InputSystem::GetState(uint32_t user_index, uint32_t flags,
                                X_INPUT_STATE* out_state) {
   SCOPE_profile_cpu_f("hid");
 
+  // If UI is blocking input, return zeroed state to the game
+  if (ui_input_blockers_.load() > 0) {
+    std::memset(out_state, 0, sizeof(X_INPUT_STATE));
+    return X_ERROR_SUCCESS;
+  }
+
+  return GetStateForUI(user_index, flags, out_state);
+}
+
+X_RESULT InputSystem::GetStateForUI(uint32_t user_index, uint32_t flags,
+                                    X_INPUT_STATE* out_state) {
+  SCOPE_profile_cpu_f("hid");
+
   std::vector<InputDriver*> filtered_drivers = FilterDrivers(flags);
   if (filtered_drivers.empty()) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -139,6 +154,10 @@ X_RESULT InputSystem::GetState(uint32_t user_index, uint32_t flags,
   UpdateUsedSlot(nullptr, user_index, false);
   return X_ERROR_DEVICE_NOT_CONNECTED;
 }
+
+void InputSystem::AddUIInputBlocker() { ui_input_blockers_.fetch_add(1); }
+
+void InputSystem::RemoveUIInputBlocker() { ui_input_blockers_.fetch_sub(1); }
 
 X_RESULT InputSystem::SetState(uint32_t user_index,
                                X_INPUT_VIBRATION* vibration) {

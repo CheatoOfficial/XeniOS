@@ -97,7 +97,7 @@ constexpr inline auto xe::app::PostProcessingDialogQt::qt_create_metaobjectdata<
       qt_enums);
 }
 Q_CONSTINIT const QMetaObject xe::app::PostProcessingDialogQt::staticMetaObject = { {
-    QMetaObject::SuperData::link<QDialog::staticMetaObject>(),
+    QMetaObject::SuperData::link<ui::GamepadDialog::staticMetaObject>(),
     qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app22PostProcessingDialogQtE_t>.stringdata,
     qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app22PostProcessingDialogQtE_t>.data,
     qt_static_metacall,
@@ -152,12 +152,12 @@ void* xe::app::PostProcessingDialogQt::qt_metacast(const char* _clname) {
   if (!_clname) return nullptr;
   if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app22PostProcessingDialogQtE_t>.strings))
     return static_cast<void*>(this);
-  return QDialog::qt_metacast(_clname);
+  return ui::GamepadDialog::qt_metacast(_clname);
 }
 
 int xe::app::PostProcessingDialogQt::qt_metacall(QMetaObject::Call _c, int _id,
                                                  void** _a) {
-  _id = QDialog::qt_metacall(_c, _id, _a);
+  _id = ui::GamepadDialog::qt_metacall(_c, _id, _a);
   if (_id < 0) return _id;
   if (_c == QMetaObject::InvokeMetaMethod) {
     if (_id < 7) qt_static_metacall(this, _c, _id, _a);

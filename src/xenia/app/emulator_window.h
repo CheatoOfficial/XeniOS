@@ -233,6 +233,7 @@ class EmulatorWindow {
   void GpuClearCaches();
   void ToggleDisplayConfigDialog();
   void TogglePerformanceTuningDialog();
+  void ToggleContextMenu(bool use_cursor_position = true);
   void ShowCompatibility();
   void ShowFAQ();
   void ShowBuildCommit();

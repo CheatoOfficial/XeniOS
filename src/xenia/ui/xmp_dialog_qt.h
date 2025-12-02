@@ -10,21 +10,23 @@
 #ifndef XENIA_UI_XMP_DIALOG_QT_H_
 #define XENIA_UI_XMP_DIALOG_QT_H_
 
-#include <QDialog>
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+
+#include "xenia/ui/gamepad_dialog_qt.h"
 
 namespace xe {
 namespace app {
 
 class EmulatorWindow;
 
-class XmpDialogQt : public QDialog {
+class XmpDialogQt : public ui::GamepadDialog {
   Q_OBJECT
 
  public:
-  XmpDialogQt(QWidget* parent, EmulatorWindow* emulator_window);
+  XmpDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+              hid::InputSystem* input_system);
   ~XmpDialogQt() override;
 
  private slots:

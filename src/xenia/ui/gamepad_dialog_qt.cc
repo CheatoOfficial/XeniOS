@@ -20,7 +20,9 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QSpinBox>
+#include <QStyle>
 #include <QTableWidget>
 
 #include "xenia/base/logging.h"
@@ -38,6 +40,19 @@ GamepadDialog::GamepadDialog(QWidget* parent, hid::InputSystem* input_system)
       repeat_counter_(0),
       scroll_accumulator_(0.0f) {
   if (input_system_) {
+    // Block input to the game while this dialog is open
+    input_system_->AddUIInputBlocker();
+
+    // Initialize prev_buttons_ to current state so held buttons aren't
+    // detected as "just pressed" when the dialog opens
+    hid::X_INPUT_STATE state;
+    for (uint32_t user_index = 0; user_index < 4; user_index++) {
+      if (input_system_->GetStateForUI(user_index, 1, &state) == 0) {
+        prev_buttons_ = state.gamepad.buttons;
+        break;
+      }
+    }
+
     poll_timer_ = new QTimer(this);
     connect(poll_timer_, &QTimer::timeout, this, &GamepadDialog::PollGamepad);
     poll_timer_->start(16);  // Poll at ~60Hz
@@ -48,6 +63,10 @@ GamepadDialog::~GamepadDialog() {
   if (poll_timer_) {
     poll_timer_->stop();
     delete poll_timer_;
+  }
+  if (input_system_) {
+    // Unblock input to the game
+    input_system_->RemoveUIInputBlocker();
   }
 }
 
@@ -61,7 +80,8 @@ void GamepadDialog::PollGamepad() {
   bool got_input = false;
   for (uint32_t user_index = 0; user_index < 4; user_index++) {
     // Pass InputType::Controller (1) as flags to get controller input
-    if (input_system_->GetState(user_index, 1, &state) == 0) {
+    // Use GetStateForUI to bypass the input blocker (we ARE the UI)
+    if (input_system_->GetStateForUI(user_index, 1, &state) == 0) {
       got_input = true;
       break;
     }
@@ -208,7 +228,7 @@ bool GamepadDialog::IsWidgetGamepadFocusable(QWidget* widget) const {
   return qobject_cast<QPushButton*>(widget) ||
          qobject_cast<QAbstractButton*>(widget) ||
          qobject_cast<QLineEdit*>(widget) || qobject_cast<QComboBox*>(widget) ||
-         qobject_cast<QSpinBox*>(widget) ||
+         qobject_cast<QSpinBox*>(widget) || qobject_cast<QSlider*>(widget) ||
          qobject_cast<QListWidget*>(widget) ||
          qobject_cast<QTableWidget*>(widget);
 }
@@ -277,8 +297,30 @@ void GamepadDialog::NavigateFocusVertical(int direction) {
 }
 
 void GamepadDialog::NavigateFocusHorizontal(int direction) {
-  // For now, treat horizontal navigation the same as vertical
-  // Could be enhanced to handle horizontal layouts differently
+  if (focusable_widgets_.empty()) {
+    return;
+  }
+
+  // Check if current focused widget is a slider - adjust value
+  if (current_focus_index_ >= 0 &&
+      current_focus_index_ < static_cast<int>(focusable_widgets_.size())) {
+    auto* widget = focusable_widgets_[current_focus_index_];
+
+    if (auto* slider = qobject_cast<QSlider*>(widget)) {
+      // Use pageStep for controller (larger increments), fallback to 5% of
+      // range
+      int step = slider->pageStep();
+      if (step <= 1) {
+        step = qMax(1, (slider->maximum() - slider->minimum()) / 20);  // 5%
+      }
+      int new_value = slider->value() + (direction * step);
+      new_value = qBound(slider->minimum(), new_value, slider->maximum());
+      slider->setValue(new_value);
+      return;
+    }
+  }
+
+  // For non-slider widgets, horizontal navigation moves between widgets
   NavigateFocusVertical(direction);
 }
 
@@ -307,19 +349,41 @@ void GamepadDialog::ApplyFocusStyle(QWidget* widget, bool focused) {
   }
 
   if (focused) {
-    // Save original stylesheet if not already saved
-    if (original_stylesheet_.isEmpty()) {
-      original_stylesheet_ = widget->styleSheet();
+    // Save original stylesheet for this specific widget
+    if (!original_stylesheets_.contains(widget)) {
+      original_stylesheets_[widget] = widget->styleSheet();
     }
 
-    // Apply highlighted border
-    QString focus_style = original_stylesheet_ +
-                          "\nQWidget { border: 2px solid #0078d7; "
-                          "border-radius: 4px; }";
+    // Use a dynamic property to indicate focus, which can be styled
+    // This approach preserves the widget's existing styles
+    widget->setProperty("gamepad_focused", true);
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+
+    // Apply focus border using the widget's specific type for better
+    // specificity
+    QString original = original_stylesheets_[widget];
+    QString focus_style;
+    if (qobject_cast<QPushButton*>(widget)) {
+      focus_style =
+          original + "\nQPushButton { border: 2px solid #0078d7 !important; }";
+    } else if (qobject_cast<QSlider*>(widget)) {
+      focus_style =
+          original +
+          "\nQSlider { border: 2px solid #0078d7; border-radius: 4px; }";
+    } else {
+      focus_style =
+          original + "\n* { border: 2px solid #0078d7; border-radius: 4px; }";
+    }
     widget->setStyleSheet(focus_style);
   } else {
-    // Restore original stylesheet
-    widget->setStyleSheet(original_stylesheet_);
+    // Restore original stylesheet for this widget
+    widget->setProperty("gamepad_focused", false);
+    if (original_stylesheets_.contains(widget)) {
+      widget->setStyleSheet(original_stylesheets_[widget]);
+    }
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
   }
 }
 

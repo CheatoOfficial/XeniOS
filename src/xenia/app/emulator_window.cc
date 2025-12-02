@@ -1096,65 +1096,78 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
     if (cvars::disable_game_window_mouse) {
       return;
     }
+    ToggleContextMenu();
+  }
+}
 
-    // If menu is already open, close it instead of opening a new one
-    if (context_menu_widget_qt_) {
-      context_menu_widget_qt_->close();
-      context_menu_widget_qt_ = nullptr;
-      return;
+void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
+  // If menu is already open, close it instead of opening a new one
+  if (context_menu_widget_qt_) {
+    context_menu_widget_qt_->close();
+    context_menu_widget_qt_ = nullptr;
+    return;
+  }
+
+  // Show context menu
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (qt_window) {
+    // Get input system for gamepad navigation support
+    auto input_sys = emulator()->input_system();
+
+    // Create new menu widget each time - just like notification widget
+    auto* context_menu =
+        new ContextMenuWidgetQt(qt_window->qwindow(), input_sys);
+    context_menu_widget_qt_ = context_menu;
+
+    context_menu->AddAction(
+        window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
+        [this]() { ToggleFullscreen(); }, "F11");
+
+    context_menu->AddSeparator();
+
+    context_menu->AddAction(
+        "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); }, "F6");
+
+    context_menu->AddAction(
+        "Performance Settings...",
+        [this]() { TogglePerformanceTuningDialog(); }, "F7");
+
+    // Get current vibration state
+    bool vibration_enabled = false;
+    if (input_sys) {
+      vibration_enabled = input_sys->GetVibrationCvar();
     }
 
-    // Show context menu on right-click
-    auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-    if (qt_window) {
-      // Create new menu widget each time - just like notification widget
-      auto* context_menu = new ContextMenuWidgetQt(qt_window->qwindow());
-      context_menu_widget_qt_ = context_menu;
+    QString vibration_text =
+        QString("Vibration: %1").arg(vibration_enabled ? "On" : "Off");
+    context_menu->AddAction(vibration_text,
+                            [this]() { ToggleControllerVibration(); });
 
-      context_menu->AddAction(
-          window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
-          [this]() { ToggleFullscreen(); }, "F11");
+    context_menu->AddAction("Controller Hotkeys...",
+                            [this]() { ToggleControllerHotkeysDialog(); });
 
-      context_menu->AddSeparator();
+    context_menu->AddSeparator();
 
-      context_menu->AddAction(
-          "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); },
-          "F6");
+    context_menu->AddAction(
+        "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
 
-      context_menu->AddAction(
-          "Performance Settings...",
-          [this]() { TogglePerformanceTuningDialog(); }, "F7");
+    context_menu->AddAction("Profiles Menu",
+                            [this]() { ToggleProfilesConfigDialog(); });
 
-      // Get current vibration state
-      bool vibration_enabled = false;
-      auto input_sys = emulator()->input_system();
-      if (input_sys) {
-        vibration_enabled = input_sys->GetVibrationCvar();
-      }
+    context_menu->AddAction("XMP Audio Player",
+                            [this]() { ToggleXMPConfigDialog(); });
 
-      QString vibration_text =
-          QString("Vibration: %1").arg(vibration_enabled ? "On" : "Off");
-      context_menu->AddAction(vibration_text,
-                              [this]() { ToggleControllerVibration(); });
-
-      context_menu->AddAction("Controller Hotkeys...",
-                              [this]() { ToggleControllerHotkeysDialog(); });
-
-      context_menu->AddSeparator();
-
-      context_menu->AddAction(
-          "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
-
-      context_menu->AddAction("Profiles Menu",
-                              [this]() { ToggleProfilesConfigDialog(); });
-
-      context_menu->AddAction("XMP Audio Player",
-                              [this]() { ToggleXMPConfigDialog(); });
-
-      // Show menu at mouse position
-      QPoint global_pos = QCursor::pos();
-      context_menu->ShowAt(global_pos);
+    // Show menu at cursor position or center of window
+    QPoint global_pos;
+    if (use_cursor_position) {
+      global_pos = QCursor::pos();
+    } else {
+      // Center of window
+      QWidget* qwindow = qt_window->qwindow();
+      global_pos = qwindow->mapToGlobal(
+          QPoint(qwindow->width() / 2, qwindow->height() / 2));
     }
+    context_menu->ShowAt(global_pos);
   }
 }
 
@@ -1629,13 +1642,16 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
     return;
   }
 
-  if (!postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_ =
-        new PostProcessingDialogQt(qt_window->qwindow(), this);
-    postprocessing_dialog_qt_->show();
-  } else {
-    postprocessing_dialog_qt_->deleteLater();
+  if (postprocessing_dialog_qt_) {
+    postprocessing_dialog_qt_->close();
+    return;
   }
+
+  postprocessing_dialog_qt_ = new PostProcessingDialogQt(
+      qt_window->qwindow(), this, emulator()->input_system());
+  postprocessing_dialog_qt_->show();
+  postprocessing_dialog_qt_->raise();
+  postprocessing_dialog_qt_->activateWindow();
 }
 
 void EmulatorWindow::TogglePerformanceTuningDialog() {
@@ -1644,18 +1660,22 @@ void EmulatorWindow::TogglePerformanceTuningDialog() {
     return;
   }
 
-  if (!performance_tuning_dialog_qt_) {
-    performance_tuning_dialog_qt_ =
-        new PerformanceTuningDialogQt(qt_window->qwindow(), this);
-    performance_tuning_dialog_qt_->show();
-  } else {
-    performance_tuning_dialog_qt_->deleteLater();
+  if (performance_tuning_dialog_qt_) {
+    performance_tuning_dialog_qt_->close();
+    return;
   }
+
+  performance_tuning_dialog_qt_ = new PerformanceTuningDialogQt(
+      qt_window->qwindow(), this, emulator()->input_system());
+  performance_tuning_dialog_qt_->show();
+  performance_tuning_dialog_qt_->raise();
+  performance_tuning_dialog_qt_->activateWindow();
 }
 
 void EmulatorWindow::ToggleProfilesConfigDialog() {
   if (!profile_dialog_qt_) {
-    profile_dialog_qt_ = new ProfileDialogQt(nullptr, this);
+    profile_dialog_qt_ =
+        new ProfileDialogQt(nullptr, this, emulator()->input_system());
     // Refresh game list icons when profile dialog closes
     QObject::connect(profile_dialog_qt_, &QDialog::finished, [this]() {
       if (game_list_dialog_qt_) {
@@ -1706,7 +1726,8 @@ void EmulatorWindow::ToggleXMPConfigDialog() {
     return;
   }
 
-  xmp_dialog_qt_ = new XmpDialogQt(qt_window->qwindow(), this);
+  xmp_dialog_qt_ =
+      new XmpDialogQt(qt_window->qwindow(), this, emulator()->input_system());
   xmp_dialog_qt_->show();
   xmp_dialog_qt_->raise();
   xmp_dialog_qt_->activateWindow();
@@ -1958,7 +1979,11 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
   // Default return value
   EmulatorWindow::ControllerHotKey Unknown_hotkey = {};
 
+  // Track guide button state for edge detection (must be before early return)
+  static bool prev_guide_pressed = false;
+
   if (buttons == 0) {
+    prev_guide_pressed = false;
     return Unknown_hotkey;
   }
 
@@ -1977,6 +2002,19 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       buttons &= ~X_INPUT_GAMEPAD_BACK;
       buttons |= X_INPUT_GAMEPAD_GUIDE;
     }
+  }
+
+  // When controller_hotkeys is disabled, use guide button alone to toggle
+  // context menu (with edge detection to prevent repeated toggling)
+  if (!cvars::controller_hotkeys) {
+    bool guide_pressed = (buttons == X_INPUT_GAMEPAD_GUIDE);
+
+    if (guide_pressed && !prev_guide_pressed) {
+      app_context().CallInUIThread([this]() { ToggleContextMenu(false); });
+      prev_guide_pressed = true;
+      return Unknown_hotkey;
+    }
+    prev_guide_pressed = guide_pressed;
   }
 
   auto it = controller_hotkey_map.find(buttons);
@@ -2238,13 +2276,16 @@ void EmulatorWindow::ToggleControllerHotkeysDialog() {
     return;
   }
 
-  if (!controller_hotkeys_dialog_qt_) {
-    controller_hotkeys_dialog_qt_ =
-        new ControllerHotkeysDialogQt(qt_window->qwindow(), this);
-    controller_hotkeys_dialog_qt_->show();
-  } else {
-    controller_hotkeys_dialog_qt_->deleteLater();
+  if (controller_hotkeys_dialog_qt_) {
+    controller_hotkeys_dialog_qt_->close();
+    return;
   }
+
+  controller_hotkeys_dialog_qt_ = new ControllerHotkeysDialogQt(
+      qt_window->qwindow(), this, emulator()->input_system());
+  controller_hotkeys_dialog_qt_->show();
+  controller_hotkeys_dialog_qt_->raise();
+  controller_hotkeys_dialog_qt_->activateWindow();
 }
 
 std::vector<std::pair<std::string, bool>>

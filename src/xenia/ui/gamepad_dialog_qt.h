@@ -11,6 +11,7 @@
 #define XENIA_UI_GAMEPAD_DIALOG_QT_H_
 
 #include <QDialog>
+#include <QMap>
 #include <QTimer>
 #include <QWidget>
 #include <vector>
@@ -71,7 +72,7 @@ class GamepadDialog : public QDialog {
                               // functionality
   float scroll_accumulator_;  // Accumulates fractional scrolling
 
-  QString original_stylesheet_;
+  QMap<QWidget*, QString> original_stylesheets_;
 };
 
 }  // namespace ui

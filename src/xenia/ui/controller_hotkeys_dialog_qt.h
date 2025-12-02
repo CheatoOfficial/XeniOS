@@ -10,21 +10,23 @@
 #ifndef XENIA_UI_CONTROLLER_HOTKEYS_DIALOG_QT_H_
 #define XENIA_UI_CONTROLLER_HOTKEYS_DIALOG_QT_H_
 
-#include <QDialog>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
+
+#include "xenia/ui/gamepad_dialog_qt.h"
 
 namespace xe {
 namespace app {
 
 class EmulatorWindow;
 
-class ControllerHotkeysDialogQt : public QDialog {
+class ControllerHotkeysDialogQt : public ui::GamepadDialog {
   Q_OBJECT
 
  public:
-  ControllerHotkeysDialogQt(QWidget* parent, EmulatorWindow* emulator_window);
+  ControllerHotkeysDialogQt(QWidget* parent, EmulatorWindow* emulator_window,
+                            hid::InputSystem* input_system);
   ~ControllerHotkeysDialogQt() override;
 
  protected:

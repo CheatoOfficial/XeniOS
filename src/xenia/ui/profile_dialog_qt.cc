@@ -35,8 +35,10 @@ using xe::ui::SafeQString;
 using xe::ui::SafeStdString;
 
 ProfileDialogQt::ProfileDialogQt(QWidget* parent,
-                                 EmulatorWindow* emulator_window)
-    : QDialog(parent), emulator_window_(emulator_window) {
+                                 EmulatorWindow* emulator_window,
+                                 hid::InputSystem* input_system)
+    : ui::GamepadDialog(parent, input_system),
+      emulator_window_(emulator_window) {
   SetupUI();
   LoadProfileIcons();
   PopulateProfileList();

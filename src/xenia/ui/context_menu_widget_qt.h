@@ -11,10 +11,17 @@
 #define XENIA_UI_CONTEXT_MENU_WIDGET_QT_H_
 
 #include <QLabel>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <functional>
 #include <vector>
+
+namespace xe {
+namespace hid {
+class InputSystem;
+}  // namespace hid
+}  // namespace xe
 
 namespace xe {
 namespace app {
@@ -25,8 +32,9 @@ class ContextMenuWidgetQt : public QWidget {
   Q_OBJECT
 
  public:
-  ContextMenuWidgetQt(QWidget* parent);
-  ~ContextMenuWidgetQt() override = default;
+  ContextMenuWidgetQt(QWidget* parent,
+                      hid::InputSystem* input_system = nullptr);
+  ~ContextMenuWidgetQt() override;
 
   void AddAction(const QString& text, std::function<void()> callback,
                  const QString& shortcut = QString());
@@ -37,11 +45,24 @@ class ContextMenuWidgetQt : public QWidget {
   void keyPressEvent(QKeyEvent* event) override;
   bool eventFilter(QObject* obj, QEvent* event) override;
 
+ private slots:
+  void PollGamepad();
+
  private:
+  void UpdateFocusedItem(int index);
+  void ActivateFocusedItem();
+
   QVBoxLayout* layout_;
+
+  // Gamepad support
+  hid::InputSystem* input_system_;
+  QTimer* poll_timer_;
+  std::vector<std::pair<QWidget*, std::function<void()>>> menu_items_;
+  int focused_index_;
+  uint16_t prev_buttons_;
 };
 
 }  // namespace app
 }  // namespace xe
 
-#endif  // XENIA_APP_CONTEXT_MENU_WIDGET_QT_H_
+#endif  // XENIA_UI_CONTEXT_MENU_WIDGET_QT_H_

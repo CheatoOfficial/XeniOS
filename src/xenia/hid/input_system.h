@@ -10,6 +10,7 @@
 #ifndef XENIA_HID_INPUT_SYSTEM_H_
 #define XENIA_HID_INPUT_SYSTEM_H_
 
+#include <atomic>
 #include <bitset>
 #include <memory>
 #include <vector>
@@ -43,9 +44,16 @@ class InputSystem {
                            X_INPUT_CAPABILITIES* out_caps);
   X_RESULT GetState(uint32_t user_index, uint32_t flags,
                     X_INPUT_STATE* out_state);
+  // GetState variant for UI that bypasses the input blocker
+  X_RESULT GetStateForUI(uint32_t user_index, uint32_t flags,
+                         X_INPUT_STATE* out_state);
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags,
                         X_INPUT_KEYSTROKE* out_keystroke);
+
+  // Block/unblock input to the game (for UI dialogs)
+  void AddUIInputBlocker();
+  void RemoveUIInputBlocker();
 
   bool GetVibrationCvar();
   void ToggleVibration();
@@ -85,6 +93,9 @@ class InputSystem {
   uint32_t last_used_slot = 0;
 
   xe_unlikely_mutex lock_;
+
+  // Reference count for UI elements blocking game input
+  std::atomic<int> ui_input_blockers_{0};
 };
 
 }  // namespace hid

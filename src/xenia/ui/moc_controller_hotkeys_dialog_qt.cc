@@ -52,7 +52,7 @@ xe::app::ControllerHotkeysDialogQt::qt_create_metaobjectdata<
       qt_enums);
 }
 Q_CONSTINIT const QMetaObject xe::app::ControllerHotkeysDialogQt::staticMetaObject = { {
-    QMetaObject::SuperData::link<QDialog::staticMetaObject>(),
+    QMetaObject::SuperData::link<ui::GamepadDialog::staticMetaObject>(),
     qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app25ControllerHotkeysDialogQtE_t>.stringdata,
     qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app25ControllerHotkeysDialogQtE_t>.data,
     qt_static_metacall,
@@ -79,12 +79,12 @@ void* xe::app::ControllerHotkeysDialogQt::qt_metacast(const char* _clname) {
   if (!_clname) return nullptr;
   if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN2xe3app25ControllerHotkeysDialogQtE_t>.strings))
     return static_cast<void*>(this);
-  return QDialog::qt_metacast(_clname);
+  return ui::GamepadDialog::qt_metacast(_clname);
 }
 
 int xe::app::ControllerHotkeysDialogQt::qt_metacall(QMetaObject::Call _c,
                                                     int _id, void** _a) {
-  _id = QDialog::qt_metacall(_c, _id, _a);
+  _id = ui::GamepadDialog::qt_metacall(_c, _id, _a);
   return _id;
 }
 QT_WARNING_POP
