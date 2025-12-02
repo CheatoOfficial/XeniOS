@@ -230,6 +230,7 @@ class EmulatorWindow {
   void GpuTraceFrame();
   void GpuClearCaches();
   void ToggleDisplayConfigDialog();
+  void TogglePerformanceTuningDialog();
   void ShowCompatibility();
   void ShowFAQ();
   void ShowBuildCommit();
@@ -285,6 +286,7 @@ class EmulatorWindow {
   bool initializing_shader_storage_ = false;
 
   QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
+  QPointer<class PerformanceTuningDialogQt> performance_tuning_dialog_qt_;
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
   QPointer<class ProfileDialogQt> profile_dialog_qt_;
   QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;

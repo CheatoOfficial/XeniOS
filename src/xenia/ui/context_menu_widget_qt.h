@@ -28,7 +28,8 @@ class ContextMenuWidgetQt : public QWidget {
   ContextMenuWidgetQt(QWidget* parent);
   ~ContextMenuWidgetQt() override = default;
 
-  void AddAction(const QString& text, std::function<void()> callback);
+  void AddAction(const QString& text, std::function<void()> callback,
+                 const QString& shortcut = QString());
   void AddSeparator();
   void ShowAt(const QPoint& global_pos);
 

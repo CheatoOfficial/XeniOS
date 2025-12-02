@@ -88,6 +88,9 @@ void SaveGPUSetting(GPUSetting setting, uint64_t value) {
     case GPUSetting::ReadbackMemexport:
       OVERRIDE_bool(readback_memexport, static_cast<bool>(value));
       break;
+    case GPUSetting::ReadbackMemexportFast:
+      OVERRIDE_bool(readback_memexport_fast, static_cast<bool>(value));
+      break;
   }
 }
 
@@ -97,8 +100,11 @@ bool GetGPUSetting(GPUSetting setting) {
       return cvars::clear_memory_page_state;
     case GPUSetting::ReadbackMemexport:
       return cvars::readback_memexport;
+    case GPUSetting::ReadbackMemexportFast:
+      return cvars::readback_memexport_fast;
+    default:
+      return false;
   }
-  return false;
 }
 
 static ReadbackResolveMode ParseReadbackResolveMode() {

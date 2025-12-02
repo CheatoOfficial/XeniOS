@@ -81,7 +81,8 @@ class D3D12CommandProcessor final : public CommandProcessor {
   void PrepareForWait() override;
   void ReturnFromWait() override;
   bool SupportsGuestOcclusionQueries() const override {
-    return use_host_occlusion_queries_;
+    return occlusion_query_resources_available_ &&
+           cvars::occlusion_query_enable;
   }
 
   ui::d3d12::D3D12Provider& GetD3D12Provider() const {
@@ -708,7 +709,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12Resource> occlusion_query_readback_;
   uint64_t* occlusion_query_readback_mapping_ = nullptr;  // Persistent mapping
   uint32_t occlusion_query_cursor_ = 0;
-  bool use_host_occlusion_queries_ = false;
+  bool occlusion_query_resources_available_ = false;
   struct ActiveOcclusionQuery {
     uint32_t sample_count_address = 0;
     uint32_t query_id = 0;  // VIZ_QUERY ID (0-63)

@@ -36,6 +36,7 @@
 #include "xenia/ui/vulkan/vulkan_util.h"
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(occlusion_query_enable);
 DECLARE_bool(readback_memexport_fast);
 DECLARE_bool(submit_on_primary_buffer_end);
 
@@ -130,7 +131,7 @@ void VulkanCommandProcessor::ReturnFromWait() {
 
 bool VulkanCommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(
     uint32_t packet, uint32_t count) {
-  if (!use_host_occlusion_queries_) {
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_) {
     return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(packet, count);
   }
 
@@ -1094,7 +1095,7 @@ bool VulkanCommandProcessor::SetupContext() {
     return false;
   }
 
-  use_host_occlusion_queries_ = InitializeOcclusionQueryResources();
+  occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
 
   // Just not to expose uninitialized memory.
   std::memset(&system_constants_, 0, sizeof(system_constants_));
@@ -3409,11 +3410,6 @@ VkBuffer VulkanCommandProcessor::RequestReadbackBuffer(uint32_t size) {
 bool VulkanCommandProcessor::InitializeOcclusionQueryResources() {
   ShutdownOcclusionQueryResources();
 
-  // Check if hardware occlusion queries are enabled
-  if (!cvars::occlusion_query_enable) {
-    return false;
-  }
-
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
   if (!vulkan_device) {
     return false;
@@ -3506,7 +3502,7 @@ bool VulkanCommandProcessor::InitializeOcclusionQueryResources() {
   occlusion_query_cursor_ = 0;
   pending_occlusion_queries_.clear();
   active_occlusion_query_ = {};
-  use_host_occlusion_queries_ = true;
+  occlusion_query_resources_available_ = true;
   return true;
 }
 
@@ -3550,7 +3546,7 @@ void VulkanCommandProcessor::DisableHostOcclusionQueries() {
       EndSubmission(false);
     }
   }
-  use_host_occlusion_queries_ = false;
+  occlusion_query_resources_available_ = false;
   active_occlusion_query_ = {};
   pending_occlusion_queries_.clear();
   occlusion_query_cursor_ = 0;
@@ -3568,7 +3564,8 @@ bool VulkanCommandProcessor::AcquireOcclusionQueryIndex(
 
 bool VulkanCommandProcessor::BeginGuestOcclusionQuery(
     uint32_t sample_count_address) {
-  if (!use_host_occlusion_queries_ || occlusion_query_pool_ == VK_NULL_HANDLE ||
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_ ||
+      occlusion_query_pool_ == VK_NULL_HANDLE ||
       occlusion_query_readback_mapping_ == nullptr) {
     return false;
   }
@@ -3597,7 +3594,8 @@ bool VulkanCommandProcessor::BeginGuestOcclusionQuery(
 
 bool VulkanCommandProcessor::EndGuestOcclusionQuery(
     uint32_t sample_count_address) {
-  if (!use_host_occlusion_queries_ || !active_occlusion_query_.valid ||
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_ ||
+      !active_occlusion_query_.valid ||
       occlusion_query_pool_ == VK_NULL_HANDLE ||
       occlusion_query_readback_mapping_ == nullptr) {
     return false;
@@ -3676,7 +3674,8 @@ void VulkanCommandProcessor::WriteGuestOcclusionResult(
 
 void VulkanCommandProcessor::ProcessReadyOcclusionQueries(
     uint64_t completed_submission_hint) {
-  if (!use_host_occlusion_queries_ || pending_occlusion_queries_.empty() ||
+  if (!occlusion_query_resources_available_ ||
+      pending_occlusion_queries_.empty() ||
       occlusion_query_readback_mapping_ == nullptr) {
     return;
   }
@@ -4144,7 +4143,7 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     // End any active occlusion query before closing the command buffer
     // Vulkan requires BeginQuery/EndQuery to be within the same command buffer
     // This should never happen in synchronous mode - log a warning
-    if (active_occlusion_query_.valid && use_host_occlusion_queries_) {
+    if (active_occlusion_query_.valid && occlusion_query_resources_available_) {
       XELOGW(
           "VulkanCommandProcessor: EndSubmission called with active occlusion "
           "query - disabling hardware queries");

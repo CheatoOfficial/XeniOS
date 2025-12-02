@@ -33,7 +33,11 @@ class ByteStream;
 
 namespace gpu {
 
-enum class GPUSetting { ClearMemoryPageState, ReadbackMemexport };
+enum class GPUSetting {
+  ClearMemoryPageState,
+  ReadbackMemexport,
+  ReadbackMemexportFast
+};
 
 enum class ReadbackResolveMode {
   kDisabled,  // No readback (none)

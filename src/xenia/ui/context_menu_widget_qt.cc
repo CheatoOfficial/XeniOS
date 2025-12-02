@@ -10,6 +10,7 @@
 #include "xenia/ui/context_menu_widget_qt.h"
 
 #include <QFrame>
+#include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>
 
@@ -34,16 +35,33 @@ ContextMenuWidgetQt::ContextMenuWidgetQt(QWidget* parent) : QWidget(parent) {
 }
 
 void ContextMenuWidgetQt::AddAction(const QString& text,
-                                    std::function<void()> callback) {
-  // Make the label clickable
-  class ClickableLabel : public QLabel {
+                                    std::function<void()> callback,
+                                    const QString& shortcut) {
+  // Make the item clickable
+  class ClickableItem : public QWidget {
    public:
-    ClickableLabel(const QString& text, QWidget* parent,
-                   std::function<void()> cb)
-        : QLabel(text, parent), callback_(cb) {
-      setStyleSheet(
-          "QLabel { padding: 5px 30px; color: white; background: transparent; "
-          "}");
+    ClickableItem(const QString& text, const QString& shortcut, QWidget* parent,
+                  std::function<void()> cb)
+        : QWidget(parent), callback_(cb) {
+      auto* layout = new QHBoxLayout(this);
+      layout->setContentsMargins(12, 5, 12, 5);
+      layout->setSpacing(20);
+
+      auto* text_label = new QLabel(text, this);
+      text_label->setStyleSheet(
+          "color: white; background: transparent; border: none;");
+      layout->addWidget(text_label);
+
+      layout->addStretch();
+
+      if (!shortcut.isEmpty()) {
+        auto* shortcut_label = new QLabel(shortcut, this);
+        shortcut_label->setStyleSheet(
+            "color: #888888; background: transparent; border: none;");
+        layout->addWidget(shortcut_label);
+      }
+
+      setStyleSheet("background: transparent; border: none;");
     }
 
    protected:
@@ -58,22 +76,18 @@ void ContextMenuWidgetQt::AddAction(const QString& text,
     }
 
     void enterEvent(QEnterEvent* event) override {
-      setStyleSheet(
-          "QLabel { padding: 5px 30px; color: white; background-color: rgb(74, "
-          "74, 74); }");
+      setStyleSheet("background-color: rgb(74, 74, 74);");
     }
 
     void leaveEvent(QEvent* event) override {
-      setStyleSheet(
-          "QLabel { padding: 5px 30px; color: white; background: transparent; "
-          "}");
+      setStyleSheet("background: transparent;");
     }
 
    private:
     std::function<void()> callback_;
   };
 
-  auto* clickable = new ClickableLabel(text, this, callback);
+  auto* clickable = new ClickableItem(text, shortcut, this, callback);
   layout_->addWidget(clickable);
 }
 

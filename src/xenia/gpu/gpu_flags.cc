@@ -26,6 +26,12 @@ DEFINE_uint64(framerate_limit, 0,
               "GPU");
 UPDATE_from_uint64(framerate_limit, 2024, 8, 31, 20, 60);
 
+void SetVsync(bool value) { OVERRIDE_bool(vsync, value); }
+
+void SetFramerateLimit(uint64_t value) {
+  OVERRIDE_uint64(framerate_limit, value);
+}
+
 DEFINE_bool(
     gpu_allow_invalid_fetch_constants, true,
     "Allow texture and vertex fetch constants with invalid type - generally "
@@ -71,6 +77,10 @@ DEFINE_bool(occlusion_query_enable, false,
             "Use hardware occlusion queries instead of fake results. More "
             "accurate but causes GPU stalls and performance issues.",
             "GPU");
+
+void SetOcclusionQueryEnable(bool value) {
+  OVERRIDE_bool(occlusion_query_enable, value);
+}
 
 // TODO(Triang3l): Make accuracy (ROV/FSI) the default when it's optimized
 // better (for instance, using static shader modifications to pass render

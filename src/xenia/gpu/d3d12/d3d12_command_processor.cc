@@ -113,7 +113,7 @@ void D3D12CommandProcessor::ReturnFromWait() {
 
 bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(uint32_t packet,
                                                                uint32_t count) {
-  if (!use_host_occlusion_queries_) {
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_) {
     return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(packet, count);
   }
 
@@ -1671,7 +1671,7 @@ bool D3D12CommandProcessor::SetupContext() {
                           uint32_t(SystemBindlessView::kGammaRampPWLSRV)));
   }
 
-  use_host_occlusion_queries_ = InitializeOcclusionQueryResources();
+  InitializeOcclusionQueryResources();
 
   pix_capture_requested_.store(false, std::memory_order_relaxed);
   pix_capturing_ = false;
@@ -3648,7 +3648,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     frame_open_ = true;
 
     // Log occlusion query stats every 100 frames
-    if (use_host_occlusion_queries_ &&
+    if (cvars::occlusion_query_enable && occlusion_query_resources_available_ &&
         frame_current_ - occlusion_query_stats_.last_log_frame >= 100) {
       XELOGI(
           "Occlusion Query Stats (last 100 frames): "
@@ -3756,7 +3756,8 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
 
     // We can't close the command list with an active query - D3D12 requirement
     // Force-end it and wait for the result immediately to avoid data loss
-    if (active_occlusion_query_.valid && use_host_occlusion_queries_) {
+    if (active_occlusion_query_.valid && cvars::occlusion_query_enable &&
+        occlusion_query_resources_available_) {
       // Translate the address to get the pointer
       auto* sample_counts =
           memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
@@ -5498,14 +5499,9 @@ bool D3D12CommandProcessor::InitializeOcclusionQueryResources() {
   occlusion_query_cursor_ = 0;
   occlusion_query_stats_ = {};
   pending_occlusion_queries_.clear();
-  use_host_occlusion_queries_ = false;
+  occlusion_query_resources_available_ = false;
   occlusion_query_heap_.Reset();
   occlusion_query_readback_.Reset();
-
-  // Check if hardware occlusion queries are enabled
-  if (!cvars::occlusion_query_enable) {
-    return false;
-  }
 
   ID3D12Device* device = GetD3D12Provider().GetDevice();
   if (!device) {
@@ -5553,15 +5549,13 @@ bool D3D12CommandProcessor::InitializeOcclusionQueryResources() {
   }
   occlusion_query_readback_mapping_ = reinterpret_cast<uint64_t*>(mapping);
 
-  use_host_occlusion_queries_ = true;
+  occlusion_query_resources_available_ = true;
   return true;
 }
 
 void D3D12CommandProcessor::ShutdownOcclusionQueryResources() {
-  // Safely disable queries (ends any active query)
   DisableHostOcclusionQueries();
 
-  // Unmap the persistent mapping before releasing
   if (occlusion_query_readback_ && occlusion_query_readback_mapping_) {
     occlusion_query_readback_->Unmap(0, nullptr);
     occlusion_query_readback_mapping_ = nullptr;
@@ -5582,7 +5576,6 @@ void D3D12CommandProcessor::DisableHostOcclusionQueries() {
       EndSubmission(false);
     }
   }
-  use_host_occlusion_queries_ = false;
   active_occlusion_query_ = {};
   pending_occlusion_queries_.clear();
   occlusion_query_cursor_ = 0;
@@ -5607,8 +5600,7 @@ bool D3D12CommandProcessor::AcquireOcclusionQueryIndex(
 
 bool D3D12CommandProcessor::BeginGuestOcclusionQuery(
     uint32_t sample_count_address) {
-  if (!use_host_occlusion_queries_ || occlusion_query_heap_ == nullptr ||
-      occlusion_query_readback_ == nullptr) {
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_) {
     return false;
   }
 
@@ -5658,8 +5650,7 @@ bool D3D12CommandProcessor::BeginGuestOcclusionQuery(
 bool D3D12CommandProcessor::EndGuestOcclusionQuery(
     uint32_t sample_count_address,
     xenos::xe_gpu_depth_sample_counts* sample_counts) {
-  if (!use_host_occlusion_queries_ || occlusion_query_heap_ == nullptr ||
-      occlusion_query_readback_ == nullptr) {
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_) {
     return false;
   }
 
@@ -5757,8 +5748,8 @@ void D3D12CommandProcessor::WriteGuestOcclusionResult(
 
 void D3D12CommandProcessor::ProcessReadyOcclusionQueries(
     uint64_t completed_submission) {
-  if (!use_host_occlusion_queries_ || pending_occlusion_queries_.empty() ||
-      !occlusion_query_readback_mapping_) {
+  if (!cvars::occlusion_query_enable || !occlusion_query_resources_available_ ||
+      pending_occlusion_queries_.empty()) {
     return;
   }
 

@@ -20,6 +20,9 @@ DECLARE_bool(vsync);
 
 DECLARE_uint64(framerate_limit);
 
+void SetVsync(bool value);
+void SetFramerateLimit(uint64_t value);
+
 DECLARE_bool(gpu_allow_invalid_fetch_constants);
 
 DECLARE_bool(non_seamless_cube_map);
@@ -31,6 +34,8 @@ DECLARE_int32(query_occlusion_sample_lower_threshold);
 DECLARE_int32(query_occlusion_sample_upper_threshold);
 
 DECLARE_bool(occlusion_query_enable);
+
+void SetOcclusionQueryEnable(bool value);
 
 DECLARE_bool(disassemble_pm4);
 

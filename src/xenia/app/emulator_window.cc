@@ -37,6 +37,7 @@
 #include "xenia/ui/context_menu_widget_qt.h"
 #include "xenia/ui/game_list_dialog_qt.h"
 #include "xenia/ui/notification_widget_qt.h"
+#include "xenia/ui/performance_tuning_dialog_qt.h"
 #include "xenia/ui/postprocessing_dialog_qt.h"
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/qt_util.h"
@@ -1030,6 +1031,9 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
     case ui::VirtualKey::kF6: {
       ToggleDisplayConfigDialog();
     } break;
+    case ui::VirtualKey::kF7: {
+      TogglePerformanceTuningDialog();
+    } break;
     case ui::VirtualKey::kF11: {
       ToggleFullscreen();
     } break;
@@ -1108,12 +1112,17 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
 
       context_menu->AddAction(
           window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
-          [this]() { ToggleFullscreen(); });
+          [this]() { ToggleFullscreen(); }, "F11");
 
       context_menu->AddSeparator();
 
-      context_menu->AddAction("Post-Processing...",
-                              [this]() { ToggleDisplayConfigDialog(); });
+      context_menu->AddAction(
+          "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); },
+          "F6");
+
+      context_menu->AddAction(
+          "Performance Settings...",
+          [this]() { TogglePerformanceTuningDialog(); }, "F7");
 
       // Get current vibration state
       bool vibration_enabled = false;
@@ -1132,8 +1141,8 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
 
       context_menu->AddSeparator();
 
-      context_menu->AddAction("Take Screenshot",
-                              [this]() { TakeScreenshot(); });
+      context_menu->AddAction(
+          "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
 
       context_menu->AddAction("Profiles Menu",
                               [this]() { ToggleProfilesConfigDialog(); });
@@ -1625,6 +1634,21 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
     postprocessing_dialog_qt_->show();
   } else {
     postprocessing_dialog_qt_->deleteLater();
+  }
+}
+
+void EmulatorWindow::TogglePerformanceTuningDialog() {
+  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+  if (!qt_window) {
+    return;
+  }
+
+  if (!performance_tuning_dialog_qt_) {
+    performance_tuning_dialog_qt_ =
+        new PerformanceTuningDialogQt(qt_window->qwindow(), this);
+    performance_tuning_dialog_qt_->show();
+  } else {
+    performance_tuning_dialog_qt_->deleteLater();
   }
 }
 

@@ -151,7 +151,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   void PrepareForWait() override;
   void ReturnFromWait() override;
   bool SupportsGuestOcclusionQueries() const override {
-    return use_host_occlusion_queries_;
+    return occlusion_query_resources_available_;
   }
 
   ui::vulkan::VulkanDevice* GetVulkanDevice() const {
@@ -807,7 +807,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   VkDeviceMemory occlusion_query_readback_memory_ = VK_NULL_HANDLE;
   uint8_t* occlusion_query_readback_mapping_ = nullptr;
   uint32_t occlusion_query_cursor_ = 0;
-  bool use_host_occlusion_queries_ = false;
+  bool occlusion_query_resources_available_ = false;
   struct ActiveOcclusionQuery {
     uint32_t sample_count_address = 0;
     uint32_t host_index = UINT32_MAX;

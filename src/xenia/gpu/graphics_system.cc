@@ -149,20 +149,6 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
       kernel::object_ref<kernel::XHostThread>(new kernel::XHostThread(
           kernel_state_, 128 * 1024, 0,
           [this]() {
-            uint64_t normalized_framerate_limit =
-                std::max<uint64_t>(0, cvars::framerate_limit);
-
-            // If VSYNC is enabled, but frames are not limited,
-            // lock framerate at default value of 60
-            if (normalized_framerate_limit == 0 && cvars::vsync)
-              normalized_framerate_limit = 60;
-
-            const double vsync_duration_d =
-                cvars::vsync
-                    ? std::max<double>(5.0,
-                                       1000.0 / static_cast<double>(
-                                                    normalized_framerate_limit))
-                    : 1.0;
             uint64_t last_frame_time = Clock::QueryGuestTickCount();
     // Sleep for 90% of the vblank duration on Windows, spin for 10%
     // Linux uses full sleep duration due to scheduler quantum issues
@@ -174,11 +160,28 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 #endif
 
             while (frame_limiter_worker_running_) {
+              // Read cvars each frame to allow runtime changes
+              uint64_t normalized_framerate_limit =
+                  std::max<uint64_t>(0, cvars::framerate_limit);
+              bool vsync_enabled = cvars::vsync;
+
+              // If VSYNC is enabled, but frames are not limited,
+              // lock framerate at default value of 60
+              if (normalized_framerate_limit == 0 && vsync_enabled)
+                normalized_framerate_limit = 60;
+
+              const double vsync_duration_d =
+                  vsync_enabled
+                      ? std::max<double>(
+                            5.0, 1000.0 / static_cast<double>(
+                                              normalized_framerate_limit))
+                      : 1.0;
+
               register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
                   GetInternalDisplayResolution().second;
 
 #if XE_PLATFORM_WIN32
-              if (cvars::vsync) {
+              if (vsync_enabled) {
                 const uint64_t current_time = Clock::QueryGuestTickCount();
                 const uint64_t tick_freq = Clock::guest_tick_frequency();
                 const uint64_t time_delta = current_time - last_frame_time;
@@ -197,7 +200,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                 }
               }
 
-              if (!cvars::vsync) {
+              if (!vsync_enabled) {
                 MarkVblank();
                 if (normalized_framerate_limit > 0) {
                   // framerate_limit is over 0, vsync disabled
@@ -216,10 +219,10 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
               // Linux: Use simplified timing logic to avoid oversleeping
               MarkVblank();
 
-              if (cvars::vsync || normalized_framerate_limit > 0) {
+              if (vsync_enabled || normalized_framerate_limit > 0) {
                 uint64_t sleep_duration_ns =
                     static_cast<uint64_t>(vsync_duration_d * 1000000.0);
-                if (!cvars::vsync && normalized_framerate_limit > 0) {
+                if (!vsync_enabled && normalized_framerate_limit > 0) {
                   sleep_duration_ns = 1000000000 / normalized_framerate_limit;
                 }
                 threading::NanoSleep(sleep_duration_ns);
