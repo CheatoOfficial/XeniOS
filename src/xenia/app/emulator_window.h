@@ -62,8 +62,6 @@ class EmulatorWindow {
 
   std::unique_ptr<xe::threading::Thread> Gamepad_HotKeys_Listener;
 
-  int32_t selected_title_index = -1;
-
   static constexpr int64_t diff_in_ms(
       const steady_clock::time_point t1,
       const steady_clock::time_point t2) noexcept {
@@ -137,7 +135,6 @@ class EmulatorWindow {
   // Types of button functions for hotkeys.
   enum class ButtonFunctions {
     ToggleFullscreen,
-    RunTitle,
     CpuTimeScalarSetHalf,
     CpuTimeScalarSetDouble,
     CpuTimeScalarReset,
@@ -146,8 +143,6 @@ class EmulatorWindow {
     ClearMemoryPageState,
     ReadbackResolve,
     ToggleLogging,
-    IncTitleSelect,
-    DecTitleSelect,
     Unknown
   };
 

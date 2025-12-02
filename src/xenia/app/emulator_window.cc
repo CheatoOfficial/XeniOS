@@ -1921,23 +1921,12 @@ const std::map<int, EmulatorWindow::ControllerHotKey> controller_hotkey_map = {
     {X_INPUT_GAMEPAD_Y, EmulatorWindow::ControllerHotKey(
                             EmulatorWindow::ButtonFunctions::ToggleFullscreen,
                             "Y = Toggle Fullscreen", true, false)},
-    {X_INPUT_GAMEPAD_START, EmulatorWindow::ControllerHotKey(
-                                EmulatorWindow::ButtonFunctions::RunTitle,
-                                "Start = Run Selected Title", false, false)},
     {X_INPUT_GAMEPAD_BACK | X_INPUT_GAMEPAD_START,
      EmulatorWindow::ControllerHotKey(
          EmulatorWindow::ButtonFunctions::ToggleLogging,
          "Back + Start = Toggle between loglevel set in config and the "
          "'Disabled' loglevel.",
-         false, false)},
-    {X_INPUT_GAMEPAD_DPAD_DOWN,
-     EmulatorWindow::ControllerHotKey(
-         EmulatorWindow::ButtonFunctions::IncTitleSelect,
-         "D-PAD Down = Title Selection +1", true, false)},
-    {X_INPUT_GAMEPAD_DPAD_UP,
-     EmulatorWindow::ControllerHotKey(
-         EmulatorWindow::ButtonFunctions::DecTitleSelect,
-         "D-PAD Up = Title Selection -1", true, false)}};
+         false, false)}};
 
 EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
     int buttons) {
@@ -1991,18 +1980,6 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       // Extra Sleep
       xe::threading::Sleep(delay);
       break;
-    case ButtonFunctions::RunTitle: {
-      if (selected_title_index == -1) {
-        selected_title_index++;
-      }
-
-      if (selected_title_index < recently_launched_titles_.size()) {
-        app_context().CallInUIThread([this]() {
-          LaunchTitleInNewProcess(
-              recently_launched_titles_[selected_title_index].path_to_file);
-        });
-      }
-    } break;
     case ButtonFunctions::ClearMemoryPageState:
       ToggleGPUSetting(GPUSetting::ClearMemoryPageState);
 
@@ -2072,12 +2049,6 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       // Extra Sleep
       xe::threading::Sleep(delay);
     } break;
-    case ButtonFunctions::IncTitleSelect:
-      selected_title_index++;
-      break;
-    case ButtonFunctions::DecTitleSelect:
-      selected_title_index--;
-      break;
     case ButtonFunctions::ToggleLogging: {
       logging::ToggleLogLevel();
 
@@ -2091,43 +2062,16 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
       break;
   }
 
-  if ((button_combination.function == ButtonFunctions::IncTitleSelect ||
-       button_combination.function == ButtonFunctions::DecTitleSelect) &&
-      recently_launched_titles_.size() > 0) {
-    selected_title_index =
-        std::clamp(selected_title_index, 0,
-                   static_cast<int32_t>(recently_launched_titles_.size() - 1));
-
-    // Must clear dialogs to prevent stacking
-    ClearDialogs();
-
-    // Titles may contain Unicode characters such as At World’s End
-    // Must use ImGUI font that can render these Unicode characters
-    std::string title_name;
-
-    // Use filename if title name is empty
-    if (recently_launched_titles_[selected_title_index].title_name.empty()) {
-      title_name = recently_launched_titles_[selected_title_index]
-                       .path_to_file.filename()
-                       .string();
-    } else {
-      title_name = recently_launched_titles_[selected_title_index].title_name;
-    }
-
-    std::string title = fmt::format(
-        "{}: {}\n\n{}", selected_title_index + 1, title_name,
-        controller_hotkey_map.find(X_INPUT_GAMEPAD_START)->second.pretty);
-
-    xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Title Selection",
-                                        title);
-  }
-
   if (!notificationTitle.empty()) {
-    app_context_.CallInUIThread(
-        [imgui_drawer = imgui_drawer(), notificationTitle, notificationDesc]() {
-          new xe::ui::HostNotificationWindow(imgui_drawer, notificationTitle,
-                                             notificationDesc, 0);
-        });
+    app_context_.CallInUIThread([this, notificationTitle, notificationDesc]() {
+      auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
+      if (qt_window) {
+        auto* notification = new NotificationWidgetQt(
+            qt_window->qwindow(), SafeQString(notificationTitle),
+            SafeQString(notificationDesc), 3000);
+        notification->Show();
+      }
+    });
   }
 
   xe::threading::Sleep(delay);
