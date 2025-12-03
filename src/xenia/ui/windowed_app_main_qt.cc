@@ -223,13 +223,14 @@ int main(int argc, char** argv) {
       "}");
 
   // Set different application name for game processes so they show as separate
-  // dock entries
+  // dock entries. Don't set desktopFileName for game processes - this allows
+  // the programmatic icon (set via QGuiApplication::setWindowIcon) to be used
+  // for the taskbar/dock instead of looking up a non-existent .desktop file.
   if (is_game_process) {
     qt_app.setApplicationName("Xbox 360 Game");
-    qt_app.setDesktopFileName("xenia-game");
   } else {
     qt_app.setApplicationName("Xenia Edge");
-    qt_app.setDesktopFileName("xenia-edge");
+    qt_app.setDesktopFileName("xenia_edge");
   }
 
   // Use Qt's own menu bar instead of native on all platforms

@@ -1147,7 +1147,6 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
     }
 
     emulator_window_->LaunchTitleInNewProcess(path, false, title_id);
-    // Widget stays visible at all times
   }
 }
 

@@ -343,6 +343,9 @@ void QtWindow::LoadAndApplyIcon(const void* buffer, size_t size,
                             static_cast<uint>(size))) {
       QIcon icon(pixmap);
       qwindow_->setWindowIcon(icon);
+      // Also set the application-level icon for taskbar/dock on KDE Plasma
+      // and other desktop environments that read from QGuiApplication
+      QGuiApplication::setWindowIcon(icon);
     }
   }
 }
