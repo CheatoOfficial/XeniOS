@@ -644,8 +644,10 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
     return false;
   }
 
-  // TODO(Triang3l): Log that the shader has been successfully translated in
-  // common code.
+  // Dump shader files if desired.
+  if (!cvars::dump_shaders.empty()) {
+    translation.Dump(cvars::dump_shaders, "vulkan");
+  }
 
   // Set up the texture binding layout.
   if (shader.EnterBindingLayoutUserUIDSetup()) {
