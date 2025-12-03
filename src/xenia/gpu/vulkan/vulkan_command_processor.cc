@@ -2508,6 +2508,9 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
           primitive_processing_result, normalized_depth_control,
           normalized_color_mask,
           render_target_cache_->last_update_render_pass_key(), &pipeline)) {
+    XELOGE("IssueDraw: ConfigurePipeline failed for VS={:016X} PS={:016X}",
+           vertex_shader->ucode_data_hash(),
+           pixel_shader ? pixel_shader->ucode_data_hash() : 0);
     return false;
   }
 

@@ -1018,6 +1018,7 @@ bool VulkanRenderTargetCache::Resolve(const Memory& memory,
           register_file(), memory, trace_writer_, draw_resolution_scale_x(),
           draw_resolution_scale_y(), IsFixedRG16TruncatedToMinus1To1(),
           IsFixedRGBA16TruncatedToMinus1To1(), resolve_info)) {
+    XELOGE("Resolve: GetResolveInfo failed");
     return false;
   }
 

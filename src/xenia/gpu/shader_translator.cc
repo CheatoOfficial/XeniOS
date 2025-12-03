@@ -688,6 +688,13 @@ bool ShaderTranslator::TranslateAnalyzedShader(
   PostTranslation();
 
   // In case is_valid_ is modified by PostTranslation, reload.
+  if (translation.is_valid_) {
+    XELOGI("Shader {:016X} {} translated successfully ({} bytes)",
+           shader.ucode_data_hash(),
+           shader.type() == xenos::ShaderType::kVertex ? "vertex" : "pixel",
+           translation.translated_binary_.size());
+  }
+
   return translation.is_valid_;
 }
 
