@@ -2842,8 +2842,10 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFullPath(
 
     VkBuffer shared_memory_buffer = shared_memory_->buffer();
 
-    // Ensure shared memory is ready for transfer.
+    // Ensure shared memory is ready for transfer and end any active render
+    // pass.
     shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+    SubmitBarriers(true);
 
     // Copy each memexport range to the readback buffer.
     uint32_t readback_buffer_offset = 0;
@@ -3019,8 +3021,9 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFastPath(
 
   VkBuffer shared_memory_buffer = shared_memory_->buffer();
 
-  // Ensure shared memory is ready for transfer.
+  // Ensure shared memory is ready for transfer and end any active render pass.
   shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+  SubmitBarriers(true);
 
   // Copy exported data to current frame's buffer
   uint32_t readback_buffer_offset = 0;
@@ -3269,8 +3272,10 @@ bool VulkanCommandProcessor::IssueCopy() {
 
     VkBuffer shared_memory_buffer = shared_memory_->buffer();
 
-    // Ensure shared memory is ready for transfer.
+    // Ensure shared memory is ready for transfer and end any active render
+    // pass.
     shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+    SubmitBarriers(true);
 
     // Copy GPU buffer → staging buffer.
     VkBufferCopy copy_region = {};
