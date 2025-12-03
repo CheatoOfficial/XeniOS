@@ -30,12 +30,13 @@ int main(int argc, char** argv) {
 
 #if XE_PLATFORM_LINUX
   // UI process: Force X11 backend for proper Qt rendering
-  // Game process: Allow Wayland for Vulkan rendering
+  // Game process: Use QT_QPA_PLATFORM if set, otherwise auto-detect
   if (!is_game_process) {
     qputenv("QT_QPA_PLATFORM", "xcb");
   } else {
-    // Clear QT_QPA_PLATFORM for game process to allow auto-detection
-    qunsetenv("QT_QPA_PLATFORM");
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+      qunsetenv("QT_QPA_PLATFORM");
+    }
   }
 #endif
 
