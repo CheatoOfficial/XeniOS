@@ -741,28 +741,58 @@ bool EmulatorWindow::Initialize() {
         MenuItem::Create(MenuItem::Type::kPopup, "&Configuration");
     {
       config_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "&General",
-                           [this]() { OpenConfigDialog("General"); }));
-      config_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "&CPU",
-                           [this]() { OpenConfigDialog("CPU"); }));
-      config_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "&GPU",
-                           [this]() { OpenConfigDialog("GPU"); }));
-      config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&APU",
                            [this]() { OpenConfigDialog("APU"); }));
       config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Content",
+                           [this]() { OpenConfigDialog("Content"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "C&PU",
+                           [this]() { OpenConfigDialog("CPU"); }));
+#if XE_PLATFORM_WIN32
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "D3D1&2",
+                           [this]() { OpenConfigDialog("D3D12"); }));
+#endif
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Display",
+                           [this]() { OpenConfigDialog("Display"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&General",
+                           [this]() { OpenConfigDialog("General"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "G&PU",
+                           [this]() { OpenConfigDialog("GPU"); }));
+      config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&HID",
                            [this]() { OpenConfigDialog("HID"); }));
+#if XE_PLATFORM_WIN32
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "HID.Win&Key",
+                           [this]() { OpenConfigDialog("HID.WinKey"); }));
+#endif
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&Kernel",
                            [this]() { OpenConfigDialog("Kernel"); }));
+#if XE_PLATFORM_LINUX
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Linux",
+                           [this]() { OpenConfigDialog("Linux"); }));
+#endif
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&Logging",
                            [this]() { OpenConfigDialog("Logging"); }));
       config_menu->AddChild(
-          MenuItem::Create(MenuItem::Type::kString, "&Storage",
+          MenuItem::Create(MenuItem::Type::kString, "&Memory",
+                           [this]() { OpenConfigDialog("Memory"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Profiles",
+                           [this]() { OpenConfigDialog("Profiles"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&SDL",
+                           [this]() { OpenConfigDialog("SDL"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "S&torage",
                            [this]() { OpenConfigDialog("Storage"); }));
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&UI",
@@ -771,8 +801,19 @@ bool EmulatorWindow::Initialize() {
           MenuItem::Create(MenuItem::Type::kString, "&Video",
                            [this]() { OpenConfigDialog("Video"); }));
       config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "V&ulkan",
+                           [this]() { OpenConfigDialog("Vulkan"); }));
+#if XE_PLATFORM_WIN32
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "&Win32",
+                           [this]() { OpenConfigDialog("Win32"); }));
+#endif
+      config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&x64",
                            [this]() { OpenConfigDialog("x64"); }));
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "X&Config",
+                           [this]() { OpenConfigDialog("XConfig"); }));
     }
     main_menu->AddChild(std::move(config_menu));
 
