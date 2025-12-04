@@ -85,7 +85,7 @@ GetKnownEnumOptions() {
       {"postprocess_scaling_and_sharpening",
        {"bilinear", "cas", "fsr", "nearest"}},
       {"spirv_version_override", {"auto", "1.0", "1.3", "1.4", "1.5", "1.6"}},
-      {"xma_decoder", {"old", "new", "fake"}},
+      {"xma_decoder", {"old", "new", "master", "fake"}},
       {"user_language",
        {"English", "Japanese", "German", "French", "Spanish", "Italian",
         "Korean", "TChinese", "Portuguese", "SChinese", "Polish", "Russian"}},

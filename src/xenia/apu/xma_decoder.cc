@@ -11,6 +11,7 @@
 
 #include "xenia/apu/xma_context.h"
 #include "xenia/apu/xma_context_fake.h"
+#include "xenia/apu/xma_context_master.h"
 #include "xenia/apu/xma_context_new.h"
 #include "xenia/apu/xma_context_old.h"
 
@@ -55,13 +56,22 @@ extern "C" {
 DEFINE_bool(ffmpeg_verbose, false, "Verbose FFmpeg output (debug and above)",
             "APU");
 
-DEFINE_string(xma_decoder, "old", "XMA decoder backend to use (old, new, fake)",
-              "APU");
-
 DEFINE_bool(use_dedicated_xma_thread, true,
             "Enables XMA decoding on separate thread. Disabled should produce "
             "better results, but decrease performance a bit.",
             "APU");
+
+DEFINE_string(
+    xma_decoder, "new",
+    "Decoder version used to process XMA audio.\n"
+    "Use: [fake, master, old, new]\n"
+    " fake: \n  No audio will be decoded.\n"
+    " master: \n  Version of decoder exactly like on base version of Xenia.\n"
+    " old: \n  Decoder based on master version of decoder with few "
+    "improvements.\n"
+    " new: \n  New version of decoder. Provides highest stability, but isn't "
+    "yet finished.\n",
+    "APU");
 
 namespace xe {
 namespace apu {
@@ -140,12 +150,18 @@ X_STATUS XmaDecoder::Setup(kernel::KernelState* kernel_state) {
 
   // Setup XMA contexts.
   for (int i = 0; i < kContextCount; ++i) {
-    if (cvars::xma_decoder == "new") {
+    if (cvars::xma_decoder == "fake") {
+      contexts_[i] = new XmaContextFake();
+    } else if (cvars::xma_decoder == "master") {
+      contexts_[i] = new XmaContextMaster();
+    } else if (cvars::xma_decoder == "old") {
+      contexts_[i] = new XmaContextOld();
+    } else if (cvars::xma_decoder == "new") {
       contexts_[i] = new XmaContextNew();
     } else if (cvars::xma_decoder == "fake") {
       contexts_[i] = new XmaContextFake();
     } else {
-      contexts_[i] = new XmaContextOld();
+      contexts_[i] = new XmaContextNew();
     }
 
     uint32_t guest_ptr = context_data_first_ptr_ + i * sizeof(XMA_CONTEXT_DATA);
