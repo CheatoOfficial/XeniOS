@@ -34,6 +34,13 @@ DEFINE_string(spirv_version_override, "1.0",
               " auto: Test for SPIR-V 1.5 support, fall back to 1.0",
               "GPU");
 
+DEFINE_bool(
+    spirv_disable_rounding_mode_rte, false,
+    "Disable RoundingModeRTE capability in SPIR-V shaders. Enable this to "
+    "allow shader debugging in RenderDoc, which doesn't support this "
+    "capability.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 
@@ -855,7 +862,8 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
     builder_->addExecutionMode(function_main_,
                                spv::ExecutionModeSignedZeroInfNanPreserve, 32);
   }
-  if (features_.rounding_mode_rte_float32) {
+  if (features_.rounding_mode_rte_float32 &&
+      !cvars::spirv_disable_rounding_mode_rte) {
     builder_->addCapability(spv::CapabilityRoundingModeRTE);
     builder_->addExecutionMode(function_main_,
                                spv::ExecutionModeRoundingModeRTE, 32);
