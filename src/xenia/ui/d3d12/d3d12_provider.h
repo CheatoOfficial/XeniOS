@@ -15,12 +15,6 @@
 #include "xenia/ui/d3d12/d3d12_api.h"
 #include "xenia/ui/graphics_provider.h"
 
-// chrispy: this is here to prevent clang format from moving d3d12_nvapi above
-// the headers it depends on
-#define HEADERFENCE
-#undef HEADERFENCE
-#include "xenia/gpu/d3d12/d3d12_nvapi.hpp"
-
 namespace xe {
 namespace ui {
 namespace d3d12 {
@@ -47,7 +41,7 @@ class D3D12Provider : public GraphicsProvider {
   uint32_t CreateUploadResource(
       D3D12_HEAP_FLAGS HeapFlags, _In_ const D3D12_RESOURCE_DESC* pDesc,
       D3D12_RESOURCE_STATES InitialResourceState, REFIID riidResource,
-      void** ppvResource, bool try_create_cpuvisible = false,
+      void** ppvResource,
       const D3D12_CLEAR_VALUE* pOptimizedClearValue = nullptr) const;
 
   IDXGIFactory2* GetDXGIFactory() const { return dxgi_factory_; }
@@ -247,14 +241,6 @@ class D3D12Provider : public GraphicsProvider {
   bool ps_specified_stencil_reference_supported_;
   bool rasterizer_ordered_views_supported_;
   bool unaligned_block_textures_supported_;
-
-  lightweight_nvapi::nvapi_state_t* nvapi_;
-  lightweight_nvapi::cb_NvAPI_D3D12_CreateCommittedResource
-      nvapi_createcommittedresource_ = nullptr;
-  lightweight_nvapi::cb_NvAPI_D3D12_UseDriverHeapPriorities
-      nvapi_usedriverheappriorities_ = nullptr;
-  lightweight_nvapi::cb_NvAPI_D3D12_QueryCpuVisibleVidmem
-      nvapi_querycpuvisiblevidmem_ = nullptr;
 };
 
 }  // namespace d3d12

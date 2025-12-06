@@ -75,12 +75,14 @@ struct XMA_CONTEXT_DATA {
 
   // DWORD 2
   uint32_t input_buffer_read_offset : 26;  // XMAGetInputBufferReadOffset
-  uint32_t error_status : 6;               // ErrorStatus/ErrorSet (?)
+  uint32_t error_status : 5;               // ErrorStatus
+  uint32_t error_set : 1;                  // ErrorSet
 
   // DWORD 3
   uint32_t loop_start : 26;          // XMASetLoopData LoopStartOffset
                                      // frame offset in bits
-  uint32_t parser_error_status : 6;  // ? ParserErrorStatus/ParserErrorSet(?)
+  uint32_t parser_error_status : 5;  // ParserErrorStatus
+  uint32_t parser_error_set : 1;     // ParserErrorSet
 
   // DWORD 4
   uint32_t loop_end : 26;        // XMASetLoopData LoopEndOffset
