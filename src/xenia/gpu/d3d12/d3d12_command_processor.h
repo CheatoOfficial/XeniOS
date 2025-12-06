@@ -107,6 +107,12 @@ class D3D12CommandProcessor final : public CommandProcessor {
     queue_operations_done_since_submission_signal_ = true;
   }
 
+  // Debug marker methods - public so subsystems can annotate their operations.
+  void PushDebugMarker(const char* format, ...);
+  void PopDebugMarker();
+  void InsertDebugMarker(const char* format, ...);
+  bool debug_markers_enabled() const { return debug_markers_enabled_; }
+
   uint64_t GetCurrentFrame() const { return frame_current_; }
   uint64_t GetCompletedFrame() const { return frame_completed_; }
 
@@ -880,6 +886,10 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   // Temporary storage for memexport stream constants used in the draw.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
+
+  // Debug marker support for PIX/RenderDoc/debug tools.
+  bool debug_markers_enabled_ = false;
+  void UpdateDebugMarkersEnabled();
 };
 
 }  // namespace d3d12

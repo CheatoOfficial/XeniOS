@@ -92,6 +92,9 @@ void VulkanPrimitiveProcessor::BeginSubmission() {
     DeferredCommandBuffer& command_buffer =
         command_processor_.deferred_command_buffer();
 
+    command_processor_.InsertDebugMarker(
+        "Builtin Index Buffer Upload: %zu bytes", builtin_index_buffer_size_);
+
     VkBufferCopy* copy_region = command_buffer.CmdCopyBufferEmplace(
         builtin_index_buffer_upload_, builtin_index_buffer_, 1);
     copy_region->srcOffset = 0;

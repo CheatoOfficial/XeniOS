@@ -398,6 +398,33 @@ class DeferredCommandBuffer {
                 sizeof(VkViewport) * viewport_count);
   }
 
+  // Debug marker support for RenderDoc/debug tools annotation.
+  void CmdVkBeginDebugUtilsLabelEXT(const char* label_name) {
+    size_t label_len = std::strlen(label_name);
+    uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
+        WriteCommand(Command::kVkBeginDebugUtilsLabelEXT,
+                     sizeof(ArgsVkDebugUtilsLabel) + label_len + 1));
+    auto& args = *reinterpret_cast<ArgsVkDebugUtilsLabel*>(args_ptr);
+    args.label_length = static_cast<uint32_t>(label_len);
+    std::memcpy(args_ptr + sizeof(ArgsVkDebugUtilsLabel), label_name,
+                label_len + 1);
+  }
+
+  void CmdVkEndDebugUtilsLabelEXT() {
+    WriteCommand(Command::kVkEndDebugUtilsLabelEXT, 0);
+  }
+
+  void CmdVkInsertDebugUtilsLabelEXT(const char* label_name) {
+    size_t label_len = std::strlen(label_name);
+    uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
+        WriteCommand(Command::kVkInsertDebugUtilsLabelEXT,
+                     sizeof(ArgsVkDebugUtilsLabel) + label_len + 1));
+    auto& args = *reinterpret_cast<ArgsVkDebugUtilsLabel*>(args_ptr);
+    args.label_length = static_cast<uint32_t>(label_len);
+    std::memcpy(args_ptr + sizeof(ArgsVkDebugUtilsLabel), label_name,
+                label_len + 1);
+  }
+
  private:
   enum class Command {
     kVkBeginRenderPass,
@@ -426,6 +453,9 @@ class DeferredCommandBuffer {
     kVkSetStencilReference,
     kVkSetStencilWriteMask,
     kVkSetViewport,
+    kVkBeginDebugUtilsLabelEXT,
+    kVkEndDebugUtilsLabelEXT,
+    kVkInsertDebugUtilsLabelEXT,
   };
 
   struct CommandHeader {
@@ -605,6 +635,11 @@ class DeferredCommandBuffer {
     uint32_t viewport_count;
     // Followed by aligned VkViewport[].
     static_assert(alignof(VkViewport) <= alignof(uintmax_t));
+  };
+
+  struct ArgsVkDebugUtilsLabel {
+    uint32_t label_length;
+    // Followed by null-terminated label string.
   };
 
   void* WriteCommand(Command command, size_t arguments_size_bytes);

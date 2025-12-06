@@ -9,6 +9,7 @@
 
 #include "xenia/gpu/vulkan/vulkan_command_processor.h"
 
+#include <cstdarg>
 #include <cstdint>
 #include <cstring>
 
@@ -36,6 +37,7 @@
 #include "xenia/ui/vulkan/vulkan_util.h"
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(gpu_debug_markers);
 DECLARE_bool(occlusion_query_enable);
 DECLARE_bool(readback_memexport_fast);
 DECLARE_bool(submit_on_primary_buffer_end);
@@ -96,6 +98,42 @@ VulkanCommandProcessor::VulkanCommandProcessor(
           kLinkedTypeDescriptorPoolSetCount) {}
 
 VulkanCommandProcessor::~VulkanCommandProcessor() = default;
+
+void VulkanCommandProcessor::UpdateDebugMarkersEnabled() {
+  // Enable debug markers if the CVAR is set or RenderDoc is detected.
+  debug_markers_enabled_ = IsGpuDebugMarkersEnabled();
+}
+
+void VulkanCommandProcessor::PushDebugMarker(const char* format, ...) {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  char label[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(label, sizeof(label), format, args);
+  va_end(args);
+  deferred_command_buffer_.CmdVkBeginDebugUtilsLabelEXT(label);
+}
+
+void VulkanCommandProcessor::PopDebugMarker() {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  deferred_command_buffer_.CmdVkEndDebugUtilsLabelEXT();
+}
+
+void VulkanCommandProcessor::InsertDebugMarker(const char* format, ...) {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  char label[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(label, sizeof(label), format, args);
+  va_end(args);
+  deferred_command_buffer_.CmdVkInsertDebugUtilsLabelEXT(label);
+}
 
 void VulkanCommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
@@ -210,6 +248,12 @@ bool VulkanCommandProcessor::SetupContext() {
   if (!CommandProcessor::SetupContext()) {
     XELOGE("Failed to initialize base command processor context");
     return false;
+  }
+
+  // Check if debug markers should be enabled (CVAR or RenderDoc detection).
+  UpdateDebugMarkersEnabled();
+  if (debug_markers_enabled_) {
+    XELOGI("GPU debug markers enabled for RenderDoc/debug tools");
   }
 
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
@@ -1496,6 +1540,8 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED, false);
             SubmitBarriers(true);
+            InsertDebugMarker("Gamma Ramp Upload: %u bytes",
+                              static_cast<uint32_t>(gamma_ramp_size));
             VkBufferCopy gamma_ramp_buffer_copy;
             gamma_ramp_buffer_copy.srcOffset = gamma_ramp_upload_offset;
             gamma_ramp_buffer_copy.dstOffset = gamma_ramp_offset_in_frame;
@@ -1606,6 +1652,9 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         // new one, and insert the barrier.
         SubmitBarriers(true);
 
+        PushDebugMarker("Apply Gamma Ramp: %s",
+                        use_pwl_gamma_ramp ? "PWL" : "256-entry table");
+
         SwapFramebuffer& swap_framebuffer =
             swap_framebuffers_[swap_framebuffer_index];
         swap_framebuffer.last_submission = GetCurrentSubmission();
@@ -1689,6 +1738,8 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 
         deferred_command_buffer_.CmdVkEndRenderPass();
         current_render_pass_ = VK_NULL_HANDLE;
+
+        PopDebugMarker();
 
         // Insert the release barrier.
         PushImageMemoryBarrier(
@@ -2766,6 +2817,16 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
       render_target_cache_->last_update_render_pass(),
       render_target_cache_->last_update_framebuffer());
 
+  // Push debug marker with Xbox 360 draw context for RenderDoc annotation.
+  if (debug_markers_enabled_) {
+    char label[draw_util::kDebugMarkerLabelMaxLength];
+    draw_util::FormatDrawDebugMarker(
+        label, sizeof(label), prim_type, primitive_processing_result,
+        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+    PushDebugMarker("%s", label);
+  }
+
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
           PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
@@ -2801,6 +2862,9 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
     deferred_command_buffer_.CmdVkDrawIndexed(
         primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
   }
+
+  // Pop debug marker for draw call.
+  PopDebugMarker();
 
   // Invalidate textures in memexported memory and watch for changes.
   for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
@@ -2846,6 +2910,9 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFullPath(
     // pass.
     shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
     SubmitBarriers(true);
+
+    InsertDebugMarker("Memexport Readback (sync): %u bytes, %zu ranges",
+                      memexport_total_size, memexport_ranges_.size());
 
     // Copy each memexport range to the readback buffer.
     uint32_t readback_buffer_offset = 0;
@@ -3024,6 +3091,9 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFastPath(
   // Ensure shared memory is ready for transfer and end any active render pass.
   shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
   SubmitBarriers(true);
+
+  InsertDebugMarker("Memexport Readback (async): %u bytes, %zu ranges",
+                    memexport_total_size, memexport_ranges_.size());
 
   // Copy exported data to current frame's buffer
   uint32_t readback_buffer_offset = 0;
@@ -3276,6 +3346,9 @@ bool VulkanCommandProcessor::IssueCopy() {
     // pass.
     shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
     SubmitBarriers(true);
+
+    InsertDebugMarker("Resolve Readback: 0x%08X, %u bytes", written_address,
+                      written_length);
 
     // Copy GPU buffer → staging buffer.
     VkBufferCopy copy_region = {};
@@ -3624,6 +3697,7 @@ bool VulkanCommandProcessor::EndGuestOcclusionQuery(
 
   DeferredCommandBuffer& command_buffer = deferred_command_buffer();
   command_buffer.CmdVkEndQuery(occlusion_query_pool_, host_index);
+  InsertDebugMarker("Occlusion Query Readback: index %u", host_index);
   command_buffer.CmdVkCopyQueryPoolResults(
       occlusion_query_pool_, host_index, 1, occlusion_query_readback_buffer_,
       sizeof(uint64_t) * host_index, sizeof(uint64_t),

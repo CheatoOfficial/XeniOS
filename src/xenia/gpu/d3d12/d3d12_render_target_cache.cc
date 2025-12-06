@@ -1322,6 +1322,12 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
   // Copying.
   bool copied = false;
   if (resolve_info.copy_dest_extent_length) {
+    if (command_processor_.debug_markers_enabled()) {
+      char label[draw_util::kDebugMarkerLabelMaxLength];
+      draw_util::FormatResolveCopyDebugMarker(label, sizeof(label),
+                                              resolve_info);
+      command_processor_.PushDebugMarker("%s", label);
+    }
     if (GetPath() == Path::kHostRenderTargets) {
       // Dump the current contents of the render targets owning the affected
       // range to edram_buffer_.
@@ -1461,6 +1467,7 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
             "memory region");
       }
     }
+    command_processor_.PopDebugMarker();
   } else {
     copied = true;
   }
@@ -1470,6 +1477,12 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
   bool clear_depth = resolve_info.IsClearingDepth();
   bool clear_color = resolve_info.IsClearingColor();
   if (clear_depth || clear_color) {
+    if (command_processor_.debug_markers_enabled()) {
+      char label[draw_util::kDebugMarkerLabelMaxLength];
+      draw_util::FormatResolveClearDebugMarker(
+          label, sizeof(label), resolve_info, clear_depth, clear_color);
+      command_processor_.PushDebugMarker("%s", label);
+    }
     switch (GetPath()) {
       case Path::kHostRenderTargets: {
         Transfer::Rectangle clear_rectangle;
@@ -1565,6 +1578,7 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
       default:
         assert_unhandled_case(GetPath());
     }
+    command_processor_.PopDebugMarker();
   } else {
     cleared = true;
   }
@@ -4424,6 +4438,23 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
     const Transfer::Rectangle* resolve_clear_rectangle) {
   assert_true(GetPath() == Path::kHostRenderTargets);
 
+  bool resolve_clear_needed =
+      render_target_resolve_clear_values && resolve_clear_rectangle;
+
+  // Check if there's any actual work to do before pushing debug marker.
+  bool has_transfers = false;
+  for (uint32_t i = 0; i < render_target_count && !has_transfers; ++i) {
+    if (render_targets[i] &&
+        (!render_target_transfers[i].empty() || resolve_clear_needed)) {
+      has_transfers = true;
+    }
+  }
+  if (!has_transfers) {
+    return;
+  }
+
+  command_processor_.PushDebugMarker("RT Transfers");
+
   const ui::d3d12::D3D12Provider& provider =
       command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
@@ -4431,8 +4462,6 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
   DeferredCommandList& command_list =
       command_processor_.GetDeferredCommandList();
 
-  bool resolve_clear_needed =
-      render_target_resolve_clear_values && resolve_clear_rectangle;
   D3D12_RECT clear_rect;
   if (resolve_clear_needed) {
     // Assuming the rectangle is already clamped by the setup function from the
@@ -5436,6 +5465,8 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
       }
     }
   }
+
+  command_processor_.PopDebugMarker();
 }
 
 void D3D12RenderTargetCache::SetCommandListRenderTargets(
@@ -6378,6 +6409,9 @@ void D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     return;
   }
 
+  command_processor_.PushDebugMarker("EDRAM Write: Dump RTs, base tile %u",
+                                     dump_base);
+
   // Clear previously set temporary indices.
   for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
     auto& d3d12_rt = *static_cast<D3D12RenderTarget*>(rectangle.render_target);
@@ -6608,6 +6642,8 @@ void D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     }
     MarkEdramBufferModified();
   }
+
+  command_processor_.PopDebugMarker();
 }
 
 }  // namespace d3d12

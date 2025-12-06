@@ -39,6 +39,13 @@ void SetOcclusionQueryEnable(bool value);
 
 DECLARE_bool(disassemble_pm4);
 
+DECLARE_bool(gpu_debug_markers);
+
+// Returns true if GPU debug markers should be enabled.
+// Checks the CVAR and also detects if RenderDoc is attached.
+// Result is cached after first call for efficiency.
+bool IsGpuDebugMarkersEnabled();
+
 DECLARE_string(render_target_path);
 
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1

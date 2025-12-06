@@ -1037,6 +1037,12 @@ bool VulkanRenderTargetCache::Resolve(const Memory& memory,
   // Copying.
   bool copied = false;
   if (resolve_info.copy_dest_extent_length) {
+    if (command_processor_.debug_markers_enabled()) {
+      char label[draw_util::kDebugMarkerLabelMaxLength];
+      draw_util::FormatResolveCopyDebugMarker(label, sizeof(label),
+                                              resolve_info);
+      command_processor_.PushDebugMarker("%s", label);
+    }
     if (GetPath() == Path::kHostRenderTargets) {
       // Dump the current contents of the render targets owning the affected
       // range to edram_buffer_.
@@ -1289,6 +1295,7 @@ bool VulkanRenderTargetCache::Resolve(const Memory& memory,
         }
       }
     }
+    command_processor_.PopDebugMarker();
   } else {
     copied = true;
   }
@@ -1298,6 +1305,12 @@ bool VulkanRenderTargetCache::Resolve(const Memory& memory,
   bool clear_depth = resolve_info.IsClearingDepth();
   bool clear_color = resolve_info.IsClearingColor();
   if (clear_depth || clear_color) {
+    if (command_processor_.debug_markers_enabled()) {
+      char label[draw_util::kDebugMarkerLabelMaxLength];
+      draw_util::FormatResolveClearDebugMarker(
+          label, sizeof(label), resolve_info, clear_depth, clear_color);
+      command_processor_.PushDebugMarker("%s", label);
+    }
     switch (GetPath()) {
       case Path::kHostRenderTargets: {
         Transfer::Rectangle clear_rectangle;
@@ -1374,6 +1387,7 @@ bool VulkanRenderTargetCache::Resolve(const Memory& memory,
       default:
         assert_unhandled_case(GetPath());
     }
+    command_processor_.PopDebugMarker();
   } else {
     cleared = true;
   }
@@ -4599,14 +4613,28 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
     const Transfer::Rectangle* resolve_clear_rectangle) {
   assert_true(GetPath() == Path::kHostRenderTargets);
 
+  bool resolve_clear_needed =
+      render_target_resolve_clear_values && resolve_clear_rectangle;
+
+  // Check if there's any actual work to do before pushing debug marker.
+  bool has_transfers = false;
+  for (uint32_t i = 0; i < render_target_count && !has_transfers; ++i) {
+    if (render_targets[i] &&
+        (!render_target_transfers[i].empty() || resolve_clear_needed)) {
+      has_transfers = true;
+    }
+  }
+  if (!has_transfers) {
+    return;
+  }
+
+  command_processor_.PushDebugMarker("RT Transfers");
+
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
   uint64_t current_submission = command_processor_.GetCurrentSubmission();
   DeferredCommandBuffer& command_buffer =
       command_processor_.deferred_command_buffer();
-
-  bool resolve_clear_needed =
-      render_target_resolve_clear_values && resolve_clear_rectangle;
   VkClearRect resolve_clear_rect;
   if (resolve_clear_needed) {
     // Assuming the rectangle is already clamped by the setup function from the
@@ -5522,6 +5550,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
                                            &resolve_clear_rect);
     }
   }
+
+  command_processor_.PopDebugMarker();
 }
 
 VkPipeline VulkanRenderTargetCache::GetDumpPipeline(DumpPipelineKey key) {
@@ -6058,6 +6088,9 @@ void VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     return;
   }
 
+  command_processor_.PushDebugMarker("EDRAM Write: Dump RTs, base tile %u",
+                                     dump_base);
+
   // Clear previously set temporary indices.
   for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
     static_cast<VulkanRenderTarget*>(rectangle.render_target)
@@ -6196,6 +6229,8 @@ void VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     }
     MarkEdramBufferModified();
   }
+
+  command_processor_.PopDebugMarker();
 }
 
 }  // namespace vulkan

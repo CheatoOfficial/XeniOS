@@ -283,6 +283,11 @@ bool VulkanSharedMemory::InitializeTraceSubmitDownloads() {
   DeferredCommandBuffer& command_buffer =
       command_processor_.deferred_command_buffer();
 
+  command_processor_.InsertDebugMarker(
+      "Trace Download: %u KB, %zu ranges",
+      download_page_count << page_size_log2() >> 10,
+      trace_download_ranges().size());
+
   size_t download_range_count = trace_download_ranges().size();
   VkBufferCopy* download_regions = command_buffer.CmdCopyBufferEmplace(
       buffer_, trace_download_buffer_, uint32_t(download_range_count));
@@ -393,7 +398,19 @@ bool VulkanSharedMemory::UploadRanges(
       std::make_pair(range_front.first << page_size_log2(),
                      (range_back.first + range_back.second - range_front.first)
                          << page_size_log2()));
+  // Submit barriers (may end render pass) before pushing debug marker so
+  // EndRenderPass is not inside the SharedMem Upload marker.
   command_processor_.SubmitBarriers(true);
+
+  // Calculate total upload size for debug marker.
+  uint32_t total_upload_bytes =
+      (range_back.first + range_back.second - range_front.first)
+      << page_size_log2();
+  command_processor_.PushDebugMarker(
+      "SharedMem Upload: 0x%08X-0x%08X (%u KB, %u ranges)",
+      range_front.first << page_size_log2(),
+      (range_back.first + range_back.second) << page_size_log2(),
+      total_upload_bytes / 1024, num_upload_ranges);
   DeferredCommandBuffer& command_buffer =
       command_processor_.deferred_command_buffer();
   uint64_t submission_current = command_processor_.GetCurrentSubmission();
@@ -463,6 +480,7 @@ bool VulkanSharedMemory::UploadRanges(
                                    upload_regions_.data());
     upload_regions_.clear();
   }
+  command_processor_.PopDebugMarker();
   return successful;
 }
 

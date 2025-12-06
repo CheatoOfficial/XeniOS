@@ -322,6 +322,10 @@ bool D3D12SharedMemory::InitializeTraceSubmitDownloads() {
   auto& command_list = command_processor_.GetDeferredCommandList();
   UseAsCopySource();
   command_processor_.SubmitBarriers();
+  command_processor_.InsertDebugMarker(
+      "Trace Download: %u KB, %zu ranges",
+      download_page_count << page_size_log2() >> 10,
+      trace_download_ranges().size());
   uint32_t download_buffer_offset = 0;
   for (const auto& download_range : trace_download_ranges()) {
     command_list.D3DCopyBufferRegion(
@@ -415,6 +419,17 @@ bool D3D12SharedMemory::UploadRanges(
   }
   CommitUAVWritesAndTransitionBuffer(D3D12_RESOURCE_STATE_COPY_DEST);
   command_processor_.SubmitBarriers();
+  auto& upload_range_front = upload_page_ranges[0];
+  auto& upload_range_back = upload_page_ranges[num_upload_page_ranges - 1];
+  uint32_t total_upload_bytes =
+      (upload_range_back.first + upload_range_back.second -
+       upload_range_front.first)
+      << page_size_log2();
+  command_processor_.PushDebugMarker(
+      "SharedMem Upload: 0x%08X-0x%08X (%u KB, %u ranges)",
+      upload_range_front.first << page_size_log2(),
+      (upload_range_back.first + upload_range_back.second) << page_size_log2(),
+      total_upload_bytes >> 10, num_upload_page_ranges);
   auto& command_list = command_processor_.GetDeferredCommandList();
   for (uint32_t i = 0; i < num_upload_page_ranges; ++i) {
     auto& upload_range = upload_page_ranges[i];
@@ -476,6 +491,7 @@ bool D3D12SharedMemory::UploadRanges(
       upload_range_length -= upload_buffer_pages;
     }
   }
+  command_processor_.PopDebugMarker();
   return true;
 }
 

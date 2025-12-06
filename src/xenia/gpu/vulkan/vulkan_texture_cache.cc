@@ -1564,6 +1564,10 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
         texture_dst_access_mask, texture_old_layout, texture_new_layout);
   }
   command_processor_.SubmitBarriers(true);
+  command_processor_.InsertDebugMarker(
+      "Texture Upload: %ux%ux%u fmt:%s mips:%u-%u", width, height,
+      depth_or_array_size, FormatInfo::GetName(guest_format), level_first,
+      level_last);
   VkBufferImageCopy* copy_regions = command_buffer.CmdCopyBufferToImageEmplace(
       scratch_buffer, vulkan_texture.image(),
       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, level_last - level_first + 1);

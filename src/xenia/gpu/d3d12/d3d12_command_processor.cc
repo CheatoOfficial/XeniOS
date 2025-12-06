@@ -8,7 +8,10 @@
  */
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+
+#include <cstdarg>
 #include <cstring>
+
 #include "xenia/apu/audio_system.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
@@ -34,6 +37,7 @@ DEFINE_bool(d3d12_bindless, true,
             "D3D12");
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(gpu_debug_markers);
 DECLARE_bool(submit_on_primary_buffer_end);
 DECLARE_bool(readback_memexport_fast);
 
@@ -56,6 +60,42 @@ D3D12CommandProcessor::D3D12CommandProcessor(
     : CommandProcessor(graphics_system, kernel_state),
       deferred_command_list_(*this) {}
 D3D12CommandProcessor::~D3D12CommandProcessor() = default;
+
+void D3D12CommandProcessor::UpdateDebugMarkersEnabled() {
+  // Enable debug markers if the CVAR is set or RenderDoc is detected.
+  debug_markers_enabled_ = IsGpuDebugMarkersEnabled();
+}
+
+void D3D12CommandProcessor::PushDebugMarker(const char* format, ...) {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  char label[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(label, sizeof(label), format, args);
+  va_end(args);
+  deferred_command_list_.BeginDebugMarker(label);
+}
+
+void D3D12CommandProcessor::PopDebugMarker() {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  deferred_command_list_.EndDebugMarker();
+}
+
+void D3D12CommandProcessor::InsertDebugMarker(const char* format, ...) {
+  if (!debug_markers_enabled_) {
+    return;
+  }
+  char label[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(label, sizeof(label), format, args);
+  va_end(args);
+  deferred_command_list_.InsertDebugMarker(label);
+}
 
 void D3D12CommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
@@ -871,6 +911,12 @@ bool D3D12CommandProcessor::SetupContext() {
   if (!CommandProcessor::SetupContext()) {
     XELOGE("Failed to initialize base command processor context");
     return false;
+  }
+
+  // Check if debug markers should be enabled (CVAR).
+  UpdateDebugMarkersEnabled();
+  if (debug_markers_enabled_) {
+    XELOGI("GPU debug markers enabled for PIX/RenderDoc/debug tools");
   }
 
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
@@ -2391,6 +2437,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                 D3D12_RESOURCE_STATE_COPY_DEST);
           gamma_ramp_buffer_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
           SubmitBarriers();
+          InsertDebugMarker("Gamma Ramp Upload: %u bytes",
+                            gamma_ramp_size_bytes);
           deferred_command_list_.D3DCopyBufferRegion(
               gamma_ramp_buffer_.Get(), gamma_ramp_offset_bytes,
               gamma_ramp_upload_buffer_.Get(), gamma_ramp_upload_offset_bytes,
@@ -2462,6 +2510,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         gamma_ramp_buffer_state_ =
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
+        PushDebugMarker("Apply Gamma Ramp: %s",
+                        use_pwl_gamma_ramp ? "PWL" : "256-entry table");
+
         deferred_command_list_.D3DSetComputeRootSignature(
             apply_gamma_root_signature_.Get());
         ApplyGammaConstants apply_gamma_constants;
@@ -2495,6 +2546,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         uint32_t group_count_x = (uint32_t(swap_texture_desc.Width) + 15) / 16;
         uint32_t group_count_y = (uint32_t(swap_texture_desc.Height) + 7) / 8;
         deferred_command_list_.D3DDispatch(group_count_x, group_count_y, 1);
+
+        PopDebugMarker();
 
         // Apply FXAA.
         if (use_fxaa) {
@@ -2985,6 +3038,16 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   SetPrimitiveTopology(primitive_topology);
   // Must not call anything that may change the primitive topology from now on!
 
+  // Push debug marker with Xbox 360 draw context for PIX/RenderDoc annotation.
+  if (debug_markers_enabled_) {
+    char label[draw_util::kDebugMarkerLabelMaxLength];
+    draw_util::FormatDrawDebugMarker(
+        label, sizeof(label), primitive_type, primitive_processing_result,
+        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+    PushDebugMarker("%s", label);
+  }
+
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
       PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
@@ -3067,6 +3130,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                               D3D12_RESOURCE_STATE_INDEX_BUFFER);
     }
   }
+
+  // Pop debug marker for draw call.
+  PopDebugMarker();
 
   if (memexport_used) {
     // Make sure this memexporting draw is ordered with other work using shared
@@ -3249,6 +3315,8 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
       // Copy resolved data to current frame's buffer
       shared_memory_->UseAsCopySource();
       SubmitBarriers();
+      InsertDebugMarker("Resolve Readback: 0x%08X, %u bytes", written_address,
+                        written_length);
       ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
       deferred_command_list_.D3DCopyBufferRegion(
           rb.buffers[write_index], 0, shared_memory_buffer, written_address,
@@ -3316,6 +3384,8 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFullPath(
   if (readback_buffer != nullptr) {
     shared_memory_->UseAsCopySource();
     SubmitBarriers();
+    InsertDebugMarker("Memexport Readback (sync): %u bytes, %zu ranges",
+                      memexport_total_size, memexport_ranges_.size());
     ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
     uint32_t readback_buffer_offset = 0;
     for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
@@ -3408,6 +3478,8 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
   // Copy exported data to current frame's buffer
   shared_memory_->UseAsCopySource();
   SubmitBarriers();
+  InsertDebugMarker("Memexport Readback (async): %u bytes, %zu ranges",
+                    memexport_total_size, memexport_ranges_.size());
   ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
   uint32_t readback_buffer_offset = 0;
   for (const draw_util::MemExportRange& memexport_range : memexport_ranges_) {
@@ -5673,6 +5745,7 @@ bool D3D12CommandProcessor::EndGuestOcclusionQuery(
 
   deferred_command_list_.D3DEndQuery(occlusion_query_heap_.Get(),
                                      D3D12_QUERY_TYPE_OCCLUSION, host_index);
+  InsertDebugMarker("Occlusion Query Readback: index %u", host_index);
   deferred_command_list_.D3DResolveQueryData(
       occlusion_query_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, host_index, 1,
       occlusion_query_readback_.Get(), sizeof(uint64_t) * host_index);

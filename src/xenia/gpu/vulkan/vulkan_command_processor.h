@@ -262,6 +262,12 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Returns the text to display in the GPU backend name in the window title.
   std::string GetWindowTitleText() const;
 
+  // Debug marker methods - public so subsystems can annotate their operations.
+  void PushDebugMarker(const char* format, ...);
+  void PopDebugMarker();
+  void InsertDebugMarker(const char* format, ...);
+  bool debug_markers_enabled() const { return debug_markers_enabled_; }
+
  protected:
   bool SetupContext() override;
   void ShutdownContext() override;
@@ -819,6 +825,10 @@ class VulkanCommandProcessor final : public CommandProcessor {
     uint32_t sample_count_address;
   };
   std::deque<PendingOcclusionQuery> pending_occlusion_queries_;
+
+  // Debug marker support for RenderDoc/debug tools.
+  bool debug_markers_enabled_ = false;
+  void UpdateDebugMarkersEnabled();
 };
 
 }  // namespace vulkan

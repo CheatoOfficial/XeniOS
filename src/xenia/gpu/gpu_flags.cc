@@ -9,6 +9,9 @@
 
 #include "xenia/gpu/gpu_flags.h"
 
+#include "xenia/base/logging.h"
+#include "xenia/ui/renderdoc_api.h"
+
 DEFINE_path(trace_gpu_prefix, "scratch/gpu/",
             "Prefix path for GPU trace files.", "GPU");
 DEFINE_bool(trace_gpu_stream, false, "Trace all GPU packets.", "GPU");
@@ -84,6 +87,34 @@ DEFINE_bool(occlusion_query_enable, false,
 
 void SetOcclusionQueryEnable(bool value) {
   OVERRIDE_bool(occlusion_query_enable, value);
+}
+
+DEFINE_bool(
+    gpu_debug_markers, false,
+    "Insert debug markers into GPU command streams for tools like RenderDoc. "
+    "Annotates draw calls with Xbox 360 GPU context (primitive type, shader "
+    "hashes, vertex count, etc). Automatically enabled when RenderDoc is "
+    "detected. Has minimal overhead when disabled.",
+    "GPU");
+
+bool IsGpuDebugMarkersEnabled() {
+  // Cache the result - RenderDoc detection only needs to happen once.
+  static bool cached = false;
+  static bool result = false;
+  if (!cached) {
+    cached = true;
+    if (cvars::gpu_debug_markers) {
+      result = true;
+      XELOGI("GPU debug markers enabled via CVAR");
+    } else {
+      auto renderdoc_api = xe::ui::RenderDocAPI::CreateIfConnected();
+      if (renderdoc_api) {
+        result = true;
+        XELOGI("GPU debug markers auto-enabled (RenderDoc detected)");
+      }
+    }
+  }
+  return result;
 }
 
 // TODO(Triang3l): Make accuracy (ROV/FSI) the default when it's optimized
