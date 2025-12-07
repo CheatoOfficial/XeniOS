@@ -1421,6 +1421,12 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   DeferredCommandBuffer& command_buffer =
       command_processor_.deferred_command_buffer();
 
+  // Debug annotation for texture load operation
+  command_processor_.PushDebugMarker(
+      "Texture Load: %ux%ux%u fmt:%s signed:%d scaled:%d", width, height,
+      depth_or_array_size, FormatInfo::GetName(guest_format),
+      host_format_is_signed ? 1 : 0, texture_key.scaled_resolve ? 1 : 0);
+
   command_processor_.BindExternalComputePipeline(pipeline);
 
   command_buffer.CmdVkBindDescriptorSets(
@@ -1531,6 +1537,11 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
             sizeof(load_constants.host_offset), &load_constants.host_offset);
       }
       command_processor_.SubmitBarriers(true);
+      // Debug: show dispatch info with source offset
+      command_processor_.InsertDebugMarker(
+          "Dispatch: guest_off=0x%X host_off=0x%X groups=%ux%ux%u",
+          load_constants.guest_offset, load_constants.host_offset,
+          group_count_x, group_count_y, load_constants.size_blocks[2]);
       command_buffer.CmdVkDispatch(group_count_x, group_count_y,
                                    load_constants.size_blocks[2]);
       load_constants.guest_offset += level_array_slice_stride_bytes_scaled;
@@ -1615,6 +1626,7 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     copy_region.imageExtent.depth = std::max(depth >> level, UINT32_C(1));
   }
 
+  command_processor_.PopDebugMarker();
   return true;
 }
 

@@ -45,6 +45,12 @@ class NullCommandProcessor : public CommandProcessor {
                  bool major_mode_explicit) override;
   bool IssueCopy() override;
 
+  // Debug marker stubs (no-op for null backend).
+  bool debug_markers_enabled() const { return false; }
+  void PushDebugMarker(const char* format, ...) {}
+  void PopDebugMarker() {}
+  void InsertDebugMarker(const char* format, ...) {}
+
   void InitializeTrace() override;
 };
 

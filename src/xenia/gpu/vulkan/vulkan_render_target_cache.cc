@@ -1887,6 +1887,10 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
     return nullptr;
   }
 
+  // Set debug name for the image.
+  std::string debug_name = key.GetDebugName();
+  vulkan_device->SetObjectName(VK_OBJECT_TYPE_IMAGE, image, debug_name.c_str());
+
   // Create the image views.
 
   VkImageViewCreateInfo view_create_info;
@@ -4628,7 +4632,7 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
     return;
   }
 
-  command_processor_.PushDebugMarker("RT Transfers");
+  command_processor_.PushDebugMarker("PerformTransfersAndResolveClears");
 
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
@@ -6088,8 +6092,8 @@ void VulkanRenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     return;
   }
 
-  command_processor_.PushDebugMarker("EDRAM Write: Dump RTs, base tile %u",
-                                     dump_base);
+  command_processor_.PushDebugMarker(
+      "DumpRenderTargets (EDRAM Write): base tile %u", dump_base);
 
   // Clear previously set temporary indices.
   for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {

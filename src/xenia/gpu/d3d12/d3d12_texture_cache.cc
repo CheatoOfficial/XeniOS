@@ -1558,6 +1558,12 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
 
   // Submit the copy buffer population commands.
 
+  // Debug annotation for texture load operation
+  command_processor_.PushDebugMarker("Texture Load: %ux%ux%u fmt:%s scaled:%d",
+                                     width, height, depth_or_array_size,
+                                     FormatInfo::GetName(guest_format),
+                                     texture_resolution_scaled ? 1 : 0);
+
   auto& cbuffer_pool = command_processor_.GetConstantBufferPool();
   LoadConstants load_constants;
   // 3 bits for each.
@@ -1691,6 +1697,11 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       }
       assert_true(copy_buffer_state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       command_processor_.SubmitBarriers();
+      // Debug: show dispatch info with source offset
+      command_processor_.InsertDebugMarker(
+          "Dispatch: guest_off=0x%X host_off=0x%X groups=%ux%ux%u",
+          load_constants.guest_offset, load_constants.host_offset,
+          group_count_x, group_count_y, load_constants.size_blocks[2]);
       command_list.D3DDispatch(group_count_x, group_count_y,
                                load_constants.size_blocks[2]);
       load_constants.guest_offset += level_array_slice_stride_bytes_scaled;
@@ -1766,6 +1777,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
 
   command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
 
+  command_processor_.PopDebugMarker();
   return true;
 }
 

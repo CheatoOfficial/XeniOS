@@ -849,7 +849,7 @@ inline void FormatDrawDebugMarker(
         break;
     }
     std::snprintf(buffer, buffer_size,
-                  "Draw: %s verts:%u %s tess:%s vs:%016llX ps:%016llX",
+                  "IssueDraw: %s verts:%u %s tess:%s vs:%016llX ps:%016llX",
                   xenos::GetPrimitiveTypeEnglishDescription(prim_type),
                   primitive_processing_result.host_draw_vertex_count,
                   index_info, tess_mode,
@@ -857,7 +857,7 @@ inline void FormatDrawDebugMarker(
                   static_cast<unsigned long long>(ps_hash));
   } else {
     std::snprintf(buffer, buffer_size,
-                  "Draw: %s verts:%u %s vs:%016llX ps:%016llX",
+                  "IssueDraw: %s verts:%u %s vs:%016llX ps:%016llX",
                   xenos::GetPrimitiveTypeEnglishDescription(prim_type),
                   primitive_processing_result.host_draw_vertex_count,
                   index_info, static_cast<unsigned long long>(vs_hash),

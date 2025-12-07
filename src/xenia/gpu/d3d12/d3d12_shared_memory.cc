@@ -426,7 +426,7 @@ bool D3D12SharedMemory::UploadRanges(
        upload_range_front.first)
       << page_size_log2();
   command_processor_.PushDebugMarker(
-      "SharedMem Upload: 0x%08X-0x%08X (%u KB, %u ranges)",
+      "UploadRanges (SharedMem): 0x%08X-0x%08X (%u KB, %u ranges)",
       upload_range_front.first << page_size_log2(),
       (upload_range_back.first + upload_range_back.second) << page_size_log2(),
       total_upload_bytes >> 10, num_upload_page_ranges);

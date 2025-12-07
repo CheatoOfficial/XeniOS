@@ -2581,6 +2581,17 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
     }
   }
 
+  // Push debug marker with Xbox 360 draw context for RenderDoc annotation.
+  // Done early so texture loads appear nested under the draw that uses them.
+  if (debug_markers_enabled_) {
+    char label[draw_util::kDebugMarkerLabelMaxLength];
+    draw_util::FormatDrawDebugMarker(
+        label, sizeof(label), prim_type, primitive_processing_result,
+        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+    PushDebugMarker("%s", label);
+  }
+
   // Update the textures before most other work in the submission because
   // samplers depend on this (and in case of sampler overflow in a submission,
   // submissions must be split) - may perform dispatches and copying.
@@ -2819,16 +2830,6 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
   SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       render_target_cache_->last_update_render_pass(),
       render_target_cache_->last_update_framebuffer());
-
-  // Push debug marker with Xbox 360 draw context for RenderDoc annotation.
-  if (debug_markers_enabled_) {
-    char label[draw_util::kDebugMarkerLabelMaxLength];
-    draw_util::FormatDrawDebugMarker(
-        label, sizeof(label), prim_type, primitive_processing_result,
-        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
-        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
-    PushDebugMarker("%s", label);
-  }
 
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
@@ -3199,9 +3200,17 @@ bool VulkanCommandProcessor::IssueCopy() {
     return false;
   }
 
+  // Push debug marker for resolve operation.
+  if (debug_markers_enabled_) {
+    PushDebugMarker("IssueCopy (Resolve)");
+  }
+
   uint32_t written_address, written_length;
   if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                      written_address, written_length)) {
+    if (debug_markers_enabled_) {
+      PopDebugMarker();
+    }
     return false;
   }
 
@@ -3407,6 +3416,11 @@ bool VulkanCommandProcessor::IssueCopy() {
 
     // Swap buffer index for next time this specific resolve address is used
     rb.current_index = 1 - rb.current_index;
+  }
+
+  // Pop debug marker for resolve operation.
+  if (debug_markers_enabled_) {
+    PopDebugMarker();
   }
 
   return true;

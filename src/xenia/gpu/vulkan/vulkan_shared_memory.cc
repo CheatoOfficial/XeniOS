@@ -407,7 +407,7 @@ bool VulkanSharedMemory::UploadRanges(
       (range_back.first + range_back.second - range_front.first)
       << page_size_log2();
   command_processor_.PushDebugMarker(
-      "SharedMem Upload: 0x%08X-0x%08X (%u KB, %u ranges)",
+      "UploadRanges (SharedMem): 0x%08X-0x%08X (%u KB, %u ranges)",
       range_front.first << page_size_log2(),
       (range_back.first + range_back.second) << page_size_log2(),
       total_upload_bytes / 1024, num_upload_ranges);

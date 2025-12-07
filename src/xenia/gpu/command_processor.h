@@ -292,6 +292,12 @@ class CommandProcessor {
   virtual bool IssueCopy() { return false; }
   virtual bool SupportsGuestOcclusionQueries() const { return false; }
 
+  // Debug marker stubs for base class (overridden by D3D12/Vulkan backends).
+  bool debug_markers_enabled() const { return false; }
+  void PushDebugMarker(const char* format, ...) {}
+  void PopDebugMarker() {}
+  void InsertDebugMarker(const char* format, ...) {}
+
   // "Actual" is for the command processor thread, to be read by the
   // implementations.
   SwapPostEffect GetActualSwapPostEffect() const {

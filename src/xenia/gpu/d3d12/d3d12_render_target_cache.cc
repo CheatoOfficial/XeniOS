@@ -4453,7 +4453,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
     return;
   }
 
-  command_processor_.PushDebugMarker("RT Transfers");
+  command_processor_.PushDebugMarker("PerformTransfersAndResolveClears");
 
   const ui::d3d12::D3D12Provider& provider =
       command_processor_.GetD3D12Provider();
@@ -6409,8 +6409,8 @@ void D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base,
     return;
   }
 
-  command_processor_.PushDebugMarker("EDRAM Write: Dump RTs, base tile %u",
-                                     dump_base);
+  command_processor_.PushDebugMarker(
+      "DumpRenderTargets (EDRAM Write): base tile %u", dump_base);
 
   // Clear previously set temporary indices.
   for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {

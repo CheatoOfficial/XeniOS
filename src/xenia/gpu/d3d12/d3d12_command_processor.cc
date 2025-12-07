@@ -2813,6 +2813,17 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     return false;
   }
 
+  // Push debug marker with Xbox 360 draw context for PIX/RenderDoc annotation.
+  // Done early so texture loads appear nested under the draw that uses them.
+  if (debug_markers_enabled_) {
+    char label[draw_util::kDebugMarkerLabelMaxLength];
+    draw_util::FormatDrawDebugMarker(
+        label, sizeof(label), primitive_type, primitive_processing_result,
+        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+    PushDebugMarker("%s", label);
+  }
+
   // Update the textures - this may bind pipelines.
   uint32_t used_texture_mask =
       vertex_shader->GetUsedTextureMaskAfterTranslation() |
@@ -3038,16 +3049,6 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   SetPrimitiveTopology(primitive_topology);
   // Must not call anything that may change the primitive topology from now on!
 
-  // Push debug marker with Xbox 360 draw context for PIX/RenderDoc annotation.
-  if (debug_markers_enabled_) {
-    char label[draw_util::kDebugMarkerLabelMaxLength];
-    draw_util::FormatDrawDebugMarker(
-        label, sizeof(label), primitive_type, primitive_processing_result,
-        vertex_shader ? vertex_shader->ucode_data_hash() : 0,
-        pixel_shader ? pixel_shader->ucode_data_hash() : 0);
-    PushDebugMarker("%s", label);
-  }
-
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
       PrimitiveProcessor::ProcessedIndexBufferType::kNone) {
@@ -3222,15 +3223,29 @@ bool D3D12CommandProcessor::IssueCopy() {
   if (!BeginSubmission(true)) {
     return false;
   }
+
+  // Push debug marker for resolve operation.
+  if (debug_markers_enabled_) {
+    PushDebugMarker("IssueCopy (Resolve)");
+  }
+
+  bool result;
   ReadbackResolveMode readback_mode = GetReadbackResolveMode();
   if (readback_mode == ReadbackResolveMode::kDisabled) {
     uint32_t written_address, written_length;
-    return render_target_cache_->Resolve(*memory_, *shared_memory_,
-                                         *texture_cache_, written_address,
-                                         written_length);
+    result = render_target_cache_->Resolve(*memory_, *shared_memory_,
+                                           *texture_cache_, written_address,
+                                           written_length);
   } else {
-    return IssueCopy_ReadbackResolvePath();
+    result = IssueCopy_ReadbackResolvePath();
   }
+
+  // Pop debug marker for resolve operation.
+  if (debug_markers_enabled_) {
+    PopDebugMarker();
+  }
+
+  return result;
 }
 XE_NOINLINE
 bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
