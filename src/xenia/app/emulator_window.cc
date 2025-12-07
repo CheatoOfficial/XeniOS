@@ -1091,21 +1091,6 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
       SetFullscreen(false);
     } break;
 
-#ifdef DEBUG
-    case ui::VirtualKey::kF7: {
-      // Save to file
-      // TODO: Choose path based on user input, or from options
-      // TODO: Spawn a new thread to do this.
-      emulator()->SaveToFile("test.sav");
-    } break;
-    case ui::VirtualKey::kF8: {
-      // Restore from file
-      // TODO: Choose path from user
-      // TODO: Spawn a new thread to do this.
-      emulator()->RestoreFromFile("test.sav");
-    } break;
-#endif  // #ifdef DEBUG
-
     case ui::VirtualKey::kPause: {
       CpuBreakIntoDebugger();
     } break;
