@@ -3170,13 +3170,20 @@ void DxbcShaderTranslator::WriteOutputSignature() {
           cull_distance.component_type =
               dxbc::SignatureRegisterComponentType::kFloat32;
           cull_distance.register_index = clip_cull_distance_register;
+          // Calculate which components the cull distance occupies in this
+          // register. Cull distances are packed after clip distances.
+          // First component of cull distance in this register.
+          uint32_t cull_start_in_register =
+              (i < clip_distance_count) ? (clip_distance_count & 3) : 0;
+          // How many cull distance components are in this register.
+          uint32_t cull_components_before_this_register =
+              (i < clip_distance_count) ? 0 : (i - clip_distance_count);
+          uint32_t cull_count_in_register = std::min(
+              cull_distance_count - cull_components_before_this_register,
+              UINT32_C(4) - cull_start_in_register);
           uint8_t cull_distance_mask =
-              (UINT8_C(1) << std::min(cull_distance_count - i, UINT32_C(4))) -
-              1;
-          if (i < clip_distance_count) {
-            cull_distance_mask &=
-                ~((UINT8_C(1) << (clip_distance_count - i)) - 1);
-          }
+              ((UINT8_C(1) << cull_count_in_register) - 1)
+              << cull_start_in_register;
           cull_distance.mask = cull_distance_mask;
           cull_distance.never_writes_mask = cull_distance_mask ^ 0b1111;
         }
