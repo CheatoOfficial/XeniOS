@@ -525,6 +525,8 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // <Submission where last used, resource>, sorted by the submission number.
   std::deque<std::pair<uint64_t, VkDeviceMemory>> destroy_memory_;
   std::deque<std::pair<uint64_t, VkBuffer>> destroy_buffers_;
+  std::deque<std::pair<uint64_t, VkImage>> destroy_images_;
+  std::deque<std::pair<uint64_t, VkImageView>> destroy_image_views_;
   std::deque<std::pair<uint64_t, VkFramebuffer>> destroy_framebuffers_;
 
   std::vector<CommandBuffer> command_buffers_writable_;
@@ -656,6 +658,36 @@ class VulkanCommandProcessor final : public CommandProcessor {
   VkPipelineLayout swap_apply_gamma_pipeline_layout_ = VK_NULL_HANDLE;
   VkPipeline swap_apply_gamma_256_entry_table_pipeline_ = VK_NULL_HANDLE;
   VkPipeline swap_apply_gamma_pwl_pipeline_ = VK_NULL_HANDLE;
+  // Gamma pipelines that also compute FXAA luma in the alpha channel.
+  VkPipeline swap_apply_gamma_256_entry_table_fxaa_luma_pipeline_ =
+      VK_NULL_HANDLE;
+  VkPipeline swap_apply_gamma_pwl_fxaa_luma_pipeline_ = VK_NULL_HANDLE;
+
+  // FXAA post-processing.
+  struct FxaaConstants {
+    uint32_t size[2];
+    float size_inv[2];
+  };
+  // Descriptor set layout for FXAA source (combined image sampler).
+  VkDescriptorSetLayout fxaa_source_descriptor_set_layout_ = VK_NULL_HANDLE;
+  VkPipelineLayout fxaa_pipeline_layout_ = VK_NULL_HANDLE;
+  VkPipeline fxaa_pipeline_ = VK_NULL_HANDLE;
+  VkPipeline fxaa_extreme_pipeline_ = VK_NULL_HANDLE;
+  VkSampler fxaa_sampler_ = VK_NULL_HANDLE;
+  // FXAA source texture - R16G16B16A16_SFLOAT for luma in alpha.
+  static constexpr VkFormat kFxaaSourceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+  VkDeviceMemory fxaa_source_memory_ = VK_NULL_HANDLE;
+  VkImage fxaa_source_image_ = VK_NULL_HANDLE;
+  VkImageView fxaa_source_image_view_ = VK_NULL_HANDLE;
+  uint32_t fxaa_source_width_ = 0;
+  uint32_t fxaa_source_height_ = 0;
+  uint64_t fxaa_source_last_submission_ = 0;
+  // Descriptor sets for FXAA - source as combined image sampler (for FXAA
+  // read).
+  std::array<VkDescriptorSet, kMaxFramesInFlight> fxaa_source_descriptors_;
+  // Descriptor sets for FXAA - source as storage image (for gamma+luma write).
+  std::array<VkDescriptorSet, kMaxFramesInFlight>
+      fxaa_source_storage_descriptors_;
 
   // Pending pipeline barriers.
   std::vector<VkBufferMemoryBarrier> pending_barriers_buffer_memory_barriers_;

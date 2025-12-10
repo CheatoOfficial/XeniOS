@@ -49,7 +49,11 @@ namespace vulkan {
 // Generated with `xb buildshaders`.
 namespace shaders {
 #include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_pwl_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_pwl_fxaa_luma_cs.h"
 #include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_fxaa_luma_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/fxaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/fxaa_extreme_cs.h"
 }  // namespace shaders
 
 constexpr VkDescriptorPoolSize
@@ -782,9 +786,19 @@ bool VulkanCommandProcessor::SetupContext() {
         "layout");
     return false;
   }
+  // FXAA source descriptor set layout (combined image sampler for linear
+  // filtering).
+  swap_descriptor_set_layout_binding.descriptorType =
+      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  if (dfn.vkCreateDescriptorSetLayout(
+          device, &swap_descriptor_set_layout_create_info, nullptr,
+          &fxaa_source_descriptor_set_layout_) != VK_SUCCESS) {
+    XELOGE("Failed to create the FXAA source descriptor set layout");
+    return false;
+  }
 
   // Swap descriptor pool.
-  std::array<VkDescriptorPoolSize, 3> swap_descriptor_pool_sizes;
+  std::array<VkDescriptorPoolSize, 4> swap_descriptor_pool_sizes;
   VkDescriptorPoolCreateInfo swap_descriptor_pool_create_info;
   swap_descriptor_pool_create_info.sType =
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -794,7 +808,6 @@ bool VulkanCommandProcessor::SetupContext() {
   swap_descriptor_pool_create_info.poolSizeCount = 0;
   swap_descriptor_pool_create_info.pPoolSizes =
       swap_descriptor_pool_sizes.data();
-  // TODO(Triang3l): FXAA combined image and sampler sources.
   {
     VkDescriptorPoolSize& swap_descriptor_pool_size_sampled_image =
         swap_descriptor_pool_sizes[swap_descriptor_pool_create_info
@@ -820,6 +833,7 @@ bool VulkanCommandProcessor::SetupContext() {
     swap_descriptor_pool_create_info.maxSets += gamma_ramp_buffer_view_count;
   }
   // Destination storage images for compute shader output.
+  // Also includes storage image for writing to FXAA source (gamma+luma output).
   {
     VkDescriptorPoolSize& swap_descriptor_pool_size_storage_image =
         swap_descriptor_pool_sizes[swap_descriptor_pool_create_info
@@ -827,6 +841,17 @@ bool VulkanCommandProcessor::SetupContext() {
     swap_descriptor_pool_size_storage_image.type =
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     swap_descriptor_pool_size_storage_image.descriptorCount =
+        kMaxFramesInFlight * 2;  // dest + FXAA source storage
+    swap_descriptor_pool_create_info.maxSets += kMaxFramesInFlight * 2;
+  }
+  // FXAA source combined image samplers.
+  {
+    VkDescriptorPoolSize& swap_descriptor_pool_size_combined_image_sampler =
+        swap_descriptor_pool_sizes[swap_descriptor_pool_create_info
+                                       .poolSizeCount++];
+    swap_descriptor_pool_size_combined_image_sampler.type =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    swap_descriptor_pool_size_combined_image_sampler.descriptorCount =
         kMaxFramesInFlight;
     swap_descriptor_pool_create_info.maxSets += kMaxFramesInFlight;
   }
@@ -874,6 +899,27 @@ bool VulkanCommandProcessor::SetupContext() {
       XELOGE(
           "Failed to allocate the presentation destination image descriptor "
           "sets");
+      return false;
+    }
+  }
+  swap_descriptor_set_allocate_info.pSetLayouts =
+      &fxaa_source_descriptor_set_layout_;
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    if (dfn.vkAllocateDescriptorSets(device, &swap_descriptor_set_allocate_info,
+                                     &fxaa_source_descriptors_[i]) !=
+        VK_SUCCESS) {
+      XELOGE("Failed to allocate the FXAA source image descriptor sets");
+      return false;
+    }
+  }
+  // Allocate storage image descriptor sets for writing to FXAA source.
+  swap_descriptor_set_allocate_info.pSetLayouts =
+      &swap_descriptor_set_layout_storage_image_;
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    if (dfn.vkAllocateDescriptorSets(device, &swap_descriptor_set_allocate_info,
+                                     &fxaa_source_storage_descriptors_[i]) !=
+        VK_SUCCESS) {
+      XELOGE("Failed to allocate the FXAA source storage descriptor sets");
       return false;
     }
   }
@@ -939,8 +985,18 @@ bool VulkanCommandProcessor::SetupContext() {
       ui::vulkan::util::CreateShaderModule(vulkan_device,
                                            shaders::apply_gamma_pwl_cs,
                                            sizeof(shaders::apply_gamma_pwl_cs));
+  VkShaderModule swap_apply_gamma_table_fxaa_luma_shader_module =
+      ui::vulkan::util::CreateShaderModule(
+          vulkan_device, shaders::apply_gamma_table_fxaa_luma_cs,
+          sizeof(shaders::apply_gamma_table_fxaa_luma_cs));
+  VkShaderModule swap_apply_gamma_pwl_fxaa_luma_shader_module =
+      ui::vulkan::util::CreateShaderModule(
+          vulkan_device, shaders::apply_gamma_pwl_fxaa_luma_cs,
+          sizeof(shaders::apply_gamma_pwl_fxaa_luma_cs));
   if (swap_apply_gamma_table_shader_module == VK_NULL_HANDLE ||
-      swap_apply_gamma_pwl_shader_module == VK_NULL_HANDLE) {
+      swap_apply_gamma_pwl_shader_module == VK_NULL_HANDLE ||
+      swap_apply_gamma_table_fxaa_luma_shader_module == VK_NULL_HANDLE ||
+      swap_apply_gamma_pwl_fxaa_luma_shader_module == VK_NULL_HANDLE) {
     XELOGE(
         "Failed to create the gamma ramp application compute shader modules");
     if (swap_apply_gamma_table_shader_module != VK_NULL_HANDLE) {
@@ -950,6 +1006,14 @@ bool VulkanCommandProcessor::SetupContext() {
     if (swap_apply_gamma_pwl_shader_module != VK_NULL_HANDLE) {
       dfn.vkDestroyShaderModule(device, swap_apply_gamma_pwl_shader_module,
                                 nullptr);
+    }
+    if (swap_apply_gamma_table_fxaa_luma_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(
+          device, swap_apply_gamma_table_fxaa_luma_shader_module, nullptr);
+    }
+    if (swap_apply_gamma_pwl_fxaa_luma_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(
+          device, swap_apply_gamma_pwl_fxaa_luma_shader_module, nullptr);
     }
     return false;
   }
@@ -984,13 +1048,139 @@ bool VulkanCommandProcessor::SetupContext() {
       dfn.vkCreateComputePipelines(device, VK_NULL_HANDLE, 1,
                                    &swap_apply_gamma_pipeline_create_info,
                                    nullptr, &swap_apply_gamma_pwl_pipeline_);
+  swap_apply_gamma_pipeline_create_info.stage.module =
+      swap_apply_gamma_table_fxaa_luma_shader_module;
+  VkResult swap_apply_gamma_pipeline_256_entry_table_fxaa_luma_create_result =
+      dfn.vkCreateComputePipelines(
+          device, VK_NULL_HANDLE, 1, &swap_apply_gamma_pipeline_create_info,
+          nullptr, &swap_apply_gamma_256_entry_table_fxaa_luma_pipeline_);
+  swap_apply_gamma_pipeline_create_info.stage.module =
+      swap_apply_gamma_pwl_fxaa_luma_shader_module;
+  VkResult swap_apply_gamma_pipeline_pwl_fxaa_luma_create_result =
+      dfn.vkCreateComputePipelines(
+          device, VK_NULL_HANDLE, 1, &swap_apply_gamma_pipeline_create_info,
+          nullptr, &swap_apply_gamma_pwl_fxaa_luma_pipeline_);
   dfn.vkDestroyShaderModule(device, swap_apply_gamma_table_shader_module,
                             nullptr);
   dfn.vkDestroyShaderModule(device, swap_apply_gamma_pwl_shader_module,
                             nullptr);
+  dfn.vkDestroyShaderModule(
+      device, swap_apply_gamma_table_fxaa_luma_shader_module, nullptr);
+  dfn.vkDestroyShaderModule(
+      device, swap_apply_gamma_pwl_fxaa_luma_shader_module, nullptr);
   if (swap_apply_gamma_pipeline_256_entry_table_create_result != VK_SUCCESS ||
-      swap_apply_gamma_pipeline_pwl_create_result != VK_SUCCESS) {
+      swap_apply_gamma_pipeline_pwl_create_result != VK_SUCCESS ||
+      swap_apply_gamma_pipeline_256_entry_table_fxaa_luma_create_result !=
+          VK_SUCCESS ||
+      swap_apply_gamma_pipeline_pwl_fxaa_luma_create_result != VK_SUCCESS) {
     XELOGE("Failed to create the gamma ramp application compute pipelines");
+    return false;
+  }
+
+  // FXAA sampler (linear filtering, clamp to edge).
+  VkSamplerCreateInfo fxaa_sampler_create_info;
+  fxaa_sampler_create_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  fxaa_sampler_create_info.pNext = nullptr;
+  fxaa_sampler_create_info.flags = 0;
+  fxaa_sampler_create_info.magFilter = VK_FILTER_LINEAR;
+  fxaa_sampler_create_info.minFilter = VK_FILTER_LINEAR;
+  fxaa_sampler_create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+  fxaa_sampler_create_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  fxaa_sampler_create_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  fxaa_sampler_create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  fxaa_sampler_create_info.mipLodBias = 0.0f;
+  fxaa_sampler_create_info.anisotropyEnable = VK_FALSE;
+  fxaa_sampler_create_info.maxAnisotropy = 1.0f;
+  fxaa_sampler_create_info.compareEnable = VK_FALSE;
+  fxaa_sampler_create_info.compareOp = VK_COMPARE_OP_NEVER;
+  fxaa_sampler_create_info.minLod = 0.0f;
+  fxaa_sampler_create_info.maxLod = 0.0f;
+  fxaa_sampler_create_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+  fxaa_sampler_create_info.unnormalizedCoordinates = VK_FALSE;
+  if (dfn.vkCreateSampler(device, &fxaa_sampler_create_info, nullptr,
+                          &fxaa_sampler_) != VK_SUCCESS) {
+    XELOGE("Failed to create the FXAA sampler");
+    return false;
+  }
+
+  // FXAA pipeline layout.
+  // set=0: destination storage image (rgb10_a2)
+  // set=1: source combined image sampler (FXAA source with luma in alpha)
+  std::array<VkDescriptorSetLayout, 2> fxaa_descriptor_set_layouts = {
+      swap_descriptor_set_layout_storage_image_,
+      fxaa_source_descriptor_set_layout_,
+  };
+  VkPushConstantRange fxaa_push_constant_range;
+  fxaa_push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  fxaa_push_constant_range.offset = 0;
+  fxaa_push_constant_range.size = sizeof(FxaaConstants);
+  VkPipelineLayoutCreateInfo fxaa_pipeline_layout_create_info;
+  fxaa_pipeline_layout_create_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  fxaa_pipeline_layout_create_info.pNext = nullptr;
+  fxaa_pipeline_layout_create_info.flags = 0;
+  fxaa_pipeline_layout_create_info.setLayoutCount =
+      uint32_t(fxaa_descriptor_set_layouts.size());
+  fxaa_pipeline_layout_create_info.pSetLayouts =
+      fxaa_descriptor_set_layouts.data();
+  fxaa_pipeline_layout_create_info.pushConstantRangeCount = 1;
+  fxaa_pipeline_layout_create_info.pPushConstantRanges =
+      &fxaa_push_constant_range;
+  if (dfn.vkCreatePipelineLayout(device, &fxaa_pipeline_layout_create_info,
+                                 nullptr,
+                                 &fxaa_pipeline_layout_) != VK_SUCCESS) {
+    XELOGE("Failed to create the FXAA pipeline layout");
+    return false;
+  }
+
+  // FXAA compute pipelines.
+  VkShaderModule fxaa_shader_module = ui::vulkan::util::CreateShaderModule(
+      vulkan_device, shaders::fxaa_cs, sizeof(shaders::fxaa_cs));
+  VkShaderModule fxaa_extreme_shader_module =
+      ui::vulkan::util::CreateShaderModule(vulkan_device,
+                                           shaders::fxaa_extreme_cs,
+                                           sizeof(shaders::fxaa_extreme_cs));
+  if (fxaa_shader_module == VK_NULL_HANDLE ||
+      fxaa_extreme_shader_module == VK_NULL_HANDLE) {
+    XELOGE("Failed to create the FXAA compute shader modules");
+    if (fxaa_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(device, fxaa_shader_module, nullptr);
+    }
+    if (fxaa_extreme_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(device, fxaa_extreme_shader_module, nullptr);
+    }
+    return false;
+  }
+
+  VkComputePipelineCreateInfo fxaa_pipeline_create_info;
+  fxaa_pipeline_create_info.sType =
+      VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  fxaa_pipeline_create_info.pNext = nullptr;
+  fxaa_pipeline_create_info.flags = 0;
+  fxaa_pipeline_create_info.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  fxaa_pipeline_create_info.stage.pNext = nullptr;
+  fxaa_pipeline_create_info.stage.flags = 0;
+  fxaa_pipeline_create_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  fxaa_pipeline_create_info.stage.pName = "main";
+  fxaa_pipeline_create_info.stage.pSpecializationInfo = nullptr;
+  fxaa_pipeline_create_info.layout = fxaa_pipeline_layout_;
+  fxaa_pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
+  fxaa_pipeline_create_info.basePipelineIndex = -1;
+
+  fxaa_pipeline_create_info.stage.module = fxaa_shader_module;
+  VkResult fxaa_pipeline_create_result = dfn.vkCreateComputePipelines(
+      device, VK_NULL_HANDLE, 1, &fxaa_pipeline_create_info, nullptr,
+      &fxaa_pipeline_);
+  fxaa_pipeline_create_info.stage.module = fxaa_extreme_shader_module;
+  VkResult fxaa_extreme_pipeline_create_result = dfn.vkCreateComputePipelines(
+      device, VK_NULL_HANDLE, 1, &fxaa_pipeline_create_info, nullptr,
+      &fxaa_extreme_pipeline_);
+  dfn.vkDestroyShaderModule(device, fxaa_shader_module, nullptr);
+  dfn.vkDestroyShaderModule(device, fxaa_extreme_shader_module, nullptr);
+  if (fxaa_pipeline_create_result != VK_SUCCESS ||
+      fxaa_extreme_pipeline_create_result != VK_SUCCESS) {
+    XELOGE("Failed to create the FXAA compute pipelines");
     return false;
   }
 
@@ -1018,8 +1208,35 @@ void VulkanCommandProcessor::ShutdownContext() {
   ui::vulkan::util::DestroyAndNullHandle(
       dfn.vkDestroyPipeline, device,
       swap_apply_gamma_256_entry_table_pipeline_);
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkDestroyPipeline, device, swap_apply_gamma_pwl_fxaa_luma_pipeline_);
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkDestroyPipeline, device,
+      swap_apply_gamma_256_entry_table_fxaa_luma_pipeline_);
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, device,
                                          swap_apply_gamma_pipeline_layout_);
+
+  // FXAA cleanup.
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
+                                         fxaa_extreme_pipeline_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
+                                         fxaa_pipeline_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, device,
+                                         fxaa_pipeline_layout_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroySampler, device,
+                                         fxaa_sampler_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyImageView, device,
+                                         fxaa_source_image_view_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyImage, device,
+                                         fxaa_source_image_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkFreeMemory, device,
+                                         fxaa_source_memory_);
+  fxaa_source_width_ = 0;
+  fxaa_source_height_ = 0;
+  fxaa_source_last_submission_ = 0;
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorSetLayout,
+                                         device,
+                                         fxaa_source_descriptor_set_layout_);
 
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
                                          swap_descriptor_pool_);
@@ -1155,6 +1372,14 @@ void VulkanCommandProcessor::ShutdownContext() {
     dfn.vkDestroyBuffer(device, destroy_pair.second, nullptr);
   }
   destroy_buffers_.clear();
+  for (const auto& destroy_pair : destroy_image_views_) {
+    dfn.vkDestroyImageView(device, destroy_pair.second, nullptr);
+  }
+  destroy_image_views_.clear();
+  for (const auto& destroy_pair : destroy_images_) {
+    dfn.vkDestroyImage(device, destroy_pair.second, nullptr);
+  }
+  destroy_images_.clear();
   for (const auto& destroy_pair : destroy_memory_) {
     dfn.vkFreeMemory(device, destroy_pair.second, nullptr);
   }
@@ -1326,8 +1551,147 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             frontbuffer_format ==
                 xenos::TextureFormat::k_2_10_10_10_AS_16_16_16_16;
 
-        // TODO(Triang3l): FXAA can result in more than 8 bits of precision.
-        context.SetIs8bpc(!use_pwl_gamma_ramp);
+        SwapPostEffect swap_post_effect = GetActualSwapPostEffect();
+        bool use_fxaa = swap_post_effect == SwapPostEffect::kFxaa ||
+                        swap_post_effect == SwapPostEffect::kFxaaExtreme;
+
+        if (use_fxaa) {
+          // Make sure the texture of the correct size is available for FXAA.
+          if (fxaa_source_image_ != VK_NULL_HANDLE &&
+              (fxaa_source_width_ != frontbuffer_width_scaled ||
+               fxaa_source_height_ != frontbuffer_height_scaled)) {
+            // Need to resize the FXAA source texture.
+            if (submission_completed_ < fxaa_source_last_submission_) {
+              // Still in use - defer destruction.
+              destroy_memory_.emplace_back(fxaa_source_last_submission_,
+                                           fxaa_source_memory_);
+              destroy_images_.emplace_back(fxaa_source_last_submission_,
+                                           fxaa_source_image_);
+              destroy_image_views_.emplace_back(fxaa_source_last_submission_,
+                                                fxaa_source_image_view_);
+            } else {
+              dfn.vkDestroyImageView(device, fxaa_source_image_view_, nullptr);
+              dfn.vkDestroyImage(device, fxaa_source_image_, nullptr);
+              dfn.vkFreeMemory(device, fxaa_source_memory_, nullptr);
+            }
+            fxaa_source_image_ = VK_NULL_HANDLE;
+            fxaa_source_image_view_ = VK_NULL_HANDLE;
+            fxaa_source_memory_ = VK_NULL_HANDLE;
+            fxaa_source_width_ = 0;
+            fxaa_source_height_ = 0;
+            fxaa_source_last_submission_ = 0;
+          }
+          if (fxaa_source_image_ == VK_NULL_HANDLE) {
+            // Create the FXAA source texture.
+            VkImageCreateInfo fxaa_source_image_create_info;
+            fxaa_source_image_create_info.sType =
+                VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            fxaa_source_image_create_info.pNext = nullptr;
+            fxaa_source_image_create_info.flags = 0;
+            fxaa_source_image_create_info.imageType = VK_IMAGE_TYPE_2D;
+            fxaa_source_image_create_info.format = kFxaaSourceFormat;
+            fxaa_source_image_create_info.extent.width =
+                frontbuffer_width_scaled;
+            fxaa_source_image_create_info.extent.height =
+                frontbuffer_height_scaled;
+            fxaa_source_image_create_info.extent.depth = 1;
+            fxaa_source_image_create_info.mipLevels = 1;
+            fxaa_source_image_create_info.arrayLayers = 1;
+            fxaa_source_image_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+            fxaa_source_image_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+            fxaa_source_image_create_info.usage =
+                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            fxaa_source_image_create_info.sharingMode =
+                VK_SHARING_MODE_EXCLUSIVE;
+            fxaa_source_image_create_info.queueFamilyIndexCount = 0;
+            fxaa_source_image_create_info.pQueueFamilyIndices = nullptr;
+            fxaa_source_image_create_info.initialLayout =
+                VK_IMAGE_LAYOUT_UNDEFINED;
+            if (dfn.vkCreateImage(device, &fxaa_source_image_create_info,
+                                  nullptr, &fxaa_source_image_) != VK_SUCCESS) {
+              XELOGE("Failed to create the FXAA source image");
+              use_fxaa = false;
+            } else {
+              VkMemoryRequirements fxaa_source_memory_requirements;
+              dfn.vkGetImageMemoryRequirements(
+                  device, fxaa_source_image_, &fxaa_source_memory_requirements);
+              VkMemoryAllocateInfo fxaa_source_memory_allocate_info;
+              fxaa_source_memory_allocate_info.sType =
+                  VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+              fxaa_source_memory_allocate_info.pNext = nullptr;
+              fxaa_source_memory_allocate_info.allocationSize =
+                  fxaa_source_memory_requirements.size;
+              fxaa_source_memory_allocate_info.memoryTypeIndex =
+                  ui::vulkan::util::ChooseMemoryType(
+                      vulkan_device->memory_types(),
+                      fxaa_source_memory_requirements.memoryTypeBits,
+                      ui::vulkan::util::MemoryPurpose::kDeviceLocal);
+              if (fxaa_source_memory_allocate_info.memoryTypeIndex ==
+                      UINT32_MAX ||
+                  dfn.vkAllocateMemory(
+                      device, &fxaa_source_memory_allocate_info, nullptr,
+                      &fxaa_source_memory_) != VK_SUCCESS) {
+                XELOGE("Failed to allocate FXAA source image memory");
+                dfn.vkDestroyImage(device, fxaa_source_image_, nullptr);
+                fxaa_source_image_ = VK_NULL_HANDLE;
+                use_fxaa = false;
+              } else if (dfn.vkBindImageMemory(device, fxaa_source_image_,
+                                               fxaa_source_memory_,
+                                               0) != VK_SUCCESS) {
+                XELOGE("Failed to bind FXAA source image memory");
+                dfn.vkFreeMemory(device, fxaa_source_memory_, nullptr);
+                fxaa_source_memory_ = VK_NULL_HANDLE;
+                dfn.vkDestroyImage(device, fxaa_source_image_, nullptr);
+                fxaa_source_image_ = VK_NULL_HANDLE;
+                use_fxaa = false;
+              } else {
+                VkImageViewCreateInfo fxaa_source_image_view_create_info;
+                fxaa_source_image_view_create_info.sType =
+                    VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                fxaa_source_image_view_create_info.pNext = nullptr;
+                fxaa_source_image_view_create_info.flags = 0;
+                fxaa_source_image_view_create_info.image = fxaa_source_image_;
+                fxaa_source_image_view_create_info.viewType =
+                    VK_IMAGE_VIEW_TYPE_2D;
+                fxaa_source_image_view_create_info.format = kFxaaSourceFormat;
+                fxaa_source_image_view_create_info.components.r =
+                    VK_COMPONENT_SWIZZLE_IDENTITY;
+                fxaa_source_image_view_create_info.components.g =
+                    VK_COMPONENT_SWIZZLE_IDENTITY;
+                fxaa_source_image_view_create_info.components.b =
+                    VK_COMPONENT_SWIZZLE_IDENTITY;
+                fxaa_source_image_view_create_info.components.a =
+                    VK_COMPONENT_SWIZZLE_IDENTITY;
+                fxaa_source_image_view_create_info.subresourceRange.aspectMask =
+                    VK_IMAGE_ASPECT_COLOR_BIT;
+                fxaa_source_image_view_create_info.subresourceRange
+                    .baseMipLevel = 0;
+                fxaa_source_image_view_create_info.subresourceRange.levelCount =
+                    1;
+                fxaa_source_image_view_create_info.subresourceRange
+                    .baseArrayLayer = 0;
+                fxaa_source_image_view_create_info.subresourceRange.layerCount =
+                    1;
+                if (dfn.vkCreateImageView(
+                        device, &fxaa_source_image_view_create_info, nullptr,
+                        &fxaa_source_image_view_) != VK_SUCCESS) {
+                  XELOGE("Failed to create the FXAA source image view");
+                  dfn.vkFreeMemory(device, fxaa_source_memory_, nullptr);
+                  fxaa_source_memory_ = VK_NULL_HANDLE;
+                  dfn.vkDestroyImage(device, fxaa_source_image_, nullptr);
+                  fxaa_source_image_ = VK_NULL_HANDLE;
+                  use_fxaa = false;
+                } else {
+                  fxaa_source_width_ = frontbuffer_width_scaled;
+                  fxaa_source_height_ = frontbuffer_height_scaled;
+                }
+              }
+            }
+          }
+        }
+
+        // FXAA can result in more than 8 bits of precision.
+        context.SetIs8bpc(!use_pwl_gamma_ramp && !use_fxaa);
 
         // Update the gamma ramp if it's out of date.
         uint32_t& gamma_ramp_frame_index_ref =
@@ -1413,13 +1777,35 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
               gamma_ramp_has_upload_buffer ? 0 : swap_frame_index;
         }
 
-        // Transition guest output image for compute shader storage image write.
-        if (vulkan_context.image_ever_written_previously()) {
-          // Insert a barrier after the last presenter's usage of the guest
-          // output image. Will be overwriting all the contents, so oldLayout
-          // can be UNDEFINED.
+        // Track FXAA source texture submission.
+        if (use_fxaa) {
+          fxaa_source_last_submission_ = GetCurrentSubmission();
+        }
+
+        // Determine the destination image for gamma application.
+        // If FXAA is enabled, gamma writes to the FXAA source texture.
+        // Otherwise, it writes directly to the guest output.
+        VkImage apply_gamma_dest_image =
+            use_fxaa ? fxaa_source_image_ : vulkan_context.image();
+        VkImageView apply_gamma_dest_image_view =
+            use_fxaa ? fxaa_source_image_view_ : vulkan_context.image_view();
+
+        // Transition destination image for compute shader storage image write.
+        if (use_fxaa) {
+          // FXAA source - transition from undefined (we'll be overwriting).
+          PushImageMemoryBarrier(apply_gamma_dest_image,
+                                 ui::vulkan::util::InitializeSubresourceRange(),
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                 VK_ACCESS_SHADER_WRITE_BIT,
+                                 VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_GENERAL);
+        } else if (vulkan_context.image_ever_written_previously()) {
+          // Guest output - insert a barrier after the last presenter's usage.
+          // Will be overwriting all the contents, so oldLayout can be
+          // UNDEFINED.
           PushImageMemoryBarrier(
-              vulkan_context.image(),
+              apply_gamma_dest_image,
               ui::vulkan::util::InitializeSubresourceRange(),
               ui::vulkan::VulkanPresenter::kGuestOutputInternalStageMask,
               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -1427,8 +1813,8 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
               VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
               VK_IMAGE_LAYOUT_GENERAL);
         } else {
-          // First write to the image - just transition from undefined.
-          PushImageMemoryBarrier(vulkan_context.image(),
+          // Guest output - first write to the image, just transition.
+          PushImageMemoryBarrier(apply_gamma_dest_image,
                                  ui::vulkan::util::InitializeSubresourceRange(),
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
@@ -1440,14 +1826,22 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         // End the current render pass before inserting barriers.
         SubmitBarriers(true);
 
-        PushDebugMarker("Apply Gamma Ramp: %s",
-                        use_pwl_gamma_ramp ? "PWL" : "256-entry table");
+        PushDebugMarker("Apply Gamma Ramp: %s%s",
+                        use_pwl_gamma_ramp ? "PWL" : "256-entry table",
+                        use_fxaa ? " (with FXAA luma)" : "");
 
-        // Bind the compute pipeline.
+        // Select the appropriate gamma pipeline.
+        VkPipeline gamma_pipeline;
+        if (use_pwl_gamma_ramp) {
+          gamma_pipeline = use_fxaa ? swap_apply_gamma_pwl_fxaa_luma_pipeline_
+                                    : swap_apply_gamma_pwl_pipeline_;
+        } else {
+          gamma_pipeline =
+              use_fxaa ? swap_apply_gamma_256_entry_table_fxaa_luma_pipeline_
+                       : swap_apply_gamma_256_entry_table_pipeline_;
+        }
         deferred_command_buffer_.CmdVkBindPipeline(
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            use_pwl_gamma_ramp ? swap_apply_gamma_pwl_pipeline_
-                               : swap_apply_gamma_256_entry_table_pipeline_);
+            VK_PIPELINE_BIND_POINT_COMPUTE, gamma_pipeline);
 
         // Update the source descriptor set with the swap texture.
         VkDescriptorSet swap_descriptor_source =
@@ -1472,12 +1866,16 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         swap_descriptor_source_write.pBufferInfo = nullptr;
         swap_descriptor_source_write.pTexelBufferView = nullptr;
 
-        // Update the destination descriptor set with the guest output image.
+        // Update the destination descriptor set with the destination image.
+        // When FXAA is enabled, use a separate descriptor set for writing to
+        // FXAA source to avoid the issue where both passes would use the same
+        // descriptor set (which gets updated twice before submission).
         VkDescriptorSet swap_descriptor_dest =
-            swap_descriptors_dest_[swap_frame_index];
+            use_fxaa ? fxaa_source_storage_descriptors_[swap_frame_index]
+                     : swap_descriptors_dest_[swap_frame_index];
         VkDescriptorImageInfo swap_descriptor_dest_image_info;
         swap_descriptor_dest_image_info.sampler = VK_NULL_HANDLE;
-        swap_descriptor_dest_image_info.imageView = vulkan_context.image_view();
+        swap_descriptor_dest_image_info.imageView = apply_gamma_dest_image_view;
         swap_descriptor_dest_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         VkWriteDescriptorSet swap_descriptor_dest_write;
         swap_descriptor_dest_write.sType =
@@ -1530,6 +1928,128 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y, 1);
 
         PopDebugMarker();
+
+        // Apply FXAA if enabled.
+        if (use_fxaa) {
+          PushDebugMarker("FXAA: %s",
+                          swap_post_effect == SwapPostEffect::kFxaaExtreme
+                              ? "Extreme"
+                              : "Standard");
+
+          // Transition FXAA source from storage image write to sampled read.
+          // Transition guest output to storage image write.
+          PushImageMemoryBarrier(
+              fxaa_source_image_,
+              ui::vulkan::util::InitializeSubresourceRange(),
+              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+              VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_GENERAL,
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+          if (vulkan_context.image_ever_written_previously()) {
+            PushImageMemoryBarrier(
+                vulkan_context.image(),
+                ui::vulkan::util::InitializeSubresourceRange(),
+                ui::vulkan::VulkanPresenter::kGuestOutputInternalStageMask,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                ui::vulkan::VulkanPresenter::kGuestOutputInternalAccessMask,
+                VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_GENERAL);
+          } else {
+            PushImageMemoryBarrier(
+                vulkan_context.image(),
+                ui::vulkan::util::InitializeSubresourceRange(),
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_GENERAL);
+          }
+          SubmitBarriers(true);
+
+          // Bind FXAA pipeline.
+          deferred_command_buffer_.CmdVkBindPipeline(
+              VK_PIPELINE_BIND_POINT_COMPUTE,
+              swap_post_effect == SwapPostEffect::kFxaaExtreme
+                  ? fxaa_extreme_pipeline_
+                  : fxaa_pipeline_);
+
+          // Update FXAA source descriptor (combined image sampler).
+          VkDescriptorSet fxaa_source_descriptor =
+              fxaa_source_descriptors_[swap_frame_index];
+          VkDescriptorImageInfo fxaa_source_descriptor_image_info;
+          fxaa_source_descriptor_image_info.sampler = fxaa_sampler_;
+          fxaa_source_descriptor_image_info.imageView = fxaa_source_image_view_;
+          fxaa_source_descriptor_image_info.imageLayout =
+              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+          VkWriteDescriptorSet fxaa_source_descriptor_write;
+          fxaa_source_descriptor_write.sType =
+              VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+          fxaa_source_descriptor_write.pNext = nullptr;
+          fxaa_source_descriptor_write.dstSet = fxaa_source_descriptor;
+          fxaa_source_descriptor_write.dstBinding = 0;
+          fxaa_source_descriptor_write.dstArrayElement = 0;
+          fxaa_source_descriptor_write.descriptorCount = 1;
+          fxaa_source_descriptor_write.descriptorType =
+              VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+          fxaa_source_descriptor_write.pImageInfo =
+              &fxaa_source_descriptor_image_info;
+          fxaa_source_descriptor_write.pBufferInfo = nullptr;
+          fxaa_source_descriptor_write.pTexelBufferView = nullptr;
+
+          // Update FXAA destination descriptor (guest output image).
+          VkDescriptorSet fxaa_dest_descriptor =
+              swap_descriptors_dest_[swap_frame_index];
+          VkDescriptorImageInfo fxaa_dest_descriptor_image_info;
+          fxaa_dest_descriptor_image_info.sampler = VK_NULL_HANDLE;
+          fxaa_dest_descriptor_image_info.imageView =
+              vulkan_context.image_view();
+          fxaa_dest_descriptor_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+          VkWriteDescriptorSet fxaa_dest_descriptor_write;
+          fxaa_dest_descriptor_write.sType =
+              VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+          fxaa_dest_descriptor_write.pNext = nullptr;
+          fxaa_dest_descriptor_write.dstSet = fxaa_dest_descriptor;
+          fxaa_dest_descriptor_write.dstBinding = 0;
+          fxaa_dest_descriptor_write.dstArrayElement = 0;
+          fxaa_dest_descriptor_write.descriptorCount = 1;
+          fxaa_dest_descriptor_write.descriptorType =
+              VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+          fxaa_dest_descriptor_write.pImageInfo =
+              &fxaa_dest_descriptor_image_info;
+          fxaa_dest_descriptor_write.pBufferInfo = nullptr;
+          fxaa_dest_descriptor_write.pTexelBufferView = nullptr;
+
+          std::array<VkWriteDescriptorSet, 2> fxaa_descriptor_writes = {
+              fxaa_source_descriptor_write, fxaa_dest_descriptor_write};
+          dfn.vkUpdateDescriptorSets(device,
+                                     uint32_t(fxaa_descriptor_writes.size()),
+                                     fxaa_descriptor_writes.data(), 0, nullptr);
+
+          // Set FXAA push constants.
+          FxaaConstants fxaa_constants;
+          fxaa_constants.size[0] = frontbuffer_width_scaled;
+          fxaa_constants.size[1] = frontbuffer_height_scaled;
+          fxaa_constants.size_inv[0] =
+              1.0f / static_cast<float>(frontbuffer_width_scaled);
+          fxaa_constants.size_inv[1] =
+              1.0f / static_cast<float>(frontbuffer_height_scaled);
+          deferred_command_buffer_.CmdVkPushConstants(
+              fxaa_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+              sizeof(fxaa_constants), &fxaa_constants);
+
+          // Bind FXAA descriptor sets.
+          std::array<VkDescriptorSet, 2> fxaa_descriptor_sets = {
+              fxaa_dest_descriptor, fxaa_source_descriptor};
+          deferred_command_buffer_.CmdVkBindDescriptorSets(
+              VK_PIPELINE_BIND_POINT_COMPUTE, fxaa_pipeline_layout_, 0,
+              uint32_t(fxaa_descriptor_sets.size()),
+              fxaa_descriptor_sets.data(), 0, nullptr);
+
+          // Dispatch FXAA compute shader.
+          deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y,
+                                                 1);
+
+          PopDebugMarker();
+        }
 
         // Insert the release barrier - transition from GENERAL to the
         // presenter's expected layout.
@@ -3737,6 +4257,22 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(
     }
     dfn.vkDestroyBuffer(device, destroy_pair.second, nullptr);
     destroy_buffers_.pop_front();
+  }
+  while (!destroy_image_views_.empty()) {
+    const auto& destroy_pair = destroy_image_views_.front();
+    if (destroy_pair.first > submission_completed_) {
+      break;
+    }
+    dfn.vkDestroyImageView(device, destroy_pair.second, nullptr);
+    destroy_image_views_.pop_front();
+  }
+  while (!destroy_images_.empty()) {
+    const auto& destroy_pair = destroy_images_.front();
+    if (destroy_pair.first > submission_completed_) {
+      break;
+    }
+    dfn.vkDestroyImage(device, destroy_pair.second, nullptr);
+    destroy_images_.pop_front();
   }
   while (!destroy_memory_.empty()) {
     const auto& destroy_pair = destroy_memory_.front();
