@@ -406,16 +406,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
   enum SwapApplyGammaDescriptorSet : uint32_t {
     kSwapApplyGammaDescriptorSetRamp,
     kSwapApplyGammaDescriptorSetSource,
+    kSwapApplyGammaDescriptorSetDest,
 
     kSwapApplyGammaDescriptorSetCount,
-  };
-
-  // Framebuffer for the current presenter's guest output image revision, and
-  // its usage tracking.
-  struct SwapFramebuffer {
-    VkFramebuffer framebuffer = VK_NULL_HANDLE;
-    uint64_t version = UINT64_MAX;
-    uint64_t last_submission = 0;
   };
 
   // BeginSubmission and EndSubmission may be called at any time. If there's an
@@ -639,6 +632,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
       VK_NULL_HANDLE;
   VkDescriptorSetLayout swap_descriptor_set_layout_uniform_texel_buffer_ =
       VK_NULL_HANDLE;
+  // Storage image descriptor set layout for compute shader destination.
+  VkDescriptorSetLayout swap_descriptor_set_layout_storage_image_ =
+      VK_NULL_HANDLE;
 
   // Descriptor pool for allocating descriptors needed for presentation, such as
   // the destination images and the gamma ramps.
@@ -648,20 +644,18 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // uploaded directly, one otherwise.
   std::array<VkDescriptorSet, 2 * kMaxFramesInFlight>
       swap_descriptors_gamma_ramp_;
-  // Sampled images.
+  // Sampled images for source.
   std::array<VkDescriptorSet, kMaxFramesInFlight> swap_descriptors_source_;
+  // Storage images for destination.
+  std::array<VkDescriptorSet, kMaxFramesInFlight> swap_descriptors_dest_;
 
+  // Gamma ramp application compute pipeline constants.
+  struct ApplyGammaConstants {
+    uint32_t size[2];
+  };
   VkPipelineLayout swap_apply_gamma_pipeline_layout_ = VK_NULL_HANDLE;
-  // Has no dependencies on specific pipeline stages on both ends to simplify
-  // use in different scenarios with different pipelines - use explicit barriers
-  // for synchronization.
-  VkRenderPass swap_apply_gamma_render_pass_ = VK_NULL_HANDLE;
   VkPipeline swap_apply_gamma_256_entry_table_pipeline_ = VK_NULL_HANDLE;
   VkPipeline swap_apply_gamma_pwl_pipeline_ = VK_NULL_HANDLE;
-
-  std::array<SwapFramebuffer,
-             ui::vulkan::VulkanPresenter::kMaxActiveGuestOutputImageVersions>
-      swap_framebuffers_;
 
   // Pending pipeline barriers.
   std::vector<VkBufferMemoryBarrier> pending_barriers_buffer_memory_barriers_;

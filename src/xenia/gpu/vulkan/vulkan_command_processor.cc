@@ -48,11 +48,8 @@ namespace vulkan {
 
 // Generated with `xb buildshaders`.
 namespace shaders {
-#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_pwl_fxaa_luma_ps.h"
-#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_pwl_ps.h"
-#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_fxaa_luma_ps.h"
-#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_ps.h"
-#include "xenia/gpu/shaders/bytecode/vulkan_spirv/fullscreen_cw_vs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_pwl_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_cs.h"
 }  // namespace shaders
 
 constexpr VkDescriptorPoolSize
@@ -745,7 +742,7 @@ bool VulkanCommandProcessor::SetupContext() {
   VkDescriptorSetLayoutBinding swap_descriptor_set_layout_binding;
   swap_descriptor_set_layout_binding.binding = 0;
   swap_descriptor_set_layout_binding.descriptorCount = 1;
-  swap_descriptor_set_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  swap_descriptor_set_layout_binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   swap_descriptor_set_layout_binding.pImmutableSamplers = nullptr;
   VkDescriptorSetLayoutCreateInfo swap_descriptor_set_layout_create_info;
   swap_descriptor_set_layout_create_info.sType =
@@ -775,9 +772,19 @@ bool VulkanCommandProcessor::SetupContext() {
         "layout");
     return false;
   }
+  swap_descriptor_set_layout_binding.descriptorType =
+      VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+  if (dfn.vkCreateDescriptorSetLayout(
+          device, &swap_descriptor_set_layout_create_info, nullptr,
+          &swap_descriptor_set_layout_storage_image_) != VK_SUCCESS) {
+    XELOGE(
+        "Failed to create the presentation storage image descriptor set "
+        "layout");
+    return false;
+  }
 
   // Swap descriptor pool.
-  std::array<VkDescriptorPoolSize, 2> swap_descriptor_pool_sizes;
+  std::array<VkDescriptorPoolSize, 3> swap_descriptor_pool_sizes;
   VkDescriptorPoolCreateInfo swap_descriptor_pool_create_info;
   swap_descriptor_pool_create_info.sType =
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -811,6 +818,17 @@ bool VulkanCommandProcessor::SetupContext() {
     swap_descriptor_pool_size_uniform_texel_buffer.descriptorCount =
         gamma_ramp_buffer_view_count;
     swap_descriptor_pool_create_info.maxSets += gamma_ramp_buffer_view_count;
+  }
+  // Destination storage images for compute shader output.
+  {
+    VkDescriptorPoolSize& swap_descriptor_pool_size_storage_image =
+        swap_descriptor_pool_sizes[swap_descriptor_pool_create_info
+                                       .poolSizeCount++];
+    swap_descriptor_pool_size_storage_image.type =
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    swap_descriptor_pool_size_storage_image.descriptorCount =
+        kMaxFramesInFlight;
+    swap_descriptor_pool_create_info.maxSets += kMaxFramesInFlight;
   }
   if (dfn.vkCreateDescriptorPool(device, &swap_descriptor_pool_create_info,
                                  nullptr,
@@ -847,6 +865,18 @@ bool VulkanCommandProcessor::SetupContext() {
       return false;
     }
   }
+  swap_descriptor_set_allocate_info.pSetLayouts =
+      &swap_descriptor_set_layout_storage_image_;
+  for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
+    if (dfn.vkAllocateDescriptorSets(device, &swap_descriptor_set_allocate_info,
+                                     &swap_descriptors_dest_[i]) !=
+        VK_SUCCESS) {
+      XELOGE(
+          "Failed to allocate the presentation destination image descriptor "
+          "sets");
+      return false;
+    }
+  }
 
   // Gamma ramp descriptor sets.
   VkWriteDescriptorSet gamma_ramp_write_descriptor_set;
@@ -868,13 +898,19 @@ bool VulkanCommandProcessor::SetupContext() {
                                nullptr);
   }
 
-  // Gamma ramp application pipeline layout.
+  // Gamma ramp application compute pipeline layout.
   std::array<VkDescriptorSetLayout, kSwapApplyGammaDescriptorSetCount>
       swap_apply_gamma_descriptor_set_layouts{};
   swap_apply_gamma_descriptor_set_layouts[kSwapApplyGammaDescriptorSetRamp] =
       swap_descriptor_set_layout_uniform_texel_buffer_;
   swap_apply_gamma_descriptor_set_layouts[kSwapApplyGammaDescriptorSetSource] =
       swap_descriptor_set_layout_sampled_image_;
+  swap_apply_gamma_descriptor_set_layouts[kSwapApplyGammaDescriptorSetDest] =
+      swap_descriptor_set_layout_storage_image_;
+  VkPushConstantRange swap_apply_gamma_push_constant_range;
+  swap_apply_gamma_push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  swap_apply_gamma_push_constant_range.offset = 0;
+  swap_apply_gamma_push_constant_range.size = sizeof(ApplyGammaConstants);
   VkPipelineLayoutCreateInfo swap_apply_gamma_pipeline_layout_create_info;
   swap_apply_gamma_pipeline_layout_create_info.sType =
       VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -884,8 +920,9 @@ bool VulkanCommandProcessor::SetupContext() {
       uint32_t(swap_apply_gamma_descriptor_set_layouts.size());
   swap_apply_gamma_pipeline_layout_create_info.pSetLayouts =
       swap_apply_gamma_descriptor_set_layouts.data();
-  swap_apply_gamma_pipeline_layout_create_info.pushConstantRangeCount = 0;
-  swap_apply_gamma_pipeline_layout_create_info.pPushConstantRanges = nullptr;
+  swap_apply_gamma_pipeline_layout_create_info.pushConstantRangeCount = 1;
+  swap_apply_gamma_pipeline_layout_create_info.pPushConstantRanges =
+      &swap_apply_gamma_push_constant_range;
   if (dfn.vkCreatePipelineLayout(
           device, &swap_apply_gamma_pipeline_layout_create_info, nullptr,
           &swap_apply_gamma_pipeline_layout_) != VK_SUCCESS) {
@@ -893,264 +930,67 @@ bool VulkanCommandProcessor::SetupContext() {
     return false;
   }
 
-  // Gamma application render pass. Doesn't make assumptions about outer usage
-  // (explicit barriers must be used instead) for simplicity of use in different
-  // scenarios with different pipelines.
-  VkAttachmentDescription swap_apply_gamma_render_pass_attachment;
-  swap_apply_gamma_render_pass_attachment.flags = 0;
-  swap_apply_gamma_render_pass_attachment.format =
-      ui::vulkan::VulkanPresenter::kGuestOutputFormat;
-  swap_apply_gamma_render_pass_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  swap_apply_gamma_render_pass_attachment.loadOp =
-      VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  swap_apply_gamma_render_pass_attachment.storeOp =
-      VK_ATTACHMENT_STORE_OP_STORE;
-  swap_apply_gamma_render_pass_attachment.stencilLoadOp =
-      VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  swap_apply_gamma_render_pass_attachment.stencilStoreOp =
-      VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  swap_apply_gamma_render_pass_attachment.initialLayout =
-      VK_IMAGE_LAYOUT_UNDEFINED;
-  swap_apply_gamma_render_pass_attachment.finalLayout =
-      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  VkAttachmentReference swap_apply_gamma_render_pass_color_attachment;
-  swap_apply_gamma_render_pass_color_attachment.attachment = 0;
-  swap_apply_gamma_render_pass_color_attachment.layout =
-      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  VkSubpassDescription swap_apply_gamma_render_pass_subpass = {};
-  swap_apply_gamma_render_pass_subpass.pipelineBindPoint =
-      VK_PIPELINE_BIND_POINT_GRAPHICS;
-  swap_apply_gamma_render_pass_subpass.colorAttachmentCount = 1;
-  swap_apply_gamma_render_pass_subpass.pColorAttachments =
-      &swap_apply_gamma_render_pass_color_attachment;
-  VkSubpassDependency swap_apply_gamma_render_pass_dependencies[2];
-  for (uint32_t i = 0; i < 2; ++i) {
-    VkSubpassDependency& swap_apply_gamma_render_pass_dependency =
-        swap_apply_gamma_render_pass_dependencies[i];
-    swap_apply_gamma_render_pass_dependency.srcSubpass =
-        i ? 0 : VK_SUBPASS_EXTERNAL;
-    swap_apply_gamma_render_pass_dependency.dstSubpass =
-        i ? VK_SUBPASS_EXTERNAL : 0;
-    swap_apply_gamma_render_pass_dependency.srcStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    swap_apply_gamma_render_pass_dependency.dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    swap_apply_gamma_render_pass_dependency.srcAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    swap_apply_gamma_render_pass_dependency.dstAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    swap_apply_gamma_render_pass_dependency.dependencyFlags =
-        VK_DEPENDENCY_BY_REGION_BIT;
-  }
-  VkRenderPassCreateInfo swap_apply_gamma_render_pass_create_info;
-  swap_apply_gamma_render_pass_create_info.sType =
-      VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  swap_apply_gamma_render_pass_create_info.pNext = nullptr;
-  swap_apply_gamma_render_pass_create_info.flags = 0;
-  swap_apply_gamma_render_pass_create_info.attachmentCount = 1;
-  swap_apply_gamma_render_pass_create_info.pAttachments =
-      &swap_apply_gamma_render_pass_attachment;
-  swap_apply_gamma_render_pass_create_info.subpassCount = 1;
-  swap_apply_gamma_render_pass_create_info.pSubpasses =
-      &swap_apply_gamma_render_pass_subpass;
-  swap_apply_gamma_render_pass_create_info.dependencyCount =
-      uint32_t(xe::countof(swap_apply_gamma_render_pass_dependencies));
-  swap_apply_gamma_render_pass_create_info.pDependencies =
-      swap_apply_gamma_render_pass_dependencies;
-  if (dfn.vkCreateRenderPass(device, &swap_apply_gamma_render_pass_create_info,
-                             nullptr,
-                             &swap_apply_gamma_render_pass_) != VK_SUCCESS) {
-    XELOGE("Failed to create the gamma ramp application render pass");
-    return false;
-  }
-
-  // Gamma ramp application pipeline.
-  // Using a graphics pipeline, not a compute one, because storage image support
-  // is optional for VK_FORMAT_A2B10G10R10_UNORM_PACK32.
-
-  enum SwapApplyGammaPixelShader {
-    kSwapApplyGammaPixelShader256EntryTable,
-    kSwapApplyGammaPixelShaderPWL,
-
-    kSwapApplyGammaPixelShaderCount,
-  };
-  std::array<VkShaderModule, kSwapApplyGammaPixelShaderCount>
-      swap_apply_gamma_pixel_shaders{};
-  bool swap_apply_gamma_pixel_shaders_created =
-      (swap_apply_gamma_pixel_shaders[kSwapApplyGammaPixelShader256EntryTable] =
-           ui::vulkan::util::CreateShaderModule(
-               vulkan_device, shaders::apply_gamma_table_ps,
-               sizeof(shaders::apply_gamma_table_ps))) != VK_NULL_HANDLE &&
-      (swap_apply_gamma_pixel_shaders[kSwapApplyGammaPixelShaderPWL] =
-           ui::vulkan::util::CreateShaderModule(
-               vulkan_device, shaders::apply_gamma_pwl_ps,
-               sizeof(shaders::apply_gamma_pwl_ps))) != VK_NULL_HANDLE;
-  if (!swap_apply_gamma_pixel_shaders_created) {
-    XELOGE("Failed to create the gamma ramp application pixel shader modules");
-    for (VkShaderModule swap_apply_gamma_pixel_shader :
-         swap_apply_gamma_pixel_shaders) {
-      if (swap_apply_gamma_pixel_shader != VK_NULL_HANDLE) {
-        dfn.vkDestroyShaderModule(device, swap_apply_gamma_pixel_shader,
-                                  nullptr);
-      }
-    }
-    return false;
-  }
-
-  VkPipelineShaderStageCreateInfo swap_apply_gamma_pipeline_stages[2];
-  swap_apply_gamma_pipeline_stages[0].sType =
-      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  swap_apply_gamma_pipeline_stages[0].pNext = nullptr;
-  swap_apply_gamma_pipeline_stages[0].flags = 0;
-  swap_apply_gamma_pipeline_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-  swap_apply_gamma_pipeline_stages[0].module =
+  // Gamma ramp application compute pipelines.
+  VkShaderModule swap_apply_gamma_table_shader_module =
+      ui::vulkan::util::CreateShaderModule(
+          vulkan_device, shaders::apply_gamma_table_cs,
+          sizeof(shaders::apply_gamma_table_cs));
+  VkShaderModule swap_apply_gamma_pwl_shader_module =
       ui::vulkan::util::CreateShaderModule(vulkan_device,
-                                           shaders::fullscreen_cw_vs,
-                                           sizeof(shaders::fullscreen_cw_vs));
-  if (swap_apply_gamma_pipeline_stages[0].module == VK_NULL_HANDLE) {
-    XELOGE("Failed to create the gamma ramp application vertex shader module");
-    for (VkShaderModule swap_apply_gamma_pixel_shader :
-         swap_apply_gamma_pixel_shaders) {
-      assert_true(swap_apply_gamma_pixel_shader != VK_NULL_HANDLE);
-      dfn.vkDestroyShaderModule(device, swap_apply_gamma_pixel_shader, nullptr);
+                                           shaders::apply_gamma_pwl_cs,
+                                           sizeof(shaders::apply_gamma_pwl_cs));
+  if (swap_apply_gamma_table_shader_module == VK_NULL_HANDLE ||
+      swap_apply_gamma_pwl_shader_module == VK_NULL_HANDLE) {
+    XELOGE(
+        "Failed to create the gamma ramp application compute shader modules");
+    if (swap_apply_gamma_table_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(device, swap_apply_gamma_table_shader_module,
+                                nullptr);
     }
+    if (swap_apply_gamma_pwl_shader_module != VK_NULL_HANDLE) {
+      dfn.vkDestroyShaderModule(device, swap_apply_gamma_pwl_shader_module,
+                                nullptr);
+    }
+    return false;
   }
-  swap_apply_gamma_pipeline_stages[0].pName = "main";
-  swap_apply_gamma_pipeline_stages[0].pSpecializationInfo = nullptr;
-  swap_apply_gamma_pipeline_stages[1].sType =
-      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-  swap_apply_gamma_pipeline_stages[1].pNext = nullptr;
-  swap_apply_gamma_pipeline_stages[1].flags = 0;
-  swap_apply_gamma_pipeline_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-  // The fragment shader module will be specified later.
-  swap_apply_gamma_pipeline_stages[1].pName = "main";
-  swap_apply_gamma_pipeline_stages[1].pSpecializationInfo = nullptr;
 
-  VkPipelineVertexInputStateCreateInfo
-      swap_apply_gamma_pipeline_vertex_input_state = {};
-  swap_apply_gamma_pipeline_vertex_input_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-  VkPipelineInputAssemblyStateCreateInfo
-      swap_apply_gamma_pipeline_input_assembly_state;
-  swap_apply_gamma_pipeline_input_assembly_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_input_assembly_state.pNext = nullptr;
-  swap_apply_gamma_pipeline_input_assembly_state.flags = 0;
-  swap_apply_gamma_pipeline_input_assembly_state.topology =
-      VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-  swap_apply_gamma_pipeline_input_assembly_state.primitiveRestartEnable =
-      VK_FALSE;
-
-  VkPipelineViewportStateCreateInfo swap_apply_gamma_pipeline_viewport_state;
-  swap_apply_gamma_pipeline_viewport_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_viewport_state.pNext = nullptr;
-  swap_apply_gamma_pipeline_viewport_state.flags = 0;
-  swap_apply_gamma_pipeline_viewport_state.viewportCount = 1;
-  swap_apply_gamma_pipeline_viewport_state.pViewports = nullptr;
-  swap_apply_gamma_pipeline_viewport_state.scissorCount = 1;
-  swap_apply_gamma_pipeline_viewport_state.pScissors = nullptr;
-
-  VkPipelineRasterizationStateCreateInfo
-      swap_apply_gamma_pipeline_rasterization_state = {};
-  swap_apply_gamma_pipeline_rasterization_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_rasterization_state.polygonMode =
-      VK_POLYGON_MODE_FILL;
-  swap_apply_gamma_pipeline_rasterization_state.cullMode = VK_CULL_MODE_NONE;
-  swap_apply_gamma_pipeline_rasterization_state.frontFace =
-      VK_FRONT_FACE_CLOCKWISE;
-  swap_apply_gamma_pipeline_rasterization_state.lineWidth = 1.0f;
-
-  VkPipelineMultisampleStateCreateInfo
-      swap_apply_gamma_pipeline_multisample_state = {};
-  swap_apply_gamma_pipeline_multisample_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_multisample_state.rasterizationSamples =
-      VK_SAMPLE_COUNT_1_BIT;
-
-  VkPipelineColorBlendAttachmentState
-      swap_apply_gamma_pipeline_color_blend_attachment_state = {};
-  swap_apply_gamma_pipeline_color_blend_attachment_state.colorWriteMask =
-      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-  VkPipelineColorBlendStateCreateInfo
-      swap_apply_gamma_pipeline_color_blend_state = {};
-  swap_apply_gamma_pipeline_color_blend_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_color_blend_state.attachmentCount = 1;
-  swap_apply_gamma_pipeline_color_blend_state.pAttachments =
-      &swap_apply_gamma_pipeline_color_blend_attachment_state;
-
-  static constexpr VkDynamicState kSwapApplyGammaPipelineDynamicStates[] = {
-      VK_DYNAMIC_STATE_VIEWPORT,
-      VK_DYNAMIC_STATE_SCISSOR,
-  };
-  VkPipelineDynamicStateCreateInfo swap_apply_gamma_pipeline_dynamic_state;
-  swap_apply_gamma_pipeline_dynamic_state.sType =
-      VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-  swap_apply_gamma_pipeline_dynamic_state.pNext = nullptr;
-  swap_apply_gamma_pipeline_dynamic_state.flags = 0;
-  swap_apply_gamma_pipeline_dynamic_state.dynamicStateCount =
-      uint32_t(xe::countof(kSwapApplyGammaPipelineDynamicStates));
-  swap_apply_gamma_pipeline_dynamic_state.pDynamicStates =
-      kSwapApplyGammaPipelineDynamicStates;
-
-  VkGraphicsPipelineCreateInfo swap_apply_gamma_pipeline_create_info;
+  VkComputePipelineCreateInfo swap_apply_gamma_pipeline_create_info;
   swap_apply_gamma_pipeline_create_info.sType =
-      VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+      VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
   swap_apply_gamma_pipeline_create_info.pNext = nullptr;
   swap_apply_gamma_pipeline_create_info.flags = 0;
-  swap_apply_gamma_pipeline_create_info.stageCount =
-      uint32_t(xe::countof(swap_apply_gamma_pipeline_stages));
-  swap_apply_gamma_pipeline_create_info.pStages =
-      swap_apply_gamma_pipeline_stages;
-  swap_apply_gamma_pipeline_create_info.pVertexInputState =
-      &swap_apply_gamma_pipeline_vertex_input_state;
-  swap_apply_gamma_pipeline_create_info.pInputAssemblyState =
-      &swap_apply_gamma_pipeline_input_assembly_state;
-  swap_apply_gamma_pipeline_create_info.pTessellationState = nullptr;
-  swap_apply_gamma_pipeline_create_info.pViewportState =
-      &swap_apply_gamma_pipeline_viewport_state;
-  swap_apply_gamma_pipeline_create_info.pRasterizationState =
-      &swap_apply_gamma_pipeline_rasterization_state;
-  swap_apply_gamma_pipeline_create_info.pMultisampleState =
-      &swap_apply_gamma_pipeline_multisample_state;
-  swap_apply_gamma_pipeline_create_info.pDepthStencilState = nullptr;
-  swap_apply_gamma_pipeline_create_info.pColorBlendState =
-      &swap_apply_gamma_pipeline_color_blend_state;
-  swap_apply_gamma_pipeline_create_info.pDynamicState =
-      &swap_apply_gamma_pipeline_dynamic_state;
+  swap_apply_gamma_pipeline_create_info.stage.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  swap_apply_gamma_pipeline_create_info.stage.pNext = nullptr;
+  swap_apply_gamma_pipeline_create_info.stage.flags = 0;
+  swap_apply_gamma_pipeline_create_info.stage.stage =
+      VK_SHADER_STAGE_COMPUTE_BIT;
+  swap_apply_gamma_pipeline_create_info.stage.pName = "main";
+  swap_apply_gamma_pipeline_create_info.stage.pSpecializationInfo = nullptr;
   swap_apply_gamma_pipeline_create_info.layout =
       swap_apply_gamma_pipeline_layout_;
-  swap_apply_gamma_pipeline_create_info.renderPass =
-      swap_apply_gamma_render_pass_;
-  swap_apply_gamma_pipeline_create_info.subpass = 0;
   swap_apply_gamma_pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
   swap_apply_gamma_pipeline_create_info.basePipelineIndex = -1;
-  swap_apply_gamma_pipeline_stages[1].module =
-      swap_apply_gamma_pixel_shaders[kSwapApplyGammaPixelShader256EntryTable];
+
+  swap_apply_gamma_pipeline_create_info.stage.module =
+      swap_apply_gamma_table_shader_module;
   VkResult swap_apply_gamma_pipeline_256_entry_table_create_result =
-      dfn.vkCreateGraphicsPipelines(
+      dfn.vkCreateComputePipelines(
           device, VK_NULL_HANDLE, 1, &swap_apply_gamma_pipeline_create_info,
           nullptr, &swap_apply_gamma_256_entry_table_pipeline_);
-  swap_apply_gamma_pipeline_stages[1].module =
-      swap_apply_gamma_pixel_shaders[kSwapApplyGammaPixelShaderPWL];
+  swap_apply_gamma_pipeline_create_info.stage.module =
+      swap_apply_gamma_pwl_shader_module;
   VkResult swap_apply_gamma_pipeline_pwl_create_result =
-      dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
-                                    &swap_apply_gamma_pipeline_create_info,
-                                    nullptr, &swap_apply_gamma_pwl_pipeline_);
-  dfn.vkDestroyShaderModule(device, swap_apply_gamma_pipeline_stages[0].module,
+      dfn.vkCreateComputePipelines(device, VK_NULL_HANDLE, 1,
+                                   &swap_apply_gamma_pipeline_create_info,
+                                   nullptr, &swap_apply_gamma_pwl_pipeline_);
+  dfn.vkDestroyShaderModule(device, swap_apply_gamma_table_shader_module,
                             nullptr);
-  for (VkShaderModule swap_apply_gamma_pixel_shader :
-       swap_apply_gamma_pixel_shaders) {
-    assert_true(swap_apply_gamma_pixel_shader != VK_NULL_HANDLE);
-    dfn.vkDestroyShaderModule(device, swap_apply_gamma_pixel_shader, nullptr);
-  }
+  dfn.vkDestroyShaderModule(device, swap_apply_gamma_pwl_shader_module,
+                            nullptr);
   if (swap_apply_gamma_pipeline_256_entry_table_create_result != VK_SUCCESS ||
       swap_apply_gamma_pipeline_pwl_create_result != VK_SUCCESS) {
-    XELOGE("Failed to create the gamma ramp application pipelines");
+    XELOGE("Failed to create the gamma ramp application compute pipelines");
     return false;
   }
 
@@ -1173,24 +1013,20 @@ void VulkanCommandProcessor::ShutdownContext() {
 
   DestroyScratchBuffer();
 
-  for (SwapFramebuffer& swap_framebuffer : swap_framebuffers_) {
-    ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyFramebuffer, device,
-                                           swap_framebuffer.framebuffer);
-  }
-
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
                                          swap_apply_gamma_pwl_pipeline_);
   ui::vulkan::util::DestroyAndNullHandle(
       dfn.vkDestroyPipeline, device,
       swap_apply_gamma_256_entry_table_pipeline_);
-  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyRenderPass, device,
-                                         swap_apply_gamma_render_pass_);
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, device,
                                          swap_apply_gamma_pipeline_layout_);
 
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
                                          swap_descriptor_pool_);
 
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkDestroyDescriptorSetLayout, device,
+      swap_descriptor_set_layout_storage_image_);
   ui::vulkan::util::DestroyAndNullHandle(
       dfn.vkDestroyDescriptorSetLayout, device,
       swap_descriptor_set_layout_uniform_texel_buffer_);
@@ -1550,7 +1386,7 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             // Copy from the host-visible buffer to the device-local one.
             PushBufferMemoryBarrier(
                 gamma_ramp_buffer_, gamma_ramp_offset_in_frame, gamma_ramp_size,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_SHADER_READ_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED,
                 VK_QUEUE_FAMILY_IGNORED, false);
@@ -1567,7 +1403,7 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             PushBufferMemoryBarrier(
                 gamma_ramp_buffer_, gamma_ramp_offset_in_frame, gamma_ramp_size,
                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
                 VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
           }
@@ -1577,141 +1413,43 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
               gamma_ramp_has_upload_buffer ? 0 : swap_frame_index;
         }
 
-        // Make sure a framebuffer is available for the current guest output
-        // image version.
-        size_t swap_framebuffer_index = SIZE_MAX;
-        size_t swap_framebuffer_new_index = SIZE_MAX;
-        // Try to find the existing framebuffer for the current guest output
-        // image version, or an unused (without an existing framebuffer, or with
-        // one, but that has never actually been used dynamically) slot.
-        for (size_t i = 0; i < swap_framebuffers_.size(); ++i) {
-          const SwapFramebuffer& existing_swap_framebuffer =
-              swap_framebuffers_[i];
-          if (existing_swap_framebuffer.framebuffer != VK_NULL_HANDLE &&
-              existing_swap_framebuffer.version == guest_output_image_version) {
-            swap_framebuffer_index = i;
-            break;
-          }
-          if (existing_swap_framebuffer.framebuffer == VK_NULL_HANDLE ||
-              !existing_swap_framebuffer.last_submission) {
-            swap_framebuffer_new_index = i;
-          }
-        }
-        if (swap_framebuffer_index == SIZE_MAX) {
-          if (swap_framebuffer_new_index == SIZE_MAX) {
-            // Replace the earliest used framebuffer.
-            swap_framebuffer_new_index = 0;
-            for (size_t i = 1; i < swap_framebuffers_.size(); ++i) {
-              if (swap_framebuffers_[i].last_submission <
-                  swap_framebuffers_[swap_framebuffer_new_index]
-                      .last_submission) {
-                swap_framebuffer_new_index = i;
-              }
-            }
-          }
-          swap_framebuffer_index = swap_framebuffer_new_index;
-          SwapFramebuffer& new_swap_framebuffer =
-              swap_framebuffers_[swap_framebuffer_new_index];
-          if (new_swap_framebuffer.framebuffer != VK_NULL_HANDLE) {
-            if (submission_completed_ >= new_swap_framebuffer.last_submission) {
-              dfn.vkDestroyFramebuffer(device, new_swap_framebuffer.framebuffer,
-                                       nullptr);
-            } else {
-              destroy_framebuffers_.emplace_back(
-                  new_swap_framebuffer.last_submission,
-                  new_swap_framebuffer.framebuffer);
-            }
-            new_swap_framebuffer.framebuffer = VK_NULL_HANDLE;
-          }
-          VkImageView guest_output_image_view = vulkan_context.image_view();
-          VkFramebufferCreateInfo swap_framebuffer_create_info;
-          swap_framebuffer_create_info.sType =
-              VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-          swap_framebuffer_create_info.pNext = nullptr;
-          swap_framebuffer_create_info.flags = 0;
-          swap_framebuffer_create_info.renderPass =
-              swap_apply_gamma_render_pass_;
-          swap_framebuffer_create_info.attachmentCount = 1;
-          swap_framebuffer_create_info.pAttachments = &guest_output_image_view;
-          swap_framebuffer_create_info.width = frontbuffer_width_scaled;
-          swap_framebuffer_create_info.height = frontbuffer_height_scaled;
-          swap_framebuffer_create_info.layers = 1;
-          if (dfn.vkCreateFramebuffer(
-                  device, &swap_framebuffer_create_info, nullptr,
-                  &new_swap_framebuffer.framebuffer) != VK_SUCCESS) {
-            XELOGE("Failed to create the Vulkan framebuffer for presentation");
-            return false;
-          }
-          new_swap_framebuffer.version = guest_output_image_version;
-          // The actual submission index will be set if the framebuffer is
-          // actually used, not dropped due to some error.
-          new_swap_framebuffer.last_submission = 0;
-        }
-
+        // Transition guest output image for compute shader storage image write.
         if (vulkan_context.image_ever_written_previously()) {
           // Insert a barrier after the last presenter's usage of the guest
           // output image. Will be overwriting all the contents, so oldLayout
-          // layout is UNDEFINED. The render pass will do the layout transition,
-          // but newLayout must not be UNDEFINED.
+          // can be UNDEFINED.
           PushImageMemoryBarrier(
               vulkan_context.image(),
               ui::vulkan::util::InitializeSubresourceRange(),
               ui::vulkan::VulkanPresenter::kGuestOutputInternalStageMask,
-              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
               ui::vulkan::VulkanPresenter::kGuestOutputInternalAccessMask,
-              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+              VK_ACCESS_SHADER_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_GENERAL);
+        } else {
+          // First write to the image - just transition from undefined.
+          PushImageMemoryBarrier(vulkan_context.image(),
+                                 ui::vulkan::util::InitializeSubresourceRange(),
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                 VK_ACCESS_SHADER_WRITE_BIT,
+                                 VK_IMAGE_LAYOUT_UNDEFINED,
+                                 VK_IMAGE_LAYOUT_GENERAL);
         }
 
-        // End the current render pass before inserting barriers and starting a
-        // new one, and insert the barrier.
+        // End the current render pass before inserting barriers.
         SubmitBarriers(true);
 
         PushDebugMarker("Apply Gamma Ramp: %s",
                         use_pwl_gamma_ramp ? "PWL" : "256-entry table");
 
-        SwapFramebuffer& swap_framebuffer =
-            swap_framebuffers_[swap_framebuffer_index];
-        swap_framebuffer.last_submission = GetCurrentSubmission();
-
-        VkRenderPassBeginInfo render_pass_begin_info;
-        render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_begin_info.pNext = nullptr;
-        render_pass_begin_info.renderPass = swap_apply_gamma_render_pass_;
-        render_pass_begin_info.framebuffer = swap_framebuffer.framebuffer;
-        render_pass_begin_info.renderArea.offset.x = 0;
-        render_pass_begin_info.renderArea.offset.y = 0;
-        render_pass_begin_info.renderArea.extent.width =
-            frontbuffer_width_scaled;
-        render_pass_begin_info.renderArea.extent.height =
-            frontbuffer_height_scaled;
-        render_pass_begin_info.clearValueCount = 0;
-        render_pass_begin_info.pClearValues = nullptr;
-        deferred_command_buffer_.CmdVkBeginRenderPass(
-            &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
-        current_render_pass_ = swap_apply_gamma_render_pass_;
-        current_framebuffer_ =
-            nullptr;  // Not a render target cache framebuffer
-
-        VkViewport viewport;
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;
-        viewport.width = float(frontbuffer_width_scaled);
-        viewport.height = float(frontbuffer_height_scaled);
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-        SetViewport(viewport);
-        VkRect2D scissor;
-        scissor.offset.x = 0;
-        scissor.offset.y = 0;
-        scissor.extent.width = frontbuffer_width_scaled;
-        scissor.extent.height = frontbuffer_height_scaled;
-        SetScissor(scissor);
-
-        BindExternalGraphicsPipeline(
+        // Bind the compute pipeline.
+        deferred_command_buffer_.CmdVkBindPipeline(
+            VK_PIPELINE_BIND_POINT_COMPUTE,
             use_pwl_gamma_ramp ? swap_apply_gamma_pwl_pipeline_
                                : swap_apply_gamma_256_entry_table_pipeline_);
 
+        // Update the source descriptor set with the swap texture.
         VkDescriptorSet swap_descriptor_source =
             swap_descriptors_source_[swap_frame_index];
         VkDescriptorImageInfo swap_descriptor_source_image_info;
@@ -1733,9 +1471,44 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
             &swap_descriptor_source_image_info;
         swap_descriptor_source_write.pBufferInfo = nullptr;
         swap_descriptor_source_write.pTexelBufferView = nullptr;
-        dfn.vkUpdateDescriptorSets(device, 1, &swap_descriptor_source_write, 0,
-                                   nullptr);
 
+        // Update the destination descriptor set with the guest output image.
+        VkDescriptorSet swap_descriptor_dest =
+            swap_descriptors_dest_[swap_frame_index];
+        VkDescriptorImageInfo swap_descriptor_dest_image_info;
+        swap_descriptor_dest_image_info.sampler = VK_NULL_HANDLE;
+        swap_descriptor_dest_image_info.imageView = vulkan_context.image_view();
+        swap_descriptor_dest_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet swap_descriptor_dest_write;
+        swap_descriptor_dest_write.sType =
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        swap_descriptor_dest_write.pNext = nullptr;
+        swap_descriptor_dest_write.dstSet = swap_descriptor_dest;
+        swap_descriptor_dest_write.dstBinding = 0;
+        swap_descriptor_dest_write.dstArrayElement = 0;
+        swap_descriptor_dest_write.descriptorCount = 1;
+        swap_descriptor_dest_write.descriptorType =
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        swap_descriptor_dest_write.pImageInfo =
+            &swap_descriptor_dest_image_info;
+        swap_descriptor_dest_write.pBufferInfo = nullptr;
+        swap_descriptor_dest_write.pTexelBufferView = nullptr;
+
+        std::array<VkWriteDescriptorSet, 2> swap_descriptor_writes = {
+            swap_descriptor_source_write, swap_descriptor_dest_write};
+        dfn.vkUpdateDescriptorSets(device,
+                                   uint32_t(swap_descriptor_writes.size()),
+                                   swap_descriptor_writes.data(), 0, nullptr);
+
+        // Set push constants.
+        ApplyGammaConstants apply_gamma_constants;
+        apply_gamma_constants.size[0] = frontbuffer_width_scaled;
+        apply_gamma_constants.size[1] = frontbuffer_height_scaled;
+        deferred_command_buffer_.CmdVkPushConstants(
+            swap_apply_gamma_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+            sizeof(apply_gamma_constants), &apply_gamma_constants);
+
+        // Bind descriptor sets.
         std::array<VkDescriptorSet, kSwapApplyGammaDescriptorSetCount>
             swap_descriptor_sets{};
         swap_descriptor_sets[kSwapApplyGammaDescriptorSetRamp] =
@@ -1743,28 +1516,31 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                          uint32_t(use_pwl_gamma_ramp)];
         swap_descriptor_sets[kSwapApplyGammaDescriptorSetSource] =
             swap_descriptor_source;
+        swap_descriptor_sets[kSwapApplyGammaDescriptorSetDest] =
+            swap_descriptor_dest;
         // TODO(Triang3l): Red / blue swap without imageViewFormatSwizzle.
         deferred_command_buffer_.CmdVkBindDescriptorSets(
-            VK_PIPELINE_BIND_POINT_GRAPHICS, swap_apply_gamma_pipeline_layout_,
+            VK_PIPELINE_BIND_POINT_COMPUTE, swap_apply_gamma_pipeline_layout_,
             0, uint32_t(swap_descriptor_sets.size()),
             swap_descriptor_sets.data(), 0, nullptr);
 
-        deferred_command_buffer_.CmdVkDraw(3, 1, 0, 0);
-
-        deferred_command_buffer_.CmdVkEndRenderPass();
-        current_render_pass_ = VK_NULL_HANDLE;
+        // Dispatch compute shader. Local size is 16x8.
+        uint32_t group_count_x = (frontbuffer_width_scaled + 15) / 16;
+        uint32_t group_count_y = (frontbuffer_height_scaled + 7) / 8;
+        deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y, 1);
 
         PopDebugMarker();
 
-        // Insert the release barrier.
+        // Insert the release barrier - transition from GENERAL to the
+        // presenter's expected layout.
         PushImageMemoryBarrier(
             vulkan_context.image(),
             ui::vulkan::util::InitializeSubresourceRange(),
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             ui::vulkan::VulkanPresenter::kGuestOutputInternalStageMask,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_SHADER_WRITE_BIT,
             ui::vulkan::VulkanPresenter::kGuestOutputInternalAccessMask,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_LAYOUT_GENERAL,
             ui::vulkan::VulkanPresenter::kGuestOutputInternalLayout);
 
         // Need to submit all the commands before giving the image back to the
@@ -4373,11 +4149,6 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
       cache_clear_requested_ = false;
 
       DestroyScratchBuffer();
-
-      for (SwapFramebuffer& swap_framebuffer : swap_framebuffers_) {
-        ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyFramebuffer, device,
-                                               swap_framebuffer.framebuffer);
-      }
 
       assert_true(command_buffers_submitted_.empty());
       for (const CommandBuffer& command_buffer : command_buffers_writable_) {
