@@ -41,9 +41,11 @@ class PostProcessingDialogQt : public ui::GamepadDialog {
   void OnResamplingEffectChanged(int index);
   void OnFsrSharpnessChanged(int value);
   void OnCasSharpnessChanged(int value);
+  void OnFsrMaxUpsamplingPassesChanged(int value);
   void OnDitherChanged(int state);
   void OnResetFsrSharpness();
   void OnResetCasSharpness();
+  void OnResetFsrMaxUpsamplingPasses();
 
  protected:
   void mousePressEvent(QMouseEvent* event) override;
@@ -88,6 +90,16 @@ class PostProcessingDialogQt : public ui::GamepadDialog {
   QSlider* cas_sharpness_slider_;
   QLabel* cas_sharpness_value_label_;
   QPushButton* cas_reset_button_;
+
+  // FSR max upsampling passes widgets
+  QWidget* fsr_max_upsampling_widget_;
+  QLabel* fsr_max_upsampling_label_;
+  QButtonGroup* fsr_max_upsampling_button_group_;
+  QRadioButton* fsr_max_upsampling_radio_1_;
+  QRadioButton* fsr_max_upsampling_radio_2_;
+  QRadioButton* fsr_max_upsampling_radio_3_;
+  QRadioButton* fsr_max_upsampling_radio_4_;
+  QPushButton* fsr_max_upsampling_reset_button_;
 
   // Dithering widgets
   QGroupBox* dither_group_;

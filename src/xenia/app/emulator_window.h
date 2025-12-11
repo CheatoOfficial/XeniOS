@@ -131,6 +131,7 @@ class EmulatorWindow {
   void UpdateScalingAndSharpeningCvar(
       ui::Presenter::GuestOutputPaintConfig::Effect effect);
   void UpdateFsrSharpnessCvar(float value);
+  void UpdateFsrMaxUpsamplingPassesCvar(uint32_t value);
   void UpdateCasSharpnessCvar(float value);
   void UpdateDitherCvar(bool value);
 
@@ -170,6 +171,22 @@ class EmulatorWindow {
     }
   };
 
+  // For comparisons, use GetSwapPostEffectForCvarValue instead as the default
+  // fallback may be used for multiple values.
+  static const char* GetCvarValueForSwapPostEffect(
+      gpu::CommandProcessor::SwapPostEffect effect);
+  static gpu::CommandProcessor::SwapPostEffect GetSwapPostEffectForCvarValue(
+      const std::string& cvar_value);
+  // For comparisons, use GetGuestOutputPaintEffectForCvarValue instead as the
+  // default fallback may be used for multiple values.
+  static const char* GetCvarValueForGuestOutputPaintEffect(
+      ui::Presenter::GuestOutputPaintConfig::Effect effect);
+  static ui::Presenter::GuestOutputPaintConfig::Effect
+  GetGuestOutputPaintEffectForCvarValue(const std::string& cvar_value);
+  static ui::Presenter::GuestOutputPaintConfig
+  GetGuestOutputPaintConfigForCvars();
+  void ApplyDisplayConfigForCvars();
+
  private:
   class EmulatorWindowListener final : public ui::WindowListener,
                                        public ui::WindowInputListener {
@@ -197,22 +214,6 @@ class EmulatorWindow {
                           uint32_t height, bool is_game_process = false);
 
   bool Initialize();
-
-  // For comparisons, use GetSwapPostEffectForCvarValue instead as the default
-  // fallback may be used for multiple values.
-  static const char* GetCvarValueForSwapPostEffect(
-      gpu::CommandProcessor::SwapPostEffect effect);
-  static gpu::CommandProcessor::SwapPostEffect GetSwapPostEffectForCvarValue(
-      const std::string& cvar_value);
-  // For comparisons, use GetGuestOutputPaintEffectForCvarValue instead as the
-  // default fallback may be used for multiple values.
-  static const char* GetCvarValueForGuestOutputPaintEffect(
-      ui::Presenter::GuestOutputPaintConfig::Effect effect);
-  static ui::Presenter::GuestOutputPaintConfig::Effect
-  GetGuestOutputPaintEffectForCvarValue(const std::string& cvar_value);
-  static ui::Presenter::GuestOutputPaintConfig
-  GetGuestOutputPaintConfigForCvars();
-  void ApplyDisplayConfigForCvars();
 
   void OnKeyDown(ui::KeyEvent& e);
   void OnMouseDown(const ui::MouseEvent& e);

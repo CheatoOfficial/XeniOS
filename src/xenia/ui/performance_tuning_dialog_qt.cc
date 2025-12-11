@@ -322,58 +322,6 @@ void PerformanceTuningDialogQt::LoadCurrentSettings() {
   clear_memory_checkbox_->blockSignals(false);
 }
 
-void PerformanceTuningDialogQt::SaveToGameConfig(const char* cvar_name,
-                                                 const std::string& value) {
-  auto emulator = emulator_window_->emulator();
-  if (!emulator || !emulator->is_title_open()) {
-    return;
-  }
-
-  uint32_t title_id = emulator->title_id();
-  if (title_id == 0) {
-    return;
-  }
-
-  toml::table config_table = config::LoadGameConfig(title_id);
-
-  if (!config_table.contains("GPU")) {
-    config_table.insert("GPU", toml::table{});
-  }
-
-  auto* gpu_table = config_table["GPU"].as_table();
-  if (gpu_table) {
-    gpu_table->insert_or_assign(cvar_name, value);
-  }
-
-  config::SaveGameConfig(title_id, config_table);
-}
-
-void PerformanceTuningDialogQt::SaveToGameConfig(const char* cvar_name,
-                                                 bool value) {
-  auto emulator = emulator_window_->emulator();
-  if (!emulator || !emulator->is_title_open()) {
-    return;
-  }
-
-  uint32_t title_id = emulator->title_id();
-  if (title_id == 0) {
-    return;
-  }
-
-  toml::table config_table = config::LoadGameConfig(title_id);
-
-  if (!config_table.contains("GPU")) {
-    config_table.insert("GPU", toml::table{});
-  }
-
-  auto* gpu_table = config_table["GPU"].as_table();
-  if (gpu_table) {
-    gpu_table->insert_or_assign(cvar_name, value);
-  }
-
-  config::SaveGameConfig(title_id, config_table);
-}
-
 void PerformanceTuningDialogQt::ShowNotification(const QString& title,
                                                  const QString& description) {
   auto* notification =
@@ -384,14 +332,16 @@ void PerformanceTuningDialogQt::ShowNotification(const QString& title,
 void PerformanceTuningDialogQt::OnVsyncChanged(int state) {
   bool enabled = (state == Qt::Checked);
   SetVsync(enabled);
-  SaveToGameConfig("vsync", enabled);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU", "vsync",
+                                enabled);
   ShowNotification("VSync", enabled ? "Enabled" : "Disabled");
 }
 
 void PerformanceTuningDialogQt::OnOcclusionQueryChanged(int state) {
   bool enabled = (state == Qt::Checked);
   SetOcclusionQueryEnable(enabled);
-  SaveToGameConfig("occlusion_query_enable", enabled);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "occlusion_query_enable", enabled);
   ShowNotification("Occlusion Queries", enabled ? "Enabled" : "Disabled");
 }
 
@@ -447,8 +397,10 @@ void PerformanceTuningDialogQt::OnReadbackMemexportChanged(int value) {
 
   gpu::SaveGPUSetting(gpu::GPUSetting::ReadbackMemexport, memexport_enabled);
   gpu::SaveGPUSetting(gpu::GPUSetting::ReadbackMemexportFast, memexport_fast);
-  SaveToGameConfig("readback_memexport", memexport_enabled);
-  SaveToGameConfig("readback_memexport_fast", memexport_fast);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "readback_memexport", memexport_enabled);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "readback_memexport_fast", memexport_fast);
 
   const char* mode_names[] = {"None", "Fast", "Full"};
   ShowNotification("Readback Memexport", mode_names[value]);
@@ -457,7 +409,8 @@ void PerformanceTuningDialogQt::OnReadbackMemexportChanged(int value) {
 void PerformanceTuningDialogQt::OnClearMemoryPageStateChanged(int state) {
   bool enabled = (state == Qt::Checked);
   gpu::SaveGPUSetting(gpu::GPUSetting::ClearMemoryPageState, enabled);
-  SaveToGameConfig("clear_memory_page_state", enabled);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "clear_memory_page_state", enabled);
   ShowNotification("Clear Memory Page State", enabled ? "Enabled" : "Disabled");
 }
 

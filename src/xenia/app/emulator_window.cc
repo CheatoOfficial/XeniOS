@@ -1005,6 +1005,13 @@ void EmulatorWindow::UpdateDitherCvar(bool value) {
   }
 }
 
+void EmulatorWindow::UpdateFsrMaxUpsamplingPassesCvar(uint32_t value) {
+  auto cvars_config = GetGuestOutputPaintConfigForCvars();
+  if (cvars_config.GetFsrMaxUpsamplingPasses() != value) {
+    OVERRIDE_uint32(postprocess_ffx_fsr_max_upsampling_passes, value);
+  }
+}
+
 void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
   if (!emulator_initialized_) {
     return;

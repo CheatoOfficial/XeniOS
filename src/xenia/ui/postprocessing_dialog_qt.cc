@@ -20,12 +20,14 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/cvar.h"
+#include "xenia/config.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/ui/qt_util.h"
 
 DECLARE_bool(postprocess_dither);
 DECLARE_double(postprocess_ffx_cas_additional_sharpness);
 DECLARE_double(postprocess_ffx_fsr_sharpness_reduction);
+DECLARE_uint32(postprocess_ffx_fsr_max_upsampling_passes);
 DECLARE_string(postprocess_antialiasing);
 DECLARE_string(postprocess_scaling_and_sharpening);
 
@@ -210,31 +212,161 @@ void PostProcessingDialogQt::SetupUI() {
   resampling_layout->setSpacing(8);
 
   resampling_button_group_ = new QButtonGroup(this);
+
+  // None / Bilinear option (no controls)
   effect_bilinear_radio_ =
       new QRadioButton("None / Bilinear", resampling_group_);
-  effect_cas_radio_ = new QRadioButton(
-      "AMD FidelityFX Contrast Adaptive Sharpening (CAS)", resampling_group_);
-  effect_fsr_radio_ = new QRadioButton(
-      "AMD FidelityFX Super Resolution 1.0 (FSR)", resampling_group_);
-
   resampling_button_group_->addButton(
       effect_bilinear_radio_,
       static_cast<int>(
           ui::Presenter::GuestOutputPaintConfig::Effect::kBilinear));
+  resampling_layout->addWidget(effect_bilinear_radio_);
+
+  // CAS option with controls as children
+  auto* cas_container = new QWidget(resampling_group_);
+  auto* cas_container_layout = new QVBoxLayout(cas_container);
+  cas_container_layout->setContentsMargins(0, 0, 0, 0);
+  cas_container_layout->setSpacing(4);
+
+  effect_cas_radio_ = new QRadioButton(
+      "AMD FidelityFX Contrast Adaptive Sharpening (CAS)", cas_container);
   resampling_button_group_->addButton(
       effect_cas_radio_,
       static_cast<int>(ui::Presenter::GuestOutputPaintConfig::Effect::kCas));
+  cas_container_layout->addWidget(effect_cas_radio_);
+
+  // CAS controls as children of cas_container
+  cas_sharpness_widget_ = new QWidget(cas_container);
+  auto* cas_layout = new QVBoxLayout(cas_sharpness_widget_);
+  cas_layout->setContentsMargins(20, 4, 0, 0);
+
+  cas_sharpness_label_ = new QLabel(
+      "CAS additional sharpness (higher is sharper):", cas_sharpness_widget_);
+  cas_layout->addWidget(cas_sharpness_label_);
+
+  auto* cas_slider_layout = new QHBoxLayout();
+  cas_sharpness_slider_ = new QSlider(Qt::Horizontal, cas_sharpness_widget_);
+  cas_sharpness_slider_->setRange(0, 100);  // Will be mapped to 0.0-1.0
+  cas_sharpness_slider_->setFocusPolicy(Qt::StrongFocus);
+  cas_sharpness_value_label_ = new QLabel("0%", cas_sharpness_widget_);
+  cas_sharpness_value_label_->setMinimumWidth(50);
+  cas_reset_button_ = new QPushButton("Reset", cas_sharpness_widget_);
+  cas_reset_button_->setMaximumWidth(50);
+  cas_reset_button_->setFocusPolicy(Qt::StrongFocus);
+
+  cas_slider_layout->addWidget(cas_sharpness_slider_);
+  cas_slider_layout->addWidget(cas_sharpness_value_label_);
+  cas_slider_layout->addWidget(cas_reset_button_);
+  cas_layout->addLayout(cas_slider_layout);
+
+  cas_container_layout->addWidget(cas_sharpness_widget_);
+  resampling_layout->addWidget(cas_container);
+
+  // FSR option with controls as children
+  auto* fsr_container = new QWidget(resampling_group_);
+  auto* fsr_container_layout = new QVBoxLayout(fsr_container);
+  fsr_container_layout->setContentsMargins(0, 0, 0, 0);
+  fsr_container_layout->setSpacing(4);
+
+  effect_fsr_radio_ = new QRadioButton(
+      "AMD FidelityFX Super Resolution 1.0 (FSR)", fsr_container);
   resampling_button_group_->addButton(
       effect_fsr_radio_,
       static_cast<int>(ui::Presenter::GuestOutputPaintConfig::Effect::kFsr));
+  fsr_container_layout->addWidget(effect_fsr_radio_);
 
-  resampling_layout->addWidget(effect_bilinear_radio_);
-  resampling_layout->addWidget(effect_cas_radio_);
-  resampling_layout->addWidget(effect_fsr_radio_);
+  // FSR sharpness controls as children of fsr_container
+  fsr_sharpness_widget_ = new QWidget(fsr_container);
+  auto* fsr_layout = new QVBoxLayout(fsr_sharpness_widget_);
+  fsr_layout->setContentsMargins(20, 4, 0, 0);
+
+  fsr_sharpness_label_ =
+      new QLabel("FSR sharpness reduction when upscaling (lower is sharper):",
+                 fsr_sharpness_widget_);
+  fsr_layout->addWidget(fsr_sharpness_label_);
+
+  auto* fsr_slider_layout = new QHBoxLayout();
+  fsr_sharpness_slider_ = new QSlider(Qt::Horizontal, fsr_sharpness_widget_);
+  fsr_sharpness_slider_->setRange(0, 200);  // Will be mapped to 0.0-2.0
+  fsr_sharpness_slider_->setFocusPolicy(Qt::StrongFocus);
+  fsr_sharpness_value_label_ = new QLabel("0%", fsr_sharpness_widget_);
+  fsr_sharpness_value_label_->setMinimumWidth(50);
+  fsr_reset_button_ = new QPushButton("Reset", fsr_sharpness_widget_);
+  fsr_reset_button_->setMaximumWidth(50);
+  fsr_reset_button_->setFocusPolicy(Qt::StrongFocus);
+
+  fsr_slider_layout->addWidget(fsr_sharpness_slider_);
+  fsr_slider_layout->addWidget(fsr_sharpness_value_label_);
+  fsr_slider_layout->addWidget(fsr_reset_button_);
+  fsr_layout->addLayout(fsr_slider_layout);
+
+  fsr_container_layout->addWidget(fsr_sharpness_widget_);
+
+  // FSR max upsampling controls as children of fsr_container
+  fsr_max_upsampling_widget_ = new QWidget(fsr_container);
+  auto* fsr_upsampling_layout = new QVBoxLayout(fsr_max_upsampling_widget_);
+  fsr_upsampling_layout->setContentsMargins(20, 4, 0, 0);
+
+  fsr_max_upsampling_label_ = new QLabel(
+      "FSR max upsampling passes (lower is faster, higher is better quality):",
+      fsr_max_upsampling_widget_);
+  fsr_upsampling_layout->addWidget(fsr_max_upsampling_label_);
+
+  fsr_max_upsampling_button_group_ = new QButtonGroup(this);
+  fsr_max_upsampling_radio_1_ =
+      new QRadioButton("1", fsr_max_upsampling_widget_);
+  fsr_max_upsampling_radio_1_->setFocusPolicy(Qt::StrongFocus);
+  fsr_max_upsampling_radio_2_ =
+      new QRadioButton("2", fsr_max_upsampling_widget_);
+  fsr_max_upsampling_radio_2_->setFocusPolicy(Qt::StrongFocus);
+  fsr_max_upsampling_radio_3_ =
+      new QRadioButton("3", fsr_max_upsampling_widget_);
+  fsr_max_upsampling_radio_3_->setFocusPolicy(Qt::StrongFocus);
+  fsr_max_upsampling_radio_4_ =
+      new QRadioButton("4", fsr_max_upsampling_widget_);
+  fsr_max_upsampling_radio_4_->setFocusPolicy(Qt::StrongFocus);
+
+  fsr_max_upsampling_button_group_->addButton(fsr_max_upsampling_radio_1_, 1);
+  fsr_max_upsampling_button_group_->addButton(fsr_max_upsampling_radio_2_, 2);
+  fsr_max_upsampling_button_group_->addButton(fsr_max_upsampling_radio_3_, 3);
+  fsr_max_upsampling_button_group_->addButton(fsr_max_upsampling_radio_4_, 4);
+
+  auto* fsr_upsampling_radio_layout = new QHBoxLayout();
+  fsr_upsampling_radio_layout->addWidget(fsr_max_upsampling_radio_1_);
+  fsr_upsampling_radio_layout->addWidget(fsr_max_upsampling_radio_2_);
+  fsr_upsampling_radio_layout->addWidget(fsr_max_upsampling_radio_3_);
+  fsr_upsampling_radio_layout->addWidget(fsr_max_upsampling_radio_4_);
+  fsr_max_upsampling_reset_button_ =
+      new QPushButton("Reset", fsr_max_upsampling_widget_);
+  fsr_max_upsampling_reset_button_->setMaximumWidth(50);
+  fsr_max_upsampling_reset_button_->setFocusPolicy(Qt::StrongFocus);
+  fsr_upsampling_radio_layout->addWidget(fsr_max_upsampling_reset_button_);
+
+  fsr_upsampling_layout->addLayout(fsr_upsampling_radio_layout);
+  fsr_container_layout->addWidget(fsr_max_upsampling_widget_);
+
+  resampling_layout->addWidget(fsr_container);
 
   connect(resampling_button_group_,
           QOverload<int>::of(&QButtonGroup::idClicked), this,
           &PostProcessingDialogQt::OnResamplingEffectChanged);
+
+  // Connect all the signal handlers
+  connect(fsr_sharpness_slider_, &QSlider::valueChanged, this,
+          &PostProcessingDialogQt::OnFsrSharpnessChanged);
+  connect(fsr_reset_button_, &QPushButton::clicked, this,
+          &PostProcessingDialogQt::OnResetFsrSharpness);
+
+  connect(fsr_max_upsampling_button_group_,
+          QOverload<int>::of(&QButtonGroup::idClicked), this,
+          &PostProcessingDialogQt::OnFsrMaxUpsamplingPassesChanged);
+  connect(fsr_max_upsampling_reset_button_, &QPushButton::clicked, this,
+          &PostProcessingDialogQt::OnResetFsrMaxUpsamplingPasses);
+
+  connect(cas_sharpness_slider_, &QSlider::valueChanged, this,
+          &PostProcessingDialogQt::OnCasSharpnessChanged);
+  connect(cas_reset_button_, &QPushButton::clicked, this,
+          &PostProcessingDialogQt::OnResetCasSharpness);
 
   // Effect description
   effect_description_label_ = new QLabel(resampling_group_);
@@ -250,63 +382,6 @@ void PostProcessingDialogQt::SetupUI() {
   fxaa_recommendation_label_->setStyleSheet(
       "QLabel { margin-top: 10px; color: #aad4ff; font-weight: bold; }");
   resampling_layout->addWidget(fxaa_recommendation_label_);
-
-  // FSR sharpness controls
-  fsr_sharpness_widget_ = new QWidget(resampling_group_);
-  auto* fsr_layout = new QVBoxLayout(fsr_sharpness_widget_);
-  fsr_layout->setContentsMargins(0, 10, 0, 0);
-
-  fsr_sharpness_label_ =
-      new QLabel("FSR sharpness reduction when upscaling (lower is sharper):",
-                 fsr_sharpness_widget_);
-  fsr_layout->addWidget(fsr_sharpness_label_);
-
-  auto* fsr_slider_layout = new QHBoxLayout();
-  fsr_sharpness_slider_ = new QSlider(Qt::Horizontal, fsr_sharpness_widget_);
-  fsr_sharpness_slider_->setRange(0, 200);  // Will be mapped to 0.0-2.0
-  fsr_sharpness_value_label_ = new QLabel("0%", fsr_sharpness_widget_);
-  fsr_sharpness_value_label_->setMinimumWidth(50);
-  fsr_reset_button_ = new QPushButton("Reset", fsr_sharpness_widget_);
-
-  fsr_slider_layout->addWidget(fsr_sharpness_slider_);
-  fsr_slider_layout->addWidget(fsr_sharpness_value_label_);
-  fsr_slider_layout->addWidget(fsr_reset_button_);
-  fsr_layout->addLayout(fsr_slider_layout);
-
-  connect(fsr_sharpness_slider_, &QSlider::valueChanged, this,
-          &PostProcessingDialogQt::OnFsrSharpnessChanged);
-  connect(fsr_reset_button_, &QPushButton::clicked, this,
-          &PostProcessingDialogQt::OnResetFsrSharpness);
-
-  resampling_layout->addWidget(fsr_sharpness_widget_);
-
-  // CAS sharpness controls
-  cas_sharpness_widget_ = new QWidget(resampling_group_);
-  auto* cas_layout = new QVBoxLayout(cas_sharpness_widget_);
-  cas_layout->setContentsMargins(0, 10, 0, 0);
-
-  cas_sharpness_label_ = new QLabel(
-      "CAS additional sharpness (higher is sharper):", cas_sharpness_widget_);
-  cas_layout->addWidget(cas_sharpness_label_);
-
-  auto* cas_slider_layout = new QHBoxLayout();
-  cas_sharpness_slider_ = new QSlider(Qt::Horizontal, cas_sharpness_widget_);
-  cas_sharpness_slider_->setRange(0, 100);  // Will be mapped to 0.0-1.0
-  cas_sharpness_value_label_ = new QLabel("0%", cas_sharpness_widget_);
-  cas_sharpness_value_label_->setMinimumWidth(50);
-  cas_reset_button_ = new QPushButton("Reset", cas_sharpness_widget_);
-
-  cas_slider_layout->addWidget(cas_sharpness_slider_);
-  cas_slider_layout->addWidget(cas_sharpness_value_label_);
-  cas_slider_layout->addWidget(cas_reset_button_);
-  cas_layout->addLayout(cas_slider_layout);
-
-  connect(cas_sharpness_slider_, &QSlider::valueChanged, this,
-          &PostProcessingDialogQt::OnCasSharpnessChanged);
-  connect(cas_reset_button_, &QPushButton::clicked, this,
-          &PostProcessingDialogQt::OnResetCasSharpness);
-
-  resampling_layout->addWidget(cas_sharpness_widget_);
 
   content_layout->addWidget(resampling_group_);
 
@@ -339,6 +414,14 @@ void PostProcessingDialogQt::LoadCurrentSettings() {
     return;
   }
 
+  // Block signals while loading to prevent triggering save handlers
+  aa_button_group_->blockSignals(true);
+  resampling_button_group_->blockSignals(true);
+  fsr_sharpness_slider_->blockSignals(true);
+  fsr_max_upsampling_button_group_->blockSignals(true);
+  cas_sharpness_slider_->blockSignals(true);
+  dither_checkbox_->blockSignals(true);
+
   // Load anti-aliasing settings
   auto command_processor = graphics_system->command_processor();
   if (command_processor) {
@@ -357,17 +440,40 @@ void PostProcessingDialogQt::LoadCurrentSettings() {
 
     // Set FSR sharpness (convert from 0.0-2.0 to 0-200)
     float fsr_sharpness = config.GetFsrSharpnessReduction();
-    // Apply power 2.0 scaling as done in ImGui version
-    fsr_sharpness = sqrt(2.f * fsr_sharpness);
-    fsr_sharpness_slider_->setValue(static_cast<int>(fsr_sharpness * 100));
+    // Apply power 2.0 scaling as done in ImGui version for slider position
+    float slider_position = sqrt(2.f * fsr_sharpness);
+    fsr_sharpness_slider_->setValue(static_cast<int>(slider_position * 100));
+    // Update label to show actual FSR sharpness percentage
+    fsr_sharpness_value_label_->setText(SafeQString(
+        fmt::format("{} %", static_cast<int>(fsr_sharpness * 100))));
+
+    // Set FSR max upsampling passes
+    uint32_t fsr_max_upsampling = config.GetFsrMaxUpsamplingPasses();
+    // Clamp to valid range 1-4
+    fsr_max_upsampling =
+        std::max(uint32_t(1), std::min(uint32_t(4), fsr_max_upsampling));
+    fsr_max_upsampling_button_group_
+        ->button(static_cast<int>(fsr_max_upsampling))
+        ->setChecked(true);
 
     // Set CAS sharpness (convert from 0.0-1.0 to 0-100)
     float cas_sharpness = config.GetCasAdditionalSharpness();
     cas_sharpness_slider_->setValue(static_cast<int>(cas_sharpness * 100));
+    // Update label to match slider value
+    cas_sharpness_value_label_->setText(SafeQString(
+        fmt::format("{} %", static_cast<int>(cas_sharpness * 100))));
 
     // Set dithering
     dither_checkbox_->setChecked(config.GetDither());
   }
+
+  // Re-enable signals
+  aa_button_group_->blockSignals(false);
+  resampling_button_group_->blockSignals(false);
+  fsr_sharpness_slider_->blockSignals(false);
+  fsr_max_upsampling_button_group_->blockSignals(false);
+  cas_sharpness_slider_->blockSignals(false);
+  dither_checkbox_->blockSignals(false);
 
   UpdateEffectDescription();
   UpdateSharpnessControls();
@@ -394,6 +500,12 @@ void PostProcessingDialogQt::OnAntiAliasingChanged(int index) {
 
   // Update cvar
   emulator_window_->UpdateAntiAliasingCvar(new_effect);
+
+  // Save to game config
+  const char* effect_str =
+      EmulatorWindow::GetCvarValueForSwapPostEffect(new_effect);
+  config::SaveGameConfigSetting(emulator, "Display", "postprocess_antialiasing",
+                                std::string(effect_str));
 }
 
 void PostProcessingDialogQt::OnResamplingEffectChanged(int index) {
@@ -420,6 +532,13 @@ void PostProcessingDialogQt::OnResamplingEffectChanged(int index) {
 
   // Update cvar
   emulator_window_->UpdateScalingAndSharpeningCvar(new_effect);
+
+  // Save to game config
+  const char* effect_str =
+      EmulatorWindow::GetCvarValueForGuestOutputPaintEffect(new_effect);
+  config::SaveGameConfigSetting(emulator, "Display",
+                                "postprocess_scaling_and_sharpening",
+                                std::string(effect_str));
 
   UpdateEffectDescription();
   UpdateSharpnessControls();
@@ -456,6 +575,11 @@ void PostProcessingDialogQt::OnFsrSharpnessChanged(int value) {
 
   // Update cvar
   emulator_window_->UpdateFsrSharpnessCvar(fsr_sharpness);
+
+  // Save to game config
+  config::SaveGameConfigSetting(emulator, "Display",
+                                "postprocess_ffx_fsr_sharpness_reduction",
+                                fsr_sharpness);
 }
 
 void PostProcessingDialogQt::OnCasSharpnessChanged(int value) {
@@ -487,6 +611,11 @@ void PostProcessingDialogQt::OnCasSharpnessChanged(int value) {
 
   // Update cvar
   emulator_window_->UpdateCasSharpnessCvar(cas_sharpness);
+
+  // Save to game config
+  config::SaveGameConfigSetting(emulator, "Display",
+                                "postprocess_ffx_cas_additional_sharpness",
+                                cas_sharpness);
 }
 
 void PostProcessingDialogQt::OnDitherChanged(int state) {
@@ -513,6 +642,10 @@ void PostProcessingDialogQt::OnDitherChanged(int state) {
 
   // Update cvar
   emulator_window_->UpdateDitherCvar(dither);
+
+  // Save to game config
+  config::SaveGameConfigSetting(emulator, "Display", "postprocess_dither",
+                                dither);
 }
 
 void PostProcessingDialogQt::OnResetFsrSharpness() {
@@ -528,6 +661,45 @@ void PostProcessingDialogQt::OnResetCasSharpness() {
   float default_value =
       ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessDefault;
   cas_sharpness_slider_->setValue(static_cast<int>(default_value * 100));
+}
+
+void PostProcessingDialogQt::OnFsrMaxUpsamplingPassesChanged(int value) {
+  auto emulator = emulator_window_->emulator();
+  if (!emulator) {
+    return;
+  }
+
+  auto graphics_system = emulator->graphics_system();
+  if (!graphics_system) {
+    return;
+  }
+
+  auto presenter = graphics_system->presenter();
+  if (!presenter) {
+    return;
+  }
+
+  // Convert slider value (1-8) to FSR max upsampling passes
+  uint32_t max_upsampling_passes = static_cast<uint32_t>(value);
+
+  auto config = presenter->GetGuestOutputPaintConfigFromUIThread();
+  config.SetFsrMaxUpsamplingPasses(max_upsampling_passes);
+  presenter->SetGuestOutputPaintConfigFromUIThread(config);
+
+  // Update cvar
+  emulator_window_->UpdateFsrMaxUpsamplingPassesCvar(max_upsampling_passes);
+
+  // Save to game config
+  config::SaveGameConfigSetting(emulator, "Display",
+                                "postprocess_ffx_fsr_max_upsampling_passes",
+                                max_upsampling_passes);
+}
+
+void PostProcessingDialogQt::OnResetFsrMaxUpsamplingPasses() {
+  uint32_t default_value =
+      ui::Presenter::GuestOutputPaintConfig::kFsrMaxUpscalingPassesMax;
+  fsr_max_upsampling_button_group_->button(static_cast<int>(default_value))
+      ->setChecked(true);
 }
 
 void PostProcessingDialogQt::UpdateEffectDescription() {
@@ -607,23 +779,22 @@ void PostProcessingDialogQt::UpdateSharpnessControls() {
   // Show/hide FXAA recommendation
   fxaa_recommendation_label_->setVisible(is_cas || is_fsr);
 
-  // Show/hide FSR sharpness controls
+  // With the new widget hierarchy, we can simply show/hide the control widgets
   fsr_sharpness_widget_->setVisible(is_fsr);
+  fsr_max_upsampling_widget_->setVisible(is_fsr);
+  cas_sharpness_widget_->setVisible(is_cas);
 
-  // Show/hide CAS sharpness controls
-  cas_sharpness_widget_->setVisible(is_cas || is_fsr);
-
-  // Update CAS label text based on effect
-  if (is_fsr) {
-    cas_sharpness_label_->setText(
-        "CAS additional sharpness when not upscaling (higher is sharper):");
-  } else {
+  // CAS label text (only shown for pure CAS, not FSR)
+  if (is_cas) {
     cas_sharpness_label_->setText(
         "CAS additional sharpness (higher is sharper):");
   }
 
   // Resize dialog to fit content after showing/hiding widgets
   adjustSize();
+
+  // Update the list of focusable widgets since visibility has changed
+  UpdateFocusableWidgets();
 }
 
 }  // namespace app

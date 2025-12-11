@@ -49,8 +49,6 @@ class PerformanceTuningDialogQt : public ui::GamepadDialog {
  private:
   void SetupUI();
   void LoadCurrentSettings();
-  void SaveToGameConfig(const char* cvar_name, const std::string& value);
-  void SaveToGameConfig(const char* cvar_name, bool value);
   void ShowNotification(const QString& title, const QString& description);
 
   EmulatorWindow* emulator_window_;

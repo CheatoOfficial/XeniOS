@@ -17,6 +17,7 @@
 #include "xenia/base/string.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/base/system.h"
+#include "xenia/emulator.h"
 #include "xenia/ui/config_helpers.h"
 
 toml::parse_result ParseFile(const std::filesystem::path& filename) {
@@ -269,6 +270,90 @@ void SaveGameConfig(uint32_t title_id, const toml::table& config_table) {
            xe::path_to_utf8(game_config_path), e.what());
     throw;
   }
+}
+
+void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,
+                           const char* cvar_name, const std::string& value) {
+  if (!emulator || !emulator->is_title_open()) {
+    return;
+  }
+
+  uint32_t title_id = emulator->title_id();
+  toml::table config_table = LoadGameConfig(title_id);
+
+  if (!config_table.contains(section)) {
+    config_table.insert(section, toml::table{});
+  }
+
+  auto* section_table = config_table[section].as_table();
+  if (section_table) {
+    section_table->insert_or_assign(cvar_name, value);
+  }
+
+  SaveGameConfig(title_id, config_table);
+}
+
+void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,
+                           const char* cvar_name, bool value) {
+  if (!emulator || !emulator->is_title_open()) {
+    return;
+  }
+
+  uint32_t title_id = emulator->title_id();
+  toml::table config_table = LoadGameConfig(title_id);
+
+  if (!config_table.contains(section)) {
+    config_table.insert(section, toml::table{});
+  }
+
+  auto* section_table = config_table[section].as_table();
+  if (section_table) {
+    section_table->insert_or_assign(cvar_name, value);
+  }
+
+  SaveGameConfig(title_id, config_table);
+}
+
+void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,
+                           const char* cvar_name, uint32_t value) {
+  if (!emulator || !emulator->is_title_open()) {
+    return;
+  }
+
+  uint32_t title_id = emulator->title_id();
+  toml::table config_table = LoadGameConfig(title_id);
+
+  if (!config_table.contains(section)) {
+    config_table.insert(section, toml::table{});
+  }
+
+  auto* section_table = config_table[section].as_table();
+  if (section_table) {
+    section_table->insert_or_assign(cvar_name, value);
+  }
+
+  SaveGameConfig(title_id, config_table);
+}
+
+void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,
+                           const char* cvar_name, double value) {
+  if (!emulator || !emulator->is_title_open()) {
+    return;
+  }
+
+  uint32_t title_id = emulator->title_id();
+  toml::table config_table = LoadGameConfig(title_id);
+
+  if (!config_table.contains(section)) {
+    config_table.insert(section, toml::table{});
+  }
+
+  auto* section_table = config_table[section].as_table();
+  if (section_table) {
+    section_table->insert_or_assign(cvar_name, value);
+  }
+
+  SaveGameConfig(title_id, config_table);
 }
 
 toml::table LoadGameConfig(uint32_t title_id) {

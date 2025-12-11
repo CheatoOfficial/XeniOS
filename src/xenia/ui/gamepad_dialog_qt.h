@@ -48,6 +48,8 @@ class GamepadDialog : public QDialog {
   // Override to customize which widgets are focusable
   virtual bool IsWidgetGamepadFocusable(QWidget* widget) const;
 
+  void UpdateFocusableWidgets();
+
   bool eventFilter(QObject* obj, QEvent* event) override;
   void showEvent(QShowEvent* event) override;
 
@@ -55,7 +57,6 @@ class GamepadDialog : public QDialog {
   void PollGamepad();
 
  private:
-  void UpdateFocusableWidgets();
   void NavigateFocusVertical(int direction);
   void NavigateFocusHorizontal(int direction);
   void AcceptFocusedButton();
