@@ -387,6 +387,8 @@ void SpirvShaderTranslator::StartTranslation() {
        offsetof(SystemConstants, texture_swizzled_signs), type_uint4_array_2},
       {"texture_swizzles", offsetof(SystemConstants, texture_swizzles),
        type_uint4_array_4},
+      {"textures_resolved", offsetof(SystemConstants, textures_resolved),
+       type_uint_},
       {"alpha_test_reference", offsetof(SystemConstants, alpha_test_reference),
        type_float_},
       {"alpha_to_mask", offsetof(SystemConstants, alpha_to_mask), type_uint_},
