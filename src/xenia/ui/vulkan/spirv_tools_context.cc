@@ -58,11 +58,24 @@ spv_result_t SpirvToolsContext::Validate(const uint32_t* words,
   if (!context_) {
     return SPV_UNSUPPORTED;
   }
+
+  // Create validator options with scalar block layout to match modern Vulkan
+  // driver behavior. This is the most permissive layout option and matches
+  // what VK_EXT_scalar_block_layout provides.
+  spv_validator_options options = spvValidatorOptionsCreate();
+  spvValidatorOptionsSetScalarBlockLayout(options, true);
+
+  // Create binary struct for the validation API
+  spv_const_binary_t binary = {words, num_words};
+
   spv_diagnostic diagnostic = nullptr;
   spv_result_t result =
-      spvValidateBinary(context_, words, num_words, &diagnostic);
+      spvValidateWithOptions(context_, options, &binary, &diagnostic);
+
+  spvValidatorOptionsDestroy(options);
+
   if (diagnostic) {
-    if (error && diagnostic && diagnostic->error) {
+    if (error && diagnostic->error) {
       *error = diagnostic->error;
     }
     spvDiagnosticDestroy(diagnostic);

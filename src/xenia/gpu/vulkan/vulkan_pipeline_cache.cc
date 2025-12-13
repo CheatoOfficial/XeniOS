@@ -778,6 +778,32 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
     QueueShaderForOptimization(&translation);
   }
 
+#ifndef NDEBUG
+  // Validate SPIR-V before creating shader module to get detailed error
+  // messages. This is a warning only - we still try to create the shader
+  // module to see if the driver accepts it.
+  if (spirv_tools_context_) {
+    std::string validation_error;
+    spv_result_t validation_result = spirv_tools_context_->Validate(
+        reinterpret_cast<const uint32_t*>(
+            translation.translated_binary().data()),
+        translation.translated_binary().size() / sizeof(uint32_t),
+        &validation_error);
+    if (validation_result != SPV_SUCCESS) {
+      XELOGW(
+          "VulkanPipelineCache: SPIR-V validation warning for shader {:016X} "
+          "modification {:016X}: {}",
+          shader.ucode_data_hash(), translation.modification(),
+          validation_error);
+      // Dump the shader for debugging if dump path is set
+      if (!cvars::dump_shaders.empty()) {
+        translation.Dump(cvars::dump_shaders, "vulkan_warning");
+      }
+      // Continue anyway - the driver might accept it
+    }
+  }
+#endif  // NDEBUG
+
   if (translation.GetOrCreateShaderModule() == VK_NULL_HANDLE) {
     return false;
   }
