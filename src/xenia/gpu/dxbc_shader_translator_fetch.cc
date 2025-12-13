@@ -831,7 +831,8 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     if (!instr.attributes.unnormalized_coordinates) {
       switch (instr.dimension) {
         case xenos::FetchOpDimension::k1D:
-          size_needed_components |= used_result_nonzero_components & 0b0001;
+          // Always need size for 1D textures to support wide 1D textures.
+          size_needed_components |= 0b0001;
           break;
         case xenos::FetchOpDimension::k2D:
         case xenos::FetchOpDimension::kCube:
@@ -848,9 +849,9 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     size_needed_components |= offsets_not_zero;
     switch (instr.dimension) {
       case xenos::FetchOpDimension::k1D:
-        if (instr.attributes.unnormalized_coordinates) {
-          size_needed_components |= 0b0001;
-        }
+        // Always need size for 1D textures to handle wide 1D textures
+        // (> 8192 wide) which are mapped to 2D grids.
+        size_needed_components |= 0b0001;
         break;
       case xenos::FetchOpDimension::k2D:
         if (instr.attributes.unnormalized_coordinates) {
@@ -886,12 +887,19 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
   }
   uint32_t size_and_is_3d_temp =
       size_needed_components ? PushSystemTemp() : UINT32_MAX;
+  // For 1D textures, save the uint width_minus_1 before it gets converted to
+  // float, as we need it for the wide 1D texture check (> 8192 wide).
+  uint32_t size_1d_width_minus_1_temp = UINT32_MAX;
   if (size_needed_components) {
     switch (instr.dimension) {
       case xenos::FetchOpDimension::k1D:
         a_.OpUBFE(dxbc::Dest::R(size_and_is_3d_temp, 0b0001), dxbc::Src::LU(24),
                   dxbc::Src::LU(0),
                   RequestTextureFetchConstantWord(tfetch_index, 2));
+        // Save the uint width_minus_1 for wide 1D texture detection later.
+        size_1d_width_minus_1_temp = PushSystemTemp();
+        a_.OpMov(dxbc::Dest::R(size_1d_width_minus_1_temp, 0b0001),
+                 dxbc::Src::R(size_and_is_3d_temp, dxbc::Src::kXXXX));
         break;
       case xenos::FetchOpDimension::k2D:
       case xenos::FetchOpDimension::kCube:
@@ -1192,11 +1200,67 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
       }
     }
     switch (instr.dimension) {
-      case xenos::FetchOpDimension::k1D:
-        // Pad to 2D array coordinates.
-        a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0110),
-                 dxbc::Src::LF(0.0f));
-        break;
+      case xenos::FetchOpDimension::k1D: {
+        // Handle wide 1D textures (> 8192 wide) mapped to 2D grids.
+        // Check if original_width > kTexture2DCubeMaxWidthHeight (8192).
+        // size_1d_width_minus_1_temp.x contains uint width_minus_1 (saved
+        // before float conversion).
+        a_.OpUGE(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                 dxbc::Src::R(size_1d_width_minus_1_temp, dxbc::Src::kXXXX),
+                 dxbc::Src::LU(xenos::kTexture2DCubeMaxWidthHeight));
+        a_.OpIf(true, dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+        {
+          // Wide 1D texture - remap to 2D coordinates.
+          // original_width = width_minus_1 + 1
+          a_.OpIAdd(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                    dxbc::Src::R(size_1d_width_minus_1_temp, dxbc::Src::kXXXX),
+                    dxbc::Src::LI(1));
+          a_.OpUToF(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                    dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+          // linear_x = coord.x * original_width (stored in coord.y temporarily)
+          a_.OpMul(dxbc::Dest::R(coord_and_sampler_temp, 0b0010),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kXXXX),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
+          // row_width = 8192.0f (constant)
+          // scaled = linear_x / row_width (stored in coord.z temporarily)
+          a_.OpDiv(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kYYYY),
+                   dxbc::Src::LF(float(xenos::kTexture2DCubeMaxWidthHeight)));
+          // row_index = floor(scaled) (stored in coord.w temporarily)
+          a_.OpRoundNI(dxbc::Dest::R(coord_and_sampler_temp, 0b1000),
+                       dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+          // x_in_row = linear_x - row_index * row_width
+          // coord.x = x_in_row / row_width = fract(scaled)
+          a_.OpFrc(dxbc::Dest::R(coord_and_sampler_temp, 0b0001),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+          // num_rows = ceil(original_width / row_width)
+          // Recompute original_width / row_width for num_rows calculation
+          a_.OpIAdd(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                    dxbc::Src::R(size_1d_width_minus_1_temp, dxbc::Src::kXXXX),
+                    dxbc::Src::LI(1));
+          a_.OpUToF(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                    dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+          a_.OpDiv(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ),
+                   dxbc::Src::LF(float(xenos::kTexture2DCubeMaxWidthHeight)));
+          a_.OpRoundPI(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                       dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+          // coord.y = row_index / num_rows
+          a_.OpDiv(dxbc::Dest::R(coord_and_sampler_temp, 0b0010),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW),
+                   dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kZZZZ));
+          // coord.z = 0 (array layer)
+          a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
+                   dxbc::Src::LF(0.0f));
+        }
+        a_.OpElse();
+        {
+          // Normal 1D texture - pad to 2D array coordinates.
+          a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0110),
+                   dxbc::Src::LF(0.0f));
+        }
+        a_.OpEndIf();
+      } break;
       case xenos::FetchOpDimension::k2D:
         // Pad to 2D array coordinates.
         a_.OpMov(dxbc::Dest::R(coord_and_sampler_temp, 0b0100),
@@ -1497,7 +1561,9 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
           grad_v_temp = PushSystemTemp();
           switch (instr.dimension) {
             case xenos::FetchOpDimension::k1D:
-              grad_component_count = 1;
+              // Use 2 components for 1D to handle wide 1D textures mapped to
+              // 2D. For normal 1D, Y gradient will be 0 (constant coord.y).
+              grad_component_count = 2;
               break;
             case xenos::FetchOpDimension::k2D:
               grad_component_count = 2;
@@ -1528,7 +1594,13 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
                    dxbc::Src::R(grad_h_lod_temp, dxbc::Src::kXXXX));
 #endif
           // Obtain the gradients and apply biases to them.
-          if (instr.attributes.use_register_gradients) {
+          // For 1D textures, always use automatic gradients. For wide 1D
+          // textures, coordinates have been remapped to 2D, and register
+          // gradients would be in 1D space without accounting for the 2D
+          // mapping. For normal 1D textures, coordinates[1] is always 0, so
+          // auto gradients give the same result (Y gradient will be 0).
+          if (instr.attributes.use_register_gradients &&
+              instr.dimension != xenos::FetchOpDimension::k1D) {
             // Register gradients are already in the cube space for cube maps.
             a_.OpMul(dxbc::Dest::R(grad_h_lod_temp, grad_mask),
                      dxbc::Src::R(system_temp_grad_h_lod_), lod_src);
@@ -1572,6 +1644,8 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
             }
           } else {
             // Coarse is according to the Direct3D 11.3 specification.
+            // For 1D textures, this computes gradients from the remapped 2D
+            // coordinates, correctly handling wide 1D textures.
             a_.OpDerivRTXCoarse(dxbc::Dest::R(grad_h_lod_temp, grad_mask),
                                 dxbc::Src::R(coord_and_sampler_temp));
             a_.OpMul(dxbc::Dest::R(grad_h_lod_temp, grad_mask),
@@ -1588,14 +1662,6 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
             a_.OpMul(dxbc::Dest::R(grad_v_temp, grad_mask),
                      dxbc::Src::R(grad_v_temp), lod_src);
 #endif
-          }
-          if (instr.dimension == xenos::FetchOpDimension::k1D) {
-            // Pad the gradients to 2D because 1D textures are fetched as 2D
-            // arrays.
-            a_.OpMov(dxbc::Dest::R(grad_h_lod_temp, 0b0010),
-                     dxbc::Src::LF(0.0f));
-            a_.OpMov(dxbc::Dest::R(grad_v_temp, 0b0010), dxbc::Src::LF(0.0f));
-            grad_component_count = 2;
           }
         }
       }
@@ -2116,6 +2182,10 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
     }
   }
 
+  // Pop in reverse order of allocation.
+  if (size_1d_width_minus_1_temp != UINT32_MAX) {
+    PopSystemTemp();
+  }
   if (size_and_is_3d_temp != UINT32_MAX) {
     PopSystemTemp();
   }

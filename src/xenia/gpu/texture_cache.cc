@@ -898,13 +898,21 @@ void TextureCache::BindingInfoFromFetchConstant(
   }
   if (fetch.dimension == xenos::DataDimension::k1D) {
     bool is_invalid_1d = false;
-    // TODO(Triang3l): Support long 1D textures.
+    // Handle wide 1D textures (> 8192 wide) by mapping them to a 2D grid.
+    // The shader will convert 1D coordinates to 2D using the original width
+    // from the fetch constant.
     if (width_minus_1 >= xenos::kTexture2DCubeMaxWidthHeight) {
-      XELOGE(
-          "1D texture is too wide ({}) - ignoring! Report the game to Xenia "
-          "developers",
-          width_minus_1 + 1);
-      is_invalid_1d = true;
+      uint32_t total_width = width_minus_1 + 1;
+      uint32_t row_width = xenos::kTexture2DCubeMaxWidthHeight;
+      uint32_t num_rows = (total_width + row_width - 1) / row_width;
+      width_minus_1 = row_width - 1;
+      height_minus_1 = num_rows - 1;
+      // Disable mipmaps for wide 1D textures. The shader's coordinate remapping
+      // assumes base-level dimensions (num_rows), but at mip level N, the 2D
+      // texture becomes (8192 >> N) x (num_rows >> N), which breaks the mapping
+      // when num_rows >> N becomes 1 while the shader still expects multiple
+      // rows. Mipmaps are rarely used with 1D lookup textures anyway.
+      mip_max_level = 0;
     }
     assert_false(fetch.tiled);
     if (fetch.tiled) {
