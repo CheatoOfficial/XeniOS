@@ -2879,12 +2879,19 @@ bool VulkanTextureCache::MakeScaledResolveRangeCurrent(
   uint32_t draw_resolution_scale_area =
       draw_resolution_scale_x() * draw_resolution_scale_y();
   uint64_t start_scaled = uint64_t(start_unscaled) * draw_resolution_scale_area;
+  uint64_t length_scaled_alignment_bits =
+      (UINT64_C(1) << length_scaled_alignment_log2) - 1;
+  uint64_t length_scaled =
+      (uint64_t(length_unscaled) * draw_resolution_scale_area +
+       length_scaled_alignment_bits) &
+      ~length_scaled_alignment_bits;
+  uint64_t end_scaled = start_scaled + length_scaled;
 
-  // Find which buffer contains this range
+  // Find which buffer contains this entire range (not just the start)
   for (size_t i = 0; i < scaled_resolve_buffers_.size(); ++i) {
     const ScaledResolveBuffer& buffer = scaled_resolve_buffers_[i];
     if (start_scaled >= buffer.range_start_scaled &&
-        start_scaled <
+        end_scaled <=
             (buffer.range_start_scaled + buffer.range_length_scaled)) {
       scaled_resolve_current_buffer_index_ = i;
       return true;
