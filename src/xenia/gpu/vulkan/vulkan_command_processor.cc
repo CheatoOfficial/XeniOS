@@ -4644,7 +4644,22 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
           dfn.vkQueueSubmit(queue_acquisition.queue(), 1, &submit_info, fence);
     }
     if (submit_result != VK_SUCCESS) {
-      XELOGE("Failed to submit a Vulkan command buffer");
+      XELOGE(
+          "Failed to submit a Vulkan command buffer - VkResult: {} (0x{:08X}), "
+          "submission_index: {}, wait_semaphores: {}, draw_resolution_scale: "
+          "{}x{}",
+          static_cast<int32_t>(submit_result),
+          static_cast<uint32_t>(submit_result), GetCurrentSubmission(),
+          submit_info.waitSemaphoreCount,
+          render_target_cache_ ? render_target_cache_->draw_resolution_scale_x()
+                               : 0,
+          render_target_cache_ ? render_target_cache_->draw_resolution_scale_y()
+                               : 0);
+      if (submit_result == VK_ERROR_DEVICE_LOST) {
+        XELOGE(
+            "VK_ERROR_DEVICE_LOST - GPU crashed or hung. This may be caused by "
+            "an invalid shader, out-of-bounds memory access, or driver bug.");
+      }
       if (submit_result == VK_ERROR_DEVICE_LOST && !device_lost_) {
         device_lost_ = true;
         graphics_system_->OnHostGpuLossFromAnyThread(true);

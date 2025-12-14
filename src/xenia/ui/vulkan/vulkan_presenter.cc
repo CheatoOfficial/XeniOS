@@ -2109,7 +2109,20 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(
       }
     }
     if (submit_result != VK_SUCCESS) {
-      XELOGE("VulkanPresenter: Failed to submit command buffers");
+      XELOGE(
+          "VulkanPresenter: Failed to submit command buffers - VkResult: {} "
+          "(0x{:08X}), command_buffer_count: {}, swapchain_extent: {}x{}",
+          static_cast<int32_t>(submit_result),
+          static_cast<uint32_t>(submit_result), submit_info.commandBufferCount,
+          paint_context_.swapchain_extent.width,
+          paint_context_.swapchain_extent.height);
+      if (submit_result == VK_ERROR_DEVICE_LOST) {
+        XELOGE("VulkanPresenter: VK_ERROR_DEVICE_LOST - GPU crashed or hung");
+      } else if (submit_result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+        XELOGE("VulkanPresenter: VK_ERROR_OUT_OF_HOST_MEMORY");
+      } else if (submit_result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        XELOGE("VulkanPresenter: VK_ERROR_OUT_OF_DEVICE_MEMORY");
+      }
       fence_acqusition.SubmissionFailedOrDropped();
       ui_fence_acquisition.SubmissionFailedOrDropped();
       if (ui_setup_command_buffer_index != SIZE_MAX) {
