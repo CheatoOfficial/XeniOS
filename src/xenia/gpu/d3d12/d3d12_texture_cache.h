@@ -801,6 +801,11 @@ class D3D12TextureCache final : public TextureCache {
   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount>
       load_pipelines_scaled_;
 
+  // Mip generation for scaled resolve textures.
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> mip_gen_root_signature_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> mip_gen_pipeline_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> mip_gen_3d_pipeline_;
+
   std::vector<SRVDescriptorCachePage> srv_descriptor_cache_;
   uint32_t srv_descriptor_cache_allocated_;
   // Indices of cached descriptors used by deleted textures, for reuse.
