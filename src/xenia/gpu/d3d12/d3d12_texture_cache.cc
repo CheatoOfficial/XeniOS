@@ -86,37 +86,24 @@ namespace shaders {
 static bool FormatSupportsMipGenerationUAV(DXGI_FORMAT format) {
   switch (format) {
     // RGBA formats - most common, widely supported for typed UAV.
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
     case DXGI_FORMAT_R8G8B8A8_UNORM:
-    case DXGI_FORMAT_R8G8B8A8_SNORM:
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
     case DXGI_FORMAT_R10G10B10A2_UNORM:
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
     case DXGI_FORMAT_R16G16B16A16_UNORM:
-    case DXGI_FORMAT_R16G16B16A16_SNORM:
     case DXGI_FORMAT_R16G16B16A16_FLOAT:
     case DXGI_FORMAT_R32G32B32A32_FLOAT:
     // RG formats.
-    case DXGI_FORMAT_R8G8_TYPELESS:
     case DXGI_FORMAT_R8G8_UNORM:
-    case DXGI_FORMAT_R8G8_SNORM:
-    case DXGI_FORMAT_R16G16_TYPELESS:
     case DXGI_FORMAT_R16G16_UNORM:
-    case DXGI_FORMAT_R16G16_SNORM:
     case DXGI_FORMAT_R16G16_FLOAT:
     case DXGI_FORMAT_R32G32_FLOAT:
     // Single channel formats.
-    case DXGI_FORMAT_R8_TYPELESS:
     case DXGI_FORMAT_R8_UNORM:
-    case DXGI_FORMAT_R8_SNORM:
-    case DXGI_FORMAT_R16_TYPELESS:
     case DXGI_FORMAT_R16_UNORM:
-    case DXGI_FORMAT_R16_SNORM:
     case DXGI_FORMAT_R16_FLOAT:
     case DXGI_FORMAT_R32_FLOAT:
       return true;
-    // All other formats (block-compressed, packed, integer, etc.) are not
-    // supported for our float4 typed UAV store mip generation.
+    // All other formats (block-compressed, packed, integer, SNORM, etc.) are
+    // not supported for our float4 typed UAV store mip generation.
     default:
       return false;
   }
@@ -1931,22 +1918,29 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
 
   // Generate mip levels for scaled resolve textures via compute shader.
   if (level_last_for_mip_gen > 0) {
+    uint32_t texture_level_count = texture_key.mip_max_level + 1;
     if (is_3d) {
       command_processor_.PushDebugMarker(
           "Mip Generation 3D: %ux%ux%u levels 1-%u",
           width * texture_resolution_scale_x,
           height * texture_resolution_scale_y, depth, level_last_for_mip_gen);
     } else {
-      command_processor_.PushDebugMarker("Mip Generation: %ux%u levels 1-%u",
+      command_processor_.PushDebugMarker("Mip Generation: %ux%ux%u levels 1-%u",
                                          width * texture_resolution_scale_x,
                                          height * texture_resolution_scale_y,
-                                         level_last_for_mip_gen);
+                                         array_size, level_last_for_mip_gen);
     }
 
     ID3D12Resource* texture_resource = d3d12_texture.resource();
-    DXGI_FORMAT texture_dxgi_format = GetDXGIResourceFormat(texture_key);
+    // Use the correct format based on texture signedness.
+    DXGI_FORMAT texture_dxgi_format =
+        texture_key.signed_separate
+            ? host_formats_[uint32_t(texture_key.format)].dxgi_format_signed
+            : GetDXGIUnormFormat(texture_key);
 
     // Check if the format supports typed UAV stores for mip generation.
+    // Note: SNORM formats don't support typed UAV stores, so signed textures
+    // will skip mip generation.
     if (!FormatSupportsMipGenerationUAV(texture_dxgi_format)) {
       XELOGW(
           "Skipping mip generation for scaled resolve texture: DXGI format %u "
@@ -1966,6 +1960,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     command_list.D3DSetComputeRootSignature(mip_gen_root_signature_.Get());
 
     // Generate each mip level by downsampling from the previous level.
+    // For texture arrays, process each slice separately.
     for (uint32_t level = 1; level <= level_last_for_mip_gen; ++level) {
       uint32_t src_width = std::max(scaled_width >> (level - 1), UINT32_C(1));
       uint32_t src_height = std::max(scaled_height >> (level - 1), UINT32_C(1));
@@ -1974,38 +1969,40 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       uint32_t dst_height = std::max(scaled_height >> level, UINT32_C(1));
       uint32_t dst_depth = std::max(depth >> level, UINT32_C(1));
 
-      // Transition source mip (level - 1) to pixel shader resource for reading.
-      // Transition destination mip (level) to unordered access for writing.
-      // Note: For first iteration, source (level 0) is in COPY_DEST state from
-      // the buffer copy above.
-      D3D12_RESOURCE_BARRIER barriers[2];
-      uint32_t barrier_count = 0;
+      // Transition source and destination mips for all array slices.
+      // Subresource index = mip + slice * mip_count.
+      std::vector<D3D12_RESOURCE_BARRIER> barriers;
+      barriers.reserve(array_size * 2);
+      for (uint32_t slice = 0; slice < array_size; ++slice) {
+        uint32_t src_subresource = (level - 1) + slice * texture_level_count;
+        uint32_t dst_subresource = level + slice * texture_level_count;
 
-      // Source barrier - from COPY_DEST (level 0) or UAV (level > 0) to SRV.
-      // Subresource index = MipSlice for ArraySlice=0, PlaneSlice=0.
-      barriers[barrier_count].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barriers[barrier_count].Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-      barriers[barrier_count].Transition.pResource = texture_resource;
-      barriers[barrier_count].Transition.Subresource = level - 1;
-      barriers[barrier_count].Transition.StateBefore =
-          (level == 1) ? D3D12_RESOURCE_STATE_COPY_DEST
-                       : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-      barriers[barrier_count].Transition.StateAfter =
-          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-      ++barrier_count;
+        // Source barrier - from COPY_DEST (level 0) or UAV (level > 0) to SRV.
+        D3D12_RESOURCE_BARRIER src_barrier;
+        src_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        src_barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        src_barrier.Transition.pResource = texture_resource;
+        src_barrier.Transition.Subresource = src_subresource;
+        src_barrier.Transition.StateBefore =
+            (level == 1) ? D3D12_RESOURCE_STATE_COPY_DEST
+                         : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        src_barrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barriers.push_back(src_barrier);
 
-      // Destination barrier - from COPY_DEST to UAV.
-      barriers[barrier_count].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barriers[barrier_count].Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-      barriers[barrier_count].Transition.pResource = texture_resource;
-      barriers[barrier_count].Transition.Subresource = level;
-      barriers[barrier_count].Transition.StateBefore =
-          D3D12_RESOURCE_STATE_COPY_DEST;
-      barriers[barrier_count].Transition.StateAfter =
-          D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-      ++barrier_count;
-
-      command_list.D3DResourceBarrier(barrier_count, barriers);
+        // Destination barrier - from COPY_DEST to UAV.
+        D3D12_RESOURCE_BARRIER dst_barrier;
+        dst_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        dst_barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        dst_barrier.Transition.pResource = texture_resource;
+        dst_barrier.Transition.Subresource = dst_subresource;
+        dst_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        dst_barrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        barriers.push_back(dst_barrier);
+      }
+      command_list.D3DResourceBarrier(uint32_t(barriers.size()),
+                                      barriers.data());
 
       // Allocate descriptors for SRV and UAV.
       ui::d3d12::util::DescriptorCpuGpuHandlePair mip_gen_descriptors[2];
@@ -2019,6 +2016,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       }
 
       // Create SRV for source mip level.
+      // For 2D textures, use array view to process all slices in one dispatch.
       D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
       srv_desc.Format = texture_dxgi_format;
       srv_desc.Shader4ComponentMapping =
@@ -2029,11 +2027,13 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
         srv_desc.Texture3D.MipLevels = 1;
         srv_desc.Texture3D.ResourceMinLODClamp = 0.0f;
       } else {
-        srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srv_desc.Texture2D.MostDetailedMip = level - 1;
-        srv_desc.Texture2D.MipLevels = 1;
-        srv_desc.Texture2D.PlaneSlice = 0;
-        srv_desc.Texture2D.ResourceMinLODClamp = 0.0f;
+        srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srv_desc.Texture2DArray.MostDetailedMip = level - 1;
+        srv_desc.Texture2DArray.MipLevels = 1;
+        srv_desc.Texture2DArray.FirstArraySlice = 0;
+        srv_desc.Texture2DArray.ArraySize = array_size;
+        srv_desc.Texture2DArray.PlaneSlice = 0;
+        srv_desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
       }
       device->CreateShaderResourceView(texture_resource, &srv_desc,
                                        mip_gen_descriptors[0].first);
@@ -2047,9 +2047,11 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
         uav_desc.Texture3D.FirstWSlice = 0;
         uav_desc.Texture3D.WSize = dst_depth;
       } else {
-        uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        uav_desc.Texture2D.MipSlice = level;
-        uav_desc.Texture2D.PlaneSlice = 0;
+        uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+        uav_desc.Texture2DArray.MipSlice = level;
+        uav_desc.Texture2DArray.FirstArraySlice = 0;
+        uav_desc.Texture2DArray.ArraySize = array_size;
+        uav_desc.Texture2DArray.PlaneSlice = 0;
       }
       device->CreateUnorderedAccessView(texture_resource, nullptr, &uav_desc,
                                         mip_gen_descriptors[1].first);
@@ -2076,7 +2078,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
           2, mip_gen_descriptors[1].second);
 
       // Dispatch compute shader.
-      // 2D: Thread group size is 8x8.
+      // 2D: Thread group size is 8x8, dispatch z = array_size for all slices.
       // 3D: Thread group size is 4x4x4.
       if (is_3d) {
         uint32_t group_count_x = (dst_width + 3) / 4;
@@ -2086,7 +2088,7 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
       } else {
         uint32_t group_count_x = (dst_width + 7) / 8;
         uint32_t group_count_y = (dst_height + 7) / 8;
-        command_list.D3DDispatch(group_count_x, group_count_y, 1);
+        command_list.D3DDispatch(group_count_x, group_count_y, array_size);
       }
     }
 
@@ -2094,27 +2096,28 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     // texture's expected state after loading.
     // Level 0 to level_last_for_mip_gen - 1 are in NON_PIXEL_SHADER_RESOURCE.
     // Level level_last_for_mip_gen is in UNORDERED_ACCESS.
-    // Subresource index = MipSlice for ArraySlice=0, PlaneSlice=0.
+    // Subresource index = mip + slice * mip_count.
     std::vector<D3D12_RESOURCE_BARRIER> final_barriers;
-    final_barriers.reserve(level_last_for_mip_gen + 1);
-    for (uint32_t level = 0; level < level_last_for_mip_gen; ++level) {
+    final_barriers.reserve((level_last_for_mip_gen + 1) * array_size);
+    for (uint32_t slice = 0; slice < array_size; ++slice) {
+      for (uint32_t level = 0; level < level_last_for_mip_gen; ++level) {
+        D3D12_RESOURCE_BARRIER barrier;
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+        barrier.Transition.pResource = texture_resource;
+        barrier.Transition.Subresource = level + slice * texture_level_count;
+        barrier.Transition.StateBefore =
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        final_barriers.push_back(barrier);
+      }
+      // Last mip level is in UAV state.
       D3D12_RESOURCE_BARRIER barrier;
       barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
       barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
       barrier.Transition.pResource = texture_resource;
-      barrier.Transition.Subresource = level;
-      barrier.Transition.StateBefore =
-          D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-      barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-      final_barriers.push_back(barrier);
-    }
-    // Last mip level is in UAV state.
-    {
-      D3D12_RESOURCE_BARRIER barrier;
-      barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-      barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-      barrier.Transition.pResource = texture_resource;
-      barrier.Transition.Subresource = level_last_for_mip_gen;
+      barrier.Transition.Subresource =
+          level_last_for_mip_gen + slice * texture_level_count;
       barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
       barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
       final_barriers.push_back(barrier);

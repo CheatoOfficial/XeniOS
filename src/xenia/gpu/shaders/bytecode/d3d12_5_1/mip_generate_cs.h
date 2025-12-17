@@ -18,32 +18,32 @@ cs_5_1
 dcl_globalFlags refactoringAllowed | allResourcesBound
 dcl_constantbuffer CB0[0:0][1], immediateIndexed, space=0
 dcl_sampler S0[0:0], mode_default, space=0
-dcl_resource_texture2d (float,float,float,float) T0[0:0], space=0
-dcl_uav_typed_texture2d (float,float,float,float) U0[0:0], space=0
-dcl_input vThreadID.xy
-dcl_temps 1
+dcl_resource_texture2darray (float,float,float,float) T0[0:0], space=0
+dcl_uav_typed_texture2darray (float,float,float,float) U0[0:0], space=0
+dcl_input vThreadID.xyz
+dcl_temps 2
 dcl_thread_group 8, 8, 1
 uge r0.xy, vThreadID.xyxx, CB0[0][0].zwzz
 or r0.x, r0.y, r0.x
 if_nz r0.x
   ret 
 endif 
-utof r0.xy, vThreadID.xyxx
-add r0.xy, r0.xyxx, l(0.500000, 0.500000, 0.000000, 0.000000)
-utof r0.zw, CB0[0][0].zzzw
-div r0.xy, r0.xyxx, r0.zwzz
-sample_l r0.xyzw, r0.xyxx, T0[0].xyzw, S0[0], l(0.000000)
-store_uav_typed U0[0].xyzw, vThreadID.xyyy, r0.xyzw
+utof r0.xyz, vThreadID.xyzx
+add r1.xy, r0.xyxx, l(0.500000, 0.500000, 0.000000, 0.000000)
+utof r1.zw, CB0[0][0].zzzw
+div r0.xy, r1.xyxx, r1.zwzz
+sample_l r0.xyzw, r0.xyzx, T0[0].xyzw, S0[0], l(0.000000)
+store_uav_typed U0[0].xyzw, vThreadID.xyzz, r0.xyzw
 ret 
 // Approximately 0 instruction slots used
 #endif
 
 const BYTE mip_generate_cs[] =
 {
-     68,  88,  66,  67, 105, 246, 
-    102,  79,  76, 251,  37, 172, 
-    110,  28,  51,  60, 201, 185, 
-    141,  14,   1,   0,   0,   0, 
+     68,  88,  66,  67,  59,  97, 
+    167, 140, 139,  19,  29,  32, 
+      0, 105,  17, 219, 209, 230, 
+    254,  36,   1,   0,   0,   0, 
       0,   2,   0,   0,   3,   0, 
       0,   0,  44,   0,   0,   0, 
      60,   0,   0,   0,  76,   0, 
@@ -64,19 +64,19 @@ const BYTE mip_generate_cs[] =
       0,   6,  70, 110,  48,   0, 
       0,   0,   0,   0,   0,   0, 
       0,   0,   0,   0,   0,   0, 
-      0,   0,   0,   0,  88,  24, 
+      0,   0,   0,   0,  88,  64, 
       0,   7,  70, 126,  48,   0, 
       0,   0,   0,   0,   0,   0, 
       0,   0,   0,   0,   0,   0, 
      85,  85,   0,   0,   0,   0, 
-      0,   0, 156,  24,   0,   7, 
+      0,   0, 156,  64,   0,   7, 
      70, 238,  49,   0,   0,   0, 
       0,   0,   0,   0,   0,   0, 
       0,   0,   0,   0,  85,  85, 
       0,   0,   0,   0,   0,   0, 
-     95,   0,   0,   2,  50,   0, 
+     95,   0,   0,   2, 114,   0, 
       2,   0, 104,   0,   0,   2, 
-      1,   0,   0,   0, 155,   0, 
+      2,   0,   0,   0, 155,   0, 
       0,   4,   8,   0,   0,   0, 
       8,   0,   0,   0,   1,   0, 
       0,   0,  80,   0,   0,   8, 
@@ -93,27 +93,27 @@ const BYTE mip_generate_cs[] =
      10,   0,  16,   0,   0,   0, 
       0,   0,  62,   0,   0,   1, 
      21,   0,   0,   1,  86,   0, 
-      0,   4,  50,   0,  16,   0, 
-      0,   0,   0,   0,  70,   0, 
+      0,   4, 114,   0,  16,   0, 
+      0,   0,   0,   0,  70,   2, 
       2,   0,   0,   0,   0,  10, 
-     50,   0,  16,   0,   0,   0, 
+     50,   0,  16,   0,   1,   0, 
       0,   0,  70,   0,  16,   0, 
       0,   0,   0,   0,   2,  64, 
       0,   0,   0,   0,   0,  63, 
       0,   0,   0,  63,   0,   0, 
       0,   0,   0,   0,   0,   0, 
      86,   0,   0,   7, 194,   0, 
-     16,   0,   0,   0,   0,   0, 
+     16,   0,   1,   0,   0,   0, 
     166, 142,  48,   0,   0,   0, 
       0,   0,   0,   0,   0,   0, 
       0,   0,   0,   0,  14,   0, 
       0,   7,  50,   0,  16,   0, 
       0,   0,   0,   0,  70,   0, 
-     16,   0,   0,   0,   0,   0, 
-    230,  10,  16,   0,   0,   0, 
+     16,   0,   1,   0,   0,   0, 
+    230,  10,  16,   0,   1,   0, 
       0,   0,  72,   0,   0,  13, 
     242,   0,  16,   0,   0,   0, 
-      0,   0,  70,   0,  16,   0, 
+      0,   0,  70,   2,  16,   0, 
       0,   0,   0,   0,  70, 126, 
      32,   0,   0,   0,   0,   0, 
       0,   0,   0,   0,   0,  96, 
@@ -122,7 +122,7 @@ const BYTE mip_generate_cs[] =
       0,   0,   0,   0,   0,   0, 
     164,   0,   0,   7, 242, 224, 
      33,   0,   0,   0,   0,   0, 
-      0,   0,   0,   0,  70,   5, 
+      0,   0,   0,   0,  70,  10, 
       2,   0,  70,  14,  16,   0, 
       0,   0,   0,   0,  62,   0, 
       0,   1
