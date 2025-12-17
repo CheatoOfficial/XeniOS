@@ -153,6 +153,21 @@ class D3D12TextureCache final : public TextureCache {
     assert_true(IsDrawResolutionScaled());
     GetCurrentScaledResolveBuffer().SetUAVBarrierPending();
   }
+  // Accessors for scaled resolve range info (for readback resolve path).
+  uint64_t GetCurrentScaledResolveRangeStartScaled() const {
+    return scaled_resolve_current_range_start_scaled_;
+  }
+  uint64_t GetCurrentScaledResolveRangeLengthScaled() const {
+    return scaled_resolve_current_range_length_scaled_;
+  }
+  // Returns the ID3D12Resource for the current scaled resolve buffer.
+  ID3D12Resource* GetCurrentScaledResolveBufferResource() {
+    return GetCurrentScaledResolveBuffer().resource();
+  }
+  // Returns the buffer index (gigabyte offset) for the current scaled resolve.
+  size_t GetCurrentScaledResolveBufferIndexPublic() const {
+    return GetCurrentScaledResolveBufferIndex();
+  }
 
   // Returns the ID3D12Resource of the front buffer texture (in
   // NON_PIXEL_SHADER_RESOURCE state), or nullptr in case of failure, and writes

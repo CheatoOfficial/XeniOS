@@ -694,6 +694,28 @@ class D3D12CommandProcessor final : public CommandProcessor {
   Microsoft::WRL::ComPtr<ID3D12PipelineState> fxaa_pipeline_;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> fxaa_extreme_pipeline_;
 
+  // Resolve downscale compute shader for scaled resolution readback.
+  // Downscales scaled resolve buffer data back to 1x resolution on the GPU,
+  // avoiding expensive CPU-side downscaling and reducing PCIe bandwidth.
+  struct ResolveDownscaleConstants {
+    uint32_t scale_x;          // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t scale_y;          // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t pixel_size_log2;  // 0=8bit, 1=16bit, 2=32bit, 3=64bit
+    uint32_t tile_count;       // Number of 32x32 tiles to process
+  };
+  enum class ResolveDownscaleRootParameter : UINT {
+    kConstants,
+    kSource,
+    kDestination,
+
+    kCount,
+  };
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> resolve_downscale_root_signature_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> resolve_downscale_pipeline_;
+  // Intermediate buffer for downscaled output (DEFAULT heap, UAV-capable).
+  Microsoft::WRL::ComPtr<ID3D12Resource> resolve_downscale_buffer_;
+  uint32_t resolve_downscale_buffer_size_ = 0;
+
   // PWL gamma ramp can result in values with more precision than 10bpc. Though
   // those sub-10bpc bits don't have any noticeable visual effect, so normally
   // R10G10B10A2_UNORM is enough. But what's the most important is that for the
