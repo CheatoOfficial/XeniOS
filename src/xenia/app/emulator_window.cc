@@ -88,6 +88,7 @@
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/hid/input_system.h"
+#include "xenia/kernel/user_module.h"
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_state.h"
@@ -1876,6 +1877,23 @@ void EmulatorWindow::UpdateTitle() {
       sb.Append(" v");
       sb.Append(title_version);
     }
+
+    // Show disc number for multi-disc titles and non-default XEX name
+    auto executable_module = emulator()->kernel_state()->GetExecutableModule();
+    if (executable_module) {
+      if (executable_module->is_multi_disc_title()) {
+        sb.AppendFormat(" Disc {}", executable_module->disc_number());
+      }
+
+      // Show XEX name if it's not default.xex
+      auto module_name = executable_module->name();
+      auto module_name_lower = xe::utf8::lower_ascii(module_name);
+      if (!module_name.empty() && module_name_lower != "default") {
+        sb.Append(" ");
+        sb.Append(module_name);
+      }
+    }
+
     sb.Append("]");
 
     auto title_name = emulator()->title_name();
@@ -2366,8 +2384,12 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   std::filesystem::path actual_path = path_to_file;
   std::string launch_module_arg;
 
+  std::string launch_flags_arg;
+  std::string launch_data_arg;
+  uint32_t launch_title_id = title_id;
+
   if (for_launch_data) {
-    // Read launch_data.txt to get the host_path and launch_path
+    // Read launch_data.txt to get all launch parameters
     std::filesystem::path file_path(kernel::xam::kXamModuleLoaderDataFileName);
     std::ifstream file(file_path);
     if (!file.is_open()) {
@@ -2392,12 +2414,18 @@ void EmulatorWindow::LaunchTitleInNewProcess(
         host_path = value;
       } else if (key == "launch_path") {
         launch_path = value;
+      } else if (key == "launch_flags") {
+        launch_flags_arg = value;
+      } else if (key == "launch_data") {
+        launch_data_arg = value;
+      } else if (key == "title_id") {
+        launch_title_id = std::stoul(value, nullptr, 16);
       }
     }
 
     file.close();
 
-    // Delete launch_data.txt so new process doesn't try to process it
+    // Delete launch_data.txt - we pass everything via command line
     std::filesystem::remove(kernel::xam::kXamModuleLoaderDataFileName);
 
     // Use the host_path as the target and launch_path as --launch_module
@@ -2413,8 +2441,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
 
   // Load per-game config overrides if title_id is provided
   std::vector<std::string> game_config_args;
-  if (title_id != 0) {
-    auto title_id_str = fmt::format("{:08X}", title_id);
+  if (launch_title_id != 0) {
+    auto title_id_str = fmt::format("{:08X}", launch_title_id);
     game_config_args = config::LoadGameConfigAsArgs(title_id_str);
   }
 
@@ -2434,6 +2462,16 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   if (!launch_module_arg.empty()) {
     cmd_line +=
         u" --launch_module=\"" + xe::to_utf16(launch_module_arg) + u"\"";
+  }
+
+  // Add --launch_flags if specified (for title-to-title launches)
+  if (!launch_flags_arg.empty()) {
+    cmd_line += u" --launch_flags=" + xe::to_utf16(launch_flags_arg);
+  }
+
+  // Add --launch_data if specified (for title-to-title launches)
+  if (!launch_data_arg.empty()) {
+    cmd_line += u" --launch_data=" + xe::to_utf16(launch_data_arg);
   }
 
   // Add per-game config overrides
@@ -2507,6 +2545,20 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     if (!launch_module_arg.empty()) {
       launch_module_arg_str = "--launch_module=" + launch_module_arg;
       argv.push_back(launch_module_arg_str.c_str());
+    }
+
+    // Add --launch_flags if specified (for title-to-title launches)
+    std::string launch_flags_arg_str;
+    if (!launch_flags_arg.empty()) {
+      launch_flags_arg_str = "--launch_flags=" + launch_flags_arg;
+      argv.push_back(launch_flags_arg_str.c_str());
+    }
+
+    // Add --launch_data if specified (for title-to-title launches)
+    std::string launch_data_arg_str;
+    if (!launch_data_arg.empty()) {
+      launch_data_arg_str = "--launch_data=" + launch_data_arg;
+      argv.push_back(launch_data_arg_str.c_str());
     }
 
     // Add per-game config overrides

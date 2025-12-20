@@ -88,6 +88,16 @@ DEFINE_string(
     "module.",
     "General");
 
+DEFINE_CVar(launch_flags, 0,
+            "Launch flags passed from a title restart request. "
+            "Used internally for title-to-title launches.",
+            "General", true, uint32_t);
+
+DEFINE_CVar(launch_data, "",
+            "Hex-encoded launch data passed from a title restart request. "
+            "Used internally for title-to-title launches.",
+            "General", true, std::string);
+
 DEFINE_bool(allow_game_relative_writes, false,
             "Not useful to non-developers. Allows code to write to paths "
             "relative to game://. Used for "

@@ -772,6 +772,13 @@ dword_result_t XamSwapDisc_entry(
           }
         }
 
+        // Update the host_path in loader_data so title restarts use the new
+        // disc
+        auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
+        if (xam) {
+          xam->loader_data().host_path = xe::path_to_utf8(new_disc_path);
+        }
+
         // Success - break out of the loop
         break;
       }
@@ -779,6 +786,13 @@ dword_result_t XamSwapDisc_entry(
       XELOGW(
           "XamSwapDisc: Mounted device is not an XContentContainerDevice, "
           "skipping validation");
+
+      // Update the host_path in loader_data so title restarts use the new disc
+      auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
+      if (xam) {
+        xam->loader_data().host_path = xe::path_to_utf8(new_disc_path);
+      }
+
       // For non-container devices, accept them (backward compatibility)
       break;
     }

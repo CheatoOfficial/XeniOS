@@ -148,6 +148,7 @@ void XamModule::SaveLoaderData() {
   file << "host_path=" << host_path_as_string << "\n";
   file << "launch_path=" << launch_path << "\n";
   file << "launch_flags=" << loader_data_.launch_flags << "\n";
+  file << "title_id=" << std::hex << kernel_state()->title_id() << "\n";
 
   // Convert launch_data bytes to hex string
   if (!loader_data_.launch_data.empty()) {

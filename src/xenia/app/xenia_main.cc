@@ -138,6 +138,9 @@ DEFINE_bool(discord, true, "Enable Discord rich presence", "General");
 
 DECLARE_bool(widescreen);
 
+DECLARE_uint32(launch_flags);
+DECLARE_string(launch_data);
+
 #if XE_PLATFORM_WIN32 && XE_ARCH_AMD64 == 1
 DEFINE_bool(enable_rdrand_ntdll_patch, false,
             "Hot-patches ntdll at the start of the process to not use rdrand "
@@ -867,11 +870,32 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
       "xam.xex");
 
   if (xam) {
-    xam->LoadLoaderData();
+    // Check if launch data was passed via command line (from UI process)
+    // This takes precedence over launch_data.txt
+    if (cvars::launch_flags != 0 || !cvars::launch_data.empty()) {
+      auto& loader_data = xam->loader_data();
+      loader_data.launch_data_present = true;
+      loader_data.launch_flags = cvars::launch_flags;
 
-    if (xam->loader_data().launch_data_present) {
-      const std::filesystem::path host_path = xam->loader_data().host_path;
-      emulator_->LaunchPath(host_path);
+      // Decode hex-encoded launch_data
+      if (!cvars::launch_data.empty()) {
+        loader_data.launch_data.clear();
+        const std::string& hex = cvars::launch_data;
+        for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+          std::string byte_str = hex.substr(i, 2);
+          uint8_t byte =
+              static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+          loader_data.launch_data.push_back(byte);
+        }
+      }
+    } else {
+      // Fall back to loading from file (legacy behavior)
+      xam->LoadLoaderData();
+
+      if (xam->loader_data().launch_data_present) {
+        const std::filesystem::path host_path = xam->loader_data().host_path;
+        emulator_->LaunchPath(host_path);
+      }
     }
   }
 
