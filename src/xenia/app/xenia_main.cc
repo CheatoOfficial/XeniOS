@@ -113,9 +113,7 @@ UPDATE_from_bool(mount_cache, 2024, 8, 31, 20, false);
 
 DECLARE_bool(force_mount_devkit);
 
-DEFINE_transient_path(target, "",
-                      "Specifies the target .xex or .iso to execute.",
-                      "General");
+DECLARE_path(target);  // Defined in windowed_app_main_qt.cc
 DEFINE_transient_bool(portable, false,
                       "Specifies if Xenia should run in portable mode.",
                       "General");

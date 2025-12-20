@@ -24,9 +24,16 @@
 #include "xenia/base/platform_win.h"
 #endif
 
+// Exists to create a mapping for positional arg.
+DEFINE_transient_path(target, "", "Specifies the target file to run.",
+                      "General");
+
 int main(int argc, char** argv) {
-  // Check if we have a target file argument (game process) or not (UI process)
-  bool is_game_process = argc > 1;
+  // Parse arguments early to determine if this is a game or UI process
+  // Must happen before QApplication creation for QT_QPA_PLATFORM to take effect
+  cvar::ParseLaunchArguments(argc, argv, "[Path to .iso/.xex]", {"target"});
+
+  bool is_game_process = !cvars::target.empty();
 
 #if XE_PLATFORM_LINUX
   // UI process: Force X11 backend for proper Qt rendering
@@ -244,9 +251,6 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<xe::ui::WindowedApp> app =
         xe::ui::GetWindowedAppCreator()(app_context);
-
-    cvar::ParseLaunchArguments(argc, argv, app->GetPositionalOptionsUsage(),
-                               app->GetPositionalOptions());
 
 #if XE_PLATFORM_WIN32
     // Initialize COM for Windows
