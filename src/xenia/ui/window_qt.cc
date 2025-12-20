@@ -235,21 +235,26 @@ bool QtWindow::OpenImpl() {
     }
   }
 
+  // Use the screen where the cursor is, falling back to primary
+  QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+  if (!screen) {
+    screen = QGuiApplication::primaryScreen();
+  }
+
+  // Position window on target screen (required for correct fullscreen monitor)
+  if (screen) {
+    QRect screen_geometry = screen->availableGeometry();
+    int x = screen_geometry.x() +
+            (screen_geometry.width() - GetDesiredLogicalWidth()) / 2;
+    int y = screen_geometry.y() +
+            (screen_geometry.height() - GetDesiredLogicalHeight()) / 2;
+    qwindow_->move(x, y);
+  }
+
   if (IsFullscreen()) {
     qwindow_->showFullScreen();
   } else {
-    // Resize window to desired dimensions
     qwindow_->resize(GetDesiredLogicalWidth(), GetDesiredLogicalHeight());
-
-    // Center window on screen
-    QScreen* screen = QGuiApplication::primaryScreen();
-    if (screen) {
-      QRect screen_geometry = screen->availableGeometry();
-      int x = (screen_geometry.width() - GetDesiredLogicalWidth()) / 2;
-      int y = (screen_geometry.height() - GetDesiredLogicalHeight()) / 2;
-      qwindow_->move(x, y);
-    }
-
     qwindow_->show();
   }
 
