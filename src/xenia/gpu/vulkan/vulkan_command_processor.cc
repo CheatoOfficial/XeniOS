@@ -54,6 +54,7 @@ namespace shaders {
 #include "xenia/gpu/shaders/bytecode/vulkan_spirv/apply_gamma_table_fxaa_luma_cs.h"
 #include "xenia/gpu/shaders/bytecode/vulkan_spirv/fxaa_cs.h"
 #include "xenia/gpu/shaders/bytecode/vulkan_spirv/fxaa_extreme_cs.h"
+#include "xenia/gpu/shaders/bytecode/vulkan_spirv/resolve_downscale_cs.h"
 }  // namespace shaders
 
 constexpr VkDescriptorPoolSize
@@ -1200,6 +1201,130 @@ bool VulkanCommandProcessor::SetupContext() {
     return false;
   }
 
+  // Resolve downscale compute shader for scaled resolution readback.
+  // Descriptor set layout: binding 0 = source storage buffer,
+  //                        binding 1 = destination storage buffer.
+  {
+    std::array<VkDescriptorSetLayoutBinding, 2> resolve_downscale_bindings;
+    // Source buffer (readonly).
+    resolve_downscale_bindings[0].binding = 0;
+    resolve_downscale_bindings[0].descriptorType =
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_downscale_bindings[0].descriptorCount = 1;
+    resolve_downscale_bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_downscale_bindings[0].pImmutableSamplers = nullptr;
+    // Destination buffer (writeonly).
+    resolve_downscale_bindings[1].binding = 1;
+    resolve_downscale_bindings[1].descriptorType =
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_downscale_bindings[1].descriptorCount = 1;
+    resolve_downscale_bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_downscale_bindings[1].pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo resolve_downscale_set_layout_create_info;
+    resolve_downscale_set_layout_create_info.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    resolve_downscale_set_layout_create_info.pNext = nullptr;
+    resolve_downscale_set_layout_create_info.flags = 0;
+    resolve_downscale_set_layout_create_info.bindingCount =
+        uint32_t(resolve_downscale_bindings.size());
+    resolve_downscale_set_layout_create_info.pBindings =
+        resolve_downscale_bindings.data();
+    if (dfn.vkCreateDescriptorSetLayout(
+            device, &resolve_downscale_set_layout_create_info, nullptr,
+            &resolve_downscale_descriptor_set_layout_) != VK_SUCCESS) {
+      XELOGE("Failed to create the resolve downscale descriptor set layout");
+      return false;
+    }
+
+    // Pipeline layout with push constants.
+    VkPushConstantRange resolve_downscale_push_constant_range;
+    resolve_downscale_push_constant_range.stageFlags =
+        VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_downscale_push_constant_range.offset = 0;
+    resolve_downscale_push_constant_range.size =
+        sizeof(ResolveDownscaleConstants);
+
+    VkPipelineLayoutCreateInfo resolve_downscale_pipeline_layout_create_info;
+    resolve_downscale_pipeline_layout_create_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    resolve_downscale_pipeline_layout_create_info.pNext = nullptr;
+    resolve_downscale_pipeline_layout_create_info.flags = 0;
+    resolve_downscale_pipeline_layout_create_info.setLayoutCount = 1;
+    resolve_downscale_pipeline_layout_create_info.pSetLayouts =
+        &resolve_downscale_descriptor_set_layout_;
+    resolve_downscale_pipeline_layout_create_info.pushConstantRangeCount = 1;
+    resolve_downscale_pipeline_layout_create_info.pPushConstantRanges =
+        &resolve_downscale_push_constant_range;
+    if (dfn.vkCreatePipelineLayout(
+            device, &resolve_downscale_pipeline_layout_create_info, nullptr,
+            &resolve_downscale_pipeline_layout_) != VK_SUCCESS) {
+      XELOGE("Failed to create the resolve downscale pipeline layout");
+      return false;
+    }
+
+    // Compute pipeline.
+    VkShaderModule resolve_downscale_shader_module =
+        ui::vulkan::util::CreateShaderModule(
+            vulkan_device, shaders::resolve_downscale_cs,
+            sizeof(shaders::resolve_downscale_cs));
+    if (resolve_downscale_shader_module == VK_NULL_HANDLE) {
+      XELOGE("Failed to create the resolve downscale shader module");
+      return false;
+    }
+
+    VkComputePipelineCreateInfo resolve_downscale_pipeline_create_info;
+    resolve_downscale_pipeline_create_info.sType =
+        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    resolve_downscale_pipeline_create_info.pNext = nullptr;
+    resolve_downscale_pipeline_create_info.flags = 0;
+    resolve_downscale_pipeline_create_info.stage.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    resolve_downscale_pipeline_create_info.stage.pNext = nullptr;
+    resolve_downscale_pipeline_create_info.stage.flags = 0;
+    resolve_downscale_pipeline_create_info.stage.stage =
+        VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_downscale_pipeline_create_info.stage.module =
+        resolve_downscale_shader_module;
+    resolve_downscale_pipeline_create_info.stage.pName = "main";
+    resolve_downscale_pipeline_create_info.stage.pSpecializationInfo = nullptr;
+    resolve_downscale_pipeline_create_info.layout =
+        resolve_downscale_pipeline_layout_;
+    resolve_downscale_pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
+    resolve_downscale_pipeline_create_info.basePipelineIndex = -1;
+
+    VkResult resolve_downscale_pipeline_result = dfn.vkCreateComputePipelines(
+        device, VK_NULL_HANDLE, 1, &resolve_downscale_pipeline_create_info,
+        nullptr, &resolve_downscale_pipeline_);
+    dfn.vkDestroyShaderModule(device, resolve_downscale_shader_module, nullptr);
+    if (resolve_downscale_pipeline_result != VK_SUCCESS) {
+      XELOGE("Failed to create the resolve downscale compute pipeline");
+      return false;
+    }
+
+    // Descriptor pool for resolve downscale shader.
+    // Max 16 sets, each with 2 storage buffers (source + destination).
+    VkDescriptorPoolSize resolve_downscale_pool_size;
+    resolve_downscale_pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_downscale_pool_size.descriptorCount = 32;  // 16 sets * 2 buffers
+    VkDescriptorPoolCreateInfo resolve_downscale_pool_create_info;
+    resolve_downscale_pool_create_info.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    resolve_downscale_pool_create_info.pNext = nullptr;
+    resolve_downscale_pool_create_info.flags =
+        VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    resolve_downscale_pool_create_info.maxSets = 16;
+    resolve_downscale_pool_create_info.poolSizeCount = 1;
+    resolve_downscale_pool_create_info.pPoolSizes =
+        &resolve_downscale_pool_size;
+    if (dfn.vkCreateDescriptorPool(
+            device, &resolve_downscale_pool_create_info, nullptr,
+            &resolve_downscale_descriptor_pool_) != VK_SUCCESS) {
+      XELOGE("Failed to create the resolve downscale descriptor pool");
+      return false;
+    }
+  }
+
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
 
   // Just not to expose uninitialized memory.
@@ -1253,6 +1378,22 @@ void VulkanCommandProcessor::ShutdownContext() {
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorSetLayout,
                                          device,
                                          fxaa_source_descriptor_set_layout_);
+
+  // Resolve downscale cleanup.
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                         resolve_downscale_buffer_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkFreeMemory, device,
+                                         resolve_downscale_buffer_memory_);
+  resolve_downscale_buffer_size_ = 0;
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
+                                         resolve_downscale_pipeline_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, device,
+                                         resolve_downscale_pipeline_layout_);
+  ui::vulkan::util::DestroyAndNullHandle(
+      dfn.vkDestroyDescriptorSetLayout, device,
+      resolve_downscale_descriptor_set_layout_);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
+                                         resolve_downscale_descriptor_pool_);
 
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
                                          swap_descriptor_pool_);
@@ -3569,6 +3710,7 @@ bool VulkanCommandProcessor::IssueCopy() {
 
     if (!memory_accessible) {
       // Destination memory not accessible, skip readback entirely
+      PopDebugMarker();
       return true;
     }
 
@@ -3601,6 +3743,7 @@ bool VulkanCommandProcessor::IssueCopy() {
         XELOGE(
             "VulkanCommandProcessor: Failed to create readback buffer of {} MB",
             size >> 20);
+        PopDebugMarker();
         return true;
       }
 
@@ -3620,6 +3763,7 @@ bool VulkanCommandProcessor::IssueCopy() {
             "VulkanCommandProcessor: Failed to find memory type for readback "
             "buffer");
         dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        PopDebugMarker();
         return true;
       }
 
@@ -3635,6 +3779,7 @@ bool VulkanCommandProcessor::IssueCopy() {
             "VulkanCommandProcessor: Failed to allocate readback buffer "
             "memory");
         dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        PopDebugMarker();
         return true;
       }
 
@@ -3644,6 +3789,7 @@ bool VulkanCommandProcessor::IssueCopy() {
         XELOGE("VulkanCommandProcessor: Failed to bind readback buffer memory");
         dfn.vkFreeMemory(device, new_memory, nullptr);
         dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        PopDebugMarker();
         return true;
       }
 
@@ -3656,6 +3802,7 @@ bool VulkanCommandProcessor::IssueCopy() {
               "destroying old readback buffer");
           dfn.vkDestroyBuffer(device, new_buffer, nullptr);
           dfn.vkFreeMemory(device, new_memory, nullptr);
+          PopDebugMarker();
           return true;
         }
       }
@@ -3716,6 +3863,7 @@ bool VulkanCommandProcessor::IssueCopy() {
         XELOGE(
             "VulkanCommandProcessor: Failed to complete queue operations for "
             "resolve readback");
+        PopDebugMarker();
         return true;
       }
     }
@@ -3731,6 +3879,7 @@ bool VulkanCommandProcessor::IssueCopy() {
         XELOGE(
             "VulkanCommandProcessor: Failed to complete queue operations for "
             "resolve readback fallback");
+        PopDebugMarker();
         return true;
       }
     }
@@ -3747,6 +3896,535 @@ bool VulkanCommandProcessor::IssueCopy() {
     }
 
     // Swap buffer index for next time this specific resolve address is used
+    rb.current_index = 1 - rb.current_index;
+  } else if (readback_mode != ReadbackResolveMode::kDisabled &&
+             texture_cache_->IsDrawResolutionScaled() && written_length > 0) {
+    /* Scaled resolution readback path - GPU compute shader downscaling */
+
+    // Early check: if destination memory is not accessible, skip all the
+    // expensive GPU readback work.
+    VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
+    bool memory_accessible = false;
+    if (physical_heap) {
+      HeapAllocationInfo alloc_info;
+      if (physical_heap->QueryRegionInfo(written_address, &alloc_info) &&
+          (alloc_info.state & kMemoryAllocationCommit) &&
+          (alloc_info.protect & kMemoryProtectWrite)) {
+        uint32_t end_address = written_address + written_length;
+        uint32_t region_end = alloc_info.base_address + alloc_info.region_size;
+        if (end_address <= region_end) {
+          memory_accessible = true;
+        }
+      }
+    }
+
+    if (!memory_accessible) {
+      // Destination memory not accessible, skip readback entirely
+      if (debug_markers_enabled_) {
+        PopDebugMarker();
+      }
+      return true;
+    }
+
+    // Get scaled resolve buffer (works for both sparse and simple buffer modes)
+    VkBuffer scaled_buffer = texture_cache_->GetCurrentScaledResolveBuffer();
+    if (scaled_buffer == VK_NULL_HANDLE) {
+      XELOGE("VulkanCommandProcessor: No scaled resolve buffer available");
+      if (debug_markers_enabled_) {
+        PopDebugMarker();
+      }
+      return true;
+    }
+
+    // Get the current scaled resolve range (not the buffer's total range)
+    uint32_t scaled_length = static_cast<uint32_t>(
+        texture_cache_->GetCurrentScaledResolveRangeLengthScaled());
+    uint64_t scaled_address =
+        texture_cache_->GetCurrentScaledResolveRangeStartScaled();
+
+    // Calculate offset within the buffer using the buffer's base address.
+    // GetCurrentScaledResolveBufferBaseOffset() returns:
+    // - For sparse buffers: buffer_index << 30 (same as D3D12's 1GB chunks)
+    // - For simple buffers: the buffer's range_start_scaled
+    uint64_t buffer_base =
+        texture_cache_->GetCurrentScaledResolveBufferBaseOffset();
+    if (scaled_address < buffer_base) {
+      XELOGE(
+          "VulkanCommandProcessor: Scaled address {} is before buffer start {}",
+          scaled_address, buffer_base);
+      if (debug_markers_enabled_) {
+        PopDebugMarker();
+      }
+      return true;
+    }
+    uint64_t source_offset = scaled_address - buffer_base;
+
+    // Get format info for downscaling
+    auto copy_dest_info = register_file_->Get<reg::RB_COPY_DEST_INFO>();
+    const FormatInfo* format_info =
+        FormatInfo::Get(static_cast<uint32_t>(copy_dest_info.copy_dest_format));
+    uint32_t bits_per_pixel = format_info->bits_per_pixel;
+
+    uint32_t scale_x = texture_cache_->draw_resolution_scale_x();
+    uint32_t scale_y = texture_cache_->draw_resolution_scale_y();
+
+    assert_true(scale_x >= 1 &&
+                scale_x <= TextureCache::kMaxDrawResolutionScaleAlongAxis);
+    assert_true(scale_y >= 1 &&
+                scale_y <= TextureCache::kMaxDrawResolutionScaleAlongAxis);
+    assert_true(scale_x > 1 || scale_y > 1);
+    assert_true(bits_per_pixel == 8 || bits_per_pixel == 16 ||
+                bits_per_pixel == 32 || bits_per_pixel == 64);
+
+    // Use the same keying as non-scaled path
+    uint64_t resolve_key =
+        MakeReadbackResolveKey(written_address, written_length);
+
+    ReadbackBuffer& rb = readback_buffers_[resolve_key];
+    rb.last_used_frame = frame_current_;
+
+    uint32_t write_index = rb.current_index;
+    // Readback buffer is now 1x size (downscaled), not scaled_length
+    uint32_t size = AlignReadbackBufferSize(written_length);
+
+    const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
+    const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+    const VkDevice device = vulkan_device->device();
+
+    // Allocate/resize write buffer if needed (1x size now)
+    if (size > rb.sizes[write_index]) {
+      VkBufferCreateInfo buffer_info = {};
+      buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      buffer_info.size = size;
+      buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+      buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+      VkBuffer new_buffer;
+      if (dfn.vkCreateBuffer(device, &buffer_info, nullptr, &new_buffer) !=
+          VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to create scaled readback buffer "
+            "of {} MB",
+            size >> 20);
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      VkMemoryRequirements memory_requirements;
+      dfn.vkGetBufferMemoryRequirements(device, new_buffer,
+                                        &memory_requirements);
+
+      const uint32_t memory_type_index = ui::vulkan::util::ChooseMemoryType(
+          vulkan_device->memory_types(), memory_requirements.memoryTypeBits,
+          ui::vulkan::util::MemoryPurpose::kReadback);
+
+      if (memory_type_index == UINT32_MAX) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to find memory type for scaled "
+            "readback buffer");
+        dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      VkMemoryAllocateInfo memory_info = {};
+      memory_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      memory_info.allocationSize = memory_requirements.size;
+      memory_info.memoryTypeIndex = memory_type_index;
+
+      VkDeviceMemory new_memory;
+      if (dfn.vkAllocateMemory(device, &memory_info, nullptr, &new_memory) !=
+          VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to allocate scaled readback "
+            "buffer memory");
+        dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      if (dfn.vkBindBufferMemory(device, new_buffer, new_memory, 0) !=
+          VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to bind scaled readback buffer "
+            "memory");
+        dfn.vkFreeMemory(device, new_memory, nullptr);
+        dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      // Clean up old buffer if exists
+      if (rb.buffers[write_index] != VK_NULL_HANDLE) {
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to wait for GPU before "
+              "destroying old scaled readback buffer");
+          dfn.vkDestroyBuffer(device, new_buffer, nullptr);
+          dfn.vkFreeMemory(device, new_memory, nullptr);
+          if (debug_markers_enabled_) {
+            PopDebugMarker();
+          }
+          return true;
+        }
+      }
+      if (rb.mapped_data[write_index] != nullptr) {
+        dfn.vkUnmapMemory(device, rb.memories[write_index]);
+        rb.mapped_data[write_index] = nullptr;
+      }
+      if (rb.buffers[write_index] != VK_NULL_HANDLE) {
+        dfn.vkDestroyBuffer(device, rb.buffers[write_index], nullptr);
+      }
+      if (rb.memories[write_index] != VK_NULL_HANDLE) {
+        dfn.vkFreeMemory(device, rb.memories[write_index], nullptr);
+      }
+
+      rb.buffers[write_index] = new_buffer;
+      rb.memories[write_index] = new_memory;
+      rb.sizes[write_index] = size;
+
+      // Map the new buffer persistently
+      if (dfn.vkMapMemory(device, new_memory, 0, size, 0,
+                          &rb.mapped_data[write_index]) != VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to persistently map scaled "
+            "readback buffer");
+        rb.mapped_data[write_index] = nullptr;
+      }
+    }
+
+    // Ensure intermediate buffer for GPU downscaling is large enough
+    uint32_t downscale_buffer_size = AlignReadbackBufferSize(written_length);
+    if (downscale_buffer_size > resolve_downscale_buffer_size_) {
+      // Clean up old buffer
+      if (resolve_downscale_buffer_ != VK_NULL_HANDLE) {
+        if (!AwaitAllQueueOperationsCompletion()) {
+          XELOGE(
+              "VulkanCommandProcessor: Failed to wait for GPU before "
+              "destroying old downscale buffer");
+          if (debug_markers_enabled_) {
+            PopDebugMarker();
+          }
+          return true;
+        }
+        dfn.vkDestroyBuffer(device, resolve_downscale_buffer_, nullptr);
+        dfn.vkFreeMemory(device, resolve_downscale_buffer_memory_, nullptr);
+        resolve_downscale_buffer_ = VK_NULL_HANDLE;
+        resolve_downscale_buffer_memory_ = VK_NULL_HANDLE;
+        resolve_downscale_buffer_size_ = 0;
+      }
+
+      VkBufferCreateInfo buffer_info = {};
+      buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+      buffer_info.size = downscale_buffer_size;
+      buffer_info.usage =
+          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+      if (dfn.vkCreateBuffer(device, &buffer_info, nullptr,
+                             &resolve_downscale_buffer_) != VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to create {} MB downscale buffer",
+            downscale_buffer_size >> 20);
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      VkMemoryRequirements memory_requirements;
+      dfn.vkGetBufferMemoryRequirements(device, resolve_downscale_buffer_,
+                                        &memory_requirements);
+
+      const uint32_t memory_type_index = ui::vulkan::util::ChooseMemoryType(
+          vulkan_device->memory_types(), memory_requirements.memoryTypeBits,
+          ui::vulkan::util::MemoryPurpose::kDeviceLocal);
+
+      if (memory_type_index == UINT32_MAX) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to find memory type for downscale "
+            "buffer");
+        dfn.vkDestroyBuffer(device, resolve_downscale_buffer_, nullptr);
+        resolve_downscale_buffer_ = VK_NULL_HANDLE;
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      VkMemoryAllocateInfo memory_info = {};
+      memory_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      memory_info.allocationSize = memory_requirements.size;
+      memory_info.memoryTypeIndex = memory_type_index;
+
+      if (dfn.vkAllocateMemory(device, &memory_info, nullptr,
+                               &resolve_downscale_buffer_memory_) !=
+          VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to allocate downscale buffer "
+            "memory");
+        dfn.vkDestroyBuffer(device, resolve_downscale_buffer_, nullptr);
+        resolve_downscale_buffer_ = VK_NULL_HANDLE;
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      if (dfn.vkBindBufferMemory(device, resolve_downscale_buffer_,
+                                 resolve_downscale_buffer_memory_,
+                                 0) != VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to bind downscale buffer memory");
+        dfn.vkFreeMemory(device, resolve_downscale_buffer_memory_, nullptr);
+        dfn.vkDestroyBuffer(device, resolve_downscale_buffer_, nullptr);
+        resolve_downscale_buffer_ = VK_NULL_HANDLE;
+        resolve_downscale_buffer_memory_ = VK_NULL_HANDLE;
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+
+      resolve_downscale_buffer_size_ = downscale_buffer_size;
+    }
+
+    // Allocate descriptor set for source and destination buffers
+    VkDescriptorSetAllocateInfo descriptor_alloc_info = {};
+    descriptor_alloc_info.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    descriptor_alloc_info.descriptorPool = resolve_downscale_descriptor_pool_;
+    descriptor_alloc_info.descriptorSetCount = 1;
+    descriptor_alloc_info.pSetLayouts =
+        &resolve_downscale_descriptor_set_layout_;
+
+    VkDescriptorSet descriptor_set;
+    if (dfn.vkAllocateDescriptorSets(device, &descriptor_alloc_info,
+                                     &descriptor_set) != VK_SUCCESS) {
+      // Pool may be exhausted, reset it and try again
+      if (!AwaitAllQueueOperationsCompletion()) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to wait for GPU before resetting "
+            "descriptor pool");
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+      dfn.vkResetDescriptorPool(device, resolve_downscale_descriptor_pool_, 0);
+      if (dfn.vkAllocateDescriptorSets(device, &descriptor_alloc_info,
+                                       &descriptor_set) != VK_SUCCESS) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to allocate resolve downscale "
+            "descriptor set");
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+    }
+
+    // Ensure submission is open after any potential
+    // AwaitAllQueueOperationsCompletion calls during buffer allocation above
+    if (!BeginSubmission(true)) {
+      XELOGE(
+          "VulkanCommandProcessor: Failed to begin submission for scaled "
+          "resolve readback");
+      if (debug_markers_enabled_) {
+        PopDebugMarker();
+      }
+      return true;
+    }
+
+    // Update descriptor set with buffer bindings
+    // Bind source buffer at offset 0 to avoid alignment issues - offset is
+    // passed via push constants and applied in the shader
+    std::array<VkDescriptorBufferInfo, 2> buffer_infos;
+    buffer_infos[0].buffer = scaled_buffer;
+    buffer_infos[0].offset = 0;
+    buffer_infos[0].range = VK_WHOLE_SIZE;
+    // Destination buffer (intermediate device-local buffer)
+    buffer_infos[1].buffer = resolve_downscale_buffer_;
+    buffer_infos[1].offset = 0;
+    buffer_infos[1].range = written_length;
+
+    std::array<VkWriteDescriptorSet, 2> descriptor_writes;
+    descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptor_writes[0].pNext = nullptr;
+    descriptor_writes[0].dstSet = descriptor_set;
+    descriptor_writes[0].dstBinding = 0;
+    descriptor_writes[0].dstArrayElement = 0;
+    descriptor_writes[0].descriptorCount = 1;
+    descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptor_writes[0].pImageInfo = nullptr;
+    descriptor_writes[0].pBufferInfo = &buffer_infos[0];
+    descriptor_writes[0].pTexelBufferView = nullptr;
+
+    descriptor_writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptor_writes[1].pNext = nullptr;
+    descriptor_writes[1].dstSet = descriptor_set;
+    descriptor_writes[1].dstBinding = 1;
+    descriptor_writes[1].dstArrayElement = 0;
+    descriptor_writes[1].descriptorCount = 1;
+    descriptor_writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptor_writes[1].pImageInfo = nullptr;
+    descriptor_writes[1].pBufferInfo = &buffer_infos[1];
+    descriptor_writes[1].pTexelBufferView = nullptr;
+
+    dfn.vkUpdateDescriptorSets(device, uint32_t(descriptor_writes.size()),
+                               descriptor_writes.data(), 0, nullptr);
+
+    // End any active render pass and submit barriers
+    SubmitBarriers(true);
+
+    // Barrier for source buffer - ensure resolve copy compute shader writes
+    // are complete before readback compute shader reads.
+    VkBufferMemoryBarrier source_barrier = {};
+    source_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    source_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    source_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    source_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    source_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    source_barrier.buffer = scaled_buffer;
+    source_barrier.offset = 0;
+    source_barrier.size = VK_WHOLE_SIZE;
+    deferred_command_buffer_.CmdVkPipelineBarrier(
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1, &source_barrier,
+        0, nullptr);
+
+    PushDebugMarker("Resolve Downscale: 0x%08X, %u bytes -> %u bytes",
+                    written_address, scaled_length, written_length);
+
+    // Bind compute pipeline
+    BindExternalComputePipeline(resolve_downscale_pipeline_);
+
+    // Push constants
+    uint32_t pixel_size_log2;
+    xe::bit_scan_forward(bits_per_pixel >> 3, &pixel_size_log2);
+    uint32_t bytes_per_pixel = 1u << pixel_size_log2;
+    uint32_t tile_size_1x = 32 * 32 * bytes_per_pixel;
+    uint32_t tile_count = written_length / tile_size_1x;
+
+    // Skip if no complete tiles to process
+    if (tile_count == 0) {
+      XELOGW(
+          "VulkanCommandProcessor: Scaled resolve has no complete tiles "
+          "(written_length=%u, tile_size=%u)",
+          written_length, tile_size_1x);
+      if (debug_markers_enabled_) {
+        PopDebugMarker();  // Pop "Resolve Downscale"
+        PopDebugMarker();  // Pop "IssueCopy (Resolve)"
+      }
+      return true;
+    }
+
+    ResolveDownscaleConstants constants;
+    constants.scale_x = scale_x;
+    constants.scale_y = scale_y;
+    constants.pixel_size_log2 = pixel_size_log2;
+    constants.tile_count = tile_count;
+    constants.source_offset_bytes = static_cast<uint32_t>(source_offset);
+    deferred_command_buffer_.CmdVkPushConstants(
+        resolve_downscale_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+        sizeof(constants), &constants);
+
+    // Bind descriptor set
+    deferred_command_buffer_.CmdVkBindDescriptorSets(
+        VK_PIPELINE_BIND_POINT_COMPUTE, resolve_downscale_pipeline_layout_, 0,
+        1, &descriptor_set, 0, nullptr);
+
+    // Dispatch compute shader - one thread group per 32x32 tile
+    deferred_command_buffer_.CmdVkDispatch(tile_count, 1, 1);
+
+    // Barrier for compute shader output before copy
+    VkBufferMemoryBarrier downscale_barrier = {};
+    downscale_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    downscale_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    downscale_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    downscale_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    downscale_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    downscale_barrier.buffer = resolve_downscale_buffer_;
+    downscale_barrier.offset = 0;
+    downscale_barrier.size = written_length;
+    deferred_command_buffer_.CmdVkPipelineBarrier(
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+        0, nullptr, 1, &downscale_barrier, 0, nullptr);
+
+    // Copy downscaled data to readback buffer
+    VkBufferCopy copy_region = {};
+    copy_region.srcOffset = 0;
+    copy_region.dstOffset = 0;
+    copy_region.size = written_length;
+    deferred_command_buffer_.CmdVkCopyBuffer(
+        resolve_downscale_buffer_, rb.buffers[write_index], 1, &copy_region);
+
+    PopDebugMarker();
+
+    bool use_delayed_sync = (readback_mode == ReadbackResolveMode::kFast ||
+                             readback_mode == ReadbackResolveMode::kSome);
+    uint32_t read_index = write_index;
+
+    if (use_delayed_sync) {
+      // Use previous frame's data (avoid stall)
+      read_index = 1 - write_index;
+    } else {
+      // Wait for GPU to finish (accurate but slow)
+      if (!AwaitAllQueueOperationsCompletion()) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to complete queue operations for "
+            "scaled resolve readback");
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+    }
+
+    // Check if we have valid data to read from
+    bool is_cache_miss = false;
+    if (use_delayed_sync && (rb.buffers[read_index] == VK_NULL_HANDLE ||
+                             written_length > rb.sizes[read_index] ||
+                             rb.mapped_data[read_index] == nullptr)) {
+      // Cache miss - need to sync and use current buffer
+      is_cache_miss = true;
+      read_index = write_index;
+      if (!AwaitAllQueueOperationsCompletion()) {
+        XELOGE(
+            "VulkanCommandProcessor: Failed to complete queue operations for "
+            "scaled resolve readback fallback");
+        if (debug_markers_enabled_) {
+          PopDebugMarker();
+        }
+        return true;
+      }
+    }
+
+    // Copy to guest memory
+    // "some" mode: only copy on cache miss (saves CPU)
+    // "fast" mode: always copy (1 frame behind, no GPU stall)
+    // "full" mode: always copy (GPU sync already done above)
+    bool should_copy =
+        (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
+
+    // Simple memcpy - data is already downscaled by GPU
+    if (should_copy && rb.mapped_data[read_index] != nullptr &&
+        written_length <= rb.sizes[read_index]) {
+      uint8_t* physaddr = memory_->TranslatePhysical(written_address);
+      memory::vastcpy(physaddr,
+                      static_cast<uint8_t*>(rb.mapped_data[read_index]),
+                      written_length);
+    }
+
+    // Swap buffer index for next time
     rb.current_index = 1 - rb.current_index;
   }
 

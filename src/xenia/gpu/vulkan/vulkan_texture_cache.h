@@ -188,6 +188,14 @@ class VulkanTextureCache final : public TextureCache {
     return nullptr;
   }
 
+  // Get the current scaled resolve range (set by MakeScaledResolveRangeCurrent)
+  uint64_t GetCurrentScaledResolveRangeStartScaled() const {
+    return scaled_resolve_current_range_start_scaled_;
+  }
+  uint64_t GetCurrentScaledResolveRangeLengthScaled() const {
+    return scaled_resolve_current_range_length_scaled_;
+  }
+
  protected:
   bool IsScaledResolveSupportedForFormat(TextureKey key) const override;
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;

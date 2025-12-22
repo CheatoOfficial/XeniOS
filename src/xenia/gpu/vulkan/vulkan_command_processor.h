@@ -674,6 +674,28 @@ class VulkanCommandProcessor final : public CommandProcessor {
   VkPipeline fxaa_pipeline_ = VK_NULL_HANDLE;
   VkPipeline fxaa_extreme_pipeline_ = VK_NULL_HANDLE;
   VkSampler fxaa_sampler_ = VK_NULL_HANDLE;
+
+  // Resolve downscale compute shader for scaled resolution readback.
+  // Downscales scaled resolve buffer data back to 1x resolution on the GPU,
+  // avoiding expensive CPU-side downscaling and reducing transfer bandwidth.
+  struct ResolveDownscaleConstants {
+    uint32_t scale_x;              // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t scale_y;              // 1 to kMaxDrawResolutionScaleAlongAxis
+    uint32_t pixel_size_log2;      // 0=8bit, 1=16bit, 2=32bit, 3=64bit
+    uint32_t tile_count;           // Number of 32x32 tiles to process
+    uint32_t source_offset_bytes;  // Byte offset into source buffer
+  };
+  VkDescriptorSetLayout resolve_downscale_descriptor_set_layout_ =
+      VK_NULL_HANDLE;
+  VkPipelineLayout resolve_downscale_pipeline_layout_ = VK_NULL_HANDLE;
+  VkPipeline resolve_downscale_pipeline_ = VK_NULL_HANDLE;
+  // Descriptor pool for resolve downscale shader (2 storage buffers per set).
+  VkDescriptorPool resolve_downscale_descriptor_pool_ = VK_NULL_HANDLE;
+  // Intermediate buffer for downscaled output (device local, for compute).
+  VkBuffer resolve_downscale_buffer_ = VK_NULL_HANDLE;
+  VkDeviceMemory resolve_downscale_buffer_memory_ = VK_NULL_HANDLE;
+  uint32_t resolve_downscale_buffer_size_ = 0;
+
   // FXAA source texture - R16G16B16A16_SFLOAT for luma in alpha.
   static constexpr VkFormat kFxaaSourceFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
   VkDeviceMemory fxaa_source_memory_ = VK_NULL_HANDLE;

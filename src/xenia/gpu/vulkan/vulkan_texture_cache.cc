@@ -2899,9 +2899,10 @@ bool VulkanTextureCache::EnsureScaledResolveMemoryCommitted(
     if (buffer.range_start_scaled <= start_scaled &&
         (buffer.range_start_scaled + buffer.range_length_scaled) >=
             (start_scaled + length_scaled)) {
-      // This buffer covers the requested range
-      scaled_resolve_current_range_start_scaled_ = buffer.range_start_scaled;
-      scaled_resolve_current_range_length_scaled_ = buffer.range_length_scaled;
+      // This buffer covers the requested range - store the REQUESTED range,
+      // not the buffer's range (matching D3D12 behavior)
+      scaled_resolve_current_range_start_scaled_ = start_scaled;
+      scaled_resolve_current_range_length_scaled_ = length_scaled;
       range_covered = true;
       break;
     }
@@ -2926,9 +2927,9 @@ bool VulkanTextureCache::EnsureScaledResolveMemoryCommitted(
       if (buffer.range_start_scaled <= buffer_start &&
           (buffer.range_start_scaled + buffer.range_length_scaled) >=
               buffer_end) {
-        scaled_resolve_current_range_start_scaled_ = buffer.range_start_scaled;
-        scaled_resolve_current_range_length_scaled_ =
-            buffer.range_length_scaled;
+        // Store the REQUESTED range, not the buffer's range
+        scaled_resolve_current_range_start_scaled_ = start_scaled;
+        scaled_resolve_current_range_length_scaled_ = length_scaled;
         expanded_range_covered = true;
         break;
       }
@@ -2943,8 +2944,9 @@ bool VulkanTextureCache::EnsureScaledResolveMemoryCommitted(
         ScaledResolveBuffer& reused_buffer = scaled_resolve_buffers_[0];
         reused_buffer.range_start_scaled = buffer_start;
         reused_buffer.range_length_scaled = buffer_size;
-        scaled_resolve_current_range_start_scaled_ = buffer_start;
-        scaled_resolve_current_range_length_scaled_ = buffer_size;
+        // Store the REQUESTED range, not the buffer's range
+        scaled_resolve_current_range_start_scaled_ = start_scaled;
+        scaled_resolve_current_range_length_scaled_ = length_scaled;
       } else {
         ScaledResolveBuffer new_buffer;
         new_buffer.size = buffer_size;
@@ -2973,8 +2975,9 @@ bool VulkanTextureCache::EnsureScaledResolveMemoryCommitted(
         new_buffer.range_length_scaled = buffer_size;
 
         scaled_resolve_buffers_.push_back(new_buffer);
-        scaled_resolve_current_range_start_scaled_ = buffer_start;
-        scaled_resolve_current_range_length_scaled_ = buffer_size;
+        // Store the REQUESTED range, not the buffer's range
+        scaled_resolve_current_range_start_scaled_ = start_scaled;
+        scaled_resolve_current_range_length_scaled_ = length_scaled;
       }
     }
   }
@@ -3359,6 +3362,9 @@ bool VulkanTextureCache::MakeScaledResolveRangeCurrentSparse(
   }
 
   scaled_resolve_current_buffer_index_ = chosen_buffer;
+  // Store the current range (matching simple buffer mode behavior)
+  scaled_resolve_current_range_start_scaled_ = start_scaled;
+  scaled_resolve_current_range_length_scaled_ = length_scaled;
   return true;
 }
 
