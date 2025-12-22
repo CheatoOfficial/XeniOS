@@ -142,30 +142,6 @@ void SimpleConfigDialogQt::SetupUI() {
   graphics_layout->addRow(options_["draw_resolution_scale"].label_widget,
                           scale_combo);
 
-  connect(gpu_combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          [scale_combo, gpu_combo]() {
-            int current_value = scale_combo->currentData().toInt();
-            if (SafeStdString(gpu_combo->currentText()) == "vulkan") {
-              while (scale_combo->count() > 3) {
-                scale_combo->removeItem(scale_combo->count() - 1);
-              }
-            } else {
-              if (scale_combo->count() < 8) {
-                scale_combo->addItem("4x", 4);
-                scale_combo->addItem("5x", 5);
-                scale_combo->addItem("6x", 6);
-                scale_combo->addItem("7x", 7);
-                scale_combo->addItem("8x", 8);
-              }
-            }
-            int index = scale_combo->findData(current_value);
-            if (index >= 0) {
-              scale_combo->setCurrentIndex(index);
-            } else {
-              scale_combo->setCurrentIndex(0);
-            }
-          });
-
   auto* fps_spin = new QSpinBox(this);
   fps_spin->setMinimum(0);
   fps_spin->setMaximum(1000);
