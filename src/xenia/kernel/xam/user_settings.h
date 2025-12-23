@@ -451,15 +451,18 @@ struct GamerPictureKey {
   char small_tile_id[8];
 
   uint32_t GetTitleId() const {
-    return string_util::from_string<uint32_t>(title_id, true);
+    return string_util::from_string<uint32_t>(
+        std::string(title_id, std::size(title_id)), true);
   }
 
   uint32_t GetBigTileId() const {
-    return string_util::from_string<uint32_t>(big_tile_id, true);
+    return string_util::from_string<uint32_t>(
+        std::string(big_tile_id, std::size(big_tile_id)), true);
   }
 
   uint32_t GetSmallTileId() const {
-    return string_util::from_string<uint32_t>(small_tile_id, true);
+    return string_util::from_string<uint32_t>(
+        std::string(small_tile_id, std::size(small_tile_id)), true);
   }
 };
 static_assert_size(GamerPictureKey, 0x18);

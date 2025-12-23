@@ -840,7 +840,7 @@ void UserTracker::UpsertSetting(uint64_t xuid, uint32_t title_id,
   // Sometimes games like to ignore providing expicitly title_id, so we need to
   // check it.
   if (!title_id) {
-    title_id = spa_data_->title_id();
+    title_id = spa_data_ ? spa_data_->title_id() : kernel_state()->title_id();
   }
 
   GpdInfo* info = user->GetGpd(title_id);
