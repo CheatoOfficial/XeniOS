@@ -962,53 +962,21 @@ PipelineCache::GetCurrentPixelShaderModification(
       auto blend_control = regs.Get<reg::RB_BLENDCONTROL>(
           reg::RB_BLENDCONTROL::rt_register_indices[0]);
 
-      // Helper to check if a source factor can be pre-multiplied in the shader.
-      // Factors that depend on destination color/alpha cannot be handled.
-      auto can_premultiply_src_factor = [](xenos::BlendFactor factor) {
-        switch (factor) {
-          case xenos::BlendFactor::kZero:
-          case xenos::BlendFactor::kOne:
-          case xenos::BlendFactor::kSrcColor:
-          case xenos::BlendFactor::kOneMinusSrcColor:
-          case xenos::BlendFactor::kSrcAlpha:
-          case xenos::BlendFactor::kOneMinusSrcAlpha:
-          case xenos::BlendFactor::kConstantColor:
-          case xenos::BlendFactor::kOneMinusConstantColor:
-          case xenos::BlendFactor::kConstantAlpha:
-          case xenos::BlendFactor::kOneMinusConstantAlpha:
-            return true;
-          default:
-            // kDstColor, kOneMinusDstColor, kDstAlpha, kOneMinusDstAlpha,
-            // kSrcAlphaSaturate (needs dst.a) - cannot be pre-multiplied.
-            return false;
-        }
-      };
-
-      // Helper to check if destination factor allows shader pre-multiply.
-      // Only ONE is safe - kZero would require zeroing the dst term which we
-      // can't do with fixed-function MIN/MAX (they ignore factors).
-      auto is_dst_factor_safe = [](xenos::BlendFactor factor) {
-        return factor == xenos::BlendFactor::kOne;
-      };
-
-      // Check color blend.
+      // Pre-multiply by kSrcAlpha for MIN/MAX blend ops when dstFactor is ONE.
       if ((blend_control.color_comb_fcn == xenos::BlendOp::kMin ||
            blend_control.color_comb_fcn == xenos::BlendOp::kMax) &&
-          blend_control.color_srcblend != xenos::BlendFactor::kOne &&
-          can_premultiply_src_factor(blend_control.color_srcblend) &&
-          is_dst_factor_safe(blend_control.color_destblend)) {
+          blend_control.color_srcblend == xenos::BlendFactor::kSrcAlpha &&
+          blend_control.color_destblend == xenos::BlendFactor::kOne) {
         modification.pixel.rt0_blend_rgb_factor_for_premult =
-            blend_control.color_srcblend;
+            xenos::BlendFactor::kSrcAlpha;
       }
 
-      // Check alpha blend.
       if ((blend_control.alpha_comb_fcn == xenos::BlendOp::kMin ||
            blend_control.alpha_comb_fcn == xenos::BlendOp::kMax) &&
-          blend_control.alpha_srcblend != xenos::BlendFactor::kOne &&
-          can_premultiply_src_factor(blend_control.alpha_srcblend) &&
-          is_dst_factor_safe(blend_control.alpha_destblend)) {
+          blend_control.alpha_srcblend == xenos::BlendFactor::kSrcAlpha &&
+          blend_control.alpha_destblend == xenos::BlendFactor::kOne) {
         modification.pixel.rt0_blend_a_factor_for_premult =
-            blend_control.alpha_srcblend;
+            xenos::BlendFactor::kSrcAlpha;
       }
     }
   }
