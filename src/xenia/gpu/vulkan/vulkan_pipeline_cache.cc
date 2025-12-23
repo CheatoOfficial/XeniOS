@@ -410,8 +410,8 @@ VulkanPipelineCache::GetCurrentVertexShaderModification(
 
 SpirvShaderTranslator::Modification
 VulkanPipelineCache::GetCurrentPixelShaderModification(
-    const Shader& shader, uint32_t interpolator_mask,
-    uint32_t param_gen_pos) const {
+    const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
+    uint32_t normalized_color_mask) const {
   assert_true(shader.type() == xenos::ShaderType::kPixel);
   assert_true(shader.is_ucode_analyzed());
   const auto& regs = register_file_;
@@ -485,6 +485,13 @@ VulkanPipelineCache::GetCurrentPixelShaderModification(
             xenos::BlendFactor::kSrcAlpha;
       }
     }
+
+    // Extract 1 bit per RT from the 4-bits-per-RT normalized_color_mask.
+    modification.pixel.color_targets_used =
+        (((normalized_color_mask >> 0) & 0xF) ? 1 : 0) |
+        (((normalized_color_mask >> 4) & 0xF) ? 2 : 0) |
+        (((normalized_color_mask >> 8) & 0xF) ? 4 : 0) |
+        (((normalized_color_mask >> 12) & 0xF) ? 8 : 0);
   }
 
   return modification;

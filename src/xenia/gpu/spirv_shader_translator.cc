@@ -2386,8 +2386,12 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
           "xe_out_fragment_data_2",
           "xe_out_fragment_data_3",
       };
+      // Only create outputs for color targets that are both written by the
+      // shader and actually bound in the render pass.
+      Modification shader_modification = GetSpirvShaderModification();
       uint32_t color_targets_remaining =
-          current_shader().writes_color_targets();
+          current_shader().writes_color_targets() &
+          shader_modification.pixel.color_targets_used;
       uint32_t color_target_index;
       while (
           xe::bit_scan_forward(color_targets_remaining, &color_target_index)) {

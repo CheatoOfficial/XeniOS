@@ -94,6 +94,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
       // pre-multiply. Only RT0 is supported for now.
       xenos::BlendFactor rt0_blend_rgb_factor_for_premult : 5;
       xenos::BlendFactor rt0_blend_a_factor_for_premult : 5;
+      // For host render targets - which color render targets are actually
+      // bound.
+      uint32_t color_targets_used : xenos::kMaxColorRenderTargets;
     } pixel;
     uint64_t value = 0;
 
