@@ -123,21 +123,27 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
     return X_E_INVALIDARG;
   }
 
-  std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
+  info.Zero();
+
   if (user_index >= XUserMaxUserCount) {
     return X_E_NO_SUCH_USER;
   }
 
-  if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    const auto& user_profile =
-        kernel_state()->xam_state()->GetUserProfile(user_index);
-    info->xuid = user_profile->xuid();
-    info->signin_state = user_profile->signin_state();
-    xe::string_util::copy_truncating(info->name, user_profile->name(),
-                                     xe::countof(info->name));
-  } else {
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
     return X_E_NO_SUCH_USER;
   }
+
+  const auto& user_profile =
+      kernel_state()->xam_state()->GetUserProfile(user_index);
+
+  xe::string_util::copy_truncating(info->name, user_profile->name(),
+                                   xe::countof(info->name));
+
+  if (!flags || flags & X_USER_GET_SIGNIN_INFO_OFFLINE_XUID_ONLY) {
+    info->xuid = user_profile->xuid();
+  }
+
+  info->signin_state = user_profile->signin_state();
   return X_E_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserGetSigninInfo, kUserProfiles, kImplemented);

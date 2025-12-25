@@ -341,16 +341,15 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
     // XMAEnableContext
 
     // The context ID is a bit in the range of the entire context array.
-    uint32_t base_context_id = (r - XmaRegister::Context0Kick) * 32;
-    for (int i = 0; value && i < 32; ++i, value >>= 1) {
-      if (value & 1) {
-        uint32_t context_id = base_context_id + i;
-        auto& context = *contexts_[context_id];
-        context.Enable();
-        if (!cvars::use_dedicated_xma_thread) {
-          context.Work();
-        }
+    const uint32_t base_context_id = (r - XmaRegister::Context0Kick) * 32;
+    while (value) {
+      const uint32_t context_id = base_context_id + std::countr_zero(value);
+      auto& context = *contexts_[context_id];
+      context.Enable();
+      if (!cvars::use_dedicated_xma_thread) {
+        context.Work();
       }
+      value &= value - 1;
     }
     // Signal the decoder thread to start processing.
     work_event_->SetBoostPriority();
@@ -358,27 +357,26 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
     // Context lock command.
     // This requests a lock by flagging the context.
     // XMADisableContext
-    uint32_t base_context_id = (r - XmaRegister::Context0Lock) * 32;
-    for (int i = 0; value && i < 32; ++i, value >>= 1) {
-      if (value & 1) {
-        uint32_t context_id = base_context_id + i;
-        auto& context = *contexts_[context_id];
-        context.Disable();
-      }
+    const uint32_t base_context_id = (r - XmaRegister::Context0Lock) * 32;
+    while (value) {
+      const uint32_t context_id = base_context_id + std::countr_zero(value);
+      auto& context = *contexts_[context_id];
+      context.Disable();
+      value &= value - 1;
     }
+
     // Signal the decoder thread to start processing.
     // work_event_->Set();
   } else if (r >= XmaRegister::Context0Clear &&
              r <= XmaRegister::Context9Clear) {
     // Context clear command.
     // This will reset the given hardware contexts.
-    uint32_t base_context_id = (r - XmaRegister::Context0Clear) * 32;
-    for (int i = 0; value && i < 32; ++i, value >>= 1) {
-      if (value & 1) {
-        uint32_t context_id = base_context_id + i;
-        XmaContext& context = *contexts_[context_id];
-        context.Clear();
-      }
+    const uint32_t base_context_id = (r - XmaRegister::Context0Clear) * 32;
+    while (value) {
+      const uint32_t context_id = base_context_id + std::countr_zero(value);
+      auto& context = *contexts_[context_id];
+      context.Clear();
+      value &= value - 1;
     }
   } else {
     // 0601h (1804h) is written to with 0x02000000 and 0x03000000 around a lock
