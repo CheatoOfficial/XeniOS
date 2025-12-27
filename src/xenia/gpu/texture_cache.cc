@@ -1108,6 +1108,11 @@ void TextureCache::ScaledResolveGlobalWatchCallback(
         xe::bit_scan_forward(resolve_l2_block, &resolve_block_relative_index)) {
       resolve_l2_block &= ~(UINT64_C(1) << resolve_block_relative_index);
       uint32_t resolve_block_index = (i << 6) + resolve_block_relative_index;
+      // Skip blocks that are not in the CPU write range
+      if (resolve_block_index < resolve_block_first ||
+          resolve_block_index > resolve_block_last) {
+        continue;
+      }
       uint32_t resolve_keep_bits = 0;
       if (resolve_block_index == resolve_block_first) {
         resolve_keep_bits |= (UINT32_C(1) << (resolve_page_first & 31)) - 1;
