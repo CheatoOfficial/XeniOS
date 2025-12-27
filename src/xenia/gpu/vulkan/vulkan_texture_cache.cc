@@ -3005,7 +3005,7 @@ bool VulkanTextureCache::MakeScaledResolveRangeCurrent(
     return false;
   }
 
-  uint32_t draw_resolution_scale_area =
+  const uint32_t draw_resolution_scale_area =
       draw_resolution_scale_x() * draw_resolution_scale_y();
   uint64_t start_scaled = uint64_t(start_unscaled) * draw_resolution_scale_area;
   uint64_t length_scaled_alignment_bits =
