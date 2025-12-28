@@ -4270,7 +4270,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(
         }
       } break;
       case TransferOutput::kStencilBit: {
-        if (packed) {
+        if (packed && !cvars::no_discard_stencil_in_transfer_pipelines) {
           // Kill the sample if the needed stencil bit is not set.
           assert_true(push_constants_member_stencil_mask != UINT32_MAX);
           id_vector_temp.clear();
