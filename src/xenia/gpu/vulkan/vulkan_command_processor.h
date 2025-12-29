@@ -216,6 +216,12 @@ class VulkanCommandProcessor final : public CommandProcessor {
   void SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       VkRenderPass render_pass,
       const VulkanRenderTargetCache::Framebuffer* framebuffer);
+  // Overload for transfer operations with dynamic rendering.
+  // transfer_dest_view is the destination render target view for the transfer.
+  void SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+      VkRenderPass render_pass,
+      const VulkanRenderTargetCache::Framebuffer* framebuffer,
+      VkImageView transfer_dest_view, bool transfer_dest_is_depth);
   // Must be called before doing anything outside the render pass scope,
   // including adding pipeline barriers that are not a part of the render pass
   // scope. Submission must be open.
@@ -777,9 +783,12 @@ class VulkanCommandProcessor final : public CommandProcessor {
       current_samplers_pixel_;
 
   // Cache render pass currently started in the command buffer with the
-  // framebuffer.
+  // framebuffer. For dynamic rendering, current_render_pass_ is VK_NULL_HANDLE
+  // but in_render_pass_ is true.
   VkRenderPass current_render_pass_;
   const VulkanRenderTargetCache::Framebuffer* current_framebuffer_;
+  // True when inside a render pass or dynamic rendering block.
+  bool in_render_pass_ = false;
 
   // Currently bound graphics pipeline, either from the pipeline cache (with
   // potentially deferred creation - current_external_graphics_pipeline_ is

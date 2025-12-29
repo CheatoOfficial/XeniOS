@@ -220,6 +220,47 @@ void DeferredCommandBuffer::Execute(VkCommandBuffer command_buffer) {
         dfn.vkCmdEndRenderPass(command_buffer);
         break;
 
+      case Command::kVkBeginRendering: {
+        auto& args = *reinterpret_cast<const ArgsVkBeginRendering*>(stream);
+        size_t offset_bytes = xe::align(sizeof(ArgsVkBeginRendering),
+                                        alignof(VkRenderingAttachmentInfo));
+        const VkRenderingAttachmentInfo* color_attachments =
+            args.color_attachment_count
+                ? reinterpret_cast<const VkRenderingAttachmentInfo*>(
+                      reinterpret_cast<const uint8_t*>(stream) + offset_bytes)
+                : nullptr;
+        offset_bytes +=
+            sizeof(VkRenderingAttachmentInfo) * args.color_attachment_count;
+        const VkRenderingAttachmentInfo* depth_attachment =
+            args.has_depth_attachment
+                ? reinterpret_cast<const VkRenderingAttachmentInfo*>(
+                      reinterpret_cast<const uint8_t*>(stream) + offset_bytes)
+                : nullptr;
+        if (args.has_depth_attachment) {
+          offset_bytes += sizeof(VkRenderingAttachmentInfo);
+        }
+        const VkRenderingAttachmentInfo* stencil_attachment =
+            args.has_stencil_attachment
+                ? reinterpret_cast<const VkRenderingAttachmentInfo*>(
+                      reinterpret_cast<const uint8_t*>(stream) + offset_bytes)
+                : nullptr;
+        VkRenderingInfo rendering_info = {};
+        rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        rendering_info.flags = args.flags;
+        rendering_info.renderArea = args.render_area;
+        rendering_info.layerCount = args.layer_count;
+        rendering_info.viewMask = args.view_mask;
+        rendering_info.colorAttachmentCount = args.color_attachment_count;
+        rendering_info.pColorAttachments = color_attachments;
+        rendering_info.pDepthAttachment = depth_attachment;
+        rendering_info.pStencilAttachment = stencil_attachment;
+        dfn.vkCmdBeginRendering(command_buffer, &rendering_info);
+      } break;
+
+      case Command::kVkEndRendering:
+        dfn.vkCmdEndRendering(command_buffer);
+        break;
+
       case Command::kVkPipelineBarrier: {
         auto& args = *reinterpret_cast<const ArgsVkPipelineBarrier*>(stream);
         size_t barrier_offset_bytes = sizeof(ArgsVkPipelineBarrier);
@@ -421,6 +462,53 @@ void DeferredCommandBuffer::CmdVkPipelineBarrier(
   if (image_memory_barrier_count) {
     std::memcpy(args_ptr + image_memory_barriers_offset, image_memory_barriers,
                 sizeof(VkImageMemoryBarrier) * image_memory_barrier_count);
+  }
+}
+
+void DeferredCommandBuffer::CmdVkBeginRendering(
+    const VkRenderingInfo* rendering_info) {
+  assert_null(rendering_info->pNext);
+
+  size_t arguments_size = xe::align(sizeof(ArgsVkBeginRendering),
+                                    alignof(VkRenderingAttachmentInfo));
+  size_t color_attachments_offset = arguments_size;
+  arguments_size +=
+      sizeof(VkRenderingAttachmentInfo) * rendering_info->colorAttachmentCount;
+  size_t depth_attachment_offset = arguments_size;
+  if (rendering_info->pDepthAttachment) {
+    arguments_size += sizeof(VkRenderingAttachmentInfo);
+  }
+  size_t stencil_attachment_offset = arguments_size;
+  if (rendering_info->pStencilAttachment) {
+    arguments_size += sizeof(VkRenderingAttachmentInfo);
+  }
+
+  uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
+      WriteCommand(Command::kVkBeginRendering, arguments_size));
+  auto& args = *reinterpret_cast<ArgsVkBeginRendering*>(args_ptr);
+  args.flags = rendering_info->flags;
+  args.render_area = rendering_info->renderArea;
+  args.layer_count = rendering_info->layerCount;
+  args.view_mask = rendering_info->viewMask;
+  args.color_attachment_count = rendering_info->colorAttachmentCount;
+  args.has_depth_attachment = rendering_info->pDepthAttachment != nullptr;
+  args.has_stencil_attachment = rendering_info->pStencilAttachment != nullptr;
+
+  if (rendering_info->colorAttachmentCount) {
+    std::memcpy(args_ptr + color_attachments_offset,
+                rendering_info->pColorAttachments,
+                sizeof(VkRenderingAttachmentInfo) *
+                    rendering_info->colorAttachmentCount);
+  }
+  if (rendering_info->pDepthAttachment) {
+    std::memcpy(args_ptr + depth_attachment_offset,
+                rendering_info->pDepthAttachment,
+                sizeof(VkRenderingAttachmentInfo));
+  }
+  if (rendering_info->pStencilAttachment) {
+    std::memcpy(args_ptr + stencil_attachment_offset,
+                rendering_info->pStencilAttachment,
+                sizeof(VkRenderingAttachmentInfo));
   }
 }
 

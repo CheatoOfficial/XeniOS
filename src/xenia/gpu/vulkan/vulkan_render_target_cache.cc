@@ -30,6 +30,8 @@
 #include "xenia/gpu/xenos.h"
 #include "xenia/ui/vulkan/vulkan_util.h"
 
+DECLARE_bool(vulkan_dynamic_rendering);
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -1537,6 +1539,49 @@ bool VulkanRenderTargetCache::Update(
   }
 
   return true;
+}
+
+void VulkanRenderTargetCache::GetLastUpdateRenderingAttachments(
+    VkRenderingAttachmentInfo* color_attachments,
+    uint32_t* color_attachment_count_out,
+    VkRenderingAttachmentInfo* depth_attachment,
+    VkRenderingAttachmentInfo* stencil_attachment) const {
+  RenderPassKey key = last_update_render_pass_key_;
+  const RenderTarget* const* rts = last_update_accumulated_render_targets();
+
+  // Initialize depth/stencil attachments.
+  std::memset(depth_attachment, 0, sizeof(VkRenderingAttachmentInfo));
+  std::memset(stencil_attachment, 0, sizeof(VkRenderingAttachmentInfo));
+
+  // Set up depth attachment if used.
+  if ((key.depth_and_color_used & 0b1) && rts[0]) {
+    const auto* vulkan_rt = static_cast<const VulkanRenderTarget*>(rts[0]);
+    depth_attachment->sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment->imageView = vulkan_rt->view_depth_stencil();
+    depth_attachment->imageLayout = VulkanRenderTarget::kDepthDrawLayout;
+    depth_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Stencil uses the same view for depth-stencil formats.
+    *stencil_attachment = *depth_attachment;
+  }
+
+  // Set up color attachments.
+  uint32_t color_attachment_count = 0;
+  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+    VkRenderingAttachmentInfo& color_attachment = color_attachments[i];
+    std::memset(&color_attachment, 0, sizeof(VkRenderingAttachmentInfo));
+    if ((key.depth_and_color_used & (1 << (1 + i))) && rts[1 + i]) {
+      const auto* vulkan_rt =
+          static_cast<const VulkanRenderTarget*>(rts[1 + i]);
+      color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+      color_attachment.imageView = vulkan_rt->view_depth_color();
+      color_attachment.imageLayout = VulkanRenderTarget::kColorDrawLayout;
+      color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      color_attachment_count = i + 1;
+    }
+  }
+  *color_attachment_count_out = color_attachment_count;
 }
 
 VkRenderPass VulkanRenderTargetCache::GetHostRenderTargetsRenderPass(
@@ -4338,23 +4383,32 @@ VkPipeline const* VulkanRenderTargetCache::GetTransferPipelines(
                                                     : nullptr;
   }
 
-  VkRenderPass render_pass =
-      GetHostRenderTargetsRenderPass(key.render_pass_key);
-  VkShaderModule fragment_shader_module = GetTransferShader(key.shader_key);
-  if (render_pass == VK_NULL_HANDLE ||
-      fragment_shader_module == VK_NULL_HANDLE) {
-    transfer_pipelines_.emplace(key, std::array<VkPipeline, 4>{});
-    return nullptr;
-  }
-
-  const TransferModeInfo& mode = kTransferModes[size_t(key.shader_key.mode)];
-
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   const ui::vulkan::VulkanDevice::Properties& device_properties =
       vulkan_device->properties();
+
+  bool use_dynamic_rendering =
+      cvars::vulkan_dynamic_rendering && device_properties.dynamicRendering;
+
+  VkRenderPass render_pass = VK_NULL_HANDLE;
+  if (!use_dynamic_rendering) {
+    render_pass = GetHostRenderTargetsRenderPass(key.render_pass_key);
+    if (render_pass == VK_NULL_HANDLE) {
+      transfer_pipelines_.emplace(key, std::array<VkPipeline, 4>{});
+      return nullptr;
+    }
+  }
+
+  VkShaderModule fragment_shader_module = GetTransferShader(key.shader_key);
+  if (fragment_shader_module == VK_NULL_HANDLE) {
+    transfer_pipelines_.emplace(key, std::array<VkPipeline, 4>{});
+    return nullptr;
+  }
+
+  const TransferModeInfo& mode = kTransferModes[size_t(key.shader_key.mode)];
 
   uint32_t dest_sample_count = uint32_t(1)
                                << uint32_t(key.shader_key.dest_msaa_samples);
@@ -4530,10 +4584,44 @@ VkPipeline const* VulkanRenderTargetCache::GetTransferPipelines(
         VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
   }
 
+  // For VK_KHR_dynamic_rendering: set up VkPipelineRenderingCreateInfo.
+  VkPipelineRenderingCreateInfo pipeline_rendering_create_info = {};
+  VkFormat color_attachment_format = VK_FORMAT_UNDEFINED;
+  VkFormat depth_attachment_format = VK_FORMAT_UNDEFINED;
+  VkFormat stencil_attachment_format = VK_FORMAT_UNDEFINED;
+  if (use_dynamic_rendering) {
+    pipeline_rendering_create_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    pipeline_rendering_create_info.pNext = nullptr;
+    pipeline_rendering_create_info.viewMask = 0;
+
+    // Transfers target a single attachment - either depth or color.
+    if (key.render_pass_key.depth_and_color_used & 0b1) {
+      // Depth attachment.
+      depth_attachment_format =
+          GetDepthVulkanFormat(key.render_pass_key.depth_format);
+      stencil_attachment_format = depth_attachment_format;
+      pipeline_rendering_create_info.colorAttachmentCount = 0;
+      pipeline_rendering_create_info.pColorAttachmentFormats = nullptr;
+    } else {
+      // Color attachment (transfers use transfer formats).
+      color_attachment_format = GetColorOwnershipTransferVulkanFormat(
+          key.render_pass_key.color_0_view_format);
+      pipeline_rendering_create_info.colorAttachmentCount = 1;
+      pipeline_rendering_create_info.pColorAttachmentFormats =
+          &color_attachment_format;
+    }
+    pipeline_rendering_create_info.depthAttachmentFormat =
+        depth_attachment_format;
+    pipeline_rendering_create_info.stencilAttachmentFormat =
+        stencil_attachment_format;
+  }
+
   std::array<VkPipeline, 4> pipelines{};
   VkGraphicsPipelineCreateInfo pipeline_create_info;
   pipeline_create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipeline_create_info.pNext = nullptr;
+  pipeline_create_info.pNext =
+      use_dynamic_rendering ? &pipeline_rendering_create_info : nullptr;
   pipeline_create_info.flags = 0;
   if (dest_is_masked_sample) {
     pipeline_create_info.flags |= VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT;
@@ -4929,6 +5017,11 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
     // Don't enter the render pass immediately - may still insert source
     // barriers later.
 
+    // Get the view for dynamic rendering (used for both transfers and clears).
+    VkImageView transfer_dest_view = dest_rt_key.is_depth
+                                         ? dest_vulkan_rt.view_depth_stencil()
+                                         : dest_vulkan_rt.view_color_transfer();
+
     if (!current_transfers.empty()) {
       uint32_t dest_pitch_tiles = dest_rt_key.GetPitchTiles();
       bool dest_is_64bpp = dest_rt_key.Is64bpp();
@@ -5081,7 +5174,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
       // Perform the transfers for the render target.
 
       command_processor_.SubmitBarriersAndEnterRenderTargetCacheRenderPass(
-          transfer_render_pass, transfer_framebuffer);
+          transfer_render_pass, transfer_framebuffer, transfer_dest_view,
+          dest_rt_key.is_depth);
 
       if (stencil_clear_rectangle_count) {
         VkClearAttachment* stencil_clear_attachment;
@@ -5452,7 +5546,8 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
     // Perform the clear.
     if (resolve_clear_needed) {
       command_processor_.SubmitBarriersAndEnterRenderTargetCacheRenderPass(
-          transfer_render_pass, transfer_framebuffer);
+          transfer_render_pass, transfer_framebuffer, transfer_dest_view,
+          dest_rt_key.is_depth);
       VkClearAttachment resolve_clear_attachment;
       resolve_clear_attachment.colorAttachment = 0;
       std::memset(&resolve_clear_attachment.clearValue, 0,

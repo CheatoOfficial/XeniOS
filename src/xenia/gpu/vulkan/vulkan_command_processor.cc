@@ -42,6 +42,13 @@ DECLARE_bool(occlusion_query_enable);
 DECLARE_bool(readback_memexport_fast);
 DECLARE_bool(submit_on_primary_buffer_end);
 
+DEFINE_bool(
+    vulkan_dynamic_rendering, true,
+    "Use VK_KHR_dynamic_rendering instead of traditional render passes. "
+    "May improve or worsen performance depending on driver. Requires Vulkan "
+    "1.3 or VK_KHR_dynamic_rendering extension support.",
+    "Vulkan");
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -2414,39 +2421,208 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
     VkRenderPass render_pass,
     const VulkanRenderTargetCache::Framebuffer* framebuffer) {
   SubmitBarriers(false);
-  if (current_render_pass_ == render_pass &&
-      current_framebuffer_ == framebuffer) {
-    return;
+
+  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
+  bool use_dynamic_rendering = cvars::vulkan_dynamic_rendering &&
+                               vulkan_device->properties().dynamicRendering;
+
+  // Check if we can stay in the current render pass.
+  if (use_dynamic_rendering) {
+    // For dynamic rendering, compare framebuffer directly.
+    if (in_render_pass_ && current_framebuffer_ == framebuffer &&
+        current_render_pass_ == VK_NULL_HANDLE) {
+      return;
+    }
+  } else {
+    if (current_render_pass_ == render_pass &&
+        current_framebuffer_ == framebuffer) {
+      return;
+    }
   }
-  if (current_render_pass_ != VK_NULL_HANDLE) {
-    deferred_command_buffer_.CmdVkEndRenderPass();
+
+  // End current render pass/rendering if active.
+  if (in_render_pass_) {
+    if (use_dynamic_rendering) {
+      deferred_command_buffer_.CmdVkEndRendering();
+    } else {
+      deferred_command_buffer_.CmdVkEndRenderPass();
+    }
+    in_render_pass_ = false;
   }
-  current_render_pass_ = render_pass;
+
+  current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
   current_framebuffer_ = framebuffer;
-  VkRenderPassBeginInfo render_pass_begin_info;
-  render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-  render_pass_begin_info.pNext = nullptr;
-  render_pass_begin_info.renderPass = render_pass;
-  render_pass_begin_info.framebuffer = framebuffer->framebuffer;
-  render_pass_begin_info.renderArea.offset.x = 0;
-  render_pass_begin_info.renderArea.offset.y = 0;
-  // TODO(Triang3l): Actual dirty width / height in the deferred command
-  // buffer.
-  render_pass_begin_info.renderArea.extent = framebuffer->host_extent;
-  render_pass_begin_info.clearValueCount = 0;
-  render_pass_begin_info.pClearValues = nullptr;
-  deferred_command_buffer_.CmdVkBeginRenderPass(&render_pass_begin_info,
-                                                VK_SUBPASS_CONTENTS_INLINE);
+
+  if (use_dynamic_rendering) {
+    // Use dynamic rendering - construct VkRenderingInfo from render targets.
+    VkRenderingAttachmentInfo color_attachments[xenos::kMaxColorRenderTargets];
+    VkRenderingAttachmentInfo depth_attachment;
+    VkRenderingAttachmentInfo stencil_attachment;
+    uint32_t color_attachment_count = 0;
+
+    render_target_cache_->GetLastUpdateRenderingAttachments(
+        color_attachments, &color_attachment_count, &depth_attachment,
+        &stencil_attachment);
+
+    // Check if depth attachment was actually set up (has valid sType).
+    bool has_depth =
+        depth_attachment.sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    bool has_stencil =
+        stencil_attachment.sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+
+    VkRenderingInfo rendering_info = {};
+    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering_info.renderArea.offset.x = 0;
+    rendering_info.renderArea.offset.y = 0;
+    rendering_info.renderArea.extent = framebuffer->host_extent;
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = color_attachment_count;
+    rendering_info.pColorAttachments =
+        color_attachment_count ? color_attachments : nullptr;
+    rendering_info.pDepthAttachment = has_depth ? &depth_attachment : nullptr;
+    rendering_info.pStencilAttachment =
+        has_stencil ? &stencil_attachment : nullptr;
+
+    deferred_command_buffer_.CmdVkBeginRendering(&rendering_info);
+  } else {
+    // Use traditional render pass.
+    VkRenderPassBeginInfo render_pass_begin_info;
+    render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_begin_info.pNext = nullptr;
+    render_pass_begin_info.renderPass = render_pass;
+    render_pass_begin_info.framebuffer = framebuffer->framebuffer;
+    render_pass_begin_info.renderArea.offset.x = 0;
+    render_pass_begin_info.renderArea.offset.y = 0;
+    // TODO(Triang3l): Actual dirty width / height in the deferred command
+    // buffer.
+    render_pass_begin_info.renderArea.extent = framebuffer->host_extent;
+    render_pass_begin_info.clearValueCount = 0;
+    render_pass_begin_info.pClearValues = nullptr;
+    deferred_command_buffer_.CmdVkBeginRenderPass(&render_pass_begin_info,
+                                                  VK_SUBPASS_CONTENTS_INLINE);
+  }
+  in_render_pass_ = true;
+}
+
+void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+    VkRenderPass render_pass,
+    const VulkanRenderTargetCache::Framebuffer* framebuffer,
+    VkImageView transfer_dest_view, bool transfer_dest_is_depth) {
+  SubmitBarriers(false);
+
+  const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
+  bool use_dynamic_rendering = cvars::vulkan_dynamic_rendering &&
+                               vulkan_device->properties().dynamicRendering;
+
+  // Check if we can stay in the current render pass.
+  if (use_dynamic_rendering) {
+    // For dynamic rendering, compare framebuffer directly.
+    if (in_render_pass_ && current_framebuffer_ == framebuffer &&
+        current_render_pass_ == VK_NULL_HANDLE) {
+      return;
+    }
+  } else {
+    if (current_render_pass_ == render_pass &&
+        current_framebuffer_ == framebuffer) {
+      return;
+    }
+  }
+
+  // End current render pass/rendering if active.
+  if (in_render_pass_) {
+    if (use_dynamic_rendering) {
+      deferred_command_buffer_.CmdVkEndRendering();
+    } else {
+      deferred_command_buffer_.CmdVkEndRenderPass();
+    }
+    in_render_pass_ = false;
+  }
+
+  current_render_pass_ = use_dynamic_rendering ? VK_NULL_HANDLE : render_pass;
+  current_framebuffer_ = framebuffer;
+
+  if (use_dynamic_rendering) {
+    // Use dynamic rendering for transfers - construct VkRenderingInfo from
+    // the transfer destination.
+    VkRenderingAttachmentInfo color_attachment = {};
+    VkRenderingAttachmentInfo depth_attachment = {};
+    VkRenderingAttachmentInfo stencil_attachment = {};
+
+    if (transfer_dest_is_depth) {
+      depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+      depth_attachment.pNext = nullptr;
+      depth_attachment.imageView = transfer_dest_view;
+      depth_attachment.imageLayout =
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+      depth_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
+      depth_attachment.resolveImageView = VK_NULL_HANDLE;
+      depth_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      depth_attachment.clearValue = {};
+      // Stencil uses the same attachment.
+      stencil_attachment = depth_attachment;
+    } else {
+      color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+      color_attachment.pNext = nullptr;
+      color_attachment.imageView = transfer_dest_view;
+      color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      color_attachment.resolveMode = VK_RESOLVE_MODE_NONE;
+      color_attachment.resolveImageView = VK_NULL_HANDLE;
+      color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      color_attachment.clearValue = {};
+    }
+
+    VkRenderingInfo rendering_info = {};
+    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering_info.renderArea.offset.x = 0;
+    rendering_info.renderArea.offset.y = 0;
+    rendering_info.renderArea.extent = framebuffer->host_extent;
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = transfer_dest_is_depth ? 0 : 1;
+    rendering_info.pColorAttachments =
+        transfer_dest_is_depth ? nullptr : &color_attachment;
+    rendering_info.pDepthAttachment =
+        transfer_dest_is_depth ? &depth_attachment : nullptr;
+    rendering_info.pStencilAttachment =
+        transfer_dest_is_depth ? &stencil_attachment : nullptr;
+
+    deferred_command_buffer_.CmdVkBeginRendering(&rendering_info);
+  } else {
+    // Use traditional render pass.
+    VkRenderPassBeginInfo render_pass_begin_info;
+    render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_begin_info.pNext = nullptr;
+    render_pass_begin_info.renderPass = render_pass;
+    render_pass_begin_info.framebuffer = framebuffer->framebuffer;
+    render_pass_begin_info.renderArea.offset.x = 0;
+    render_pass_begin_info.renderArea.offset.y = 0;
+    render_pass_begin_info.renderArea.extent = framebuffer->host_extent;
+    render_pass_begin_info.clearValueCount = 0;
+    render_pass_begin_info.pClearValues = nullptr;
+    deferred_command_buffer_.CmdVkBeginRenderPass(&render_pass_begin_info,
+                                                  VK_SUBPASS_CONTENTS_INLINE);
+  }
+  in_render_pass_ = true;
 }
 
 void VulkanCommandProcessor::EndRenderPass() {
   assert_true(submission_open_);
-  if (current_render_pass_ == VK_NULL_HANDLE) {
+  if (!in_render_pass_) {
     return;
   }
-  deferred_command_buffer_.CmdVkEndRenderPass();
+  // Use current_render_pass_ to determine which end command to use.
+  // VK_NULL_HANDLE means we used dynamic rendering, otherwise traditional.
+  if (current_render_pass_ == VK_NULL_HANDLE) {
+    deferred_command_buffer_.CmdVkEndRendering();
+  } else {
+    deferred_command_buffer_.CmdVkEndRenderPass();
+  }
   current_render_pass_ = VK_NULL_HANDLE;
   current_framebuffer_ = nullptr;
+  in_render_pass_ = false;
 }
 
 VkDescriptorSet VulkanCommandProcessor::AllocateSingleTransientDescriptor(
@@ -5019,6 +5195,7 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
     dynamic_stencil_reference_back_update_needed_ = true;
     current_render_pass_ = VK_NULL_HANDLE;
     current_framebuffer_ = nullptr;
+    in_render_pass_ = false;
     current_guest_graphics_pipeline_ = VK_NULL_HANDLE;
     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
     current_external_compute_pipeline_ = VK_NULL_HANDLE;

@@ -154,6 +154,10 @@ class VulkanDevice {
 
     bool shaderDemoteToHelperInvocation = false;
 
+    // VK_KHR_dynamic_rendering (#55, promoted to 1.3)
+
+    bool dynamicRendering = false;
+
     // VK_EXT_non_seamless_cube_map (#423)
 
     bool nonSeamlessCubeMap = false;
@@ -182,6 +186,8 @@ class VulkanDevice {
     bool ext_EXT_memory_budget = false;                 // #238
     // Has optional features not implied by this being true.
     bool ext_1_3_KHR_maintenance4 = false;  // #414
+    // VK_KHR_dynamic_rendering (#55, promoted to 1.3)
+    bool ext_1_3_KHR_dynamic_rendering = false;
   };
 
   const Extensions& extensions() const { return extensions_; }
@@ -201,6 +207,8 @@ class VulkanDevice {
 #include "xenia/ui/vulkan/functions/device_1_1_khr_bind_memory2.inc"
     // VK_KHR_maintenance4 (#414, promoted to 1.3)
 #include "xenia/ui/vulkan/functions/device_1_3_khr_maintenance4.inc"
+    // VK_KHR_dynamic_rendering (#55, promoted to 1.3)
+#include "xenia/ui/vulkan/functions/device_1_3_khr_dynamic_rendering.inc"
 #undef XE_UI_VULKAN_FUNCTION_PROMOTED
 #undef XE_UI_VULKAN_FUNCTION
   };

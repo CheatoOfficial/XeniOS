@@ -265,6 +265,8 @@ class VulkanPipelineCache {
     VkShaderModule tessellation_vertex_shader;   // VS for passing data to TCS.
     VkShaderModule tessellation_control_shader;  // TCS (hull shader).
     VkRenderPass render_pass;
+    // For dynamic rendering (VK_KHR_dynamic_rendering / Vulkan 1.3).
+    VulkanRenderTargetCache::RenderPassKey render_pass_key;
   };
 
   union GeometryShaderKey {

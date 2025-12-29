@@ -333,6 +333,12 @@ class DeferredCommandBuffer {
 
   void CmdVkEndRenderPass() { WriteCommand(Command::kVkEndRenderPass, 0); }
 
+  // Dynamic rendering (VK_KHR_dynamic_rendering / Vulkan 1.3)
+  // Simpler than CmdVkBeginRenderPass - doesn't need
+  // VkRenderPass/VkFramebuffer.
+  void CmdVkBeginRendering(const VkRenderingInfo* rendering_info);
+  void CmdVkEndRendering() { WriteCommand(Command::kVkEndRendering, 0); }
+
   // pNext of all barriers must be null.
   void CmdVkPipelineBarrier(VkPipelineStageFlags src_stage_mask,
                             VkPipelineStageFlags dst_stage_mask,
@@ -473,6 +479,8 @@ class DeferredCommandBuffer {
     kVkDraw,
     kVkDrawIndexed,
     kVkEndRenderPass,
+    kVkBeginRendering,
+    kVkEndRendering,
     kVkPipelineBarrier,
     kVkPushConstants,
     kVkSetBlendConstants,
@@ -502,6 +510,22 @@ class DeferredCommandBuffer {
     VkSubpassContents contents;
     // Followed by aligned optional VkClearValue[].
     static_assert(alignof(VkClearValue) <= alignof(uintmax_t));
+  };
+
+  // For VK_KHR_dynamic_rendering / Vulkan 1.3.
+  struct ArgsVkBeginRendering {
+    VkRenderingFlags flags;
+    VkRect2D render_area;
+    uint32_t layer_count;
+    uint32_t view_mask;
+    uint32_t color_attachment_count;
+    bool has_depth_attachment;
+    bool has_stencil_attachment;
+    // Followed by:
+    // - VkRenderingAttachmentInfo[color_attachment_count] for color attachments
+    // - VkRenderingAttachmentInfo for depth (if has_depth_attachment)
+    // - VkRenderingAttachmentInfo for stencil (if has_stencil_attachment)
+    static_assert(alignof(VkRenderingAttachmentInfo) <= alignof(uintmax_t));
   };
 
   struct ArgsVkBindDescriptorSets {

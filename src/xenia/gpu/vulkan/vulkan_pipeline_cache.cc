@@ -71,6 +71,8 @@ DEFINE_bool(
     "optimized before use. Can be combined with background optimization.",
     "Vulkan");
 
+DECLARE_bool(vulkan_dynamic_rendering);
+
 namespace xe {
 namespace gpu {
 namespace vulkan {
@@ -657,6 +659,7 @@ bool VulkanPipelineCache::ConfigurePipeline(
       creation_arguments.tessellation_control_shader =
           tessellation_control_shader;
       creation_arguments.render_pass = render_pass;
+      creation_arguments.render_pass_key = render_pass_key;
     }
     creation_request_cond_.notify_one();
   } else {
@@ -670,6 +673,7 @@ bool VulkanPipelineCache::ConfigurePipeline(
     creation_arguments.tessellation_control_shader =
         tessellation_control_shader;
     creation_arguments.render_pass = render_pass;
+    creation_arguments.render_pass_key = render_pass_key;
     if (!EnsurePipelineCreated(creation_arguments)) {
       return false;
     }
@@ -2815,9 +2819,48 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
     }
   }
 
+  // Dynamic rendering support (VK_KHR_dynamic_rendering / Vulkan 1.3).
+  VkPipelineRenderingCreateInfo pipeline_rendering_create_info = {};
+  VkFormat color_attachment_formats[xenos::kMaxColorRenderTargets] = {};
+  bool use_dynamic_rendering = cvars::vulkan_dynamic_rendering &&
+                               vulkan_device->properties().dynamicRendering;
+
+  if (use_dynamic_rendering) {
+    pipeline_rendering_create_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    VulkanRenderTargetCache::RenderPassKey key =
+        creation_arguments.render_pass_key;
+
+    // Set up color attachment formats.
+    xenos::ColorRenderTargetFormat color_formats[] = {
+        key.color_0_view_format, key.color_1_view_format,
+        key.color_2_view_format, key.color_3_view_format};
+    uint32_t color_attachment_count = 0;
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+      if (key.depth_and_color_used & (1 << (1 + i))) {
+        color_attachment_formats[i] =
+            render_target_cache_.GetColorVulkanFormat(color_formats[i]);
+        color_attachment_count = i + 1;
+      }
+    }
+    pipeline_rendering_create_info.colorAttachmentCount =
+        color_attachment_count;
+    pipeline_rendering_create_info.pColorAttachmentFormats =
+        color_attachment_formats;
+
+    // Set up depth/stencil format.
+    if (key.depth_and_color_used & 0b1) {
+      VkFormat depth_format =
+          render_target_cache_.GetDepthVulkanFormat(key.depth_format);
+      pipeline_rendering_create_info.depthAttachmentFormat = depth_format;
+      pipeline_rendering_create_info.stencilAttachmentFormat = depth_format;
+    }
+  }
+
   VkGraphicsPipelineCreateInfo pipeline_create_info;
   pipeline_create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-  pipeline_create_info.pNext = nullptr;
+  pipeline_create_info.pNext =
+      use_dynamic_rendering ? &pipeline_rendering_create_info : nullptr;
   pipeline_create_info.flags = 0;
   pipeline_create_info.stageCount = shader_stage_count;
   pipeline_create_info.pStages = shader_stages.data();
@@ -2833,7 +2876,8 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
   pipeline_create_info.pDynamicState = &dynamic_state;
   pipeline_create_info.layout =
       creation_arguments.pipeline->second.pipeline_layout->GetPipelineLayout();
-  pipeline_create_info.renderPass = creation_arguments.render_pass;
+  pipeline_create_info.renderPass =
+      use_dynamic_rendering ? VK_NULL_HANDLE : creation_arguments.render_pass;
   pipeline_create_info.subpass = 0;
   pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
   pipeline_create_info.basePipelineIndex = -1;

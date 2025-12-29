@@ -151,6 +151,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     // #414.
     XE_UI_VULKAN_STRUCT_PROMOTED_EXTENSION(KHR_maintenance4, 1, 3)
   }
+  if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
+    // #55. Dynamic rendering removes render pass/framebuffer overhead.
+    XE_UI_VULKAN_STRUCT_PROMOTED_EXTENSION(KHR_dynamic_rendering, 1, 3)
+  }
 
   if (with_swapchain) {
     // #2.
@@ -162,6 +166,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   bool ext_1_2_KHR_shader_float_controls = false;
   bool ext_EXT_fragment_shader_interlock = false;
   bool ext_1_3_EXT_shader_demote_to_helper_invocation = false;
+  bool ext_1_3_KHR_dynamic_rendering = false;
   bool ext_EXT_non_seamless_cube_map = false;
   if (with_gpu_emulation) {
     // #15.
@@ -180,6 +185,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(KHR_shader_float_controls, 1, 2)
       // #252.
       XE_UI_VULKAN_LOCAL_EXTENSION(EXT_fragment_shader_interlock)
+      // #55.
+      XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(KHR_dynamic_rendering, 1, 3)
       // #277.
       XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(
           EXT_shader_demote_to_helper_invocation, 1, 3)
@@ -289,6 +296,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT,
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_NON_SEAMLESS_CUBE_MAP_FEATURES_EXT>
       features_EXT_non_seamless_cube_map;
+  VulkanFeatures<VkPhysicalDeviceDynamicRenderingFeatures,
+                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES>
+      features_1_3_KHR_dynamic_rendering;
 
   if (get_physical_device_properties2_supported) {
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
@@ -300,6 +310,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
       if (ext_1_3_EXT_shader_demote_to_helper_invocation) {
         features_1_3_EXT_shader_demote_to_helper_invocation.Link(
             supported_features_2, device_create_info);
+      }
+      if (ext_1_3_KHR_dynamic_rendering) {
+        features_1_3_KHR_dynamic_rendering.Link(supported_features_2,
+                                                device_create_info);
       }
     }
     if (ext_KHR_portability_subset) {
@@ -630,6 +644,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
     if (with_gpu_emulation) {
       XE_UI_VULKAN_FEATURE_2(features_1_3, shaderDemoteToHelperInvocation);
+      XE_UI_VULKAN_FEATURE_2(features_1_3, dynamicRendering);
     }
   } else {
     if (ext_1_3_EXT_shader_demote_to_helper_invocation) {
@@ -637,6 +652,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
         XE_UI_VULKAN_FEATURE_2(
             features_1_3_EXT_shader_demote_to_helper_invocation,
             shaderDemoteToHelperInvocation);
+      }
+    }
+    if (ext_1_3_KHR_dynamic_rendering) {
+      if (with_gpu_emulation) {
+        XE_UI_VULKAN_FEATURE_2(features_1_3_KHR_dynamic_rendering,
+                               dynamicRendering);
       }
     }
   }
@@ -734,6 +755,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
 #include "xenia/ui/vulkan/functions/device_1_1_khr_get_memory_requirements2.inc"
   }
   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
+#include "xenia/ui/vulkan/functions/device_1_3_khr_dynamic_rendering.inc"
 #include "xenia/ui/vulkan/functions/device_1_3_khr_maintenance4.inc"
   }
 #undef XE_UI_VULKAN_FUNCTION_PROMOTED
@@ -755,6 +777,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   if (properties.apiVersion < VK_MAKE_API_VERSION(0, 1, 3, 0)) {
     if (device->extensions_.ext_1_3_KHR_maintenance4) {
 #include "xenia/ui/vulkan/functions/device_1_3_khr_maintenance4.inc"
+    }
+    if (device->extensions_.ext_1_3_KHR_dynamic_rendering) {
+#include "xenia/ui/vulkan/functions/device_1_3_khr_dynamic_rendering.inc"
     }
   }
   if (device->extensions_.ext_KHR_swapchain) {

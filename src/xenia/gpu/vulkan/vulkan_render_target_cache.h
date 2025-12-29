@@ -137,6 +137,16 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
     return last_update_framebuffer_;
   }
 
+  // For VK_KHR_dynamic_rendering: fills in attachment info structures.
+  // Returns the number of color attachments (may be less than max if trailing
+  // slots are unused). depth_attachment and stencil_attachment are filled if
+  // depth is used (check key.depth_and_color_used & 0b1).
+  void GetLastUpdateRenderingAttachments(
+      VkRenderingAttachmentInfo* color_attachments,
+      uint32_t* color_attachment_count_out,
+      VkRenderingAttachmentInfo* depth_attachment,
+      VkRenderingAttachmentInfo* stencil_attachment) const;
+
   // Using R16G16[B16A16]_SNORM, which are -1...1, not the needed -32...32.
   // Persistent data doesn't depend on this, so can be overriden by per-game
   // configuration.
