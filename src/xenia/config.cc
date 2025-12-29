@@ -158,6 +158,19 @@ void ReadConfig(const std::filesystem::path& file_path,
     }
   }
 
+  // Log command line overrides (after config values are loaded)
+  bool has_overrides = false;
+  for (const auto& it : *cvar::ConfigVars) {
+    auto config_var = static_cast<cvar::IConfigVar*>(it.second);
+    if (config_var->commandline_value() != config_var->config_value()) {
+      if (!has_overrides) {
+        XELOGI("Command line overrides:");
+        has_overrides = true;
+      }
+      XELOGI("  {} = {}", config_var->name(), config_var->commandline_value());
+    }
+  }
+
   MigrateLegacyCvars(config);
   uint32_t config_defaults_date = defaults_date_cvar->GetTypedConfigValue();
   if (update_if_no_version_stored || config_defaults_date) {

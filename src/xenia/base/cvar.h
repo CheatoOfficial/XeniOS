@@ -53,6 +53,7 @@ class IConfigVar : virtual public ICommandVar {
   virtual bool is_advanced() const = 0;
   virtual bool is_transient() const = 0;
   virtual std::string config_value() const = 0;
+  virtual std::string commandline_value() const = 0;
   virtual void LoadConfigValue(const toml::node* result) = 0;
   virtual void LoadGameConfigValue(const toml::node* result) = 0;
   virtual void ResetConfigValueToDefault() = 0;
@@ -93,6 +94,7 @@ class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
                const char* display_name, const char* category, bool is_advanced,
                bool is_transient);
   std::string config_value() const override;
+  std::string commandline_value() const override;
   const T& GetTypedConfigValue() const;
   const std::string& category() const override;
   const std::string& display_name() const override;
@@ -294,6 +296,12 @@ template <class T>
 std::string ConfigVar<T>::config_value() const {
   if (config_value_) return this->ToString(*config_value_);
   return this->ToString(this->default_value_);
+}
+template <class T>
+std::string ConfigVar<T>::commandline_value() const {
+  if (this->commandline_value_)
+    return this->ToString(*this->commandline_value_);
+  return config_value();
 }
 template <class T>
 const T& ConfigVar<T>::GetTypedConfigValue() const {
