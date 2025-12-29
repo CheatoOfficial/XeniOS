@@ -1302,27 +1302,16 @@ bool VulkanCommandProcessor::SetupContext() {
       return false;
     }
 
-    // Descriptor pool for resolve downscale shader.
-    // Max 16 sets, each with 2 storage buffers (source + destination).
+    // Descriptor pool chain for resolve downscale shader.
+    // Uses pool chain to avoid mid-frame GPU stalls on pool exhaustion.
+    // Each pool has 64 sets with 2 storage buffers each.
     VkDescriptorPoolSize resolve_downscale_pool_size;
     resolve_downscale_pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    resolve_downscale_pool_size.descriptorCount = 32;  // 16 sets * 2 buffers
-    VkDescriptorPoolCreateInfo resolve_downscale_pool_create_info;
-    resolve_downscale_pool_create_info.sType =
-        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    resolve_downscale_pool_create_info.pNext = nullptr;
-    resolve_downscale_pool_create_info.flags =
-        VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    resolve_downscale_pool_create_info.maxSets = 16;
-    resolve_downscale_pool_create_info.poolSizeCount = 1;
-    resolve_downscale_pool_create_info.pPoolSizes =
-        &resolve_downscale_pool_size;
-    if (dfn.vkCreateDescriptorPool(
-            device, &resolve_downscale_pool_create_info, nullptr,
-            &resolve_downscale_descriptor_pool_) != VK_SUCCESS) {
-      XELOGE("Failed to create the resolve downscale descriptor pool");
-      return false;
-    }
+    resolve_downscale_pool_size.descriptorCount = 128;  // 64 sets * 2 buffers
+    resolve_downscale_descriptor_pool_chain_ =
+        std::make_unique<ui::vulkan::VulkanDescriptorPoolChain>(
+            vulkan_device, 0, 64, &resolve_downscale_pool_size, 1,
+            resolve_downscale_descriptor_set_layout_);
   }
 
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
@@ -1392,8 +1381,7 @@ void VulkanCommandProcessor::ShutdownContext() {
   ui::vulkan::util::DestroyAndNullHandle(
       dfn.vkDestroyDescriptorSetLayout, device,
       resolve_downscale_descriptor_set_layout_);
-  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
-                                         resolve_downscale_descriptor_pool_);
+  resolve_downscale_descriptor_pool_chain_.reset();
 
   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyDescriptorPool, device,
                                          swap_descriptor_pool_);
@@ -4201,43 +4189,22 @@ bool VulkanCommandProcessor::IssueCopy() {
       resolve_downscale_buffer_size_ = downscale_buffer_size;
     }
 
-    // Allocate descriptor set for source and destination buffers
-    VkDescriptorSetAllocateInfo descriptor_alloc_info = {};
-    descriptor_alloc_info.sType =
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    descriptor_alloc_info.descriptorPool = resolve_downscale_descriptor_pool_;
-    descriptor_alloc_info.descriptorSetCount = 1;
-    descriptor_alloc_info.pSetLayouts =
-        &resolve_downscale_descriptor_set_layout_;
-
-    VkDescriptorSet descriptor_set;
-    if (dfn.vkAllocateDescriptorSets(device, &descriptor_alloc_info,
-                                     &descriptor_set) != VK_SUCCESS) {
-      // Pool may be exhausted, reset it and try again
-      if (!AwaitAllQueueOperationsCompletion()) {
-        XELOGE(
-            "VulkanCommandProcessor: Failed to wait for GPU before resetting "
-            "descriptor pool");
-        if (debug_markers_enabled_) {
-          PopDebugMarker();
-        }
-        return true;
+    // Allocate descriptor set for source and destination buffers.
+    // Uses pool chain to avoid mid-frame GPU stalls on pool exhaustion.
+    VkDescriptorSet descriptor_set =
+        resolve_downscale_descriptor_pool_chain_->Allocate(
+            GetCurrentSubmission());
+    if (descriptor_set == VK_NULL_HANDLE) {
+      XELOGE(
+          "VulkanCommandProcessor: Failed to allocate resolve downscale "
+          "descriptor set from pool chain");
+      if (debug_markers_enabled_) {
+        PopDebugMarker();
       }
-      dfn.vkResetDescriptorPool(device, resolve_downscale_descriptor_pool_, 0);
-      if (dfn.vkAllocateDescriptorSets(device, &descriptor_alloc_info,
-                                       &descriptor_set) != VK_SUCCESS) {
-        XELOGE(
-            "VulkanCommandProcessor: Failed to allocate resolve downscale "
-            "descriptor set");
-        if (debug_markers_enabled_) {
-          PopDebugMarker();
-        }
-        return true;
-      }
+      return true;
     }
 
-    // Ensure submission is open after any potential
-    // AwaitAllQueueOperationsCompletion calls during buffer allocation above
+    // Ensure submission is open
     if (!BeginSubmission(true)) {
       XELOGE(
           "VulkanCommandProcessor: Failed to begin submission for scaled "
@@ -4856,27 +4823,9 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(
 
   size_t fences_total = submissions_in_flight_fences_.size();
   size_t fences_awaited = 0;
-  if (await_submission > submission_completed_) {
-    // Await in a blocking way if requested.
-    // TODO(Triang3l): Await only one fence. "Fence signal operations that are
-    // defined by vkQueueSubmit additionally include in the first
-    // synchronization scope all commands that occur earlier in submission
-    // order."
-    VkResult wait_result = dfn.vkWaitForFences(
-        device, uint32_t(await_submission - submission_completed_),
-        submissions_in_flight_fences_.data(), VK_TRUE, UINT64_MAX);
-    if (wait_result == VK_SUCCESS) {
-      fences_awaited += await_submission - submission_completed_;
-    } else {
-      XELOGE("Failed to await submission completion Vulkan fences");
-      if (wait_result == VK_ERROR_DEVICE_LOST) {
-        device_lost_ = true;
-      }
-    }
-  }
-  // Check how far into the submissions the GPU currently is, in order because
-  // submission themselves can be executed out of order, but Xenia serializes
-  // that for simplicity.
+  // Check how far into the submissions the GPU currently is (non-blocking).
+  // This is similar to D3D12's GetCompletedValue() - check first, wait only if
+  // needed.
   while (fences_awaited < fences_total) {
     VkResult fence_status = dfn.vkWaitForFences(
         device, 1, &submissions_in_flight_fences_[fences_awaited], VK_TRUE, 0);
@@ -4887,6 +4836,25 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(
       break;
     }
     ++fences_awaited;
+  }
+  // If we need to wait for a specific submission and it's not done yet, block.
+  if (!device_lost_ &&
+      await_submission > submission_completed_ + fences_awaited) {
+    size_t fences_to_wait =
+        size_t(await_submission - submission_completed_) - fences_awaited;
+    if (fences_to_wait > 0 && fences_awaited < fences_total) {
+      VkResult wait_result = dfn.vkWaitForFences(
+          device, uint32_t(fences_to_wait),
+          &submissions_in_flight_fences_[fences_awaited], VK_TRUE, UINT64_MAX);
+      if (wait_result == VK_SUCCESS) {
+        fences_awaited += fences_to_wait;
+      } else {
+        XELOGE("Failed to await submission completion Vulkan fences");
+        if (wait_result == VK_ERROR_DEVICE_LOST) {
+          device_lost_ = true;
+        }
+      }
+    }
   }
   if (device_lost_) {
     graphics_system_->OnHostGpuLossFromAnyThread(true);
@@ -4936,6 +4904,11 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(
   render_target_cache_->CompletedSubmissionUpdated();
 
   texture_cache_->CompletedSubmissionUpdated(submission_completed_);
+
+  // Reclaim descriptor pools that the GPU has finished using.
+  if (resolve_downscale_descriptor_pool_chain_) {
+    resolve_downscale_descriptor_pool_chain_->Reclaim(submission_completed_);
+  }
 
   ProcessReadyOcclusionQueries(submission_completed_);
 
@@ -5376,6 +5349,12 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     // Increments the current submission number, going to the next submission.
     submissions_in_flight_fences_.push_back(fence);
     fences_free_.pop_back();
+
+    // Mark descriptor pool chains with submission index for reclaim tracking.
+    if (resolve_downscale_descriptor_pool_chain_) {
+      resolve_downscale_descriptor_pool_chain_->EndSubmission(
+          submission_current);
+    }
 
     submission_open_ = false;
   }

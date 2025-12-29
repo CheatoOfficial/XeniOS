@@ -38,6 +38,7 @@
 #include "xenia/gpu/xenos.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/ui/vulkan/linked_type_descriptor_set_allocator.h"
+#include "xenia/ui/vulkan/vulkan_descriptor_pool_chain.h"
 #include "xenia/ui/vulkan/vulkan_presenter.h"
 #include "xenia/ui/vulkan/vulkan_provider.h"
 #include "xenia/ui/vulkan/vulkan_upload_buffer_pool.h"
@@ -689,8 +690,10 @@ class VulkanCommandProcessor final : public CommandProcessor {
       VK_NULL_HANDLE;
   VkPipelineLayout resolve_downscale_pipeline_layout_ = VK_NULL_HANDLE;
   VkPipeline resolve_downscale_pipeline_ = VK_NULL_HANDLE;
-  // Descriptor pool for resolve downscale shader (2 storage buffers per set).
-  VkDescriptorPool resolve_downscale_descriptor_pool_ = VK_NULL_HANDLE;
+  // Descriptor pool chain for resolve downscale shader (2 storage buffers per
+  // set). Uses pool chain to avoid mid-frame GPU stalls on pool exhaustion.
+  std::unique_ptr<ui::vulkan::VulkanDescriptorPoolChain>
+      resolve_downscale_descriptor_pool_chain_;
   // Intermediate buffer for downscaled output (device local, for compute).
   VkBuffer resolve_downscale_buffer_ = VK_NULL_HANDLE;
   VkDeviceMemory resolve_downscale_buffer_memory_ = VK_NULL_HANDLE;
