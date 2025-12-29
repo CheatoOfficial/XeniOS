@@ -832,6 +832,28 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     if (memory_type_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
       device->memory_types_.host_cached |= memory_type_bit;
     }
+    // Detect ReBAR/SAM memory (both device-local and host-visible)
+    if ((memory_type_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+        (memory_type_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+      uint32_t heap_index =
+          memory_properties.memoryTypes[memory_type_index].heapIndex;
+      VkDeviceSize heap_size = memory_properties.memoryHeaps[heap_index].size;
+      // Require at least 256MB to consider this usable ReBAR memory.
+      // Smaller heaps aren't worth using for staging buffers.
+      constexpr VkDeviceSize kMinRebarHeapSize = 256 * 1024 * 1024;
+      if (heap_size >= kMinRebarHeapSize) {
+        device->memory_types_.device_local_host_visible |= memory_type_bit;
+        XELOGI(
+            "Vulkan memory type {}: HOST_VISIBLE | DEVICE_LOCAL (ReBAR/SAM), "
+            "heap {} ({} MB)",
+            memory_type_index, heap_index, heap_size >> 20);
+      } else {
+        XELOGI(
+            "Vulkan memory type {}: HOST_VISIBLE | DEVICE_LOCAL but heap {} "
+            "too small ({} MB < 256 MB), not using as ReBAR",
+            memory_type_index, heap_index, heap_size >> 20);
+      }
+    }
   }
 
   return device;

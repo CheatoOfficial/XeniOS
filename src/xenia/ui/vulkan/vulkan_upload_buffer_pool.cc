@@ -105,6 +105,15 @@ VulkanUploadBufferPool::CreatePageImplementation() {
       dfn.vkDestroyBuffer(device, buffer, nullptr);
       return nullptr;
     }
+    // Log whether we're using ReBAR memory for staging buffers.
+    if ((1u << memory_type_) &
+        vulkan_device_->memory_types().device_local_host_visible) {
+      XELOGI("Vulkan upload buffer pool using ReBAR memory (type {})",
+             memory_type_);
+    } else {
+      XELOGI("Vulkan upload buffer pool using system memory (type {})",
+             memory_type_);
+    }
     allocation_size_ = memory_requirements.size;
     if (allocation_size_ > page_size_) {
       // Try to occupy the allocation padding. If that's going to require even

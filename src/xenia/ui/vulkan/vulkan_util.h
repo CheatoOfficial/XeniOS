@@ -13,8 +13,11 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "xenia/base/cvar.h"
 #include "xenia/base/math.h"
 #include "xenia/ui/vulkan/vulkan_device.h"
+
+DECLARE_bool(vulkan_rebar);
 
 namespace xe {
 namespace ui {
@@ -54,6 +57,16 @@ inline uint32_t ChooseHostMemoryType(
     const bool is_readback) {
   supported_types &= memory_types.host_visible;
   uint32_t memory_type;
+  // For upload, prefer HOST_VISIBLE | DEVICE_LOCAL (ReBAR/SAM) if available
+  // and enabled. This places staging buffers in GPU VRAM, making copies
+  // GPU-internal.
+  if (!is_readback && cvars::vulkan_rebar) {
+    if (xe::bit_scan_forward(
+            supported_types & memory_types.device_local_host_visible,
+            &memory_type)) {
+      return memory_type;
+    }
+  }
   // For upload, uncached is preferred so writes do not pollute the CPU cache.
   // For readback, cached is preferred so multiple CPU reads are fast.
   // If the preferred caching behavior is not available, pick any host-visible.

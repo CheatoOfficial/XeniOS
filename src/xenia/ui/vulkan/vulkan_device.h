@@ -281,6 +281,8 @@ class VulkanDevice {
     uint32_t host_visible = 0b0;
     uint32_t host_coherent = 0b0;
     uint32_t host_cached = 0b0;
+    // Memory types that are both device-local and host-visible (ReBAR/SAM)
+    uint32_t device_local_host_visible = 0b0;
   };
 
   const MemoryTypes& memory_types() const { return memory_types_; }

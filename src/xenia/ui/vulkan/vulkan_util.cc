@@ -12,8 +12,17 @@
 #include <cstdint>
 
 #include "xenia/base/assert.h"
+#include "xenia/base/cvar.h"
 #include "xenia/base/math.h"
 #include "xenia/ui/vulkan/vulkan_device.h"
+
+DEFINE_bool(
+    vulkan_rebar, false,
+    "Use ReBAR/SAM (Resizable BAR / Smart Access Memory) for upload buffers "
+    "when available. This places staging buffers in GPU VRAM. May improve or "
+    "hurt performance depending on hardware - traditional staging via system "
+    "memory is often faster due to async GPU DMA.",
+    "Vulkan");
 
 namespace xe {
 namespace ui {
