@@ -46,6 +46,16 @@ ContextMenuWidgetQt::ContextMenuWidgetQt(QWidget* parent,
     // Block input to the game while this menu is open
     input_system_->AddUIInputBlocker();
 
+    // Initialize prev_buttons_ to current state so held buttons aren't
+    // detected as "just pressed" when the menu opens
+    hid::X_INPUT_STATE state;
+    for (uint32_t user_index = 0; user_index < 4; user_index++) {
+      if (input_system_->GetStateForUI(user_index, 1, &state) == 0) {
+        prev_buttons_ = state.gamepad.buttons;
+        break;
+      }
+    }
+
     poll_timer_ = new QTimer(this);
     connect(poll_timer_, &QTimer::timeout, this,
             &ContextMenuWidgetQt::PollGamepad);
@@ -257,8 +267,8 @@ void ContextMenuWidgetQt::PollGamepad() {
         ActivateFocusedItem();
       }
 
-      // B button to close
-      if (pressed & 0x2000) {
+      // B button, Back button, or Guide button to close
+      if (pressed & (0x2000 | 0x0020 | 0x0400)) {
         close();
       }
 

@@ -44,6 +44,7 @@ class GamepadDialog : public QDialog {
   virtual void OnGamepadButtonY() {}
   virtual void OnGamepadStart() { AcceptFocusedButton(); }
   virtual void OnGamepadBack() { reject(); }
+  virtual void OnGamepadGuide() { reject(); }
 
   // Override to customize which widgets are focusable
   virtual bool IsWidgetGamepadFocusable(QWidget* widget) const;

@@ -10,6 +10,7 @@
 #ifndef XENIA_HID_INPUT_SYSTEM_H_
 #define XENIA_HID_INPUT_SYSTEM_H_
 
+#include <array>
 #include <atomic>
 #include <bitset>
 #include <memory>
@@ -96,6 +97,11 @@ class InputSystem {
 
   // Reference count for UI elements blocking game input
   std::atomic<int> ui_input_blockers_{0};
+
+  // Buttons that should be masked from game input until released (per slot).
+  // This prevents button presses used to close UI dialogs from being
+  // seen by the game immediately after the dialog closes.
+  std::array<uint16_t, XUserMaxUserCount> consumed_buttons_{};
 };
 
 }  // namespace hid

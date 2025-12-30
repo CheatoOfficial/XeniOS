@@ -127,7 +127,20 @@ X_RESULT InputSystem::GetState(uint32_t user_index, uint32_t flags,
     return X_ERROR_SUCCESS;
   }
 
-  return GetStateForUI(user_index, flags, out_state);
+  X_RESULT result = GetStateForUI(user_index, flags, out_state);
+
+  // Handle consumed buttons - these are buttons that were held when a UI dialog
+  // closed. We mask them from the game until they are released.
+  if (result == X_ERROR_SUCCESS && user_index < XUserMaxUserCount &&
+      consumed_buttons_[user_index] != 0) {
+    uint16_t buttons = out_state->gamepad.buttons;
+    // Update consumed_buttons_ to only include buttons still being held
+    consumed_buttons_[user_index] &= buttons;
+    // Mask consumed buttons from the output
+    out_state->gamepad.buttons = buttons & ~consumed_buttons_[user_index];
+  }
+
+  return result;
 }
 
 X_RESULT InputSystem::GetStateForUI(uint32_t user_index, uint32_t flags,
@@ -157,7 +170,19 @@ X_RESULT InputSystem::GetStateForUI(uint32_t user_index, uint32_t flags,
 
 void InputSystem::AddUIInputBlocker() { ui_input_blockers_.fetch_add(1); }
 
-void InputSystem::RemoveUIInputBlocker() { ui_input_blockers_.fetch_sub(1); }
+void InputSystem::RemoveUIInputBlocker() {
+  // Before removing the blocker, capture any currently pressed buttons.
+  // These will be masked from game input until they are released, preventing
+  // the button press that closed the UI from carrying over into the game.
+  X_INPUT_STATE state;
+  for (uint32_t user_index = 0; user_index < XUserMaxUserCount; user_index++) {
+    if (GetStateForUI(user_index, 1, &state) == X_ERROR_SUCCESS) {
+      consumed_buttons_[user_index] |= state.gamepad.buttons;
+    }
+  }
+
+  ui_input_blockers_.fetch_sub(1);
+}
 
 X_RESULT InputSystem::SetState(uint32_t user_index,
                                X_INPUT_VIBRATION* vibration) {

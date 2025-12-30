@@ -115,6 +115,9 @@ void GamepadDialog::PollGamepad() {
   if (pressed & 0x0020) {  // Back button
     OnGamepadBack();
   }
+  if (pressed & 0x0400) {  // Guide button
+    OnGamepadGuide();
+  }
 
   // D-pad navigation with repeat
   // First press (edge detection)
