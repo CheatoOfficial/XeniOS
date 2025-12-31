@@ -262,6 +262,9 @@ class EmulatorWindow {
   // Timer callback for saving window size after resize is complete
   void SaveWindowSizeConfig();
 
+  // Save fullscreen state to per-game config
+  void SaveFullscreenConfig(bool fullscreen);
+
   Emulator* emulator_;
   ui::WindowedAppContext& app_context_;
   bool is_game_process_;

@@ -514,6 +514,11 @@ void EmulatorWindow::EmulatorWindowListener::OnResize(ui::UISetupEvent& e) {
 }
 
 void EmulatorWindow::SaveWindowSizeConfig() {
+  // Don't save window dimensions when in fullscreen mode
+  if (window_ && window_->IsFullscreen()) {
+    return;
+  }
+
   if (is_game_process_) {
     // Game process - save to game-specific config
     if (!emulator_ || !emulator_->is_title_open()) {
@@ -558,6 +563,36 @@ void EmulatorWindow::SaveWindowSizeConfig() {
       config::SaveConfig();
     }
   }
+}
+
+void EmulatorWindow::SaveFullscreenConfig(bool fullscreen) {
+  if (!is_game_process_) {
+    return;  // Only save for game process
+  }
+
+  if (!emulator_ || !emulator_->is_title_open()) {
+    return;  // No title loaded yet
+  }
+
+  uint32_t title_id = emulator_->title_id();
+  if (title_id == 0) {
+    return;
+  }
+
+  // Load existing config, update fullscreen value, save
+  toml::table config_table = config::LoadGameConfig(title_id);
+
+  // Ensure Display category exists
+  if (!config_table.contains("Display")) {
+    config_table.insert("Display", toml::table{});
+  }
+
+  auto* display_table = config_table["Display"].as_table();
+  if (display_table) {
+    display_table->insert_or_assign("fullscreen", fullscreen);
+  }
+
+  config::SaveGameConfig(title_id, config_table);
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnKeyDown(ui::KeyEvent& e) {
@@ -1665,6 +1700,7 @@ void EmulatorWindow::SetFullscreen(bool fullscreen) {
     return;
   }
   window_->SetFullscreen(fullscreen);
+  SaveFullscreenConfig(fullscreen);
 }
 
 void EmulatorWindow::ToggleFullscreen() {
