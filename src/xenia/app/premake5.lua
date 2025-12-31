@@ -144,7 +144,7 @@ project("xenia-app")
     if qt_dir then
       local windeployqt = path.translate(path.join(qt_dir, "bin", "windeployqt.exe"), "\\")
       postbuildcommands {
-        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --debug --no-translations --no-system-d3d-compiler --no-opengl-sw "$(TargetPath)"'
+        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --debug --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime "$(TargetPath)"'
       }
     end
 
@@ -153,7 +153,7 @@ project("xenia-app")
     if qt_dir then
       local windeployqt = path.translate(path.join(qt_dir, "bin", "windeployqt.exe"), "\\")
       postbuildcommands {
-        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --release --no-translations --no-system-d3d-compiler --no-opengl-sw "$(TargetPath)"'
+        'if exist "' .. windeployqt .. '" "' .. windeployqt .. '" --release --no-translations --no-system-d3d-compiler --no-opengl-sw --no-compiler-runtime "$(TargetPath)"'
       }
     end
 

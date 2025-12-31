@@ -850,6 +850,7 @@ def run_windeployqt(bin_path, config):
         "--no-translations",  # Don't copy translation files
         "--no-system-d3d-compiler",  # Don't copy D3D compiler
         "--no-opengl-sw",  # Don't copy software OpenGL renderer
+        "--no-compiler-runtime",  # Don't copy vc_redist.x64.exe (25MB)
     ]
 
     if config.lower() in ["debug", "checked", "valgrind"]:
