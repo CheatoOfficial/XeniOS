@@ -3235,6 +3235,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
       return false;
     }
   }
+  // If async mode is active, this may be a placeholder pipeline. The real
+  // pipeline will be swapped in by the creation thread when ready.
+  // We re-load the handle to pick up any swap that may have happened.
+  current_pipeline = pipeline->pipeline.load(std::memory_order_acquire);
 
   // Push debug marker with Xbox 360 draw context for RenderDoc annotation.
   // Done early so texture loads appear nested under the draw that uses them.

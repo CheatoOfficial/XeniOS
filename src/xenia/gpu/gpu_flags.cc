@@ -150,3 +150,12 @@ DEFINE_bool(no_discard_stencil_in_transfer_pipelines, false,
             "Skip stencil bit discard in render target transfer pipelines. "
             "May improve performance on some GPUs.",
             "GPU");
+
+DEFINE_bool(
+    async_shader_compilation, true,
+    "Compile shaders and create pipelines asynchronously in background "
+    "threads. "
+    "Eliminates shader compilation stutter but may cause brief rendering "
+    "artifacts while pipelines are being created. When disabled, pipelines are "
+    "created synchronously which causes stutter but no visual artifacts.",
+    "GPU");

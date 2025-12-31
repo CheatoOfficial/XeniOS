@@ -2911,6 +2911,15 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     return false;
   }
 
+  // For async mode: if pipeline state is still nullptr, skip this draw.
+  // The real pipeline will be ready on next frame.
+  // Sync mode always has valid pipelines at this point.
+  if (cvars::async_shader_compilation &&
+      pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
+    XELOGI("Skipping draw - pipeline not ready yet");
+    return true;  // Return true to not count as failure, just skip draw.
+  }
+
   // Push debug marker with Xbox 360 draw context for PIX/RenderDoc annotation.
   // Done early so texture loads appear nested under the draw that uses them.
   if (debug_markers_enabled_) {

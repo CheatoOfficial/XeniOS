@@ -50,6 +50,8 @@ DECLARE_string(render_target_path);
 
 DECLARE_bool(no_discard_stencil_in_transfer_pipelines);
 
+DECLARE_bool(async_shader_compilation);
+
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1
 
 #endif  // XENIA_GPU_GPU_FLAGS_H_
