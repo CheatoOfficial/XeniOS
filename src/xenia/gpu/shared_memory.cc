@@ -500,15 +500,46 @@ bool SharedMemory::RequestRange(uint32_t start, uint32_t length,
   uint32_t page_first = start >> page_size_log2_;
   uint32_t page_last = (start + length - 1) >> page_size_log2_;
 
+  uint32_t block_first = page_first >> 6;
+  uint32_t block_last = page_last >> 6;
+
+  // Lockless fast-path: check if all pages are already valid.
+  // This avoids lock acquisition for the common case where pages are resident.
+  uint64_t* valid_flags = active_valid_flags_.load(std::memory_order_acquire);
+  if (valid_flags) {
+    bool all_valid = true;
+    for (uint32_t i = block_first; i <= block_last && all_valid; ++i) {
+      uint64_t block_valid = valid_flags[i];
+      if (i == block_first) {
+        // Mask out pages before page_first
+        uint64_t block_before = (uint64_t(1) << (page_first & 63)) - 1;
+        block_valid |= block_before;
+      }
+      if (i == block_last && (page_last & 63) != 63) {
+        // Mask out pages after page_last
+        uint64_t block_after = ~((uint64_t(1) << ((page_last & 63) + 1)) - 1);
+        block_valid |= block_after;
+      }
+      if (block_valid != ~uint64_t(0)) {
+        all_valid = false;
+      }
+    }
+    if (all_valid) {
+      // All pages already valid, nothing to upload
+      if (any_data_resolved_out) {
+        *any_data_resolved_out = false;
+      }
+      return true;
+    }
+  }
+
   upload_ranges_.clear();
 
   std::pair<uint32_t, uint32_t>* uploads =
       reinterpret_cast<std::pair<uint32_t, uint32_t>*>(upload_ranges_.data());
 
   bool any_data_resolved = false;
-  uint32_t block_first = page_first >> 6;
   // swcache::PrefetchL1(&system_page_flags_[block_first]);
-  uint32_t block_last = page_last >> 6;
   uint32_t range_start = UINT32_MAX;
 
   {
