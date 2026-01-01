@@ -106,6 +106,11 @@ class PipelineCache {
         std::memory_order_acquire);
   }
 
+  ID3D12RootSignature* GetRootSignatureByHandle(void* handle) const {
+    return reinterpret_cast<const Pipeline*>(handle)
+        ->description.root_signature;
+  }
+
  private:
   XEPACKEDSTRUCT(ShaderStoredHeader, {
     uint64_t ucode_data_hash;

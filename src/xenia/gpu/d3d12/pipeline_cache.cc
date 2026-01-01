@@ -1084,16 +1084,19 @@ bool PipelineCache::ConfigurePipeline(
     }
   }
 
-  // For async mode, pass the real pixel_shader to get correct hash for cache
-  // lookup, but with use_async=true so root signature uses VS-only bindings
-  // (PS bindings aren't known until background thread translates it).
+  // If shaders are already translated, create PSO synchronously (fast path).
+  bool shaders_already_translated =
+      vertex_shader->is_translated() &&
+      (pixel_shader == nullptr || pixel_shader->is_translated());
+  bool effective_async = use_async && !shaders_already_translated;
+
   PipelineRuntimeDescription runtime_description;
   if (!GetCurrentStateDescription(
           vertex_shader, pixel_shader, primitive_processing_result,
           normalized_depth_control, normalized_color_mask,
           bound_depth_and_color_render_target_bits,
           bound_depth_and_color_render_target_formats, runtime_description,
-          use_async)) {
+          effective_async)) {
     return false;
   }
   PipelineDescription& description = runtime_description.description;
@@ -1101,7 +1104,7 @@ bool PipelineCache::ConfigurePipeline(
   if (current_pipeline_ != nullptr &&
       current_pipeline_->description.description == description) {
     *pipeline_handle_out = current_pipeline_;
-    *root_signature_out = runtime_description.root_signature;
+    *root_signature_out = current_pipeline_->description.root_signature;
     return true;
   }
 
@@ -1124,15 +1127,10 @@ bool PipelineCache::ConfigurePipeline(
   pipelines_.emplace(hash, new_pipeline);
   COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
 
-  // Pipeline creation: async queues for background, sync creates immediately.
-  if (use_async) {
-    // Store shaders for background thread to translate and create pipeline.
-    // Shaders may already be translated (from cache) - background thread
-    // checks.
+  if (effective_async) {
+    // Queue for background thread.
     new_pipeline->pending_vertex_shader = vertex_shader;
     new_pipeline->pending_pixel_shader = pixel_shader;
-
-    // Queue pipeline creation in background. State starts as nullptr.
     {
       std::lock_guard<xe_mutex> lock(creation_request_lock_);
       creation_queue_.push_back(new_pipeline);
@@ -3532,7 +3530,15 @@ void PipelineCache::CreationThread(size_t thread_index) {
     if (new_state != nullptr) {
       pipeline_to_create->state.store(new_state, std::memory_order_release);
     } else {
-      XELOGW("CreationThread: Pipeline creation failed");
+      XELOGE("Pipeline creation failed (VS {:016X}, PS {:016X})",
+             pipeline_to_create->description.vertex_shader
+                 ? pipeline_to_create->description.vertex_shader->shader()
+                       .ucode_data_hash()
+                 : 0,
+             pipeline_to_create->description.pixel_shader
+                 ? pipeline_to_create->description.pixel_shader->shader()
+                       .ucode_data_hash()
+                 : 0);
     }
 
     // Pipeline created - the thread is not busy anymore, safe to set the
