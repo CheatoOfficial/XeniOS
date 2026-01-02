@@ -589,16 +589,8 @@ bool EmulatorApp::OnInitialize() {
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
 
-  // Check if this is a game process (has target or launch_data.txt) or UI
-  // process
-  bool has_launch_data = false;
-  FILE* launch_data_file =
-      xe::filesystem::OpenFile(kernel::xam::kXamModuleLoaderDataFileName, "r");
-  if (launch_data_file) {
-    has_launch_data = true;
-    fclose(launch_data_file);
-  }
-  bool is_game_process = !cvars::target.empty() || has_launch_data;
+  // Check if this is a game process (has target) or UI process
+  bool is_game_process = !cvars::target.empty();
 
 #if XE_PLATFORM_WIN32 && XE_ARCH_AMD64 == 1
   // Apply ntdll rdrand patch for game process only
@@ -853,8 +845,7 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
       return;
     }
 
-    // Store the host path in loader_data for potential restart with
-    // launch_data.txt
+    // Store the host path in loader_data for title-to-title launches
     auto xam_for_path =
         emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
             "xam.xex");
@@ -872,32 +863,20 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
   auto xam = emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
       "xam.xex");
 
-  if (xam) {
-    // Check if launch data was passed via command line (from UI process)
-    // This takes precedence over launch_data.txt
-    if (cvars::launch_flags != 0 || !cvars::launch_data.empty()) {
-      auto& loader_data = xam->loader_data();
-      loader_data.launch_data_present = true;
-      loader_data.launch_flags = cvars::launch_flags;
+  // Check if launch data was passed via command line (for title-to-title)
+  if (xam && (cvars::launch_flags != 0 || !cvars::launch_data.empty())) {
+    auto& loader_data = xam->loader_data();
+    loader_data.launch_data_present = true;
+    loader_data.launch_flags = cvars::launch_flags;
 
-      // Decode hex-encoded launch_data
-      if (!cvars::launch_data.empty()) {
-        loader_data.launch_data.clear();
-        const std::string& hex = cvars::launch_data;
-        for (size_t i = 0; i + 1 < hex.length(); i += 2) {
-          std::string byte_str = hex.substr(i, 2);
-          uint8_t byte =
-              static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
-          loader_data.launch_data.push_back(byte);
-        }
-      }
-    } else {
-      // Fall back to loading from file (legacy behavior)
-      xam->LoadLoaderData();
-
-      if (xam->loader_data().launch_data_present) {
-        const std::filesystem::path host_path = xam->loader_data().host_path;
-        emulator_->LaunchPath(host_path);
+    // Decode hex-encoded launch_data
+    if (!cvars::launch_data.empty()) {
+      loader_data.launch_data.clear();
+      const std::string& hex = cvars::launch_data;
+      for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+        std::string byte_str = hex.substr(i, 2);
+        uint8_t byte = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+        loader_data.launch_data.push_back(byte);
       }
     }
   }

@@ -20,9 +20,6 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
-static constexpr std::string_view kXamModuleLoaderDataFileName =
-    "launch_data.txt";
-
 class XamModule : public KernelModule {
  public:
   XamModule(Emulator* emulator, KernelState* kernel_state);
@@ -39,9 +36,6 @@ class XamModule : public KernelModule {
     uint32_t launch_flags = 0;
     std::vector<uint8_t> launch_data;
   };
-
-  void LoadLoaderData();
-  void SaveLoaderData();
 
   const LoaderData& loader_data() const { return loader_data_; }
   LoaderData& loader_data() { return loader_data_; }

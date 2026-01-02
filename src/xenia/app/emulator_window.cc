@@ -426,29 +426,119 @@ void EmulatorWindow::OnEmulatorInitialized() {
     Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
   }
 
-  // Register callback for launch data restart requests from the kernel
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (qt_window) {
-    emulator_->set_on_launch_data_restart([this, qt_window]() {
-      // Show notification in UI thread
-      window_->app_context().CallInUIThread([this, qt_window]() {
-        auto* notification = new NotificationWidgetQt(
-            qt_window->qwindow(), "Title Restart Required",
-            "Title is restarting with new launch data.\n"
-            "Game will be loaded automatically.",
-            5000);  // 5 second duration
-        notification->Show();
+  // Register callback for title-to-title launches from the kernel
+  emulator_->set_on_launch_new_title([this](const std::string& host_path,
+                                            const std::string& launch_module,
+                                            uint32_t launch_flags,
+                                            const std::string& launch_data) {
+    XELOGI(
+        "Launching new title: host_path={}, launch_module={}, flags={}, "
+        "data_len={}",
+        host_path, launch_module, launch_flags, launch_data.length());
 
-        // Schedule terminate and exit after notification duration
-        QTimer::singleShot(5000, [this]() {
-          if (emulator_->kernel_state()) {
-            emulator_->kernel_state()->TerminateTitle();
-          }
-          std::quick_exit(0);
-        });
-      });
-    });
-  }
+    std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
+
+#if XE_PLATFORM_WIN32
+    auto exe_path_u16 = xe::path_to_utf16(executable_path);
+    std::u16string cmd_line = u"\"" + exe_path_u16 + u"\"";
+
+    if (!cvars::config.empty()) {
+      cmd_line += u" --config=\"" + xe::to_utf16(cvars::config) + u"\"";
+    }
+    // Append to log file instead of overwriting
+    cmd_line += u" --log_append=true";
+    if (!launch_module.empty()) {
+      cmd_line += u" --launch_module=\"" + xe::to_utf16(launch_module) + u"\"";
+    }
+    if (launch_flags != 0) {
+      cmd_line +=
+          u" --launch_flags=" + xe::to_utf16(fmt::format("{}", launch_flags));
+    }
+    if (!launch_data.empty()) {
+      cmd_line += u" --launch_data=" + xe::to_utf16(launch_data);
+    }
+    if (!host_path.empty()) {
+      cmd_line += u" \"" + xe::to_utf16(host_path) + u"\"";
+    }
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+
+    if (!CreateProcessW(nullptr,
+                        const_cast<wchar_t*>(
+                            reinterpret_cast<const wchar_t*>(cmd_line.c_str())),
+                        nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr,
+                        nullptr, &si, &pi)) {
+      XELOGE("Failed to launch new process: {}", GetLastError());
+      return;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+#else
+    pid_t pid = fork();
+    if (pid == 0) {
+      // Child process
+      if (cvars::use_mangohud) {
+        setenv("MANGOHUD", "1", 1);
+      }
+
+      std::vector<std::string> arg_storage;
+      std::vector<const char*> argv;
+
+      std::string gamemode_cmd;
+      if (cvars::use_gamemode) {
+        gamemode_cmd = "gamemoderun";
+        argv.push_back(gamemode_cmd.c_str());
+      }
+      arg_storage.push_back(executable_path.string());
+      argv.push_back(arg_storage.back().c_str());
+
+      if (!cvars::config.empty()) {
+        arg_storage.push_back("--config=" + cvars::config);
+        argv.push_back(arg_storage.back().c_str());
+      }
+      // Append to log file instead of overwriting
+      arg_storage.push_back("--log_append=true");
+      argv.push_back(arg_storage.back().c_str());
+      if (!launch_module.empty()) {
+        arg_storage.push_back("--launch_module=" + launch_module);
+        argv.push_back(arg_storage.back().c_str());
+      }
+      if (launch_flags != 0) {
+        arg_storage.push_back(fmt::format("--launch_flags={}", launch_flags));
+        argv.push_back(arg_storage.back().c_str());
+      }
+      if (!launch_data.empty()) {
+        arg_storage.push_back("--launch_data=" + launch_data);
+        argv.push_back(arg_storage.back().c_str());
+      }
+      if (!host_path.empty()) {
+        arg_storage.push_back(host_path);
+        argv.push_back(arg_storage.back().c_str());
+      }
+      argv.push_back(nullptr);
+
+      if (cvars::use_gamemode) {
+        execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
+      } else {
+        execv(executable_path.c_str(), const_cast<char**>(argv.data()));
+      }
+      std::exit(1);
+    } else if (pid < 0) {
+      XELOGE("Failed to fork process");
+      return;
+    }
+#endif
+    // Exit the current process
+    std::quick_exit(0);
+  });
+
+  // Register callback for disc swap to update title bar
+  emulator_->set_on_disc_swap([this](uint8_t new_disc_number) {
+    swapped_disc_number_ = new_disc_number;
+    app_context_.CallInUIThread([this]() { UpdateTitle(); });
+  });
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
@@ -1918,7 +2008,11 @@ void EmulatorWindow::UpdateTitle() {
     auto executable_module = emulator()->kernel_state()->GetExecutableModule();
     if (executable_module) {
       if (executable_module->is_multi_disc_title()) {
-        sb.AppendFormat(" Disc {}", executable_module->disc_number());
+        // Use swapped disc number if set, otherwise use XEX header value
+        uint8_t disc_number = swapped_disc_number_ != 0
+                                  ? swapped_disc_number_
+                                  : executable_module->disc_number();
+        sb.AppendFormat(" Disc {}", disc_number);
       }
 
       // Show XEX name if it's not default.xex
@@ -2411,63 +2505,13 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
 }
 
 void EmulatorWindow::LaunchTitleInNewProcess(
-    const std::filesystem::path& path_to_file, bool for_launch_data) {
+    const std::filesystem::path& path_to_file) {
   // Get the path to the current executable
   std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
 
-  // Handle launch_data.txt if present
-  std::filesystem::path actual_path = path_to_file;
-  std::string launch_module_arg;
-
-  std::string launch_flags_arg;
-  std::string launch_data_arg;
-
-  if (for_launch_data) {
-    // Read launch_data.txt to get all launch parameters
-    std::filesystem::path file_path(kernel::xam::kXamModuleLoaderDataFileName);
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-      XELOGE("launch_data.txt not found");
-      return;
-    }
-
-    std::string host_path;
-    std::string launch_path;
-    std::string line;
-
-    while (std::getline(file, line)) {
-      size_t eq_pos = line.find('=');
-      if (eq_pos == std::string::npos) {
-        continue;
-      }
-
-      std::string key = line.substr(0, eq_pos);
-      std::string value = line.substr(eq_pos + 1);
-
-      if (key == "host_path") {
-        host_path = value;
-      } else if (key == "launch_path") {
-        launch_path = value;
-      } else if (key == "launch_flags") {
-        launch_flags_arg = value;
-      } else if (key == "launch_data") {
-        launch_data_arg = value;
-      }
-    }
-
-    file.close();
-
-    // Delete launch_data.txt - we pass everything via command line
-    std::filesystem::remove(kernel::xam::kXamModuleLoaderDataFileName);
-
-    // Use the host_path as the target and launch_path as --launch_module
-    actual_path = host_path;
-    launch_module_arg = launch_path;
-  }
-
   // Verify the file exists
-  if (!actual_path.empty() && !std::filesystem::exists(actual_path)) {
-    XELOGE("Cannot launch title - file not found: {}", actual_path.string());
+  if (!path_to_file.empty() && !std::filesystem::exists(path_to_file)) {
+    XELOGE("Cannot launch title - file not found: {}", path_to_file.string());
     return;
   }
 
@@ -2483,25 +2527,9 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     cmd_line += u" --config=\"" + xe::to_utf16(cvars::config) + u"\"";
   }
 
-  // Add --launch_module if specified
-  if (!launch_module_arg.empty()) {
-    cmd_line +=
-        u" --launch_module=\"" + xe::to_utf16(launch_module_arg) + u"\"";
-  }
-
-  // Add --launch_flags if specified (for title-to-title launches)
-  if (!launch_flags_arg.empty()) {
-    cmd_line += u" --launch_flags=" + xe::to_utf16(launch_flags_arg);
-  }
-
-  // Add --launch_data if specified (for title-to-title launches)
-  if (!launch_data_arg.empty()) {
-    cmd_line += u" --launch_data=" + xe::to_utf16(launch_data_arg);
-  }
-
   // Add the target game file
-  if (!actual_path.empty()) {
-    auto game_path_u16 = xe::path_to_utf16(actual_path);
+  if (!path_to_file.empty()) {
+    auto game_path_u16 = xe::path_to_utf16(path_to_file);
     cmd_line += u" \"" + game_path_u16 + u"\"";
   }
 
@@ -2560,31 +2588,10 @@ void EmulatorWindow::LaunchTitleInNewProcess(
       argv.push_back(config_arg.c_str());
     }
 
-    // Add --launch_module if specified
-    std::string launch_module_arg_str;
-    if (!launch_module_arg.empty()) {
-      launch_module_arg_str = "--launch_module=" + launch_module_arg;
-      argv.push_back(launch_module_arg_str.c_str());
-    }
-
-    // Add --launch_flags if specified (for title-to-title launches)
-    std::string launch_flags_arg_str;
-    if (!launch_flags_arg.empty()) {
-      launch_flags_arg_str = "--launch_flags=" + launch_flags_arg;
-      argv.push_back(launch_flags_arg_str.c_str());
-    }
-
-    // Add --launch_data if specified (for title-to-title launches)
-    std::string launch_data_arg_str;
-    if (!launch_data_arg.empty()) {
-      launch_data_arg_str = "--launch_data=" + launch_data_arg;
-      argv.push_back(launch_data_arg_str.c_str());
-    }
-
     // Add the target game file
     std::string target_arg;
-    if (!actual_path.empty()) {
-      target_arg = actual_path.string();
+    if (!path_to_file.empty()) {
+      target_arg = path_to_file.string();
       argv.push_back(target_arg.c_str());
     }
     argv.push_back(nullptr);
@@ -2610,11 +2617,7 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   child_processes_.push_back(pid);
 #endif
 
-  if (for_launch_data) {
-    XELOGI("Launched new process for launch_data.txt");
-  } else {
-    XELOGI("Launched title in new process: {}", path_to_file.string());
-  }
+  XELOGI("Launched title in new process: {}", path_to_file.string());
 
   // Start periodic checking now that we have a child
   ScheduleChildProcessCheck();
@@ -2704,36 +2707,6 @@ void EmulatorWindow::CheckChildProcessStatus() {
       game_list_dialog_qt_->LoadGameList();
       game_list_dialog_qt_->UpdateProfileButtonState();
       XELOGI("Game list dialog refreshed");
-    }
-
-    // Check for launch_data.txt
-    FILE* file = xe::filesystem::OpenFile(
-        kernel::xam::kXamModuleLoaderDataFileName, "r");
-    if (file) {
-      fclose(file);
-      XELOGI(
-          "launch_data.txt exists - cleaning up old child and launching new "
-          "instance");
-
-      // Force kill any remaining child processes before launching new one
-      // (they should have exited but may be stuck)
-#if XE_PLATFORM_WIN32
-      for (auto it = child_processes_.begin(); it != child_processes_.end();) {
-        TerminateProcess(*it, 0);
-        CloseHandle(*it);
-        it = child_processes_.erase(it);
-      }
-#else
-      for (auto it = child_processes_.begin(); it != child_processes_.end();) {
-        XELOGI("Force killing stuck child process {}", *it);
-        kill(*it, SIGKILL);
-        int status;
-        waitpid(*it, &status, WNOHANG);
-        it = child_processes_.erase(it);
-      }
-#endif
-
-      LaunchTitleInNewProcess(std::filesystem::path(), true);
     }
   }
 

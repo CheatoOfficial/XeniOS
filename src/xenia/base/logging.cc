@@ -47,6 +47,10 @@ DEFINE_bool(log_to_logcat, true, "Write log output to Android Logcat.",
             "Logging");
 #else
 DEFINE_path(log_file, "", "Logs are written to the given file", "Logging");
+DEFINE_transient_bool(log_append, false,
+                      "Append to existing log file instead of overwriting. "
+                      "Used for title-to-title launches.",
+                      "Logging");
 DEFINE_bool(log_to_stdout, true, "Write log output to stdout", "Logging");
 DEFINE_bool(log_to_debugprint, false, "Dump the log to DebugPrint.", "Logging");
 #endif  // XE_PLATFORM_ANDROID
@@ -447,15 +451,17 @@ void InitializeLogging(const std::string_view app_name, bool is_game_process) {
   // Only enable file logging for game processes, not the UI process
   if (is_game_process) {
     FILE* log_file = nullptr;
+    // Use append mode for title-to-title launches to preserve log history
+    const char* file_mode = cvars::log_append ? "at" : "wt";
     if (cvars::log_file.empty()) {
       // Default log file name for game process
       std::string file_name = fmt::format("{}.log", app_name);
       auto file_path = xe::filesystem::GetExecutableFolder() / file_name;
-      log_file = xe::filesystem::OpenFile(file_path, "wt");
+      log_file = xe::filesystem::OpenFile(file_path, file_mode);
     } else {
       // User specified log file - use as-is for game process
       xe::filesystem::CreateParentFolder(cvars::log_file);
-      log_file = xe::filesystem::OpenFile(cvars::log_file, "wt");
+      log_file = xe::filesystem::OpenFile(cvars::log_file, file_mode);
     }
     logger_->AddLogSink(std::make_unique<FileLogSink>(log_file, true));
   }

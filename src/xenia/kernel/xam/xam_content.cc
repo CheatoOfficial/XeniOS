@@ -651,8 +651,10 @@ dword_result_t XamSwapDisc_entry(
   }
 
   auto filesystem = kernel_state()->file_system();
-  auto mount_path = "\\Device\\LauncherData";
+  // Mount to Cdrom0 so the game: symlink points to the new disc
+  auto mount_path = "\\Device\\Cdrom0";
 
+  // Unmount the current disc
   if (filesystem->ResolvePath(mount_path) != NULL) {
     filesystem->UnregisterDevice(mount_path);
   }
@@ -779,6 +781,12 @@ dword_result_t XamSwapDisc_entry(
           xam->loader_data().host_path = xe::path_to_utf8(new_disc_path);
         }
 
+        // Notify UI of disc swap for title bar update
+        auto on_disc_swap = kernel_state()->emulator()->on_disc_swap();
+        if (on_disc_swap) {
+          on_disc_swap(exec_info.disc_number);
+        }
+
         // Success - break out of the loop
         break;
       }
@@ -847,24 +855,11 @@ dword_result_t XamContentLaunchImageFromFileInternal_entry(
         entry, kernel_state()->emulator()->content_root(), progress, true);
   }
 
-  auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
-
-  auto& loader_data = xam->loader_data();
-  loader_data.host_path = xe::path_to_utf8(host_path);
-  loader_data.launch_path = xex_name_;
-
-  xam->SaveLoaderData();
-
-  auto display_window = kernel_state()->emulator()->display_window();
-  auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
-
-  if (display_window && imgui_drawer) {
-    display_window->app_context().CallInUIThreadSynchronous([imgui_drawer]() {
-      xe::ui::ImGuiDialog::ShowMessageBox(
-          imgui_drawer, "Launching new title!",
-          "Launching new title. \nPlease close Xenia and launch it again. Game "
-          "should load automatically.");
-    });
+  auto on_launch_new_title = kernel_state()->emulator()->on_launch_new_title();
+  if (on_launch_new_title) {
+    XELOGI("XamContentLaunchImageFromFileInternal: spawning new title process");
+    on_launch_new_title(xe::path_to_utf8(host_path), xex_name_, 0, "");
+    // Callback calls quick_exit, so we don't reach here
   }
 
   kernel_state()->TerminateTitle();
@@ -903,24 +898,11 @@ dword_result_t XamContentLaunchImageInternal_entry(lpvoid_t content_data_ptr,
         entry, kernel_state()->emulator()->content_root(), progress, true);
   }
 
-  auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
-
-  auto& loader_data = xam->loader_data();
-  loader_data.host_path = xe::path_to_utf8(host_path);
-  loader_data.launch_path = xex_path.value();
-
-  xam->SaveLoaderData();
-
-  auto display_window = kernel_state()->emulator()->display_window();
-  auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
-
-  if (display_window && imgui_drawer) {
-    display_window->app_context().CallInUIThreadSynchronous([imgui_drawer]() {
-      xe::ui::ImGuiDialog::ShowMessageBox(
-          imgui_drawer, "Launching new title!",
-          "Launching new title. \nPlease close Xenia and launch it again. Game "
-          "should load automatically.");
-    });
+  auto on_launch_new_title = kernel_state()->emulator()->on_launch_new_title();
+  if (on_launch_new_title) {
+    XELOGI("XamContentLaunchImageInternal: spawning new title process");
+    on_launch_new_title(xe::path_to_utf8(host_path), xex_path.value(), 0, "");
+    // Callback calls quick_exit, so we don't reach here
   }
 
   kernel_state()->TerminateTitle();

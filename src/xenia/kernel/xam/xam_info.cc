@@ -385,26 +385,55 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   if (raw_name_ptr) {
     auto path = raw_name_ptr.value();
     if (path.empty()) {
-      // Empty path means exit to dashboard - don't save loader data
+      // Empty path means exit to dashboard
       loader_data.launch_path = "game:\\default.xex";
     } else {
-      // Non-empty path means launching another title - save loader data
-      loader_data.launch_path = xe::path_to_utf8(path);
+      // Non-empty path means launching another title
       loader_data.launch_data_present = true;
-      xam->SaveLoaderData();
-    }
 
-    if (loader_data.launch_data_present) {
-      // Notify the UI that a restart with launch data is requested.
-      // The callback can show a notification, but we terminate immediately
-      // to prevent the game from calling this function repeatedly.
-      auto on_launch_data_restart =
-          kernel_state()->emulator()->on_launch_data_restart();
-      if (on_launch_data_restart) {
-        on_launch_data_restart();
+      // Normalize the paths
+      std::filesystem::path host_path = loader_data.host_path;
+      std::string launch_path = xe::path_to_utf8(path);
+
+      XELOGI("XamLoaderLaunchTitle: original host_path={}, launch_path={}",
+             loader_data.host_path, launch_path);
+
+      // Remove common guest path prefixes
+      auto remove_prefix = [&launch_path](std::string_view prefix) {
+        if (launch_path.compare(0, prefix.length(), prefix) == 0) {
+          launch_path = launch_path.substr(prefix.length());
+        }
+      };
+      remove_prefix("game:\\");
+      remove_prefix("d:\\");
+
+      // If host_path points to a .xex, combine with launch_path
+      if (host_path.extension() == ".xex") {
+        host_path.remove_filename();
+        host_path = host_path / launch_path;
+        launch_path = "";
       }
 
-      // Terminate immediately when launch data is present
+      XELOGI("XamLoaderLaunchTitle: normalized host_path={}, launch_path={}",
+             xe::path_to_utf8(host_path), launch_path);
+
+      // Convert launch_data to hex string
+      std::string launch_data_hex;
+      for (uint8_t byte : loader_data.launch_data) {
+        launch_data_hex += fmt::format("{:02X}", byte);
+      }
+
+      // Call the callback to spawn the new process directly
+      auto on_launch_new_title =
+          kernel_state()->emulator()->on_launch_new_title();
+      if (on_launch_new_title) {
+        XELOGI("XamLoaderLaunchTitle: spawning new title process");
+        on_launch_new_title(xe::path_to_utf8(host_path), launch_path,
+                            loader_data.launch_flags, launch_data_hex);
+        // Callback calls quick_exit, so we don't reach here
+      }
+
+      // Terminate if callback wasn't set
       XELOGI("XamLoaderLaunchTitle: terminating to launch new title");
       kernel_state()->TerminateTitle();
       // This function does not return

@@ -84,8 +84,7 @@ class EmulatorWindow {
 
   void OnEmulatorInitialized();
 
-  void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file,
-                               bool for_launch_data = false);
+  void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file);
   xe::X_STATUS RunTitle(const std::filesystem::path& path_to_file);
   void UpdateTitle();
   bool HasRunningChildProcess();
@@ -289,6 +288,8 @@ class EmulatorWindow {
 
   std::string base_title_;
   bool initializing_shader_storage_ = false;
+  // Disc number after disc swap (0 = use XEX header value)
+  uint8_t swapped_disc_number_ = 0;
 
   QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
   QPointer<class PerformanceTuningDialogQt> performance_tuning_dialog_qt_;

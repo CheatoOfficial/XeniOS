@@ -326,13 +326,24 @@ class Emulator {
   xe::Delegate<> on_terminate;
   xe::Delegate<> on_exit;
 
-  // Called when XamLoaderLaunchTitle requests a restart with launch data.
-  // The UI layer should show an appropriate dialog and handle termination.
-  std::function<void()> on_launch_data_restart() const {
-    return on_launch_data_restart_;
+  // Called when XamLoaderLaunchTitle requests launching a new title.
+  // The callback should spawn a new process with the given parameters.
+  // Parameters: host_path, launch_module, launch_flags, launch_data (hex)
+  using LaunchNewTitleCallback = std::function<void(
+      const std::string&, const std::string&, uint32_t, const std::string&)>;
+  LaunchNewTitleCallback on_launch_new_title() const {
+    return on_launch_new_title_;
   }
-  void set_on_launch_data_restart(std::function<void()> callback) {
-    on_launch_data_restart_ = std::move(callback);
+  void set_on_launch_new_title(LaunchNewTitleCallback callback) {
+    on_launch_new_title_ = std::move(callback);
+  }
+
+  // Called when XamSwapDisc successfully swaps to a new disc.
+  // Parameters: new_disc_number
+  using DiscSwapCallback = std::function<void(uint8_t)>;
+  DiscSwapCallback on_disc_swap() const { return on_disc_swap_; }
+  void set_on_disc_swap(DiscSwapCallback callback) {
+    on_disc_swap_ = std::move(callback);
   }
 
  private:
@@ -383,7 +394,8 @@ class Emulator {
   bool restoring_;
   threading::Fence restore_fence_;  // Fired on restore finish.
 
-  std::function<void()> on_launch_data_restart_;
+  LaunchNewTitleCallback on_launch_new_title_;
+  DiscSwapCallback on_disc_swap_;
 };
 
 }  // namespace xe
