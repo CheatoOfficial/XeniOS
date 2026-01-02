@@ -115,8 +115,34 @@ bool QtFilePicker::Show(Window* parent_window) {
 
   std::vector<std::filesystem::path> selected_files;
 
-  if (multi_selection() && mode() == Mode::kOpen && type() == Type::kFile) {
-    // Use getOpenFileNames for multi-selection
+  QString result_path;
+
+  if (mode() == Mode::kSave) {
+    // Build initial path with default filename if provided
+    QString save_path = initial_dir;
+    if (!file_name().empty()) {
+      if (!save_path.isEmpty() && !save_path.endsWith('/') &&
+          !save_path.endsWith('\\')) {
+        save_path += '/';
+      }
+      save_path += SafeQString(file_name());
+      if (!default_extension().empty()) {
+        save_path += '.';
+        save_path += SafeQString(default_extension());
+      }
+    }
+
+    result_path = QFileDialog::getSaveFileName(
+        qt_window ? qt_window->qwindow() : nullptr, title, save_path, filter,
+        nullptr,  // selected filter
+        options);
+  } else if (type() == Type::kDirectory) {
+    // Directory selection
+    result_path = QFileDialog::getExistingDirectory(
+        qt_window ? qt_window->qwindow() : nullptr, title, initial_dir,
+        options | QFileDialog::ShowDirsOnly);
+  } else if (multi_selection()) {
+    // Multi-selection file open
     QStringList file_paths = QFileDialog::getOpenFileNames(
         qt_window ? qt_window->qwindow() : nullptr, title, initial_dir, filter,
         nullptr,  // selected filter
@@ -131,20 +157,21 @@ bool QtFilePicker::Show(Window* parent_window) {
       set_selected_files(selected_files);
       return true;
     }
+    return false;
   } else {
-    // Use getOpenFileName for single selection
-    QString file_path = QFileDialog::getOpenFileName(
+    // Single file open
+    result_path = QFileDialog::getOpenFileName(
         qt_window ? qt_window->qwindow() : nullptr, title, initial_dir, filter,
         nullptr,  // selected filter
         options);
+  }
 
-    if (!file_path.isEmpty()) {
-      QByteArray utf8_bytes = file_path.toUtf8();
-      std::string file_path_str(utf8_bytes.constData(), utf8_bytes.size());
-      selected_files.push_back(xe::to_path(file_path_str));
-      set_selected_files(selected_files);
-      return true;
-    }
+  if (!result_path.isEmpty()) {
+    QByteArray utf8_bytes = result_path.toUtf8();
+    std::string file_path_str(utf8_bytes.constData(), utf8_bytes.size());
+    selected_files.push_back(xe::to_path(file_path_str));
+    set_selected_files(selected_files);
+    return true;
   }
 
   return false;
