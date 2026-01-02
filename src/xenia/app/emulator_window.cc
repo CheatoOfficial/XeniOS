@@ -519,8 +519,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
       return;
     }
 #endif
-    // Exit the current process
-    std::quick_exit(0);
+    // Exit the current process via Qt
+    xe::FlushLog();
+    app_context_.QuitFromUIThread();
   });
 
   // Register callback for disc swap to update title bar
@@ -596,10 +597,9 @@ void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
     }
 
     xe::FlushLog();
-    std::quick_exit(0);
   }
 
-  // UI process: just quit
+  // Let Qt handle the exit naturally
   emulator_window_.app_context_.QuitFromUIThread();
 }
 
@@ -2480,7 +2480,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   XELOGI("Launched title in new process: {}", path_to_file.string());
 
   // Exit UI process - game process will spawn new UI when it exits
-  std::quick_exit(0);
+  xe::FlushLog();
+  app_context_.QuitFromUIThread();
 }
 
 xe::X_STATUS EmulatorWindow::RunTitle(
