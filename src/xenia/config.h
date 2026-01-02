@@ -25,8 +25,11 @@ extern std::filesystem::path config_folder;
 extern std::string game_config_suffix;
 
 void SetupConfig(const std::filesystem::path& config_folder);
-std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id);
 toml::table LoadGameConfig(uint32_t title_id);
+
+// Extract title_id from a game file and load its config overrides.
+// Returns the title_id if successful, 0 otherwise.
+uint32_t LoadGameConfigForFile(const std::filesystem::path& game_path);
 void SaveConfig();
 void SaveGameConfig(uint32_t title_id, const toml::table& config_table);
 void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,

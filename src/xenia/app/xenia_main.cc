@@ -548,6 +548,11 @@ bool EmulatorApp::OnInitialize() {
 
   config::SetupConfig(storage_root);
 
+  // Load game-specific config if a target is specified.
+  if (!cvars::target.empty()) {
+    config::LoadGameConfigForFile(cvars::target);
+  }
+
 #if XE_ARCH_AMD64 == 1
   amd64::InitFeatureFlags();
 #endif

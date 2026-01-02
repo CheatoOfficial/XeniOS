@@ -9,6 +9,9 @@
 
 #include "config.h"
 
+#include <algorithm>
+#include <sstream>
+
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/cvar.h"
@@ -19,6 +22,10 @@
 #include "xenia/base/system.h"
 #include "xenia/emulator.h"
 #include "xenia/ui/config_helpers.h"
+#include "xenia/vfs/iso_metadata.h"
+#include "xenia/vfs/stfs_metadata.h"
+#include "xenia/vfs/xex_metadata.h"
+#include "xenia/vfs/zar_metadata.h"
 
 toml::parse_result ParseFile(const std::filesystem::path& filename) {
   return toml::parse_file(xe::path_to_utf8(filename));
@@ -38,6 +45,10 @@ std::filesystem::path config_folder;
 std::filesystem::path config_path;
 std::string game_config_suffix = ".config.toml";
 std::function<void()> config_saved_callback;
+
+std::filesystem::path GetGameConfigPath(const std::string& title_id) {
+  return config_folder / "config" / (title_id + game_config_suffix);
+}
 
 bool sortCvar(cvar::IConfigVar* a, cvar::IConfigVar* b) {
   if (a->category() < b->category()) return true;
@@ -200,24 +211,66 @@ void ReadConfig(const std::filesystem::path& file_path,
   XELOGI("Loaded config: {}", file_path);
 }
 
-std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id) {
-  std::vector<std::string> args;
+uint32_t LoadGameConfigForFile(const std::filesystem::path& game_path) {
+  if (game_path.empty() || !std::filesystem::exists(game_path)) {
+    return 0;
+  }
 
-  const auto game_config_path =
-      config_folder / "config" / (std::string(title_id) + game_config_suffix);
+  std::string ext = game_path.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+
+  uint32_t title_id = 0;
+
+  if (ext == ".iso") {
+    if (auto metadata = xe::vfs::ExtractIsoMetadata(game_path)) {
+      title_id = metadata->title_id;
+    }
+  } else if (ext == ".zar") {
+    if (auto metadata = xe::vfs::ExtractZarMetadata(game_path)) {
+      title_id = metadata->title_id;
+    }
+  } else if (ext == ".xex") {
+    if (auto metadata = xe::vfs::ExtractXexMetadata(game_path)) {
+      title_id = metadata->title_id;
+    }
+  } else {
+    // Unknown extension - try all formats.
+    if (auto metadata = xe::vfs::ExtractStfsMetadata(game_path)) {
+      title_id = metadata->title_id;
+    } else if (auto metadata = xe::vfs::ExtractXexMetadata(game_path)) {
+      title_id = metadata->title_id;
+    } else if (auto metadata = xe::vfs::ExtractZarMetadata(game_path)) {
+      title_id = metadata->title_id;
+    } else if (auto metadata = xe::vfs::ExtractIsoMetadata(game_path)) {
+      title_id = metadata->title_id;
+    }
+  }
+
+  if (title_id == 0) {
+    XELOGI("Could not extract title_id from: {}", game_path.string());
+    return 0;
+  }
+
+  XELOGI("Extracted title_id {:08X} from: {}", title_id, game_path.string());
+
+  // Load the game config directly into cvars.
+  auto title_id_str = fmt::format("{:08X}", title_id);
+  const auto game_config_path = GetGameConfigPath(title_id_str);
 
   if (!std::filesystem::exists(game_config_path)) {
-    return args;
+    return title_id;
   }
 
   if (!cvar::ConfigVars) {
-    return args;
+    return title_id;
   }
 
   try {
     const auto config = ParseConfig(game_config_path);
+    XELOGI("Loading game config: {}", xe::path_to_utf8(game_config_path));
 
-    // Iterate through all registered cvars
+    size_t override_count = 0;
     for (auto& it : *cvar::ConfigVars) {
       auto config_var = static_cast<cvar::IConfigVar*>(it.second);
       toml::path config_key =
@@ -225,45 +278,27 @@ std::vector<std::string> LoadGameConfigAsArgs(const std::string_view title_id) {
 
       const auto config_key_node = config.at_path(config_key);
       if (config_key_node) {
-        // Save the current config value state so we can restore it after
-        // parsing This prevents game-specific overrides from contaminating the
-        // parent process's global config when SaveConfig() is called later
-        void* saved_state = config_var->SaveConfigValueState();
+        config_var->LoadGameConfigValue(config_key_node.node());
+        override_count++;
 
-        // Load the value into the cvar temporarily to validate and convert it
-        config_var->LoadConfigValue(config_key_node.node());
-
-        // Get the string representation from the cvar
-        std::string value = config_var->config_value();
-
-        // Restore the original config value state
-        config_var->RestoreConfigValueState(saved_state);
-
-        // Strip TOML quotes from string values (they're added by ToString for
-        // TOML format)
-        if (value.length() >= 2 && value.front() == '"' &&
-            value.back() == '"') {
-          value = value.substr(1, value.length() - 2);
-        }
-
-        args.push_back(fmt::format("--{}={}", config_var->name(), value));
+        std::stringstream ss;
+        ss << config_key_node;
+        XELOGI("  {} = {}", config_var->name(), ss.str());
       }
     }
 
-    XELOGI("Loaded per-game config for title {} with {} overrides", title_id,
-           args.size());
+    XELOGI("Applied {} game config override(s)", override_count);
   } catch (const std::exception& e) {
-    XELOGE("Failed to parse per-game config {}: {}",
+    XELOGE("Failed to parse game config {}: {}",
            xe::path_to_utf8(game_config_path), e.what());
   }
 
-  return args;
+  return title_id;
 }
 
 void SaveGameConfig(uint32_t title_id, const toml::table& config_table) {
   const auto game_config_path =
-      config_folder / "config" /
-      (fmt::format("{:08X}", title_id) + game_config_suffix);
+      GetGameConfigPath(fmt::format("{:08X}", title_id));
 
   try {
     xe::filesystem::CreateParentFolder(game_config_path);
@@ -371,8 +406,7 @@ void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,
 
 toml::table LoadGameConfig(uint32_t title_id) {
   const auto game_config_path =
-      config_folder / "config" /
-      (fmt::format("{:08X}", title_id) + game_config_suffix);
+      GetGameConfigPath(fmt::format("{:08X}", title_id));
 
   toml::table config_table;
   if (std::filesystem::exists(game_config_path)) {

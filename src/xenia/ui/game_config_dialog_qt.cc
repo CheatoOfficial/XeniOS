@@ -200,7 +200,6 @@ void GameConfigDialogQt::LoadConfigOverrides() {
   try {
     const auto config = config::LoadGameConfig(title_id_);
 
-    // Use the same logic as LoadGameConfigAsArgs
     if (!cvar::ConfigVars) {
       return;
     }

@@ -85,8 +85,7 @@ class EmulatorWindow {
   void OnEmulatorInitialized();
 
   void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file,
-                               bool for_launch_data = false,
-                               uint32_t title_id = 0);
+                               bool for_launch_data = false);
   xe::X_STATUS RunTitle(const std::filesystem::path& path_to_file);
   void UpdateTitle();
   bool HasRunningChildProcess();

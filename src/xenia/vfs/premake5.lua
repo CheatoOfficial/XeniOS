@@ -15,6 +15,7 @@ project("xenia-vfs")
   recursive_platform_files()
   removefiles({
     "vfs_dump.cc",
+    "xex_metadata_main.cc",
   })
 
 if enableMiscSubprojects then
@@ -30,6 +31,24 @@ if enableMiscSubprojects then
 
     files({
       "vfs_dump.cc",
+      project_root.."/src/xenia/base/console_app_main_"..platform_suffix..".cc",
+    })
+    resincludedirs({
+      project_root,
+    })
+
+  project("xenia-xex-metadata")
+    uuid("A1B2C3D4-E5F6-7890-ABCD-EF1234567890")
+    kind("ConsoleApp")
+    language("C++")
+    links({
+      "fmt",
+      "xenia-base",
+      "xenia-vfs",
+    })
+
+    files({
+      "xex_metadata_main.cc",
       project_root.."/src/xenia/base/console_app_main_"..platform_suffix..".cc",
     })
     resincludedirs({

@@ -1146,7 +1146,7 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
       return;
     }
 
-    emulator_window_->LaunchTitleInNewProcess(path, false, title_id);
+    emulator_window_->LaunchTitleInNewProcess(path);
   }
 }
 

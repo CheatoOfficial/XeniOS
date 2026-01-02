@@ -2411,8 +2411,7 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
 }
 
 void EmulatorWindow::LaunchTitleInNewProcess(
-    const std::filesystem::path& path_to_file, bool for_launch_data,
-    uint32_t title_id) {
+    const std::filesystem::path& path_to_file, bool for_launch_data) {
   // Get the path to the current executable
   std::filesystem::path executable_path = xe::filesystem::GetExecutablePath();
 
@@ -2422,7 +2421,6 @@ void EmulatorWindow::LaunchTitleInNewProcess(
 
   std::string launch_flags_arg;
   std::string launch_data_arg;
-  uint32_t launch_title_id = title_id;
 
   if (for_launch_data) {
     // Read launch_data.txt to get all launch parameters
@@ -2454,8 +2452,6 @@ void EmulatorWindow::LaunchTitleInNewProcess(
         launch_flags_arg = value;
       } else if (key == "launch_data") {
         launch_data_arg = value;
-      } else if (key == "title_id") {
-        launch_title_id = std::stoul(value, nullptr, 16);
       }
     }
 
@@ -2473,13 +2469,6 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   if (!actual_path.empty() && !std::filesystem::exists(actual_path)) {
     XELOGE("Cannot launch title - file not found: {}", actual_path.string());
     return;
-  }
-
-  // Load per-game config overrides if title_id is provided
-  std::vector<std::string> game_config_args;
-  if (launch_title_id != 0) {
-    auto title_id_str = fmt::format("{:08X}", launch_title_id);
-    game_config_args = config::LoadGameConfigAsArgs(title_id_str);
   }
 
 #if XE_PLATFORM_WIN32
@@ -2508,11 +2497,6 @@ void EmulatorWindow::LaunchTitleInNewProcess(
   // Add --launch_data if specified (for title-to-title launches)
   if (!launch_data_arg.empty()) {
     cmd_line += u" --launch_data=" + xe::to_utf16(launch_data_arg);
-  }
-
-  // Add per-game config overrides
-  for (const auto& arg : game_config_args) {
-    cmd_line += u" " + xe::to_utf16(arg);
   }
 
   // Add the target game file
@@ -2595,12 +2579,6 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     if (!launch_data_arg.empty()) {
       launch_data_arg_str = "--launch_data=" + launch_data_arg;
       argv.push_back(launch_data_arg_str.c_str());
-    }
-
-    // Add per-game config overrides
-    for (const auto& arg : game_config_args) {
-      argv.push_back(arg.c_str());
-      XELOGI("Adding per-game config arg: {}", arg);
     }
 
     // Add the target game file

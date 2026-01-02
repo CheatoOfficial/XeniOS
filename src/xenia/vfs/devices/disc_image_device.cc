@@ -13,13 +13,12 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/vfs/devices/disc_image_entry.h"
+#include "xenia/vfs/gdfx_util.h"
 
 namespace xe {
 namespace vfs {
 
 using namespace xe::literals;
-
-constexpr size_t kXESectorSize = 2_KiB;
 
 DiscImageDevice::DiscImageDevice(const std::string_view mount_path,
                                  const std::filesystem::path& host_path)
@@ -69,46 +68,23 @@ Entry* DiscImageDevice::ResolvePath(const std::string_view path) {
 }
 
 DiscImageDevice::Error DiscImageDevice::Verify(ParseState* state) {
-  // Find sector 32 of the game partition - try at a few points.
-  static constexpr size_t likely_offsets[] = {
-      0x00000000, 0x0000FB20, 0x00020600, 0x02080000, 0x0FD90000,
-  };
-  bool magic_found = false;
-  for (size_t n = 0; n < xe::countof(likely_offsets); n++) {
-    state->game_offset = likely_offsets[n];
-    if (VerifyMagic(state, state->game_offset + (32 * kXESectorSize))) {
-      magic_found = true;
-      break;
-    }
-  }
-  if (!magic_found) {
-    // File doesn't have the magic values - likely not a real GDFX source.
+  // Use shared GDFX utility to find the game partition.
+  auto partition = GdfxFindPartition(state->ptr, state->size);
+  if (!partition) {
     return Error::kErrorFileMismatch;
   }
 
-  // Read sector 32 to get FS state.
-  if (state->size < state->game_offset + (32 * kXESectorSize)) {
-    return Error::kErrorReadError;
-  }
-  uint8_t* fs_ptr = state->ptr + state->game_offset + (32 * kXESectorSize);
-  state->root_sector = xe::load<uint32_t>(fs_ptr + 20);
-  state->root_size = xe::load<uint32_t>(fs_ptr + 24);
+  state->game_offset = partition->game_offset;
+  state->root_sector = partition->root_sector;
+  state->root_size = partition->root_size;
   state->root_offset =
-      state->game_offset + (state->root_sector * kXESectorSize);
-  if (state->root_size < 13 || state->root_size > 32_MiB) {
-    return Error::kErrorDamagedFile;
-  }
+      state->game_offset + (state->root_sector * kGdfxSectorSize);
 
   return Error::kSuccess;
 }
 
 bool DiscImageDevice::VerifyMagic(ParseState* state, size_t offset) {
-  if (offset >= state->size) {
-    return false;
-  }
-
-  // Simple check to see if the given offset contains the magic value.
-  return std::memcmp(state->ptr + offset, "MICROSOFT*XBOX*MEDIA", 20) == 0;
+  return GdfxVerifyMagic(state->ptr, state->size, offset);
 }
 
 DiscImageDevice::Error DiscImageDevice::ReadAllEntries(
@@ -166,20 +142,20 @@ bool DiscImageDevice::ReadEntry(ParseState* state, const uint8_t* buffer,
     entry->data_size_ = 0;
     if (length) {
       // Not a leaf - read in children.
-      if (state->size < state->game_offset + (sector * kXESectorSize)) {
+      if (state->size < state->game_offset + (sector * kGdfxSectorSize)) {
         // Out of bounds read.
         return false;
       }
       // Read child list.
       uint8_t* folder_ptr =
-          state->ptr + state->game_offset + (sector * kXESectorSize);
+          state->ptr + state->game_offset + (sector * kGdfxSectorSize);
       if (!ReadEntry(state, folder_ptr, 0, entry.get())) {
         return false;
       }
     }
   } else {
     // File.
-    entry->data_offset_ = state->game_offset + (sector * kXESectorSize);
+    entry->data_offset_ = state->game_offset + (sector * kGdfxSectorSize);
     entry->data_size_ = length;
   }
 
