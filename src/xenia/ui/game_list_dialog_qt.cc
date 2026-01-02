@@ -1110,10 +1110,6 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
 void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
                                   uint32_t title_id) {
   if (emulator_window_) {
-    if (emulator_window_->HasRunningChildProcess()) {
-      return;
-    }
-
     // Check if the file exists
     if (!std::filesystem::exists(path)) {
       // Show warning popup
@@ -1340,36 +1336,20 @@ void GameListDialogQt::OnSelectionChanged() {
 }
 
 void GameListDialogQt::UpdatePlayButtonState() {
-  bool game_is_running =
-      emulator_window_ && emulator_window_->HasRunningChildProcess();
+  play_button_->setIcon(QIcon(":/xenia/play-icon.png"));
+  play_label_->setText("Play");
+  play_button_->setToolTip("Launch selected game");
+  bool is_enabled = !selected_game_path_.empty();
+  play_button_->setEnabled(is_enabled);
 
-  // Update button appearance based on game state
-  if (game_is_running) {
-    play_button_->setIcon(QIcon(":/xenia/pause-icon.png"));
-    play_label_->setText("Pause");
-    play_button_->setToolTip("Game is running");
-    play_button_->setEnabled(false);
-    // Greyed out when game is running
-    play_opacity_->setOpacity(0.4);
-    play_label_opacity_->setOpacity(0.4);
+  // Greyed out when disabled, normal when enabled
+  if (is_enabled) {
+    play_opacity_->setOpacity(1.0);  // Normal appearance
+    play_label_opacity_->setOpacity(1.0);
   } else {
-    play_button_->setIcon(QIcon(":/xenia/play-icon.png"));
-    play_label_->setText("Play");
-    play_button_->setToolTip("Launch selected game");
-    bool is_enabled = !selected_game_path_.empty();
-    play_button_->setEnabled(is_enabled);
-
-    // Greyed out when disabled, normal when enabled
-    if (is_enabled) {
-      play_opacity_->setOpacity(1.0);  // Normal appearance
-      play_label_opacity_->setOpacity(1.0);
-    } else {
-      play_opacity_->setOpacity(0.4);  // Greyed out
-      play_label_opacity_->setOpacity(0.4);
-    }
+    play_opacity_->setOpacity(0.4);  // Greyed out
+    play_label_opacity_->setOpacity(0.4);
   }
-
-  last_game_running_state_ = game_is_running;
 }
 
 void GameListDialogQt::UpdateProfileButtonState() {

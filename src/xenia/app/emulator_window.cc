@@ -120,6 +120,11 @@ DECLARE_string(readback_resolve);
 
 DECLARE_bool(readback_memexport);
 
+DEFINE_transient_bool(return_to_ui, false,
+                      "Return to UI process when game exits. Set automatically "
+                      "when launching from UI.",
+                      "General");
+
 DEFINE_uint32(window_size_ui_x, 950, "UI window width in pixels.", "Display");
 DEFINE_uint32(window_size_ui_y, 750, "UI window height in pixels.", "Display");
 
@@ -292,38 +297,6 @@ std::unique_ptr<EmulatorWindow> EmulatorWindow::Create(
 }
 
 EmulatorWindow::~EmulatorWindow() {
-  // Kill all child processes when the parent window is destroyed
-#if XE_PLATFORM_WIN32
-  for (HANDLE process : child_processes_) {
-    DWORD exit_code;
-    // Check if process is still running
-    if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
-      // Terminate the process
-      TerminateProcess(process, 0);
-      // Wait briefly for it to exit
-      WaitForSingleObject(process, 1000);
-    }
-    // Close the handle regardless
-    CloseHandle(process);
-  }
-#else
-  for (pid_t pid : child_processes_) {
-    // Check if process still exists before trying to kill it
-    if (kill(pid, 0) == 0) {
-      // Process exists, send SIGTERM to gracefully terminate
-      kill(pid, SIGTERM);
-      // Give it a moment to exit gracefully
-      usleep(100000);  // 100ms
-      // If still running, force kill
-      kill(pid, SIGKILL);
-    }
-    // Try to reap it if it's a zombie
-    int status;
-    waitpid(pid, &status, WNOHANG);
-  }
-#endif
-  child_processes_.clear();
-
   // Notify the ImGui drawer that the immediate drawer is being destroyed.
   ShutdownGraphicsSystemPresenterPainting();
 }
@@ -382,9 +355,6 @@ void EmulatorWindow::OnEmulatorInitialized() {
         central_widget->layout()->addWidget(game_list_dialog_qt_);
       }
     }
-
-    // Start periodic child process checking for UI process
-    ScheduleChildProcessCheck();
 
     emulator_initialized_ = true;
     window_->SetMainMenuEnabled(true);
@@ -447,6 +417,10 @@ void EmulatorWindow::OnEmulatorInitialized() {
     }
     // Append to log file instead of overwriting
     cmd_line += u" --log_append=true";
+    // Preserve return_to_ui through the title-to-title chain
+    if (cvars::return_to_ui) {
+      cmd_line += u" --return_to_ui=true";
+    }
     if (!launch_module.empty()) {
       cmd_line += u" --launch_module=\"" + xe::to_utf16(launch_module) + u"\"";
     }
@@ -501,6 +475,11 @@ void EmulatorWindow::OnEmulatorInitialized() {
       // Append to log file instead of overwriting
       arg_storage.push_back("--log_append=true");
       argv.push_back(arg_storage.back().c_str());
+      // Preserve return_to_ui through the title-to-title chain
+      if (cvars::return_to_ui) {
+        arg_storage.push_back("--return_to_ui=true");
+        argv.push_back(arg_storage.back().c_str());
+      }
       if (!launch_module.empty()) {
         arg_storage.push_back("--launch_module=" + launch_module);
         argv.push_back(arg_storage.back().c_str());
@@ -542,51 +521,80 @@ void EmulatorWindow::OnEmulatorInitialized() {
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
-  // Game process: exit immediately without cleanup to avoid Vulkan hangs
+  // Game process: spawn UI if return_to_ui is set, then exit
   if (emulator_window_.is_game_process_) {
+    if (cvars::return_to_ui) {
+      // Spawn UI process (xenia with no target)
+      std::filesystem::path executable_path =
+          xe::filesystem::GetExecutablePath();
+
+#if XE_PLATFORM_WIN32
+      auto exe_path_u16 = xe::path_to_utf16(executable_path);
+      std::u16string cmd_line = u"\"" + exe_path_u16 + u"\"";
+
+      if (!cvars::config.empty()) {
+        cmd_line += u" --config=\"" + xe::to_utf16(cvars::config) + u"\"";
+      }
+
+      STARTUPINFOW si = {};
+      si.cb = sizeof(si);
+      PROCESS_INFORMATION pi = {};
+
+      if (CreateProcessW(nullptr,
+                         const_cast<wchar_t*>(reinterpret_cast<const wchar_t*>(
+                             cmd_line.c_str())),
+                         nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr,
+                         nullptr, &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        XELOGI("Spawned UI process");
+      } else {
+        XELOGE("Failed to spawn UI process: {}", GetLastError());
+      }
+#else
+      pid_t pid = fork();
+      if (pid == 0) {
+        // Child process - become UI
+        std::vector<const char*> argv;
+        std::string gamemode_cmd;
+
+        if (cvars::use_gamemode) {
+          gamemode_cmd = "gamemoderun";
+          argv.push_back(gamemode_cmd.c_str());
+        }
+        argv.push_back(executable_path.c_str());
+
+        std::string config_arg;
+        if (!cvars::config.empty()) {
+          config_arg = "--config=" + cvars::config;
+          argv.push_back(config_arg.c_str());
+        }
+        argv.push_back(nullptr);
+
+        if (cvars::use_gamemode) {
+          execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
+        } else {
+          execv(executable_path.c_str(), const_cast<char**>(argv.data()));
+        }
+        std::exit(1);
+      } else if (pid > 0) {
+        XELOGI("Spawned UI process");
+      } else {
+        XELOGE("Failed to fork UI process");
+      }
+#endif
+    }
+
     xe::FlushLog();
     std::quick_exit(0);
   }
 
-  // UI process: kill all child processes when the parent window is closing
-#if XE_PLATFORM_WIN32
-  for (HANDLE process : emulator_window_.child_processes_) {
-    DWORD exit_code;
-    if (GetExitCodeProcess(process, &exit_code)) {
-      if (exit_code == STILL_ACTIVE) {
-        XELOGI("Terminating child process");
-        TerminateProcess(process, 0);
-        // Don't wait, just close handle
-      }
-    }
-    CloseHandle(process);
-  }
-#else
-  for (pid_t pid : emulator_window_.child_processes_) {
-    // Check if process is still alive
-    if (kill(pid, 0) == 0) {
-      XELOGI("Terminating child process {}", pid);
-      // Send SIGKILL directly for immediate termination
-      kill(pid, SIGKILL);
-    }
-  }
-#endif
-
-  emulator_window_.child_processes_.clear();
+  // UI process: just quit
   emulator_window_.app_context_.QuitFromUIThread();
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnFileDrop(ui::FileDropEvent& e) {
   emulator_window_.FileDrop(e.filename());
-}
-
-void EmulatorWindow::EmulatorWindowListener::OnGotFocus(ui::UISetupEvent& e) {
-  // Check child process status when window regains focus
-  // This handles the case where a child process exits while our window doesn't
-  // have focus
-  if (!emulator_window_.is_game_process_) {
-    emulator_window_.CheckChildProcessStatus();
-  }
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnResize(ui::UISetupEvent& e) {
@@ -706,132 +714,20 @@ bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);
 
-  // Set up callback to notify child processes when config is saved
-  if (!is_game_process_) {
-    config::SetConfigSavedCallback(
-        [this]() { SendCommandToChild("reload_config"); });
-  }
-
-#if XE_PLATFORM_LINUX
-  // If this is a game process, create a named pipe for IPC
-  if (is_game_process_) {
-    pid_t pid = getpid();
-    std::string pipe_path = fmt::format("/tmp/xenia_ipc_{}", pid);
-
-    // Remove any existing pipe
-    unlink(pipe_path.c_str());
-
-    // Create the named pipe
-    if (mkfifo(pipe_path.c_str(), 0666) == 0) {
-      XELOGI("Created IPC pipe at: {}", pipe_path);
-
-      // Start a thread to listen for commands
-      std::thread ipc_thread([this, pipe_path]() {
-        while (!emulator_initialized_) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        XELOGI("Starting IPC listener thread");
-        char buffer[256];
-        while (true) {
-          int fd = open(pipe_path.c_str(), O_RDONLY);
-          if (fd == -1) {
-            XELOGW("Failed to open pipe for reading: {}", strerror(errno));
-            break;
-          }
-
-          ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
-          if (bytes_read > 0) {
-            buffer[bytes_read] = '\0';
-            std::string command(buffer);
-            // Remove trailing newline
-            if (!command.empty() && command.back() == '\n') {
-              command.pop_back();
-            }
-
-            XELOGI("Received IPC command: '{}'", command);
-
-            // Execute command directly - if we get crashes, we'll need to use
-            // UI thread
-            if (command == "toggle_fullscreen") {
-              ToggleFullscreen();
-            } else if (command == "take_screenshot") {
-              TakeScreenshot();
-            } else if (command == "toggle_profiler") {
-              Profiler::ToggleDisplay();
-            } else if (command == "gpu_trace_frame") {
-              GpuTraceFrame();
-            } else if (command == "gpu_clear_caches") {
-              GpuClearCaches();
-            } else if (command == "toggle_display_config") {
-              ToggleDisplayConfigDialog();
-            } else if (command == "cpu_time_scalar_reset") {
-              CpuTimeScalarReset();
-            } else if (command == "cpu_time_scalar_half") {
-              CpuTimeScalarSetHalf();
-            } else if (command == "cpu_time_scalar_double") {
-              CpuTimeScalarSetDouble();
-            } else if (command == "break_debugger") {
-              CpuBreakIntoDebugger();
-            } else if (command == "reload_config") {
-              XELOGI("Reloading config from parent process request");
-              config::ReloadConfig();
-              // Sync the profile login state with the reloaded config
-              if (emulator_ && emulator_->kernel_state() &&
-                  emulator_->kernel_state()->xam_state() &&
-                  emulator_->kernel_state()->xam_state()->profile_manager()) {
-                emulator_->kernel_state()
-                    ->xam_state()
-                    ->profile_manager()
-                    ->SyncProfilesWithConfig();
-                XELOGI("Profile login state synchronized with config");
-              }
-            } else {
-              XELOGW("Unknown IPC command: {}", command);
-            }
-          }
-          close(fd);
-
-          // Check if we should exit
-          if (bytes_read <= 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          }
-        }
-
-        // Clean up pipe on exit
-        unlink(pipe_path.c_str());
-        XELOGI("IPC listener thread exiting");
-      });
-      ipc_thread.detach();
-    } else {
-      XELOGW("Failed to create IPC pipe: {}", strerror(errno));
-    }
-  }
-#endif
-
   // Main menu - only create for UI process, not game process
   if (!is_game_process_) {
     // UI process - create the menu bar
     // FIXME: This code is really messy.
     auto main_menu = MenuItem::Create(MenuItem::Type::kNormal);
 
-    // Create File menu with a callback that checks child status when clicked
-    auto file_menu =
-        MenuItem::Create(MenuItem::Type::kPopup, "&File", "", [this]() {
-          // Check child process status when File menu is clicked
-          CheckChildProcessStatus();
-        });
+    auto file_menu = MenuItem::Create(MenuItem::Type::kPopup, "&File");
     file_menu_ = file_menu.get();
     auto recent_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Open Recent");
     FillRecentlyLaunchedTitlesMenu(recent_menu.get());
     {
-      auto open_item = MenuItem::Create(MenuItem::Type::kString, "&Open...",
-                                        "Ctrl+O", [this]() {
-                                          // Check child process status when
-                                          // menu item is clicked
-                                          CheckChildProcessStatus();
-                                          FileOpen();
-                                        });
+      auto open_item =
+          MenuItem::Create(MenuItem::Type::kString, "&Open...", "Ctrl+O",
+                           std::bind(&EmulatorWindow::FileOpen, this));
       file_open_item_ = open_item.get();
       file_menu->AddChild(std::move(open_item));
       file_open_recent_menu_ = recent_menu.get();
@@ -1141,38 +1037,6 @@ void EmulatorWindow::UpdateFsrMaxUpsamplingPassesCvar(uint32_t value) {
 void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
   if (!emulator_initialized_) {
     return;
-  }
-
-  // If we're the UI process and have a child process running, forward certain
-  // keys
-  if (!is_game_process_ && HasRunningChildProcess()) {
-    // Forward keys that should be handled by the game process
-    switch (e.virtual_key()) {
-      case ui::VirtualKey::kF11:
-      case ui::VirtualKey::kF12:
-      case ui::VirtualKey::kMultiply:  // Numpad *
-      case ui::VirtualKey::kSubtract:  // Numpad -
-      case ui::VirtualKey::kAdd:       // Numpad +
-      case ui::VirtualKey::kF3:
-      case ui::VirtualKey::kF4:
-      case ui::VirtualKey::kF5:
-      case ui::VirtualKey::kF6:
-        SendKeyToChild(e.virtual_key(), e.is_ctrl_pressed(), e.is_alt_pressed(),
-                       e.is_shift_pressed());
-        e.set_handled(true);
-        return;
-      case ui::VirtualKey::kPause:
-        if (e.is_ctrl_pressed() && e.is_shift_pressed()) {
-          SendKeyToChild(e.virtual_key(), e.is_ctrl_pressed(),
-                         e.is_alt_pressed(), e.is_shift_pressed());
-          e.set_handled(true);
-          return;
-        }
-        break;
-      default:
-        // Let other keys fall through to be handled locally
-        break;
-    }
   }
 
   switch (e.virtual_key()) {
@@ -2527,6 +2391,9 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     cmd_line += u" --config=\"" + xe::to_utf16(cvars::config) + u"\"";
   }
 
+  // Tell game process to return to UI when it exits
+  cmd_line += u" --return_to_ui=true";
+
   // Add the target game file
   if (!path_to_file.empty()) {
     auto game_path_u16 = xe::path_to_utf16(path_to_file);
@@ -2552,10 +2419,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     return;
   }
 
-  // Store the process handle so we can terminate it later if needed
-  child_processes_.push_back(pi.hProcess);
-
-  // Close thread handle as we don't need it
+  // Close handles - we don't track child processes anymore
+  CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 #else
   // On Linux/Unix, use fork/exec for proper process creation
@@ -2588,6 +2453,9 @@ void EmulatorWindow::LaunchTitleInNewProcess(
       argv.push_back(config_arg.c_str());
     }
 
+    // Tell game process to return to UI when it exits
+    argv.push_back("--return_to_ui=true");
+
     // Add the target game file
     std::string target_arg;
     if (!path_to_file.empty()) {
@@ -2613,261 +2481,12 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     XELOGE("Failed to fork process");
     return;
   }
-  // Parent process continues - store child PID
-  child_processes_.push_back(pid);
 #endif
 
   XELOGI("Launched title in new process: {}", path_to_file.string());
 
-  // Start periodic checking now that we have a child
-  ScheduleChildProcessCheck();
-}
-
-bool EmulatorWindow::HasRunningChildProcess() {
-  // Simple check if any child processes are still alive
-#if XE_PLATFORM_WIN32
-  for (const auto& process : child_processes_) {
-    DWORD exit_code;
-    if (GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE) {
-      return true;
-    }
-  }
-#else
-  // Clean up any zombies first
-  for (auto it = child_processes_.begin(); it != child_processes_.end();) {
-    int status;
-    pid_t result = waitpid(*it, &status, WNOHANG);
-    if (result > 0) {
-      // Process has exited, remove from list
-      XELOGI("Reaped child process {}", *it);
-      it = child_processes_.erase(it);
-    } else if (result < 0 && errno == ECHILD) {
-      // Process doesn't exist anymore
-      XELOGI("Child process {} no longer exists", *it);
-      it = child_processes_.erase(it);
-    } else {
-      // Process still running
-      ++it;
-    }
-  }
-
-  return !child_processes_.empty();
-#endif
-
-  return false;
-}
-
-void EmulatorWindow::CheckChildProcessStatus() {
-  static bool had_child_last_check = false;
-  bool has_child_now = HasRunningChildProcess();
-
-  // Detect transition from having child to no child
-  if (had_child_last_check && !has_child_now) {
-    XELOGI("Child process exited, reloading config and profile state");
-
-    // Reload config from disk to pick up any profile login changes made by
-    // child process
-    config::ReloadConfig();
-    XELOGI("Config reloaded from disk");
-
-    // Sync profile login state with the reloaded config
-    if (emulator_ && emulator_->kernel_state() &&
-        emulator_->kernel_state()->xam_state()) {
-      auto profile_manager =
-          emulator_->kernel_state()->xam_state()->profile_manager();
-      if (profile_manager) {
-        // Sync profiles with config: logout current profiles and login based on
-        // config cvars
-        profile_manager->SyncProfilesWithConfig();
-        XELOGI("Profile login state synced with config");
-
-        // Remount VFS for all newly logged-in profiles
-        for (uint8_t i = 0; i < 4; i++) {
-          auto profile = profile_manager->GetProfile(i);
-          if (profile) {
-            uint64_t xuid = profile->xuid();
-            XELOGI("Remounting VFS for profile {:016X}", xuid);
-            profile_manager->DismountProfile(xuid);
-            profile_manager->MountProfile(xuid);
-          }
-        }
-
-        // Now reload GPDs from the freshly mounted VFS
-        profile_manager->ReloadProfileGpds();
-        XELOGI("Profile VFS remounted and GPDs reloaded");
-      }
-    }
-
-    LoadRecentlyLaunchedTitles();
-    XELOGI("Recent titles reloaded, count: {}",
-           recently_launched_titles_.size());
-
-    // Reload the game list dialog if it's open
-    if (game_list_dialog_qt_) {
-      game_list_dialog_qt_->LoadGameList();
-      game_list_dialog_qt_->UpdateProfileButtonState();
-      XELOGI("Game list dialog refreshed");
-    }
-  }
-
-  had_child_last_check = has_child_now;
-
-  // Update menu items based on whether a child process is running
-  if (file_open_item_) {
-    file_open_item_->SetEnabled(!has_child_now);
-  }
-  if (file_open_recent_menu_) {
-    file_open_recent_menu_->SetEnabled(!has_child_now);
-  }
-
-  // Keep checking periodically if this is the UI process
-  if (!is_game_process_) {
-    ScheduleChildProcessCheck();
-  }
-}
-
-void EmulatorWindow::ScheduleChildProcessCheck() {
-  // Schedule check to run in 500ms on a background thread
-  std::thread([this]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    app_context_.CallInUIThread([this]() { CheckChildProcessStatus(); });
-  }).detach();
-}
-
-void EmulatorWindow::SendCommandToChild(const std::string& command) {
-#if XE_PLATFORM_LINUX
-  if (!child_processes_.empty()) {
-    // Use a named pipe to send commands to child process
-    std::string pipe_path =
-        fmt::format("/tmp/xenia_ipc_{}", child_processes_[0]);
-
-    int fd = open(pipe_path.c_str(), O_WRONLY | O_NONBLOCK);
-    if (fd != -1) {
-      std::string message = command + "\n";
-      ssize_t written = write(fd, message.c_str(), message.length());
-      close(fd);
-
-      if (written > 0) {
-        XELOGI("Sent command '{}' to child process via pipe", command);
-      } else {
-        XELOGW("Failed to write command to pipe");
-      }
-    } else {
-      XELOGW("Could not open pipe {} for writing: {}", pipe_path,
-             strerror(errno));
-    }
-  }
-#elif XE_PLATFORM_WIN32
-  // Windows implementation could use named pipes or other IPC
-  XELOGW("Command forwarding not yet implemented for Windows");
-#endif
-}
-
-void EmulatorWindow::SendKeyToChild(ui::VirtualKey key, bool ctrl, bool alt,
-                                    bool shift) {
-#if XE_PLATFORM_LINUX
-  // Convert key combination to command string
-  std::string command;
-  switch (key) {
-    case ui::VirtualKey::kF3:
-      command = "toggle_profiler";
-      break;
-    case ui::VirtualKey::kF4:
-      command = "gpu_trace_frame";
-      break;
-    case ui::VirtualKey::kF5:
-      command = "gpu_clear_caches";
-      break;
-    case ui::VirtualKey::kF6:
-      command = "toggle_display_config";
-      break;
-    case ui::VirtualKey::kF11:
-      command = "toggle_fullscreen";
-      break;
-    case ui::VirtualKey::kF12:
-      command = "take_screenshot";
-      break;
-    case ui::VirtualKey::kMultiply:
-      command = "cpu_time_scalar_reset";
-      break;
-    case ui::VirtualKey::kSubtract:
-      command = "cpu_time_scalar_half";
-      break;
-    case ui::VirtualKey::kAdd:
-      command = "cpu_time_scalar_double";
-      break;
-    case ui::VirtualKey::kPause:
-      if (ctrl && shift) command = "break_debugger";
-      break;
-    default:
-      XELOGW("Unknown key combination for command forwarding");
-      return;
-  }
-
-  if (!command.empty()) {
-    SendCommandToChild(command);
-  }
-#endif
-
-#if XE_PLATFORM_WIN32
-  // Windows implementation
-  if (!child_processes_.empty()) {
-    // Get the process ID from our first child
-    DWORD pid = GetProcessId(child_processes_[0]);
-
-    // Find windows belonging to this process
-    struct EnumData {
-      DWORD pid;
-      HWND hwnd;
-    } data = {pid, nullptr};
-
-    EnumWindows(
-        [](HWND hwnd, LPARAM lParam) -> BOOL {
-          auto* data = reinterpret_cast<EnumData*>(lParam);
-          DWORD window_pid;
-          GetWindowThreadProcessId(hwnd, &window_pid);
-          if (window_pid == data->pid && IsWindowVisible(hwnd)) {
-            data->hwnd = hwnd;
-            return FALSE;  // Stop enumeration
-          }
-          return TRUE;  // Continue enumeration
-        },
-        reinterpret_cast<LPARAM>(&data));
-
-    if (data.hwnd) {
-      XELOGI("Found child window handle: {}",
-             reinterpret_cast<void*>(data.hwnd));
-
-      // Send the key events
-      if (ctrl) PostMessage(data.hwnd, WM_KEYDOWN, VK_CONTROL, 0);
-      if (alt) PostMessage(data.hwnd, WM_KEYDOWN, VK_MENU, 0);
-      if (shift) PostMessage(data.hwnd, WM_KEYDOWN, VK_SHIFT, 0);
-
-      // Convert VirtualKey to Windows VK code (they should mostly match)
-      WPARAM vk = static_cast<WPARAM>(key);
-      PostMessage(data.hwnd, WM_KEYDOWN, vk, 0);
-      PostMessage(data.hwnd, WM_KEYUP, vk, 0);
-
-      if (shift) PostMessage(data.hwnd, WM_KEYUP, VK_SHIFT, 0);
-      if (alt) PostMessage(data.hwnd, WM_KEYUP, VK_MENU, 0);
-      if (ctrl) PostMessage(data.hwnd, WM_KEYUP, VK_CONTROL, 0);
-    } else {
-      XELOGW("Could not find window for child process");
-    }
-  }
-#endif
-}
-
-void EmulatorWindow::ExecuteOrForward(std::function<void()> local_action,
-                                      ui::VirtualKey key, bool ctrl, bool alt,
-                                      bool shift) {
-  if (HasRunningChildProcess()) {
-    XELOGI("Has child process - forwarding key instead of executing action");
-    SendKeyToChild(key, ctrl, alt, shift);
-  } else {
-    XELOGI("No child process - executing action locally");
-    local_action();
-  }
+  // Exit UI process - game process will spawn new UI when it exits
+  std::quick_exit(0);
 }
 
 xe::X_STATUS EmulatorWindow::RunTitle(
@@ -2975,9 +2594,6 @@ void EmulatorWindow::FillRecentlyLaunchedTitlesMenu(
     recent_menu->AddChild(MenuItem::Create(MenuItem::Type::kString, item_text,
                                            hotkey,
                                            [this, path = entry.path_to_file]() {
-                                             // Check child process status when
-                                             // menu item is clicked
-                                             CheckChildProcessStatus();
                                              LaunchTitleInNewProcess(path);
                                            }));
   }

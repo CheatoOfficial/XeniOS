@@ -87,17 +87,6 @@ class EmulatorWindow {
   void LaunchTitleInNewProcess(const std::filesystem::path& path_to_file);
   xe::X_STATUS RunTitle(const std::filesystem::path& path_to_file);
   void UpdateTitle();
-  bool HasRunningChildProcess();
-  void CheckChildProcessStatus();
-  void ScheduleChildProcessCheck();
-
-  // Keyboard forwarding for child processes
-  void SendKeyToChild(ui::VirtualKey key, bool ctrl = false, bool alt = false,
-                      bool shift = false);
-  void SendCommandToChild(const std::string& command);
-  void ExecuteOrForward(std::function<void()> local_action, ui::VirtualKey key,
-                        bool ctrl = false, bool alt = false,
-                        bool shift = false);
 
   void AddRecentlyLaunchedTitle(std::filesystem::path path_to_file,
                                 std::string title_name);
@@ -194,7 +183,6 @@ class EmulatorWindow {
 
     void OnClosing(ui::UIEvent& e) override;
     void OnFileDrop(ui::FileDropEvent& e) override;
-    void OnGotFocus(ui::UISetupEvent& e) override;
     void OnResize(ui::UISetupEvent& e) override;
 
     void OnKeyDown(ui::KeyEvent& e) override;
@@ -273,11 +261,6 @@ class EmulatorWindow {
   uint32_t pending_resize_width_ = 0;
   uint32_t pending_resize_height_ = 0;
 
-#if XE_PLATFORM_LINUX
-  std::vector<pid_t> child_processes_;
-#elif XE_PLATFORM_WIN32
-  std::vector<HANDLE> child_processes_;
-#endif
   std::unique_ptr<ui::Window> window_;
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
   // Creation may fail, in this case immediate drawer UI must not be drawn.

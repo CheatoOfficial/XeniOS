@@ -117,7 +117,6 @@ class GameListDialogQt : public QWidget {
 
   int last_logged_in_count_ = 0;
   bool has_logged_in_profile_ = false;
-  bool last_game_running_state_ = false;
   std::filesystem::path selected_game_path_;
   uint32_t selected_game_title_id_ = 0;
   uint64_t current_profile_xuid_ = 0;
