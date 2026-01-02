@@ -34,6 +34,7 @@
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
 #include "xenia/ui/config_dialog_qt.h"
+#include "xenia/ui/confirm_dialog_widget_qt.h"
 #include "xenia/ui/context_menu_widget_qt.h"
 #include "xenia/ui/controller_hotkeys_dialog_qt.h"
 #include "xenia/ui/game_list_dialog_qt.h"
@@ -1179,6 +1180,21 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
 
     context_menu->AddAction("XMP Audio Player",
                             [this]() { ToggleXMPConfigDialog(); });
+
+    context_menu->AddSeparator();
+
+    context_menu->AddAction("Quit Game", [this, qt_window, input_sys]() {
+      auto* confirm = new ConfirmDialogWidgetQt(
+          qt_window->qwindow(), input_sys, "Quit Game",
+          "Are you sure you want to quit?\n\nAny unsaved progress will be "
+          "lost.",
+          [this](bool confirmed) {
+            if (confirmed) {
+              window_->RequestClose();
+            }
+          });
+      confirm->ShowCentered();
+    });
 
     // Show menu at cursor position or center of window
     QPoint global_pos;
