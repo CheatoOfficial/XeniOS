@@ -422,6 +422,10 @@ void EmulatorWindow::OnEmulatorInitialized() {
     if (cvars::return_to_ui) {
       cmd_line += u" --return_to_ui=true";
     }
+    // Preserve fullscreen state
+    if (window_->IsFullscreen()) {
+      cmd_line += u" --fullscreen=true";
+    }
     if (!launch_module.empty()) {
       cmd_line += u" --launch_module=\"" + xe::to_utf16(launch_module) + u"\"";
     }
@@ -479,6 +483,11 @@ void EmulatorWindow::OnEmulatorInitialized() {
       // Preserve return_to_ui through the title-to-title chain
       if (cvars::return_to_ui) {
         arg_storage.push_back("--return_to_ui=true");
+        argv.push_back(arg_storage.back().c_str());
+      }
+      // Preserve fullscreen state
+      if (window_->IsFullscreen()) {
+        arg_storage.push_back("--fullscreen=true");
         argv.push_back(arg_storage.back().c_str());
       }
       if (!launch_module.empty()) {
@@ -662,36 +671,6 @@ void EmulatorWindow::SaveWindowSizeConfig() {
       config::SaveConfig();
     }
   }
-}
-
-void EmulatorWindow::SaveFullscreenConfig(bool fullscreen) {
-  if (!is_game_process_) {
-    return;  // Only save for game process
-  }
-
-  if (!emulator_ || !emulator_->is_title_open()) {
-    return;  // No title loaded yet
-  }
-
-  uint32_t title_id = emulator_->title_id();
-  if (title_id == 0) {
-    return;
-  }
-
-  // Load existing config, update fullscreen value, save
-  toml::table config_table = config::LoadGameConfig(title_id);
-
-  // Ensure Display category exists
-  if (!config_table.contains("Display")) {
-    config_table.insert("Display", toml::table{});
-  }
-
-  auto* display_table = config_table["Display"].as_table();
-  if (display_table) {
-    display_table->insert_or_assign("fullscreen", fullscreen);
-  }
-
-  config::SaveGameConfig(title_id, config_table);
 }
 
 void EmulatorWindow::EmulatorWindowListener::OnKeyDown(ui::KeyEvent& e) {
@@ -1670,7 +1649,6 @@ void EmulatorWindow::SetFullscreen(bool fullscreen) {
     return;
   }
   window_->SetFullscreen(fullscreen);
-  SaveFullscreenConfig(fullscreen);
 }
 
 void EmulatorWindow::ToggleFullscreen() {
