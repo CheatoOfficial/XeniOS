@@ -258,6 +258,10 @@ bool QtWindow::OpenImpl() {
     qwindow_->show();
   }
 
+  // Bring window to foreground
+  qwindow_->activateWindow();
+  qwindow_->raise();
+
   // Ensure native window is created by accessing winId()
   // This must be done after show() so Qt creates the platform window
   drawing_widget_->winId();

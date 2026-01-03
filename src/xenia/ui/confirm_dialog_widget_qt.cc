@@ -21,40 +21,28 @@ namespace app {
 ConfirmDialogWidgetQt::ConfirmDialogWidgetQt(QWidget* parent,
                                              hid::InputSystem* input_system,
                                              const QString& title,
-                                             const QString& message,
-                                             std::function<void(bool)> callback)
-    : QWidget(parent),
-      callback_(callback),
+                                             const QString& message)
+    : QDialog(parent),
       input_system_(input_system),
       poll_timer_(nullptr),
       focused_index_(0),  // Start with "No" focused (safer default)
       prev_buttons_(0) {
-  setAttribute(Qt::WA_DeleteOnClose);
-  setAutoFillBackground(true);
-  setAttribute(Qt::WA_StyledBackground, true);
+  setWindowTitle(title);
+  setModal(true);
+  setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
   // Match theme from postprocessing dialog
   setStyleSheet(
-      "background-color: rgb(30, 30, 30); "
-      "border: 1px solid rgba(100, 100, 100, 180);");
+      "QDialog { background-color: rgb(30, 30, 30); }"
+      "QLabel { color: #d0d0d0; background: transparent; }");
 
   auto* main_layout = new QVBoxLayout(this);
   main_layout->setContentsMargins(24, 20, 24, 20);
   main_layout->setSpacing(16);
 
-  // Title
-  auto* title_label = new QLabel(title, this);
-  title_label->setStyleSheet(
-      "color: #f0f0f0; font-size: 15px; font-weight: bold; "
-      "background: transparent; border: none;");
-  title_label->setAlignment(Qt::AlignCenter);
-  main_layout->addWidget(title_label);
-
   // Message
   auto* message_label = new QLabel(message, this);
-  message_label->setStyleSheet(
-      "color: #d0d0d0; font-size: 12px; "
-      "background: transparent; border: none;");
+  message_label->setStyleSheet("color: #d0d0d0; font-size: 12px;");
   message_label->setAlignment(Qt::AlignCenter);
   message_label->setWordWrap(true);
   main_layout->addWidget(message_label);
@@ -68,18 +56,12 @@ ConfirmDialogWidgetQt::ConfirmDialogWidgetQt(QWidget* parent,
   no_button_ = new QPushButton("No", this);
   no_button_->setMinimumSize(90, 32);
   no_button_->setCursor(Qt::PointingHandCursor);
-  connect(no_button_, &QPushButton::clicked, this, [this]() {
-    close();
-    if (callback_) callback_(false);
-  });
+  connect(no_button_, &QPushButton::clicked, this, &QDialog::reject);
 
   yes_button_ = new QPushButton("Yes", this);
   yes_button_->setMinimumSize(90, 32);
   yes_button_->setCursor(Qt::PointingHandCursor);
-  connect(yes_button_, &QPushButton::clicked, this, [this]() {
-    close();
-    if (callback_) callback_(true);
-  });
+  connect(yes_button_, &QPushButton::clicked, this, &QDialog::accept);
 
   button_layout->addStretch();
   button_layout->addWidget(no_button_);
@@ -87,9 +69,6 @@ ConfirmDialogWidgetQt::ConfirmDialogWidgetQt(QWidget* parent,
   button_layout->addStretch();
 
   main_layout->addLayout(button_layout);
-
-  // Install global event filter to close on clicks outside
-  qApp->installEventFilter(this);
 
   // Start gamepad polling if input system is available
   if (input_system_) {
@@ -109,6 +88,9 @@ ConfirmDialogWidgetQt::ConfirmDialogWidgetQt(QWidget* parent,
             &ConfirmDialogWidgetQt::PollGamepad);
     poll_timer_->start(16);  // ~60fps polling
   }
+
+  // Set initial button focus
+  UpdateFocusedButton(focused_index_);
 }
 
 ConfirmDialogWidgetQt::~ConfirmDialogWidgetQt() {
@@ -120,33 +102,18 @@ ConfirmDialogWidgetQt::~ConfirmDialogWidgetQt() {
   }
 }
 
-void ConfirmDialogWidgetQt::ShowCentered() {
-  if (!parentWidget()) {
-    return;
-  }
-
-  adjustSize();
-
-  // Center in parent
-  QWidget* parent = parentWidget();
-  int x = (parent->width() - width()) / 2;
-  int y = (parent->height() - height()) / 2;
-
-  move(x, y);
-
-  show();
-  raise();
-  setFocus(Qt::PopupFocusReason);
-
-  // Set initial button focus
-  UpdateFocusedButton(focused_index_);
+bool ConfirmDialogWidgetQt::Confirm(QWidget* parent,
+                                    hid::InputSystem* input_system,
+                                    const QString& title,
+                                    const QString& message) {
+  ConfirmDialogWidgetQt dialog(parent, input_system, title, message);
+  return dialog.exec() == QDialog::Accepted;
 }
 
 void ConfirmDialogWidgetQt::keyPressEvent(QKeyEvent* event) {
   switch (event->key()) {
     case Qt::Key_Escape:
-      close();
-      if (callback_) callback_(false);
+      reject();
       break;
     case Qt::Key_Left:
     case Qt::Key_Right:
@@ -154,32 +121,15 @@ void ConfirmDialogWidgetQt::keyPressEvent(QKeyEvent* event) {
       break;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-      ActivateFocusedButton();
+      if (focused_index_ == 1) {
+        accept();
+      } else {
+        reject();
+      }
       break;
     default:
-      QWidget::keyPressEvent(event);
+      QDialog::keyPressEvent(event);
   }
-}
-
-bool ConfirmDialogWidgetQt::eventFilter(QObject* obj, QEvent* event) {
-  if (event->type() == QEvent::MouseButtonPress) {
-    QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
-
-    if (mouseEvent->button() == Qt::LeftButton) {
-      QWidget* widget = qobject_cast<QWidget*>(obj);
-      if (widget) {
-        QPoint globalPos = widget->mapToGlobal(mouseEvent->pos());
-        QPoint localPos = mapFromGlobal(globalPos);
-
-        if (!rect().contains(localPos)) {
-          close();
-          if (callback_) callback_(false);
-          return true;
-        }
-      }
-    }
-  }
-  return false;
 }
 
 void ConfirmDialogWidgetQt::PollGamepad() {
@@ -203,13 +153,16 @@ void ConfirmDialogWidgetQt::PollGamepad() {
 
       // A button to confirm selection
       if (pressed & 0x1000) {
-        ActivateFocusedButton();
+        if (focused_index_ == 1) {
+          accept();
+        } else {
+          reject();
+        }
       }
 
       // B button to cancel (same as No)
       if (pressed & 0x2000) {
-        close();
-        if (callback_) callback_(false);
+        reject();
       }
 
       prev_buttons_ = buttons;
@@ -240,16 +193,6 @@ void ConfirmDialogWidgetQt::UpdateFocusedButton(int index) {
   } else {
     no_button_->setStyleSheet(unfocused_style);
     yes_button_->setStyleSheet(focused_style);
-  }
-}
-
-void ConfirmDialogWidgetQt::ActivateFocusedButton() {
-  bool result = (focused_index_ == 1);  // Yes = 1
-  close();
-  if (callback_) {
-    QTimer::singleShot(0, [this, result]() {
-      if (callback_) callback_(result);
-    });
   }
 }
 

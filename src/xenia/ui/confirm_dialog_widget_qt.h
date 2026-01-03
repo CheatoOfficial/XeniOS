@@ -10,10 +10,10 @@
 #ifndef XENIA_UI_CONFIRM_DIALOG_WIDGET_QT_H_
 #define XENIA_UI_CONFIRM_DIALOG_WIDGET_QT_H_
 
+#include <QDialog>
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
-#include <QWidget>
 #include <functional>
 
 namespace xe {
@@ -25,30 +25,28 @@ class InputSystem;
 namespace xe {
 namespace app {
 
-// Confirmation dialog widget with gamepad support
-class ConfirmDialogWidgetQt : public QWidget {
+// Confirmation dialog with gamepad support
+class ConfirmDialogWidgetQt : public QDialog {
   Q_OBJECT
 
  public:
   ConfirmDialogWidgetQt(QWidget* parent, hid::InputSystem* input_system,
-                        const QString& title, const QString& message,
-                        std::function<void(bool)> callback);
+                        const QString& title, const QString& message);
   ~ConfirmDialogWidgetQt() override;
 
-  void ShowCentered();
+  // Static blocking method - returns true if confirmed
+  static bool Confirm(QWidget* parent, hid::InputSystem* input_system,
+                      const QString& title, const QString& message);
 
  protected:
   void keyPressEvent(QKeyEvent* event) override;
-  bool eventFilter(QObject* obj, QEvent* event) override;
 
  private slots:
   void PollGamepad();
 
  private:
   void UpdateFocusedButton(int index);
-  void ActivateFocusedButton();
 
-  std::function<void(bool)> callback_;
   QPushButton* yes_button_;
   QPushButton* no_button_;
 

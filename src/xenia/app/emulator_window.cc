@@ -452,6 +452,8 @@ void EmulatorWindow::OnEmulatorInitialized() {
       XELOGE("Failed to launch new process: {}", GetLastError());
       return;
     }
+    // Allow the new process to bring itself to the foreground
+    AllowSetForegroundWindow(pi.dwProcessId);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #else
@@ -519,9 +521,10 @@ void EmulatorWindow::OnEmulatorInitialized() {
       return;
     }
 #endif
-    // Exit the current process via Qt
+    // Exit directly - don't go through window close path which would
+    // spawn a UI process if return_to_ui is set
     xe::FlushLog();
-    app_context_.QuitFromUIThread();
+    std::exit(0);
   });
 
   // Register callback for disc swap to update title bar
@@ -556,6 +559,8 @@ void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
                              cmd_line.c_str())),
                          nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr,
                          nullptr, &si, &pi)) {
+        // Allow the new process to bring itself to the foreground
+        AllowSetForegroundWindow(pi.dwProcessId);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         XELOGI("Spawned UI process");
@@ -597,9 +602,10 @@ void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
     }
 
     xe::FlushLog();
+    std::exit(0);
   }
 
-  // Let Qt handle the exit naturally
+  // UI process: let Qt handle the exit
   emulator_window_.app_context_.QuitFromUIThread();
 }
 
@@ -1163,16 +1169,12 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
     context_menu->AddSeparator();
 
     context_menu->AddAction("Quit Game", [this, qt_window, input_sys]() {
-      auto* confirm = new ConfirmDialogWidgetQt(
-          qt_window->qwindow(), input_sys, "Quit Game",
-          "Are you sure you want to quit?\n\nAny unsaved progress will be "
-          "lost.",
-          [this](bool confirmed) {
-            if (confirmed) {
-              window_->RequestClose();
-            }
-          });
-      confirm->ShowCentered();
+      if (ConfirmDialogWidgetQt::Confirm(
+              qt_window->qwindow(), input_sys, "Quit Game",
+              "Are you sure you want to quit?\n\nAny unsaved progress will be "
+              "lost.")) {
+        window_->RequestClose();
+      }
     });
 
     // Show menu at cursor position or center of window
@@ -2413,7 +2415,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     return;
   }
 
-  // Close handles - we don't track child processes anymore
+  // Allow the new process to bring itself to the foreground
+  AllowSetForegroundWindow(pi.dwProcessId);
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 #else
