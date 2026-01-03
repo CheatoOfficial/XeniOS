@@ -201,6 +201,20 @@ bool QtWindow::OpenImpl() {
   QIcon app_icon(":/xenia/icon.png");
   if (!app_icon.isNull()) {
     qwindow_->setWindowIcon(app_icon);
+    // Also set application-level icon for taskbar/dock
+    QGuiApplication::setWindowIcon(app_icon);
+
+#if defined(XE_PLATFORM_WIN32)
+    // On Windows, also set via Win32 API for taskbar
+    HWND hwnd = reinterpret_cast<HWND>(qwindow_->winId());
+    if (hwnd) {
+      HICON hicon = app_icon.pixmap(32, 32).toImage().toHICON();
+      if (hicon) {
+        SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
+        SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hicon);
+      }
+    }
+#endif
   } else {
     XELOGW("Failed to load window icon from Qt resources");
   }
@@ -352,9 +366,20 @@ void QtWindow::LoadAndApplyIcon(const void* buffer, size_t size,
                             static_cast<uint>(size))) {
       QIcon icon(pixmap);
       qwindow_->setWindowIcon(icon);
-      // Also set the application-level icon for taskbar/dock on KDE Plasma
-      // and other desktop environments that read from QGuiApplication
+      // Also set the application-level icon for taskbar/dock
       QGuiApplication::setWindowIcon(icon);
+
+#if defined(XE_PLATFORM_WIN32)
+      // On Windows, also set via Win32 API for taskbar
+      HWND hwnd = reinterpret_cast<HWND>(qwindow_->winId());
+      if (hwnd) {
+        HICON hicon = icon.pixmap(32, 32).toImage().toHICON();
+        if (hicon) {
+          SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
+          SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hicon);
+        }
+      }
+#endif
     }
   }
 }
