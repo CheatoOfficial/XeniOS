@@ -13,8 +13,10 @@
 // Operates on 32x32 tiled data format used by Xbox 360.
 // Each thread handles one output pixel (one 32x32 tile = 1024 threads).
 //
-// The scaling picks the top-left pixel of each scale_x * scale_y block,
-// effectively point-sampling the scaled data back to original resolution.
+// By default, picks the top-left pixel of each scale_x * scale_y block.
+// When xe_downscale_half_pixel_offset is set, samples from (scale/2, scale/2)
+// within each block to compensate for the half-pixel offset becoming a
+// full-pixel offset at higher resolutions.
 
 layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 
@@ -24,6 +26,12 @@ layout(push_constant) uniform ResolveDownscaleConstants {
   uint xe_downscale_pixel_size_log2;   // 0=8bit, 1=16bit, 2=32bit, 3=64bit
   uint xe_downscale_tile_count;        // Number of 32x32 tiles to process
   uint xe_downscale_source_offset_bytes;   // Byte offset into source buffer
+  // When non-zero, apply half-pixel offset correction by sampling from
+  // (scale/2, scale/2) within each scaled block instead of (0, 0).
+  // This compensates for the D3D9-style half-pixel offset used by Xbox 360
+  // games, which at Nx resolution scaling shifts rendered content by
+  // (N/2, N/2) host pixels.
+  uint xe_downscale_half_pixel_offset;
 };
 
 // Source buffer (scaled resolve data)
@@ -56,12 +64,25 @@ void main() {
   uint scale_xy = xe_downscale_scale_x * xe_downscale_scale_y;
   uint tile_size_scaled = tile_size_1x * scale_xy;
 
-  // Source offset: pick every (scale_x * scale_y)th pixel
+  // Compute offset within each scaled block to sample from.
+  // Without half-pixel correction: sample from (0, 0) = linear offset 0.
+  // With half-pixel correction: sample from (scale/2, scale/2) to compensate
+  // for the D3D9-style half-pixel offset shifting content by (N/2, N/2) pixels
+  // at Nx resolution.
+  uint block_sample_offset = 0u;
+  if (xe_downscale_half_pixel_offset != 0u && scale_xy > 1u) {
+    uint offset_x = xe_downscale_scale_x >> 1u;
+    uint offset_y = xe_downscale_scale_y >> 1u;
+    block_sample_offset = offset_x + offset_y * xe_downscale_scale_x;
+  }
+
+  // Source offset: base of the scaled block plus offset within block
   // Add source_offset_bytes to handle buffer-relative addressing
   // This must be done before division to preserve sub-dword byte position
   uint src_byte_offset = xe_downscale_source_offset_bytes +
                          tile_index * tile_size_scaled +
-                         pixel_index * pixel_size * scale_xy;
+                         pixel_index * pixel_size * scale_xy +
+                         block_sample_offset * pixel_size;
   uint src_offset = src_byte_offset >> 2u;
 
   // Destination offset in 1x buffer

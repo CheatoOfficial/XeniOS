@@ -691,6 +691,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
     uint32_t pixel_size_log2;      // 0=8bit, 1=16bit, 2=32bit, 3=64bit
     uint32_t tile_count;           // Number of 32x32 tiles to process
     uint32_t source_offset_bytes;  // Byte offset into source buffer
+    // When non-zero, apply half-pixel offset correction by sampling from
+    // (scale/2, scale/2) within each scaled block instead of (0, 0).
+    uint32_t half_pixel_offset;
   };
   VkDescriptorSetLayout resolve_downscale_descriptor_set_layout_ =
       VK_NULL_HANDLE;
