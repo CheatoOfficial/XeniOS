@@ -698,10 +698,32 @@ bool VulkanPipelineCache::ConfigurePipeline(
 
     if (EnsurePipelineCreatedWithPlaceholder(placeholder_args)) {
       // Queue real pipeline creation in background.
+      // Calculate priority based on whether shader writes to visible RTs.
+      uint8_t priority = 0;
+      if (pixel_shader) {
+        // Get bound RT mask from normalized_color_mask (4 bits per RT).
+        uint32_t bound_rts = (((normalized_color_mask >> 0) & 0xF) ? 1 : 0) |
+                             (((normalized_color_mask >> 4) & 0xF) ? 2 : 0) |
+                             (((normalized_color_mask >> 8) & 0xF) ? 4 : 0) |
+                             (((normalized_color_mask >> 12) & 0xF) ? 8 : 0);
+        uint32_t shader_writes = pixel_shader->shader().writes_color_targets();
+        if (bound_rts & shader_writes) {
+          // Writes to at least one visible RT - high priority.
+          priority = 2;
+          // Extra priority if writing to RT0 (usually main color buffer).
+          if ((bound_rts & shader_writes) & 1) {
+            priority = 3;
+          }
+        } else if (pixel_shader->shader().writes_depth()) {
+          // Depth-only - medium priority.
+          priority = 1;
+        }
+        // else: writes to unbound RTs only - lowest priority (0).
+      }
+
       {
         std::lock_guard<std::mutex> lock(creation_request_lock_);
-        creation_queue_.emplace_back();
-        PipelineCreationArguments& creation_arguments = creation_queue_.back();
+        PipelineCreationArguments creation_arguments;
         creation_arguments.pipeline = &pipeline_pair;
         creation_arguments.vertex_shader = vertex_shader;
         creation_arguments.pixel_shader = pixel_shader;
@@ -712,6 +734,8 @@ bool VulkanPipelineCache::ConfigurePipeline(
             tessellation_control_shader;
         creation_arguments.render_pass = render_pass;
         creation_arguments.render_pass_key = render_pass_key;
+        creation_arguments.priority = priority;
+        creation_queue_.push(creation_arguments);
       }
       creation_request_cond_.notify_one();
     } else {
@@ -793,8 +817,8 @@ void VulkanPipelineCache::CreationThread() {
       if (creation_threads_shutdown_) {
         break;
       }
-      creation_arguments = creation_queue_.front();
-      creation_queue_.pop_front();
+      creation_arguments = creation_queue_.top();
+      creation_queue_.pop();
       ++creation_threads_busy_;
     }
 

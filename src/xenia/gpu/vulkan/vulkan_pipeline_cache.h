@@ -18,8 +18,10 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "xenia/base/hash.h"
 #include "xenia/base/platform.h"
@@ -276,6 +278,17 @@ class VulkanPipelineCache {
     VkRenderPass render_pass;
     // For dynamic rendering (VK_KHR_dynamic_rendering / Vulkan 1.3).
     VulkanRenderTargetCache::RenderPassKey render_pass_key;
+    // Priority for async compilation (higher = compiled sooner).
+    // Pipelines that write to visible render targets get higher priority.
+    uint8_t priority = 0;
+  };
+
+  // Comparator for priority queue - higher priority first.
+  struct PipelineCreationPriorityCompare {
+    bool operator()(const PipelineCreationArguments& a,
+                    const PipelineCreationArguments& b) const {
+      return a.priority < b.priority;  // max-heap: lower priority at bottom
+    }
   };
 
   union GeometryShaderKey {
@@ -439,9 +452,14 @@ class VulkanPipelineCache {
   std::vector<std::unique_ptr<xe::threading::Thread>> creation_threads_;
   std::atomic<bool> creation_threads_shutdown_{false};
   std::atomic<size_t> creation_threads_busy_{0};
-  // Queue contains pointers to map entries. Pipelines are never evicted as
-  // games have a finite set that should all remain cached for performance.
-  std::deque<PipelineCreationArguments> creation_queue_;
+  // Priority queue contains pointers to map entries. Pipelines are never
+  // evicted as games have a finite set that should all remain cached for
+  // performance. Higher priority pipelines (those writing to visible RTs)
+  // are compiled first.
+  std::priority_queue<PipelineCreationArguments,
+                      std::vector<PipelineCreationArguments>,
+                      PipelineCreationPriorityCompare>
+      creation_queue_;
   std::mutex creation_request_lock_;
   std::condition_variable creation_request_cond_;
   std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
