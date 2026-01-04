@@ -1413,10 +1413,6 @@ class BuildShadersCommand(Command):
             if not has_bin(spirv_opt):
                 print("ERROR: could not find spirv-opt")
                 return 1
-            spirv_remap = os.path.join(vulkan_bin_path, "spirv-remap")
-            if not has_bin(spirv_remap):
-                print("ERROR: could not find spirv-remap")
-                return 1
             spirv_dis = os.path.join(vulkan_bin_path, "spirv-dis")
             if not has_bin(spirv_dis):
                 print("ERROR: could not find spirv-dis")
@@ -1481,22 +1477,13 @@ class BuildShadersCommand(Command):
                 if subprocess.call([
                        spirv_opt,
                        "-O", "-O",
+                       "--canonicalize-ids",
                        spirv_glslang_file_path,
                        "-o", spirv_file_path,
                        ]) != 0:
                     print("ERROR: failed to optimize a SPIR-V shader")
                     return 1
                 os.remove(spirv_glslang_file_path)
-                # spirv-remap takes the output directory, but it may be the same
-                # as the one the input is stored in.
-                if subprocess.call([
-                       spirv_remap,
-                       "--do-everything",
-                       "-i", spirv_file_path,
-                       "-o", spirv_dir_path,
-                       ]) != 0:
-                    print("ERROR: failed to remap a SPIR-V shader")
-                    return 1
                 spirv_dis_file_path = f"{spirv_file_path_base}.txt"
                 if subprocess.call([
                        spirv_dis,

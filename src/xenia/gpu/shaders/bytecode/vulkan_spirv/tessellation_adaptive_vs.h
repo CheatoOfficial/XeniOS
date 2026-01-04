@@ -8,17 +8,30 @@
                OpCapability Shader
           %1 = OpExtInstImport "GLSL.std.450"
                OpMemoryModel Logical GLSL450
-               OpEntryPoint Vertex %5663 "main" %gl_VertexIndex %5229
+               OpEntryPoint Vertex %main "main" %gl_VertexIndex %out_edge_factor
+               OpSource GLSL 460
+               OpSourceExtension "GL_GOOGLE_cpp_style_line_directive"
+               OpSourceExtension "GL_GOOGLE_include_directive"
+               OpName %main "main"
+               OpName %gl_VertexIndex "gl_VertexIndex"
+               OpName %XeTessellationConstants "XeTessellationConstants"
+               OpMemberName %XeTessellationConstants 0 "xe_tessellation_factor_range"
+               OpMemberName %XeTessellationConstants 1 "xe_tessellation_padding0"
+               OpMemberName %XeTessellationConstants 2 "xe_vertex_index_endian"
+               OpMemberName %XeTessellationConstants 3 "xe_vertex_index_offset"
+               OpMemberName %XeTessellationConstants 4 "xe_vertex_index_min_max"
+               OpName %_ ""
+               OpName %out_edge_factor "out_edge_factor"
                OpDecorate %gl_VertexIndex BuiltIn VertexIndex
-               OpDecorate %_struct_1111 Block
-               OpMemberDecorate %_struct_1111 0 Offset 0
-               OpMemberDecorate %_struct_1111 1 Offset 8
-               OpMemberDecorate %_struct_1111 2 Offset 16
-               OpMemberDecorate %_struct_1111 3 Offset 20
-               OpMemberDecorate %_struct_1111 4 Offset 24
-               OpDecorate %4930 Binding 6
-               OpDecorate %4930 DescriptorSet 1
-               OpDecorate %5229 Location 0
+               OpDecorate %XeTessellationConstants Block
+               OpMemberDecorate %XeTessellationConstants 0 Offset 0
+               OpMemberDecorate %XeTessellationConstants 1 Offset 8
+               OpMemberDecorate %XeTessellationConstants 2 Offset 16
+               OpMemberDecorate %XeTessellationConstants 3 Offset 20
+               OpMemberDecorate %XeTessellationConstants 4 Offset 24
+               OpDecorate %_ Binding 6
+               OpDecorate %_ DescriptorSet 1
+               OpDecorate %out_edge_factor Location 0
        %void = OpTypeVoid
        %1282 = OpTypeFunction %void
        %uint = OpTypeInt 32 0
@@ -43,21 +56,21 @@
       %float = OpTypeFloat 32
     %v2float = OpTypeVector %float 2
      %v2uint = OpTypeVector %uint 2
-%_struct_1111 = OpTypeStruct %v2float %v2float %uint %uint %v2uint
-%_ptr_Uniform__struct_1111 = OpTypePointer Uniform %_struct_1111
-       %4930 = OpVariable %_ptr_Uniform__struct_1111 Uniform
+%XeTessellationConstants = OpTypeStruct %v2float %v2float %uint %uint %v2uint
+%_ptr_Uniform_XeTessellationConstants = OpTypePointer Uniform %XeTessellationConstants
+          %_ = OpVariable %_ptr_Uniform_XeTessellationConstants Uniform
       %int_2 = OpConstant %int 2
 %_ptr_Uniform_uint = OpTypePointer Uniform %uint
     %float_1 = OpConstant %float 1
 %_ptr_Output_float = OpTypePointer Output %float
-       %5229 = OpVariable %_ptr_Output_float Output
+%out_edge_factor = OpVariable %_ptr_Output_float Output
       %int_0 = OpConstant %int 0
 %_ptr_Uniform_float = OpTypePointer Uniform %float
-       %5663 = OpFunction %void None %1282
+       %main = OpFunction %void None %1282
        %6733 = OpLabel
        %9931 = OpLoad %int %gl_VertexIndex
       %15381 = OpBitcast %uint %9931
-       %9656 = OpAccessChain %_ptr_Uniform_uint %4930 %int_2
+       %9656 = OpAccessChain %_ptr_Uniform_uint %_ %int_2
       %22442 = OpLoad %uint %9656
                OpSelectionMerge %10204 None
                OpSwitch %uint_0 %16320
@@ -112,12 +125,12 @@
       %15672 = OpPhi %uint %15381 %11868 %16378 %19530 %16377 %21863 %16376 %10583
       %24496 = OpBitcast %float %15672
       %21708 = OpFAdd %float %24496 %float_1
-       %7335 = OpAccessChain %_ptr_Uniform_float %4930 %int_0 %uint_0
+       %7335 = OpAccessChain %_ptr_Uniform_float %_ %int_0 %uint_0
       %12980 = OpLoad %float %7335
-      %19190 = OpAccessChain %_ptr_Uniform_float %4930 %int_0 %uint_1
+      %19190 = OpAccessChain %_ptr_Uniform_float %_ %int_0 %uint_1
       %10126 = OpLoad %float %19190
       %23029 = OpExtInst %float %1 FClamp %21708 %12980 %10126
-               OpStore %5229 %23029
+               OpStore %out_edge_factor %23029
                OpReturn
                OpFunctionEnd
 #endif
@@ -126,7 +139,23 @@ const uint32_t tessellation_adaptive_vs[] = {
     0x07230203, 0x00010000, 0x0008000B, 0x00006297, 0x00000000, 0x00020011,
     0x00000001, 0x0006000B, 0x00000001, 0x4C534C47, 0x6474732E, 0x3035342E,
     0x00000000, 0x0003000E, 0x00000000, 0x00000001, 0x0007000F, 0x00000000,
-    0x0000161F, 0x6E69616D, 0x00000000, 0x00001029, 0x0000146D, 0x00040047,
+    0x0000161F, 0x6E69616D, 0x00000000, 0x00001029, 0x0000146D, 0x00030003,
+    0x00000002, 0x000001CC, 0x000A0004, 0x475F4C47, 0x4C474F4F, 0x70635F45,
+    0x74735F70, 0x5F656C79, 0x656E696C, 0x7269645F, 0x69746365, 0x00006576,
+    0x00080004, 0x475F4C47, 0x4C474F4F, 0x6E695F45, 0x64756C63, 0x69645F65,
+    0x74636572, 0x00657669, 0x00040005, 0x0000161F, 0x6E69616D, 0x00000000,
+    0x00060005, 0x00001029, 0x565F6C67, 0x65747265, 0x646E4978, 0x00007865,
+    0x00080005, 0x00000457, 0x65546558, 0x6C657373, 0x6974616C, 0x6F436E6F,
+    0x6174736E, 0x0073746E, 0x000B0006, 0x00000457, 0x00000000, 0x745F6578,
+    0x65737365, 0x74616C6C, 0x5F6E6F69, 0x74636166, 0x725F726F, 0x65676E61,
+    0x00000000, 0x000A0006, 0x00000457, 0x00000001, 0x745F6578, 0x65737365,
+    0x74616C6C, 0x5F6E6F69, 0x64646170, 0x30676E69, 0x00000000, 0x00090006,
+    0x00000457, 0x00000002, 0x765F6578, 0x65747265, 0x6E695F78, 0x5F786564,
+    0x69646E65, 0x00006E61, 0x00090006, 0x00000457, 0x00000003, 0x765F6578,
+    0x65747265, 0x6E695F78, 0x5F786564, 0x7366666F, 0x00007465, 0x00090006,
+    0x00000457, 0x00000004, 0x765F6578, 0x65747265, 0x6E695F78, 0x5F786564,
+    0x5F6E696D, 0x0078616D, 0x00030005, 0x00001342, 0x00000000, 0x00060005,
+    0x0000146D, 0x5F74756F, 0x65676465, 0x6361665F, 0x00726F74, 0x00040047,
     0x00001029, 0x0000000B, 0x0000002A, 0x00030047, 0x00000457, 0x00000002,
     0x00050048, 0x00000457, 0x00000000, 0x00000023, 0x00000000, 0x00050048,
     0x00000457, 0x00000001, 0x00000023, 0x00000008, 0x00050048, 0x00000457,
