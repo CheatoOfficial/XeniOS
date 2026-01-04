@@ -14,7 +14,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -368,6 +367,11 @@ class VulkanPipelineCache {
     return EnsurePipelineCreated(creation_arguments, placeholder_pixel_shader_);
   }
 
+  // Optimizes a shader's SPIR-V binary if optimization is enabled and the
+  // shader module hasn't been created yet. Called from creation threads.
+  void OptimizeTranslationIfNeeded(
+      VulkanShader::VulkanTranslation& translation);
+
   VulkanCommandProcessor& command_processor_;
   const RegisterFile& register_file_;
   VulkanRenderTargetCache& render_target_cache_;
@@ -465,25 +469,10 @@ class VulkanPipelineCache {
   std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
   std::atomic<bool> creation_completion_set_event_{false};
 
-  // Background SPIRV optimization
-  struct ShaderOptimizationRequest {
-    VulkanShader::VulkanTranslation* translation;
-  };
-  std::unique_ptr<xe::threading::Thread> optimization_thread_;
-  std::deque<ShaderOptimizationRequest> optimization_queue_;
-  std::mutex optimization_queue_lock_;
-  std::condition_variable optimization_queue_cond_;
-  std::atomic<bool> optimization_thread_shutdown_{false};
-  void OptimizationThread();
-  void QueueShaderForOptimization(VulkanShader::VulkanTranslation* translation);
-
-  // Deferred destruction of replaced shader modules and pipelines.
+  // Deferred destruction of pipelines.
   // Pipelines are only destroyed after the GPU submission that might reference
   // them has completed (tracked via submission numbers from command processor).
   void ProcessDeferredDestructions();
-  std::vector<VkShaderModule> deferred_destroy_shader_modules_;
-  // Pipelines pending destruction, paired with the submission number they were
-  // last potentially used in. Only destroyed when that submission completes.
   std::vector<std::pair<VkPipeline, uint64_t>> deferred_destroy_pipelines_;
   std::mutex deferred_destroy_mutex_;
 };

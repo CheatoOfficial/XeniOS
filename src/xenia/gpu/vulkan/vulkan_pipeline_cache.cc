@@ -60,18 +60,10 @@ DEFINE_int32(
     "Vulkan");
 
 DEFINE_bool(
-    vulkan_spirv_background_optimization, false,
-    "Enable background SPIR-V shader optimization. When enabled, shaders "
-    "are initially compiled without optimization for faster startup, then "
-    "optimized in a background thread.",
-    "Vulkan");
-
-DEFINE_bool(
-    vulkan_spirv_inline_optimization, false,
-    "Enable inline SPIR-V shader optimization. When enabled, shaders are "
-    "optimized immediately during translation, blocking the main thread. "
-    "This increases shader compilation time but ensures all shaders are "
-    "optimized before use. Can be combined with background optimization.",
+    vulkan_spirv_optimization, false,
+    "Enable SPIR-V shader optimization. When enabled, shaders are optimized "
+    "on pipeline creation threads before the shader module is created. This "
+    "only affects async pipeline creation and does not block the main thread.",
     "Vulkan");
 
 DECLARE_bool(vulkan_dynamic_rendering);
@@ -250,18 +242,6 @@ bool VulkanPipelineCache::Initialize() {
     }
   }
 
-  // Start background optimization thread
-  if (cvars::vulkan_spirv_background_optimization && spirv_tools_context_) {
-    optimization_thread_shutdown_.store(false, std::memory_order_release);
-    optimization_thread_ =
-        xe::threading::Thread::Create({}, [this]() { OptimizationThread(); });
-    assert_not_null(optimization_thread_);
-    optimization_thread_->set_name("SPIRV Optimizer");
-    XELOGI("SPIR-V background optimization thread started");
-  } else if (!cvars::vulkan_spirv_background_optimization) {
-    XELOGI("SPIR-V background optimization disabled");
-  }
-
   return true;
 }
 
@@ -281,17 +261,6 @@ void VulkanPipelineCache::Shutdown() {
   }
   creation_completion_event_.reset();
 
-  // Shut down the optimization thread
-  if (optimization_thread_) {
-    {
-      std::lock_guard<std::mutex> lock(optimization_queue_lock_);
-      optimization_thread_shutdown_.store(true, std::memory_order_release);
-    }
-    optimization_queue_cond_.notify_all();
-    xe::threading::Wait(optimization_thread_.get(), false);
-    optimization_thread_.reset();
-  }
-
   const ui::vulkan::VulkanDevice* const vulkan_device =
       command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
@@ -301,12 +270,6 @@ void VulkanPipelineCache::Shutdown() {
   // device should be idle at shutdown).
   {
     std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
-    for (VkShaderModule module : deferred_destroy_shader_modules_) {
-      if (module != VK_NULL_HANDLE) {
-        dfn.vkDestroyShaderModule(device, module, nullptr);
-      }
-    }
-    deferred_destroy_shader_modules_.clear();
     for (const auto& pipeline_pair : deferred_destroy_pipelines_) {
       if (pipeline_pair.first != VK_NULL_HANDLE) {
         dfn.vkDestroyPipeline(device, pipeline_pair.first, nullptr);
@@ -814,8 +777,17 @@ void VulkanPipelineCache::CreationThread() {
     if (!EnsureShadersTranslated(creation_arguments.vertex_shader,
                                  creation_arguments.pixel_shader)) {
       XELOGE("Failed to translate shaders for pipeline creation");
-    } else if (!EnsurePipelineCreated(creation_arguments)) {
-      XELOGE("Failed to create Vulkan pipeline");
+    } else {
+      // Optimize shaders on the creation thread before creating the pipeline.
+      // This keeps the main thread fast while still benefiting from
+      // optimization.
+      OptimizeTranslationIfNeeded(*creation_arguments.vertex_shader);
+      if (creation_arguments.pixel_shader) {
+        OptimizeTranslationIfNeeded(*creation_arguments.pixel_shader);
+      }
+      if (!EnsurePipelineCreated(creation_arguments)) {
+        XELOGE("Failed to create Vulkan pipeline");
+      }
     }
     // On failure: if a placeholder exists it will remain in use permanently.
     // Clear the flag so we're not in a misleading "waiting for real" state.
@@ -852,52 +824,6 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
     XELOGE("Shader {:016X} translation failed; marking as ignored",
            shader.ucode_data_hash());
     return false;
-  }
-
-  // Perform inline optimization if enabled - optimize before the shader module
-  // is created
-  if (cvars::vulkan_spirv_inline_optimization && spirv_tools_context_ &&
-      translation.is_valid()) {
-    const std::vector<uint8_t>& unoptimized_binary =
-        translation.translated_binary();
-    if (!unoptimized_binary.empty()) {
-      // Reinterpret the byte vector as uint32_t for SPIRV-Tools
-      const uint32_t* spirv_words =
-          reinterpret_cast<const uint32_t*>(unoptimized_binary.data());
-      size_t word_count = unoptimized_binary.size() / sizeof(uint32_t);
-
-      std::vector<uint32_t> optimized_spirv;
-      spv_result_t result = spirv_tools_context_->Optimize(
-          spirv_words, word_count, optimized_spirv, true);
-
-      if (result == SPV_SUCCESS && !optimized_spirv.empty()) {
-        // Convert back to byte vector
-        std::vector<uint8_t> optimized_binary;
-        optimized_binary.resize(optimized_spirv.size() * sizeof(uint32_t));
-        std::memcpy(optimized_binary.data(), optimized_spirv.data(),
-                    optimized_binary.size());
-
-        // Store as optimized binary (will be used by GetOrCreateShaderModule)
-        translation.SetOptimizedBinary(optimized_binary);
-
-        size_t original_size = word_count;
-        size_t optimized_size = optimized_spirv.size();
-        XELOGI("Inline SPIRV optimization: {} -> {} words ({:.1f}% reduction)",
-               original_size, optimized_size,
-               100.0f * (1.0f - float(optimized_size) / float(original_size)));
-      } else {
-        XELOGW("Inline SPIRV optimization failed with error code: {}",
-               static_cast<int>(result));
-      }
-    }
-  }
-
-  // Store unoptimized binary and queue for background optimization
-  // (only if inline optimization is disabled)
-  if (spirv_tools_context_ && translation.NeedsOptimization() &&
-      !cvars::vulkan_spirv_inline_optimization) {
-    translation.StoreUnoptimizedBinary();
-    QueueShaderForOptimization(&translation);
   }
 
 #ifndef NDEBUG
@@ -3027,40 +2953,16 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
   return true;
 }
 
-void VulkanPipelineCache::QueueShaderForOptimization(
-    VulkanShader::VulkanTranslation* translation) {
-  if (!cvars::vulkan_spirv_background_optimization || !spirv_tools_context_ ||
-      !optimization_thread_ || !translation) {
-    return;
-  }
-
-  // Verify the shader has unoptimized binary before queuing
-  if (translation->GetUnoptimizedBinary().empty()) {
-    return;
-  }
-
-  // Queue for optimization
-  {
-    std::lock_guard<std::mutex> lock(optimization_queue_lock_);
-    optimization_queue_.push_back({translation});
-  }
-  optimization_queue_cond_.notify_one();
-}
-
 void VulkanPipelineCache::ProcessDeferredDestructions() {
-  std::vector<VkShaderModule> modules_to_destroy;
   std::vector<VkPipeline> pipelines_to_destroy;
 
   uint64_t completed_submission = command_processor_.GetCompletedSubmission();
 
   {
     std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
-    if (deferred_destroy_shader_modules_.empty() &&
-        deferred_destroy_pipelines_.empty()) {
+    if (deferred_destroy_pipelines_.empty()) {
       return;
     }
-    modules_to_destroy = std::move(deferred_destroy_shader_modules_);
-    deferred_destroy_shader_modules_.clear();
 
     // Only destroy pipelines whose submission has completed on the GPU.
     // Keep pipelines that are still potentially in-flight.
@@ -3076,17 +2978,15 @@ void VulkanPipelineCache::ProcessDeferredDestructions() {
     }
   }
 
-  // Destroy the modules and pipelines now that we know GPU is done with them.
+  if (pipelines_to_destroy.empty()) {
+    return;
+  }
+
+  // Destroy pipelines now that we know GPU is done with them.
   const ui::vulkan::VulkanDevice* vulkan_device =
       command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   VkDevice device = vulkan_device->device();
-
-  for (VkShaderModule module : modules_to_destroy) {
-    if (module != VK_NULL_HANDLE) {
-      dfn.vkDestroyShaderModule(device, module, nullptr);
-    }
-  }
 
   for (VkPipeline pipeline : pipelines_to_destroy) {
     if (pipeline != VK_NULL_HANDLE) {
@@ -3095,75 +2995,55 @@ void VulkanPipelineCache::ProcessDeferredDestructions() {
   }
 }
 
-void VulkanPipelineCache::OptimizationThread() {
-  for (;;) {
-    ShaderOptimizationRequest request;
-    {
-      std::unique_lock<std::mutex> lock(optimization_queue_lock_);
-      optimization_queue_cond_.wait(lock, [this]() {
-        return !optimization_queue_.empty() ||
-               optimization_thread_shutdown_.load(std::memory_order_acquire);
-      });
+void VulkanPipelineCache::OptimizeTranslationIfNeeded(
+    VulkanShader::VulkanTranslation& translation) {
+  // Only optimize if enabled and spirv-tools is available.
+  if (!cvars::vulkan_spirv_optimization || !spirv_tools_context_) {
+    return;
+  }
 
-      if (optimization_thread_shutdown_.load(std::memory_order_acquire)) {
-        break;
-      }
+  // Only optimize if the shader module hasn't been created yet.
+  // Once created, we can't replace it without the complexity of the old
+  // background optimization system.
+  if (translation.shader_module() != VK_NULL_HANDLE) {
+    return;
+  }
 
-      if (optimization_queue_.empty()) {
-        continue;
-      }
+  if (!translation.is_valid()) {
+    return;
+  }
 
-      request = std::move(optimization_queue_.front());
-      optimization_queue_.pop_front();
-    }
+  const std::vector<uint8_t>& unoptimized_binary =
+      translation.translated_binary();
+  if (unoptimized_binary.empty()) {
+    return;
+  }
 
-    // Perform optimization outside of the lock
-    if (request.translation) {
-      const std::vector<uint8_t>& unoptimized_binary =
-          request.translation->GetUnoptimizedBinary();
-      if (!unoptimized_binary.empty()) {
-        // Reinterpret the byte vector as uint32_t for SPIRV-Tools
-        const uint32_t* spirv_words =
-            reinterpret_cast<const uint32_t*>(unoptimized_binary.data());
-        size_t word_count = unoptimized_binary.size() / sizeof(uint32_t);
+  // Reinterpret the byte vector as uint32_t for SPIRV-Tools
+  const uint32_t* spirv_words =
+      reinterpret_cast<const uint32_t*>(unoptimized_binary.data());
+  size_t word_count = unoptimized_binary.size() / sizeof(uint32_t);
 
-        std::vector<uint32_t> optimized_spirv;
-        spv_result_t result = spirv_tools_context_->Optimize(
-            spirv_words, word_count, optimized_spirv, true);
+  std::vector<uint32_t> optimized_spirv;
+  spv_result_t result = spirv_tools_context_->Optimize(spirv_words, word_count,
+                                                       optimized_spirv, true);
 
-        if (result == SPV_SUCCESS && !optimized_spirv.empty()) {
-          // Convert back to byte vector
-          std::vector<uint8_t> optimized_binary;
-          optimized_binary.resize(optimized_spirv.size() * sizeof(uint32_t));
-          std::memcpy(optimized_binary.data(), optimized_spirv.data(),
-                      optimized_binary.size());
+  if (result == SPV_SUCCESS && !optimized_spirv.empty()) {
+    // Convert back to byte vector and replace the translated binary
+    std::vector<uint8_t> optimized_binary;
+    optimized_binary.resize(optimized_spirv.size() * sizeof(uint32_t));
+    std::memcpy(optimized_binary.data(), optimized_spirv.data(),
+                optimized_binary.size());
+    translation.SetOptimizedBinary(std::move(optimized_binary));
 
-          // Update the translation with optimized binary
-          request.translation->SetOptimizedBinary(optimized_binary);
-
-          // Collect any old shader modules that need deferred destruction
-          std::vector<VkShaderModule> modules_to_destroy =
-              request.translation->CollectPendingDestroyModules();
-          if (!modules_to_destroy.empty()) {
-            std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
-            deferred_destroy_shader_modules_.insert(
-                deferred_destroy_shader_modules_.end(),
-                modules_to_destroy.begin(), modules_to_destroy.end());
-          }
-
-          size_t original_size = word_count;
-          size_t optimized_size = optimized_spirv.size();
-          XELOGI(
-              "Background SPIRV optimization: {} -> {} words ({:.1f}% "
-              "reduction)",
-              original_size, optimized_size,
-              100.0f * (1.0f - float(optimized_size) / float(original_size)));
-        } else {
-          XELOGW("Background SPIRV optimization failed with error code: {}",
-                 static_cast<int>(result));
-        }
-      }
-    }
+    size_t original_size = word_count;
+    size_t optimized_size = optimized_spirv.size();
+    XELOGI("SPIRV optimization: {} -> {} words ({:.1f}% reduction)",
+           original_size, optimized_size,
+           100.0f * (1.0f - float(optimized_size) / float(original_size)));
+  } else {
+    XELOGW("SPIRV optimization failed with error code: {}",
+           static_cast<int>(result));
   }
 }
 

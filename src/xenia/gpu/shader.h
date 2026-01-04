@@ -830,6 +830,8 @@ class Shader {
     // If there was some failure during preparation on the implementation side.
     void MakeInvalid() { is_valid_ = false; }
 
+    std::vector<uint8_t> translated_binary_;
+
    private:
     friend class Shader;
     friend class ShaderTranslator;
@@ -840,7 +842,6 @@ class Shader {
     bool is_valid_ = false;
     bool is_translated_ = false;
     std::vector<Error> errors_;
-    std::vector<uint8_t> translated_binary_;
     std::string host_disassembly_;
   };
 
