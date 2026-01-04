@@ -20,6 +20,7 @@
 #include "xenia/base/xxhash.h"
 #include "xenia/gpu/draw_util.h"
 #include "xenia/gpu/gpu_flags.h"
+#include "xenia/gpu/pipeline_util.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/spirv_builder.h"
@@ -701,24 +702,12 @@ bool VulkanPipelineCache::ConfigurePipeline(
       // Calculate priority based on whether shader writes to visible RTs.
       uint8_t priority = 0;
       if (pixel_shader) {
-        // Get bound RT mask from normalized_color_mask (4 bits per RT).
-        uint32_t bound_rts = (((normalized_color_mask >> 0) & 0xF) ? 1 : 0) |
-                             (((normalized_color_mask >> 4) & 0xF) ? 2 : 0) |
-                             (((normalized_color_mask >> 8) & 0xF) ? 4 : 0) |
-                             (((normalized_color_mask >> 12) & 0xF) ? 8 : 0);
-        uint32_t shader_writes = pixel_shader->shader().writes_color_targets();
-        if (bound_rts & shader_writes) {
-          // Writes to at least one visible RT - high priority.
-          priority = 2;
-          // Extra priority if writing to RT0 (usually main color buffer).
-          if ((bound_rts & shader_writes) & 1) {
-            priority = 3;
-          }
-        } else if (pixel_shader->shader().writes_depth()) {
-          // Depth-only - medium priority.
-          priority = 1;
-        }
-        // else: writes to unbound RTs only - lowest priority (0).
+        uint32_t bound_rts =
+            pipeline_util::GetBoundRTMaskFromNormalizedColorMask(
+                normalized_color_mask);
+        priority = pipeline_util::CalculatePipelinePriority(
+            bound_rts, pixel_shader->shader().writes_color_targets(),
+            pixel_shader->shader().writes_depth());
       }
 
       {

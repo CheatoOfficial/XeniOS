@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -379,6 +380,16 @@ class PipelineCache {
     // pipeline. Set to nullptr after translation is done.
     D3D12Shader::D3D12Translation* pending_vertex_shader{nullptr};
     D3D12Shader::D3D12Translation* pending_pixel_shader{nullptr};
+    // Priority for async compilation (higher = compiled sooner).
+    // Pipelines that write to visible render targets get higher priority.
+    uint8_t priority{0};
+  };
+
+  // Comparator for priority queue - higher priority first.
+  struct PipelineCreationPriorityCompare {
+    bool operator()(const Pipeline* a, const Pipeline* b) const {
+      return a->priority < b->priority;  // max-heap: lower priority at bottom
+    }
   };
 
   // Helper to translate pending shaders for a pipeline and update root
@@ -437,9 +448,13 @@ class PipelineCache {
   void CreateQueuedPipelinesOnProcessorThread();
   xe_mutex creation_request_lock_;
   std::condition_variable_any creation_request_cond_;
-  // Protected with creation_request_lock_, notify_one creation_request_cond_
-  // when set.
-  std::deque<Pipeline*> creation_queue_;
+  // Priority queue contains pointers to map entries. Pipelines are never
+  // evicted as games have a finite set that should all remain cached for
+  // performance. Higher priority pipelines (those writing to visible RTs)
+  // are compiled first.
+  std::priority_queue<Pipeline*, std::vector<Pipeline*>,
+                      PipelineCreationPriorityCompare>
+      creation_queue_;
   // Number of threads that are currently creating a pipeline - incremented when
   // a pipeline is dequeued (the completion event can't be triggered before this
   // is zero). Protected with creation_request_lock_.

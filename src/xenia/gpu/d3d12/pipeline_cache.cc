@@ -32,6 +32,7 @@
 #include "xenia/gpu/dxbc.h"
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/gpu_flags.h"
+#include "xenia/gpu/pipeline_util.h"
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/ui/d3d12/d3d12_util.h"
@@ -673,6 +674,17 @@ void PipelineCache::InitializeShaderStorage(
       Pipeline* new_pipeline = new Pipeline;
       std::memcpy(&new_pipeline->description, &pipeline_runtime_description,
                   sizeof(pipeline_runtime_description));
+      // Calculate priority based on whether shader writes to visible RTs.
+      if (pixel_shader) {
+        uint32_t bound_rts =
+            (pipeline_description.render_targets[0].used ? 1 : 0) |
+            (pipeline_description.render_targets[1].used ? 2 : 0) |
+            (pipeline_description.render_targets[2].used ? 4 : 0) |
+            (pipeline_description.render_targets[3].used ? 8 : 0);
+        new_pipeline->priority = pipeline_util::CalculatePipelinePriority(
+            bound_rts, pixel_shader->writes_color_targets(),
+            pixel_shader->writes_depth());
+      }
       pipelines_.emplace(pipeline_stored_description.description_hash,
                          new_pipeline);
       COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
@@ -680,7 +692,7 @@ void PipelineCache::InitializeShaderStorage(
         // Submit the pipeline for creation to any available thread.
         {
           std::lock_guard<xe_mutex> lock(creation_request_lock_);
-          creation_queue_.push_back(new_pipeline);
+          creation_queue_.push(new_pipeline);
         }
         creation_request_cond_.notify_one();
       } else {
@@ -1131,9 +1143,17 @@ bool PipelineCache::ConfigurePipeline(
     // Queue for background thread.
     new_pipeline->pending_vertex_shader = vertex_shader;
     new_pipeline->pending_pixel_shader = pixel_shader;
+    // Calculate priority based on whether shader writes to visible RTs.
+    if (pixel_shader) {
+      uint32_t bound_rts = pipeline_util::GetBoundRTMaskFromNormalizedColorMask(
+          normalized_color_mask);
+      new_pipeline->priority = pipeline_util::CalculatePipelinePriority(
+          bound_rts, pixel_shader->shader().writes_color_targets(),
+          pixel_shader->shader().writes_depth());
+    }
     {
       std::lock_guard<xe_mutex> lock(creation_request_lock_);
-      creation_queue_.push_back(new_pipeline);
+      creation_queue_.push(new_pipeline);
     }
     creation_request_cond_.notify_one();
   } else {
@@ -3509,8 +3529,8 @@ void PipelineCache::CreationThread(size_t thread_index) {
       // until the pipeline is created - other threads must be able to dequeue
       // requests, but can't set the completion event until the pipelines are
       // fully created (rather than just started creating).
-      pipeline_to_create = creation_queue_.front();
-      creation_queue_.pop_front();
+      pipeline_to_create = creation_queue_.top();
+      creation_queue_.pop();
       ++creation_threads_busy_;
     }
 
@@ -3560,8 +3580,8 @@ void PipelineCache::CreateQueuedPipelinesOnProcessorThread() {
       if (creation_queue_.empty()) {
         break;
       }
-      pipeline_to_create = creation_queue_.front();
-      creation_queue_.pop_front();
+      pipeline_to_create = creation_queue_.top();
+      creation_queue_.pop();
     }
 
     // Translate pending shaders and update root signature.
