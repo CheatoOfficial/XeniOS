@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
+#include <QFocusEvent>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QKeyEvent>
@@ -139,6 +140,24 @@ class QtWindowInternal : public QMainWindow {
   void resizeEvent(QResizeEvent* event) override {
     QMainWindow::resizeEvent(event);
     window_->OnResizeEvent(event);
+  }
+  void focusInEvent(QFocusEvent* event) override {
+    QMainWindow::focusInEvent(event);
+    window_->OnFocusInEvent(event);
+  }
+  void focusOutEvent(QFocusEvent* event) override {
+    QMainWindow::focusOutEvent(event);
+    window_->OnFocusOutEvent(event);
+  }
+  void changeEvent(QEvent* event) override {
+    QMainWindow::changeEvent(event);
+    // Handle window activation changes (more reliable than focus events for
+    // detecting app-level focus like Alt+Tab)
+    if (event->type() == QEvent::WindowActivate) {
+      window_->OnFocusInEvent(nullptr);
+    } else if (event->type() == QEvent::WindowDeactivate) {
+      window_->OnFocusOutEvent(nullptr);
+    }
   }
   void keyPressEvent(QKeyEvent* event) override {
     window_->OnKeyPressEvent(event);
@@ -722,6 +741,16 @@ void QtWindow::OnResizeEvent(QResizeEvent* event) {
                        uint32_t(event->size().height()), destruction_receiver);
     in_size_update_ = false;
   }
+}
+
+void QtWindow::OnFocusInEvent(QFocusEvent* event) {
+  WindowDestructionReceiver destruction_receiver(this);
+  OnFocusUpdate(true, destruction_receiver);
+}
+
+void QtWindow::OnFocusOutEvent(QFocusEvent* event) {
+  WindowDestructionReceiver destruction_receiver(this);
+  OnFocusUpdate(false, destruction_receiver);
 }
 
 void QtWindow::OnKeyPressEvent(QKeyEvent* event) {

@@ -72,6 +72,8 @@ class QtWindow : public Window {
 
   void OnCloseEvent(QCloseEvent* event);
   void OnResizeEvent(QResizeEvent* event);
+  void OnFocusInEvent(QFocusEvent* event);
+  void OnFocusOutEvent(QFocusEvent* event);
   void OnKeyPressEvent(QKeyEvent* event);
   void OnKeyReleaseEvent(QKeyEvent* event);
   bool OnEventFilter(QObject* obj, QEvent* event);
