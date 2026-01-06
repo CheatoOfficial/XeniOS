@@ -821,24 +821,10 @@ void PipelineCache::EndSubmission() {
     pipeline_storage_file_flush_needed_ = false;
   }
   if (!creation_threads_.empty()) {
-    CreateQueuedPipelinesOnProcessorThread();
-    // Await creation of all queued pipelines.
-    bool await_creation_completion_event;
-    {
-      std::lock_guard<xe_mutex> lock(creation_request_lock_);
-      // Assuming the creation queue is already empty (because the processor
-      // thread also worked on creating the leftover pipelines), so only check
-      // if there are threads with pipelines currently being created.
-      await_creation_completion_event = creation_threads_busy_ != 0;
-      if (await_creation_completion_event) {
-        creation_completion_event_->Reset();
-        creation_completion_set_event_ = true;
-      }
-    }
-    if (await_creation_completion_event) {
-      creation_request_cond_.notify_one();
-      xe::threading::Wait(creation_completion_event_.get(), false);
-    }
+    // Don't wait for pipeline creation - let background threads work
+    // asynchronously. Draws will be skipped until pipelines are ready.
+    // This avoids frame-time spikes from blocking on pipeline creation.
+    creation_request_cond_.notify_one();
   }
 }
 
@@ -3588,7 +3574,7 @@ void PipelineCache::CreateQueuedPipelinesOnProcessorThread() {
     EnsurePipelineShadersTranslated(pipeline_to_create, *shader_translator_,
                                     ucode_disasm_buffer_, dxbc_converter_,
                                     dxc_utils_, dxc_compiler_,
-                                    /*use_try_claim=*/false,
+                                    /*use_try_claim=*/true,
                                     /*handle_non_placeholder=*/true);
 
     ID3D12PipelineState* new_state =
