@@ -786,7 +786,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_XE_SWAP(uint32_t packet,
   COMMAND_PROCESSOR::IssueSwap(frontbuffer_ptr, frontbuffer_width,
                                frontbuffer_height);
 
-  ++counter_;
+  // Apply host frame rate limiting (separate from guest vblank timing)
+  COMMAND_PROCESSOR::ThrottlePresentation();
+
   return true;
 }
 
@@ -867,22 +869,29 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
     matched = MatchValueAndRef(value & mask, ref, wait_info);
 
     if (!matched) {
-      // Wait.
+      // Wait using the duration specified by the guest.
       if (wait >= 0x100) {
         PrepareForWait();
-        if (!cvars::vsync) {
-          // User wants it fast and dangerous.
-          // do nothing
-        } else {
+        if (cvars::vsync) {
+          // Fixed rate vblank mode - sleep since counter updates at 50/60Hz
+#if XE_PLATFORM_WIN32
+          // Accurate timing: 90% sleep, 10% spin
+          const uint64_t wait_ms = wait / 0x100;
+          const uint64_t sleep_ns =
+              static_cast<uint64_t>(wait_ms * 1000000 * 0.90);
+          xe::threading::NanoSleep(sleep_ns);
+#else
           xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
-          ReturnFromWait();
+#endif
         }
+        // Unlimited vblank mode (vsync=false) - spin since counter updates
+        // rapidly
+        ReturnFromWait();
 
         if (!worker_running_) {
           // Short-circuited exit.
           return false;
         }
-      } else {
       }
     }
   } while (!matched);

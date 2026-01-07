@@ -12,6 +12,9 @@
 #include "xenia/base/logging.h"
 #include "xenia/ui/renderdoc_api.h"
 
+// Declared in xboxkrnl_video.cc
+DECLARE_bool(use_50Hz_mode);
+
 DEFINE_path(trace_gpu_prefix, "scratch/gpu/",
             "Prefix path for GPU trace files.", "GPU");
 DEFINE_bool(trace_gpu_stream, false, "Trace all GPU packets.", "GPU");
@@ -21,12 +24,19 @@ DEFINE_path(
     "For shader debugging, path to dump GPU shaders to as they are compiled.",
     "GPU");
 
-DEFINE_bool(vsync, true, "Enable VSYNC.", "GPU");
+DEFINE_bool(vsync, true,
+            "Control guest vblank timing.\n"
+            "  true: Fixed rate vblanks (50Hz PAL, 60Hz NTSC based on "
+            "use_50Hz_mode).\n"
+            "  false: Unlimited vblanks for games using delta time.",
+            "GPU");
 
-DEFINE_uint64(framerate_limit, 0,
-              "Maximum frames per second. 0 = Unlimited frames.\n"
-              "Defaults to 60, when set to 0, and VSYNC is enabled.",
-              "GPU");
+DEFINE_uint64(
+    framerate_limit, 0,
+    "Host frame rate limit in FPS. 0 = unlimited.\n"
+    "Throttles presentation without affecting guest vblank timing.\n"
+    "Guest vblanks are controlled by use_50Hz_mode (50Hz PAL, 60Hz NTSC).",
+    "GPU");
 UPDATE_from_uint64(framerate_limit, 2024, 8, 31, 20, 60);
 
 void SetVsync(bool value) { OVERRIDE_bool(vsync, value); }
@@ -88,6 +98,8 @@ DEFINE_bool(occlusion_query_enable, false,
 void SetOcclusionQueryEnable(bool value) {
   OVERRIDE_bool(occlusion_query_enable, value);
 }
+
+uint32_t GetGuestVblankRateHz() { return cvars::use_50Hz_mode ? 50 : 60; }
 
 DEFINE_bool(
     gpu_debug_markers, false,

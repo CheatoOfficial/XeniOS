@@ -136,6 +136,11 @@ class CommandProcessor {
   virtual void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                          uint32_t frontbuffer_height) {}
 
+  // Throttle presentation based on framerate_limit cvar.
+  // Called after IssueSwap to limit host frame rate without affecting guest
+  // vblank timing.
+  void ThrottlePresentation();
+
   // May be called not only from the command processor thread when the command
   // processor is paused, and the termination of this function may be explicitly
   // awaited.
@@ -357,6 +362,9 @@ class CommandProcessor {
   // Cached readback resolve mode (parsed once from string cvar)
   ReadbackResolveMode cached_readback_resolve_mode_ =
       ReadbackResolveMode::kFast;
+
+  // For host frame rate limiting at IssueSwap
+  uint64_t last_swap_time_ = 0;
 
  private:
   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
