@@ -272,7 +272,8 @@ std::unique_ptr<ImmediateTexture> ImGuiDrawer::LoadImGuiIcon(
       width, height, ImmediateTextureFilter::kLinear, true,
       reinterpret_cast<uint8_t*>(image_data));
 
-  stbi_image_free(image_data);  // Free the image data after creating texture
+  stbi_image_free(image_data);
+
   return texture;
 }
 
@@ -310,6 +311,8 @@ void ImGuiDrawer::SetupNotificationTextures() {
     notification_icon_textures_.push_back(immediate_drawer_->CreateTexture(
         width, height, ImmediateTextureFilter::kLinear, true,
         reinterpret_cast<uint8_t*>(image_data)));
+
+    stbi_image_free(image_data);
   }
 }
 
@@ -550,6 +553,8 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
     locked_achievement_icon_ = immediate_drawer_->CreateTexture(
         width, height, ImmediateTextureFilter::kLinear, true,
         reinterpret_cast<uint8_t*>(image_data));
+
+    stbi_image_free(image_data);
   }
 }
 
