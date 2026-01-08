@@ -221,14 +221,19 @@ def setup_qt():
 
     # Get the first (latest) version directory
     try:
-        # List all version directories (e.g., 6.8.1, 6.7.0)
+        # List all version directories (e.g., 6.8.1, 6.10.1)
         version_dirs = [d for d in os.listdir(qt_base)
                         if os.path.isdir(os.path.join(qt_base, d)) and d[0].isdigit()]
         if not version_dirs:
             return False
 
-        # Sort versions to get the latest (simple string sort works for semantic versions)
-        version_dirs.sort(reverse=True)
+        # Sort versions using semantic versioning (split by dots and compare as integers)
+        def version_key(v):
+            try:
+                return tuple(int(x) for x in v.split('.'))
+            except ValueError:
+                return (0,)
+        version_dirs.sort(key=version_key, reverse=True)
         qt_version_dir = os.path.join(qt_base, version_dirs[0])
 
         if sys.platform == "win32":
@@ -272,6 +277,73 @@ def setup_qt():
         return True
     except Exception:
         return False
+
+
+def generate_moc_files():
+    """Generates Qt MOC files for all headers containing Q_OBJECT.
+
+    Returns:
+        True if MOC generation succeeded or was skipped, False on error.
+    """
+    qt_dir = os.environ.get("QT_DIR")
+    if not qt_dir:
+        return True  # Qt not available, skip MOC generation
+
+    # Find moc executable
+    if sys.platform == "win32":
+        moc_path = os.path.join(qt_dir, "bin", "moc.exe")
+    else:
+        moc_path = os.path.join(qt_dir, "libexec", "moc")
+        if not os.path.exists(moc_path):
+            moc_path = os.path.join(qt_dir, "bin", "moc")
+
+    if not os.path.exists(moc_path):
+        print(f"WARNING: moc not found at {moc_path}")
+        return False
+
+    # Find all Qt headers with Q_OBJECT
+    ui_dir = os.path.join("src", "xenia", "ui")
+    qt_headers = []
+    for filename in os.listdir(ui_dir):
+        if filename.endswith("_qt.h"):
+            header_path = os.path.join(ui_dir, filename)
+            with open(header_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                if "Q_OBJECT" in content:
+                    qt_headers.append(header_path)
+
+    if not qt_headers:
+        return True
+
+    print(f"- generating MOC files for {len(qt_headers)} Qt headers...")
+
+    # Generate MOC files
+    any_errors = False
+    for header_path in qt_headers:
+        header_name = os.path.basename(header_path)
+        moc_name = "moc_" + header_name[:-2] + ".cc"  # Replace .h with .cc
+        moc_path_out = os.path.join(os.path.dirname(header_path), moc_name)
+
+        # Build include paths for MOC
+        include_args = [
+            f"-I{os.path.join(qt_dir, 'include')}",
+            f"-I{os.path.join(qt_dir, 'include', 'QtCore')}",
+            f"-I{os.path.join(qt_dir, 'include', 'QtGui')}",
+            f"-I{os.path.join(qt_dir, 'include', 'QtWidgets')}",
+            f"-I{os.path.join(qt_dir, 'include', 'QtMultimedia')}",
+            "-Isrc",
+        ]
+
+        cmd = [moc_path] + include_args + ["-o", moc_path_out, header_path]
+
+        result = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if result != 0:
+            print(f"  ERROR: Failed to generate {moc_name}")
+            any_errors = True
+        else:
+            print(f"  {moc_name}")
+
+    return not any_errors
 
 
 def main():
@@ -1243,6 +1315,10 @@ class BuildCommand(BaseBuildCommand):
 
     def execute(self, args, pass_args, cwd):
         print(f"Building {args['config']}...\n")
+
+        # Generate MOC files before building
+        if not generate_moc_files():
+            print("WARNING: MOC generation had errors, build may fail")
 
         result = super(BuildCommand, self).execute(args, pass_args, cwd)
 

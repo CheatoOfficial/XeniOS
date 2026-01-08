@@ -16,11 +16,11 @@ drivers.
   * Ensure Python is in PATH.
 * [Vulkan SDK](https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe)
   * The build script will automatically detect it if installed at `C:\VulkanSDK`
-* Qt 6.9.2 (for the UI)
+* Qt 6.10.1 (for the UI)
   * Install using aqtinstall:
     ```
     pip install aqtinstall
-    python -m aqt install-qt windows desktop 6.9.2 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
+    python -m aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
     # Note: msvc2022_64 is compatible with with VS2026
     ```
   * The build script will automatically detect it if installed in `C:\Qt`
@@ -121,22 +121,22 @@ sudo apt-get install build-essential mesa-vulkan-drivers valgrind libc++-dev lib
 
 In addition, you will need up to date Vulkan libraries and drivers for your hardware, which most distributions have in their standard repositories nowadays.
 
-**Qt 6.9.2 (for the UI)**
+**Qt 6.10.1 (for the UI)**
 
 You can install Qt from your distribution's package manager, or use aqtinstall:
 
 ```sh
 pip install aqtinstall
-aqt install-qt linux desktop 6.9.2 linux_gcc_64 -m qtmultimedia -O /opt/Qt
+aqt install-qt linux desktop 6.10.1 linux_gcc_64 -m qtmultimedia -O /opt/Qt
 ```
 
 If using aqtinstall, add Qt to your environment:
 
 ```sh
-export PATH="/opt/Qt/6.9.2/gcc_64/bin:$PATH"
-export CMAKE_PREFIX_PATH="/opt/Qt/6.9.2/gcc_64"
-export PKG_CONFIG_PATH="/opt/Qt/6.9.2/gcc_64/lib/pkgconfig:$PKG_CONFIG_PATH"
-export QT_DIR="/opt/Qt/6.9.2/gcc_64"
+export PATH="/opt/Qt/6.10.1/gcc_64/bin:$PATH"
+export CMAKE_PREFIX_PATH="/opt/Qt/6.10.1/gcc_64"
+export PKG_CONFIG_PATH="/opt/Qt/6.10.1/gcc_64/lib/pkgconfig:$PKG_CONFIG_PATH"
+export QT_DIR="/opt/Qt/6.10.1/gcc_64"
 ```
 
 ## Running
