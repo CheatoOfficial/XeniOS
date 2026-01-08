@@ -3576,10 +3576,11 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
     constants.scale_y = scale_y;
     constants.pixel_size_log2 = pixel_size_log2;
     constants.tile_count = tile_count;
-    // Apply half-pixel offset correction when resolution scaling is active.
-    // Most Xbox 360 games use D3D9-style half-pixel offset, which at Nx
-    // resolution becomes an N/2 pixel offset that needs correction.
-    constants.half_pixel_offset = (scale_x > 1 || scale_y > 1) ? 1 : 0;
+    // Optionally sample from center of scaled block instead of top-left.
+    constants.half_pixel_offset = (cvars::readback_resolve_half_pixel_offset &&
+                                   (scale_x > 1 || scale_y > 1))
+                                      ? 1
+                                      : 0;
     deferred_command_list_.D3DSetComputeRoot32BitConstants(
         UINT(ResolveDownscaleRootParameter::kConstants),
         sizeof(constants) / sizeof(uint32_t), &constants, 0);

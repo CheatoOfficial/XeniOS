@@ -171,3 +171,11 @@ DEFINE_bool(
     "artifacts while pipelines are being created. When disabled, pipelines are "
     "created synchronously which causes stutter but no visual artifacts.",
     "GPU");
+
+DEFINE_bool(
+    readback_resolve_half_pixel_offset, false,
+    "When resolution scaling is active, sample from the center of each scaled "
+    "pixel block during readback resolve instead of the top-left corner. May "
+    "improve image quality in some cases but can break games that rely on "
+    "reading back specific pixel values (e.g., for gamma detection).",
+    "GPU");

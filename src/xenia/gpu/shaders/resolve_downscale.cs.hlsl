@@ -13,19 +13,15 @@
 //
 // By default, picks the top-left pixel of each scale_x * scale_y block.
 // When xe_downscale_half_pixel_offset is set, samples from (scale/2, scale/2)
-// within each block to compensate for the half-pixel offset becoming a
-// full-pixel offset at higher resolutions.
+// within each block instead.
 
 cbuffer XeResolveDownscaleConstants : register(b0) {
   uint xe_downscale_scale_x;         // 1 to kMaxDrawResolutionScaleAlongAxis
   uint xe_downscale_scale_y;         // 1 to kMaxDrawResolutionScaleAlongAxis
   uint xe_downscale_pixel_size_log2; // 0=8bit, 1=16bit, 2=32bit, 3=64bit
   uint xe_downscale_tile_count;      // Number of 32x32 tiles to process
-  // When non-zero, apply half-pixel offset correction by sampling from
-  // (scale/2, scale/2) within each scaled block instead of (0, 0).
-  // This compensates for the D3D9-style half-pixel offset used by Xbox 360
-  // games, which at Nx resolution scaling shifts rendered content by
-  // (N/2, N/2) host pixels.
+  // When non-zero, sample from (scale/2, scale/2) within each scaled block
+  // instead of (0, 0).
   uint xe_downscale_half_pixel_offset;
 };
 
@@ -59,10 +55,6 @@ void main(uint3 xe_group_id : SV_GroupID,
   uint tile_size_scaled = tile_size_1x * scale_xy;
 
   // Compute offset within each scaled block to sample from.
-  // Without half-pixel correction: sample from (0, 0) = linear offset 0.
-  // With half-pixel correction: sample from (scale/2, scale/2) to compensate
-  // for the D3D9-style half-pixel offset shifting content by (N/2, N/2) pixels
-  // at Nx resolution.
   uint block_sample_offset = 0u;
   [branch] if (xe_downscale_half_pixel_offset != 0u && scale_xy > 1u) {
     uint offset_x = xe_downscale_scale_x >> 1u;
