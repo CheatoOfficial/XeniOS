@@ -240,11 +240,17 @@ void GameConfigDialogQt::LoadConfigOverrides() {
 
       for (const auto& [key, value] : *category_table.as_table()) {
         std::string var_name = std::string(key);
-        std::string var_value = value.value_or("");
+        std::string var_value;
 
-        if (var_value.length() >= 2 && var_value.front() == '"' &&
-            var_value.back() == '"') {
-          var_value = var_value.substr(1, var_value.length() - 2);
+        // Handle different TOML value types
+        if (value.is_boolean()) {
+          var_value = value.as_boolean()->get() ? "true" : "false";
+        } else {
+          var_value = value.value_or("");
+          if (var_value.length() >= 2 && var_value.front() == '"' &&
+              var_value.back() == '"') {
+            var_value = var_value.substr(1, var_value.length() - 2);
+          }
         }
 
         std::string translated_name;
@@ -260,6 +266,9 @@ void GameConfigDialogQt::LoadConfigOverrides() {
         }
       }
     }
+
+    // Sort the table by cvar name after all entries are added
+    overrides_table_->sortItems(0, Qt::AscendingOrder);
   } catch (const std::exception& e) {
     XELOGE("Failed to load game config for {:08X}: {}", title_id_, e.what());
     QMessageBox::warning(

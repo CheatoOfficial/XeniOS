@@ -330,6 +330,8 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     paint_context_.swap_chain_height = new_swap_chain_height;
     paint_context_.swap_chain_allows_tearing =
         (swap_chain_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0;
+    XELOGI("D3D12Presenter: Swap chain created, allows tearing: {}",
+           paint_context_.swap_chain_allows_tearing ? "yes" : "no");
     for (uint32_t i = 0; i < PaintContext::kSwapChainBufferCount; ++i) {
       if (FAILED(paint_context_.swap_chain->GetBuffer(
               i, IID_PPV_ARGS(&paint_context_.swap_chain_buffers[i])))) {
@@ -1102,6 +1104,8 @@ bool D3D12Presenter::InitializeSurfaceIndependent() {
               sizeof(tearing_feature_data))) &&
           tearing_feature_data;
     }
+    XELOGI("D3D12Presenter: DXGI tearing support: {}",
+           dxgi_supports_tearing_ ? "yes" : "no");
   }
 
   ID3D12Device* device = provider_.GetDevice();

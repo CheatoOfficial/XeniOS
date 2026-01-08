@@ -872,7 +872,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       // Wait using the duration specified by the guest.
       if (wait >= 0x100) {
         PrepareForWait();
-        if (cvars::vsync) {
+        if (cvars::guest_display_refresh_cap) {
           // Fixed rate vblank mode - sleep since counter updates at 50/60Hz
 #if XE_PLATFORM_WIN32
           // Accurate timing: 90% sleep, 10% spin
@@ -884,8 +884,8 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
           xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
 #endif
         }
-        // Unlimited vblank mode (vsync=false) - spin since counter updates
-        // rapidly
+        // Unlimited vblank mode (guest_display_refresh_cap=false) - spin since
+        // counter updates rapidly
         ReturnFromWait();
 
         if (!worker_running_) {

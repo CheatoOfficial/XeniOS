@@ -10,10 +10,12 @@
 #ifndef XENIA_UI_SIMPLE_CONFIG_DIALOG_QT_H_
 #define XENIA_UI_SIMPLE_CONFIG_DIALOG_QT_H_
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QLabel>
+#include <QRadioButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
 #include <map>

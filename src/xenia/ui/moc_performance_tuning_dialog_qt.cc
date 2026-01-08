@@ -41,7 +41,7 @@ xe::app::PerformanceTuningDialogQt::qt_create_metaobjectdata<
   namespace QMC = QtMocConstants;
   QtMocHelpers::StringRefStorage qt_stringData{
       "xe::app::PerformanceTuningDialogQt",
-      "OnVsyncChanged",
+      "OnEmulatedDisplayUncappedChanged",
       "",
       "state",
       "OnOcclusionQueryChanged",
@@ -51,7 +51,7 @@ xe::app::PerformanceTuningDialogQt::qt_create_metaobjectdata<
       "OnClearMemoryPageStateChanged"};
 
   QtMocHelpers::UintData qt_methods{
-      // Slot 'OnVsyncChanged'
+      // Slot 'OnEmulatedDisplayUncappedChanged'
       QtMocHelpers::SlotData<void(int)>(1, 2, QMC::AccessPrivate,
                                         QMetaType::Void,
                                         {{
@@ -106,7 +106,8 @@ void xe::app::PerformanceTuningDialogQt::qt_static_metacall(
   if (_c == QMetaObject::InvokeMetaMethod) {
     switch (_id) {
       case 0:
-        _t->OnVsyncChanged((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
+        _t->OnEmulatedDisplayUncappedChanged(
+            (*reinterpret_cast<std::add_pointer_t<int>>(_a[1])));
         break;
       case 1:
         _t->OnOcclusionQueryChanged(

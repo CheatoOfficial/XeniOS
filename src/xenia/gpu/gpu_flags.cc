@@ -24,11 +24,12 @@ DEFINE_path(
     "For shader debugging, path to dump GPU shaders to as they are compiled.",
     "GPU");
 
-DEFINE_bool(vsync, true,
+DEFINE_bool(guest_display_refresh_cap, true,
             "Control guest vblank timing.\n"
             "  true: Fixed rate vblanks (50Hz PAL, 60Hz NTSC based on "
             "use_50Hz_mode).\n"
-            "  false: Unlimited vblanks for games using delta time.",
+            "  false: Unlimited vblanks, allows the guest to run as fast as "
+            "possible.",
             "GPU");
 
 DEFINE_uint64(
@@ -39,7 +40,9 @@ DEFINE_uint64(
     "GPU");
 UPDATE_from_uint64(framerate_limit, 2024, 8, 31, 20, 60);
 
-void SetVsync(bool value) { OVERRIDE_bool(vsync, value); }
+void SetGuestDisplayRefreshCap(bool value) {
+  OVERRIDE_bool(guest_display_refresh_cap, value);
+}
 
 void SetFramerateLimit(uint64_t value) {
   OVERRIDE_uint64(framerate_limit, value);

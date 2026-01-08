@@ -34,7 +34,7 @@ class PerformanceTuningDialogQt : public ui::GamepadDialog {
   ~PerformanceTuningDialogQt() override;
 
  private slots:
-  void OnVsyncChanged(int state);
+  void OnEmulatedDisplayUncappedChanged(int state);
   void OnOcclusionQueryChanged(int state);
   void OnReadbackResolveChanged(int value);
   void OnReadbackMemexportChanged(int value);
@@ -65,7 +65,7 @@ class PerformanceTuningDialogQt : public ui::GamepadDialog {
 
   // Other settings widgets
   QGroupBox* other_group_;
-  QCheckBox* vsync_checkbox_;
+  QCheckBox* emulated_display_uncapped_checkbox_;
   QCheckBox* occlusion_query_checkbox_;
   QCheckBox* clear_memory_checkbox_;
 };

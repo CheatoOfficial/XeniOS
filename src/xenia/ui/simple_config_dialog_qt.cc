@@ -148,11 +148,39 @@ void SimpleConfigDialogQt::SetupUI() {
   fps_spin->setSpecialValueText("Unlimited");
   options_["framerate_limit"].cvar_name = "framerate_limit";
   options_["framerate_limit"].editor_widget = fps_spin;
-  options_["framerate_limit"].label_widget = new QLabel("FPS Limit:", this);
+  options_["framerate_limit"].label_widget =
+      new QLabel("Max Refresh Rate:", this);
   connect(fps_spin, QOverload<int>::of(&QSpinBox::valueChanged), this,
           &SimpleConfigDialogQt::OnValueChanged);
   graphics_layout->addRow(options_["framerate_limit"].label_widget, fps_spin);
 
+  // Guest Refresh Rate radio group (controls guest_display_refresh_cap and
+  // use_50Hz_mode)
+  auto* guest_refresh_widget = new QWidget(this);
+  auto* guest_refresh_layout = new QHBoxLayout(guest_refresh_widget);
+  guest_refresh_layout->setContentsMargins(0, 0, 0, 0);
+  auto* guest_refresh_group = new QButtonGroup(this);
+  auto* uncapped_radio = new QRadioButton("Uncapped", guest_refresh_widget);
+  auto* hz50_radio = new QRadioButton("50Hz", guest_refresh_widget);
+  auto* hz60_radio = new QRadioButton("60Hz", guest_refresh_widget);
+  guest_refresh_group->addButton(uncapped_radio, 0);
+  guest_refresh_group->addButton(hz50_radio, 1);
+  guest_refresh_group->addButton(hz60_radio, 2);
+  guest_refresh_layout->addWidget(uncapped_radio);
+  guest_refresh_layout->addWidget(hz50_radio);
+  guest_refresh_layout->addWidget(hz60_radio);
+  guest_refresh_layout->addStretch();
+  options_["guest_refresh_rate"].cvar_name = "guest_refresh_rate";
+  options_["guest_refresh_rate"].editor_widget = guest_refresh_widget;
+  options_["guest_refresh_rate"].label_widget =
+      new QLabel("Emulated Display Refresh Rate:", this);
+  connect(guest_refresh_group, &QButtonGroup::idClicked, this,
+          &SimpleConfigDialogQt::OnValueChanged);
+  graphics_layout->addRow(options_["guest_refresh_rate"].label_widget,
+                          guest_refresh_widget);
+
+  // VSync checkbox (inverted from variable_refresh_rate - VSync enabled means
+  // VRR disabled)
   auto* vsync_check = new QCheckBox(this);
   options_["vsync"].cvar_name = "vsync";
   options_["vsync"].editor_widget = vsync_check;
@@ -178,16 +206,6 @@ void SimpleConfigDialogQt::SetupUI() {
           &SimpleConfigDialogQt::OnValueChanged);
   graphics_layout->addRow(options_["present_letterbox"].label_widget,
                           letterbox_check);
-
-  auto* vrr_check = new QCheckBox(this);
-  options_["variable_refresh_rate"].cvar_name = "variable_refresh_rate";
-  options_["variable_refresh_rate"].editor_widget = vrr_check;
-  options_["variable_refresh_rate"].label_widget =
-      new QLabel("Variable Refresh Rate:", this);
-  connect(vrr_check, &QCheckBox::checkStateChanged, this,
-          &SimpleConfigDialogQt::OnValueChanged);
-  graphics_layout->addRow(options_["variable_refresh_rate"].label_widget,
-                          vrr_check);
 
   main_layout->addWidget(graphics_group);
 
@@ -373,7 +391,8 @@ void SimpleConfigDialogQt::UpdateUIFromConfigVars() {
       continue;
     }
 
-    if (cvar_name == "variable_refresh_rate") {
+    // VSync option (inverted from variable_refresh_rate cvars)
+    if (cvar_name == "vsync") {
       auto it_gpu = (*cvar::ConfigVars).find("gpu");
       std::string gpu_value = "d3d12";
       if (it_gpu != (*cvar::ConfigVars).end()) {
@@ -400,11 +419,61 @@ void SimpleConfigDialogQt::UpdateUIFromConfigVars() {
           value = value.substr(1, value.length() - 2);
         }
 
-        option.current_value = value;
-        option.pending_value = value;
+        // Store the inverted value (VSync = !VRR)
+        std::string inverted = (value == "true") ? "false" : "true";
+        option.current_value = inverted;
+        option.pending_value = inverted;
 
         if (auto* check = qobject_cast<QCheckBox*>(option.editor_widget)) {
-          check->setChecked(value == "true");
+          // VSync enabled = VRR disabled
+          check->setChecked(value != "true");
+        }
+      }
+      continue;
+    }
+
+    // Guest Refresh Rate option (from guest_display_refresh_cap +
+    // use_50Hz_mode)
+    if (cvar_name == "guest_refresh_rate") {
+      bool cap_enabled = false;
+      bool use_50hz = false;
+
+      auto it_cap = (*cvar::ConfigVars).find("guest_display_refresh_cap");
+      if (it_cap != (*cvar::ConfigVars).end()) {
+        auto cap_var = static_cast<cvar::IConfigVar*>(it_cap->second);
+        std::string cap_value = cap_var->config_value();
+        if (cap_value.length() >= 2 && cap_value.front() == '"' &&
+            cap_value.back() == '"') {
+          cap_value = cap_value.substr(1, cap_value.length() - 2);
+        }
+        cap_enabled = (cap_value == "true");
+      }
+
+      auto it_50hz = (*cvar::ConfigVars).find("use_50Hz_mode");
+      if (it_50hz != (*cvar::ConfigVars).end()) {
+        auto hz_var = static_cast<cvar::IConfigVar*>(it_50hz->second);
+        std::string hz_value = hz_var->config_value();
+        if (hz_value.length() >= 2 && hz_value.front() == '"' &&
+            hz_value.back() == '"') {
+          hz_value = hz_value.substr(1, hz_value.length() - 2);
+        }
+        use_50hz = (hz_value == "true");
+      }
+
+      // Determine radio selection: 0=Uncapped, 1=50Hz, 2=60Hz
+      int selection = 0;
+      if (cap_enabled) {
+        selection = use_50hz ? 1 : 2;
+      }
+      std::string value = std::to_string(selection);
+      option.current_value = value;
+      option.pending_value = value;
+
+      // Find the button group and select the appropriate radio
+      if (auto* widget = option.editor_widget) {
+        auto buttons = widget->findChildren<QRadioButton*>();
+        if (selection < buttons.size()) {
+          buttons[selection]->setChecked(true);
         }
       }
       continue;
@@ -474,7 +543,8 @@ void SimpleConfigDialogQt::SaveConfigChanges() {
       continue;
     }
 
-    if (cvar_name == "variable_refresh_rate") {
+    // VSync option (inverted to variable_refresh_rate cvars)
+    if (cvar_name == "vsync") {
       auto it_gpu = (*cvar::ConfigVars).find("gpu");
       std::string gpu_value = "d3d12";
       if (it_gpu != (*cvar::ConfigVars).end()) {
@@ -494,8 +564,33 @@ void SimpleConfigDialogQt::SaveConfigChanges() {
       auto it_vrr = (*cvar::ConfigVars).find(actual_cvar_name);
       if (it_vrr != (*cvar::ConfigVars).end()) {
         auto config_var_vrr = static_cast<cvar::IConfigVar*>(it_vrr->second);
-        toml::value new_value(option.pending_value == "true");
+        // Invert: VSync enabled = VRR disabled
+        toml::value new_value(option.pending_value != "true");
         config_var_vrr->LoadConfigValue(&new_value);
+      }
+      continue;
+    }
+
+    // Guest Refresh Rate option (saves to guest_display_refresh_cap +
+    // use_50Hz_mode)
+    if (cvar_name == "guest_refresh_rate") {
+      int selection = std::stoi(option.pending_value);
+      // 0=Uncapped, 1=50Hz, 2=60Hz
+      bool cap_enabled = (selection != 0);
+      bool use_50hz = (selection == 1);
+
+      auto it_cap = (*cvar::ConfigVars).find("guest_display_refresh_cap");
+      if (it_cap != (*cvar::ConfigVars).end()) {
+        auto cap_var = static_cast<cvar::IConfigVar*>(it_cap->second);
+        toml::value cap_value(cap_enabled);
+        cap_var->LoadConfigValue(&cap_value);
+      }
+
+      auto it_50hz = (*cvar::ConfigVars).find("use_50Hz_mode");
+      if (it_50hz != (*cvar::ConfigVars).end()) {
+        auto hz_var = static_cast<cvar::IConfigVar*>(it_50hz->second);
+        toml::value hz_value(use_50hz);
+        hz_var->LoadConfigValue(&hz_value);
       }
       continue;
     }
@@ -510,7 +605,7 @@ void SimpleConfigDialogQt::SaveConfigChanges() {
       } else if (cvar_name == "license_mask") {
         toml::value new_value(std::stoi(option.pending_value));
         config_var->LoadConfigValue(&new_value);
-      } else if (cvar_name == "vsync" || cvar_name == "fullscreen" ||
+      } else if (cvar_name == "fullscreen" ||
                  cvar_name == "present_letterbox" || cvar_name == "discord" ||
                  cvar_name == "use_dedicated_xma_thread") {
         toml::value new_value(option.pending_value == "true");
@@ -623,6 +718,15 @@ std::string SimpleConfigDialogQt::GetEditorValue(QWidget* editor,
     return check->isChecked() ? "true" : "false";
   } else if (auto* spin = qobject_cast<QSpinBox*>(editor)) {
     return std::to_string(spin->value());
+  } else if (cvar_name == "guest_refresh_rate") {
+    // Find which radio button is checked (0=Uncapped, 1=50Hz, 2=60Hz)
+    auto buttons = editor->findChildren<QRadioButton*>();
+    for (int i = 0; i < buttons.size(); ++i) {
+      if (buttons[i]->isChecked()) {
+        return std::to_string(i);
+      }
+    }
+    return "2";  // Default to 60Hz
   }
   return "";
 }

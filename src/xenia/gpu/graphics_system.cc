@@ -160,17 +160,18 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 #endif
 
             while (frame_limiter_worker_running_) {
-              // Read vsync cvar each frame to allow runtime changes
-              // vsync=true: Fire vblanks at fixed rate (50Hz PAL, 60Hz NTSC)
-              // vsync=false: Fire vblanks limited by framerate_limit or 1ms
+              // Read guest_display_refresh_cap cvar each frame to allow
+              // runtime changes
+              // true: Fire vblanks at fixed rate (50Hz PAL, 60Hz NTSC)
+              // false: Fire vblanks limited by framerate_limit or 1ms
               // Note: framerate_limit is handled separately at IssueSwap for
               // host presentation throttling
-              bool vsync_enabled = cvars::vsync;
+              bool refresh_cap_enabled = cvars::guest_display_refresh_cap;
 
               register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
                   GetInternalDisplayResolution().second;
 
-              if (vsync_enabled) {
+              if (refresh_cap_enabled) {
                 // Fixed vblank rate mode
                 const uint32_t vblank_hz = GetGuestVblankRateHz();
                 const uint64_t sleep_ns = static_cast<uint64_t>(

@@ -16,11 +16,11 @@ DECLARE_bool(trace_gpu_stream);
 
 DECLARE_path(dump_shaders);
 
-DECLARE_bool(vsync);
+DECLARE_bool(guest_display_refresh_cap);
 
 DECLARE_uint64(framerate_limit);
 
-void SetVsync(bool value);
+void SetGuestDisplayRefreshCap(bool value);
 void SetFramerateLimit(uint64_t value);
 
 DECLARE_bool(gpu_allow_invalid_fetch_constants);

@@ -28,7 +28,7 @@ DECLARE_bool(clear_memory_page_state);
 DECLARE_bool(readback_memexport);
 DECLARE_bool(readback_memexport_fast);
 DECLARE_string(readback_resolve);
-DECLARE_bool(vsync);
+DECLARE_bool(guest_display_refresh_cap);
 DECLARE_bool(occlusion_query_enable);
 
 namespace xe {
@@ -249,10 +249,11 @@ void PerformanceTuningDialogQt::SetupUI() {
   auto* other_layout = new QVBoxLayout(other_group_);
   other_layout->setSpacing(6);
 
-  vsync_checkbox_ = new QCheckBox("Enable VSync", other_group_);
-  other_layout->addWidget(vsync_checkbox_);
-  connect(vsync_checkbox_, &QCheckBox::checkStateChanged, this,
-          &PerformanceTuningDialogQt::OnVsyncChanged);
+  emulated_display_uncapped_checkbox_ =
+      new QCheckBox("Emulated Display Uncapped", other_group_);
+  other_layout->addWidget(emulated_display_uncapped_checkbox_);
+  connect(emulated_display_uncapped_checkbox_, &QCheckBox::checkStateChanged,
+          this, &PerformanceTuningDialogQt::OnEmulatedDisplayUncappedChanged);
 
   occlusion_query_checkbox_ =
       new QCheckBox("Enable hardware occlusion queries", other_group_);
@@ -273,14 +274,16 @@ void PerformanceTuningDialogQt::SetupUI() {
 
 void PerformanceTuningDialogQt::LoadCurrentSettings() {
   // Block signals to prevent notifications during initial load
-  vsync_checkbox_->blockSignals(true);
+  emulated_display_uncapped_checkbox_->blockSignals(true);
   occlusion_query_checkbox_->blockSignals(true);
   readback_resolve_button_group_->blockSignals(true);
   readback_memexport_button_group_->blockSignals(true);
   clear_memory_checkbox_->blockSignals(true);
 
-  // Load VSync setting
-  vsync_checkbox_->setChecked(cvars::vsync);
+  // Load Emulated Display Uncapped setting (inverted from
+  // guest_display_refresh_cap)
+  emulated_display_uncapped_checkbox_->setChecked(
+      !cvars::guest_display_refresh_cap);
 
   // Load Occlusion Query setting
   occlusion_query_checkbox_->setChecked(cvars::occlusion_query_enable);
@@ -315,7 +318,7 @@ void PerformanceTuningDialogQt::LoadCurrentSettings() {
   clear_memory_checkbox_->setChecked(cvars::clear_memory_page_state);
 
   // Restore signals
-  vsync_checkbox_->blockSignals(false);
+  emulated_display_uncapped_checkbox_->blockSignals(false);
   occlusion_query_checkbox_->blockSignals(false);
   readback_resolve_button_group_->blockSignals(false);
   readback_memexport_button_group_->blockSignals(false);
@@ -329,12 +332,13 @@ void PerformanceTuningDialogQt::ShowNotification(const QString& title,
   notification->Show();
 }
 
-void PerformanceTuningDialogQt::OnVsyncChanged(int state) {
-  bool enabled = (state == Qt::Checked);
-  SetVsync(enabled);
-  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU", "vsync",
-                                enabled);
-  ShowNotification("VSync", enabled ? "Enabled" : "Disabled");
+void PerformanceTuningDialogQt::OnEmulatedDisplayUncappedChanged(int state) {
+  bool uncapped = (state == Qt::Checked);
+  // Inverted: uncapped = guest_display_refresh_cap disabled
+  SetGuestDisplayRefreshCap(!uncapped);
+  config::SaveGameConfigSetting(emulator_window_->emulator(), "GPU",
+                                "guest_display_refresh_cap", !uncapped);
+  ShowNotification("Emulated Display", uncapped ? "Uncapped" : "Capped");
 }
 
 void PerformanceTuningDialogQt::OnOcclusionQueryChanged(int state) {
