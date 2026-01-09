@@ -140,6 +140,8 @@ void ProfileConfigDialog::LoadProfileIcon(const uint64_t xuid) {
 }
 
 void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
+  PollGamepad();
+
   if (!emulator_window_->emulator() ||
       !emulator_window_->emulator()->kernel_state() ||
       !emulator_window_->emulator()->kernel_state()->xam_state()) {
@@ -168,13 +170,15 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  // For whatever reason dialog wasn't opened. It's probably in closing state.
-  // We need to handle it here before it will make icons allocation.
+  // Handle keyboard escape
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    dialog_open = false;
+  }
+
+  // Handle close button or escape
   if (!dialog_open) {
-    ImGui::CloseCurrentPopup();
-    Close();
     ImGui::End();
-    emulator_window_->ToggleProfilesConfigDialog();
+    Close();
     return;
   }
 

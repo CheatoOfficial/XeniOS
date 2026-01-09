@@ -34,17 +34,16 @@
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
 #include "xenia/ui/config_dialog_qt.h"
-#include "xenia/ui/confirm_dialog_widget_qt.h"
-#include "xenia/ui/context_menu_widget_qt.h"
-#include "xenia/ui/controller_hotkeys_dialog_qt.h"
 #include "xenia/ui/game_list_dialog_qt.h"
-#include "xenia/ui/notification_widget_qt.h"
-#include "xenia/ui/performance_tuning_dialog_qt.h"
-#include "xenia/ui/postprocessing_dialog_qt.h"
-#include "xenia/ui/profile_dialog_qt.h"
+#include "xenia/ui/imgui_confirm_dialog.h"
+#include "xenia/ui/imgui_context_menu.h"
+#include "xenia/ui/imgui_controller_hotkeys_dialog.h"
+#include "xenia/ui/imgui_performance_dialog.h"
+#include "xenia/ui/imgui_postprocessing_dialog.h"
+#include "xenia/ui/imgui_xmp_dialog.h"
+#include "xenia/ui/profile_dialogs.h"
 #include "xenia/ui/qt_util.h"
 #include "xenia/ui/simple_config_dialog_qt.h"
-#include "xenia/ui/xmp_dialog_qt.h"
 
 #if XE_PLATFORM_WIN32
 #include <windows.h>
@@ -81,6 +80,25 @@
 #endif
 #ifdef Bool
 #undef Bool
+#endif
+// Undefine X11 macros that conflict with Qt's QEvent enum
+#ifdef KeyPress
+#undef KeyPress
+#endif
+#ifdef KeyRelease
+#undef KeyRelease
+#endif
+#ifdef FocusIn
+#undef FocusIn
+#endif
+#ifdef FocusOut
+#undef FocusOut
+#endif
+#ifdef FontChange
+#undef FontChange
+#endif
+#ifdef Expose
+#undef Expose
 #endif
 #endif
 
@@ -1111,84 +1129,76 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
 
 void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
   // If menu is already open, close it instead of opening a new one
-  if (context_menu_widget_qt_) {
-    context_menu_widget_qt_->close();
-    context_menu_widget_qt_ = nullptr;
+  if (context_menu_) {
+    context_menu_->CloseMenu();
+    context_menu_ = nullptr;
     return;
   }
 
-  // Show context menu
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (qt_window) {
-    // Get input system for gamepad navigation support
-    auto input_sys = emulator()->input_system();
+  // Get input system for gamepad navigation support
+  auto input_sys = emulator()->input_system();
 
-    // Create new menu widget each time - just like notification widget
-    auto* context_menu =
-        new ContextMenuWidgetQt(qt_window->qwindow(), input_sys);
-    context_menu_widget_qt_ = context_menu;
+  // Create new ImGui context menu
+  auto* context_menu = new ui::ImGuiContextMenu(imgui_drawer(), input_sys);
+  context_menu_ = context_menu;
 
-    context_menu->AddAction(
-        window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
-        [this]() { ToggleFullscreen(); }, "F11");
+  // Set callback to clear our pointer when menu closes
+  context_menu->SetOnCloseCallback([this]() { context_menu_ = nullptr; });
 
-    context_menu->AddSeparator();
+  context_menu->AddAction(
+      window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
+      [this]() { ToggleFullscreen(); }, "F11");
 
-    context_menu->AddAction(
-        "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); }, "F6");
+  context_menu->AddSeparator();
 
-    context_menu->AddAction(
-        "Performance Settings...",
-        [this]() { TogglePerformanceTuningDialog(); }, "F7");
+  context_menu->AddAction(
+      "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); }, "F6");
 
-    // Get current vibration state
-    bool vibration_enabled = false;
-    if (input_sys) {
-      vibration_enabled = input_sys->GetVibrationCvar();
-    }
+  context_menu->AddAction(
+      "Performance Settings...", [this]() { TogglePerformanceTuningDialog(); },
+      "F7");
 
-    QString vibration_text =
-        QString("Vibration: %1").arg(vibration_enabled ? "On" : "Off");
-    context_menu->AddAction(vibration_text,
-                            [this]() { ToggleControllerVibration(); });
-
-    context_menu->AddAction("Controller Hotkeys...",
-                            [this]() { ToggleControllerHotkeysDialog(); });
-
-    context_menu->AddSeparator();
-
-    context_menu->AddAction(
-        "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
-
-    context_menu->AddAction("Profiles Menu",
-                            [this]() { ToggleProfilesConfigDialog(); });
-
-    context_menu->AddAction("XMP Audio Player",
-                            [this]() { ToggleXMPConfigDialog(); });
-
-    context_menu->AddSeparator();
-
-    context_menu->AddAction("Quit Game", [this, qt_window, input_sys]() {
-      if (ConfirmDialogWidgetQt::Confirm(
-              qt_window->qwindow(), input_sys, "Quit Game",
-              "Are you sure you want to quit?\n\nAny unsaved progress will be "
-              "lost.")) {
-        window_->RequestClose();
-      }
-    });
-
-    // Show menu at cursor position or center of window
-    QPoint global_pos;
-    if (use_cursor_position) {
-      global_pos = QCursor::pos();
-    } else {
-      // Center of window
-      QWidget* qwindow = qt_window->qwindow();
-      global_pos = qwindow->mapToGlobal(
-          QPoint(qwindow->width() / 2, qwindow->height() / 2));
-    }
-    context_menu->ShowAt(global_pos);
+  // Get current vibration state
+  bool vibration_enabled = false;
+  if (input_sys) {
+    vibration_enabled = input_sys->GetVibrationCvar();
   }
+
+  std::string vibration_text =
+      std::string("Vibration: ") + (vibration_enabled ? "On" : "Off");
+  context_menu->AddAction(vibration_text,
+                          [this]() { ToggleControllerVibration(); });
+
+  context_menu->AddAction("Controller Hotkeys...",
+                          [this]() { ToggleControllerHotkeysDialog(); });
+
+  context_menu->AddSeparator();
+
+  context_menu->AddAction(
+      "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
+
+  context_menu->AddAction("Profiles Menu",
+                          [this]() { ToggleProfilesConfigDialog(); });
+
+  context_menu->AddAction("XMP Audio Player",
+                          [this]() { ToggleXMPConfigDialog(); });
+
+  context_menu->AddSeparator();
+
+  context_menu->AddAction("Quit Game", [this, input_sys]() {
+    new ui::ImGuiConfirmDialog(
+        imgui_drawer(), "Quit Game",
+        "Are you sure you want to quit?\n\nAny unsaved progress will be lost.",
+        [this](bool confirmed) {
+          if (confirmed) {
+            window_->RequestClose();
+          }
+        },
+        input_sys);
+  });
+
+  // Show menu centered (ImGui handles positioning)
+  context_menu->Show();
 }
 
 void EmulatorWindow::OnMouseUp(const ui::MouseEvent& e) {
@@ -1243,12 +1253,9 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
       fmt::format("Screenshot saved: {}", filename);
 
   app_context_.CallInUIThread([this, notification_text]() {
-    auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-    if (qt_window) {
-      auto* notification =
-          new NotificationWidgetQt(qt_window->qwindow(), "Screenshot Created!",
-                                   SafeQString(notification_text), 3000);
-      notification->Show();
+    if (imgui_drawer()) {
+      new ui::HostNotificationWindow(imgui_drawer(), "Screenshot Created!",
+                                     notification_text, 0);
     }
   });
 }
@@ -1658,56 +1665,46 @@ void EmulatorWindow::ToggleFullscreen() {
 }
 
 void EmulatorWindow::ToggleDisplayConfigDialog() {
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (!qt_window) {
+  if (postprocessing_dialog_) {
+    postprocessing_dialog_->CloseDialog();
+    postprocessing_dialog_ = nullptr;
     return;
   }
 
-  if (postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_->close();
-    return;
-  }
-
-  postprocessing_dialog_qt_ = new PostProcessingDialogQt(
-      qt_window->qwindow(), this, emulator()->input_system());
-  postprocessing_dialog_qt_->show();
-  postprocessing_dialog_qt_->raise();
-  postprocessing_dialog_qt_->activateWindow();
+  postprocessing_dialog_ = new ui::ImGuiPostProcessingDialog(
+      imgui_drawer(), this, emulator()->input_system());
+  postprocessing_dialog_->SetOnCloseCallback(
+      [this]() { postprocessing_dialog_ = nullptr; });
 }
 
 void EmulatorWindow::TogglePerformanceTuningDialog() {
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (!qt_window) {
+  if (performance_dialog_) {
+    performance_dialog_->CloseDialog();
+    performance_dialog_ = nullptr;
     return;
   }
 
-  if (performance_tuning_dialog_qt_) {
-    performance_tuning_dialog_qt_->close();
-    return;
-  }
-
-  performance_tuning_dialog_qt_ = new PerformanceTuningDialogQt(
-      qt_window->qwindow(), this, emulator()->input_system());
-  performance_tuning_dialog_qt_->show();
-  performance_tuning_dialog_qt_->raise();
-  performance_tuning_dialog_qt_->activateWindow();
+  performance_dialog_ = new ui::ImGuiPerformanceDialog(
+      imgui_drawer(), this, emulator()->input_system());
+  performance_dialog_->SetOnCloseCallback(
+      [this]() { performance_dialog_ = nullptr; });
 }
 
 void EmulatorWindow::ToggleProfilesConfigDialog() {
-  if (!profile_dialog_qt_) {
-    profile_dialog_qt_ =
-        new ProfileDialogQt(nullptr, this, emulator()->input_system());
-    // Refresh game list icons when profile dialog closes
-    QObject::connect(profile_dialog_qt_, &QDialog::finished, [this]() {
-      if (game_list_dialog_qt_) {
-        game_list_dialog_qt_->RefreshIcons();
-      }
-    });
+  if (profile_dialog_) {
+    profile_dialog_->CloseDialog();
+    return;
   }
 
-  profile_dialog_qt_->show();
-  profile_dialog_qt_->raise();
-  profile_dialog_qt_->activateWindow();
+  profile_dialog_ =
+      new ProfileConfigDialog(imgui_drawer(), this, emulator()->input_system());
+  profile_dialog_->SetOnCloseCallback([this]() {
+    profile_dialog_ = nullptr;
+    // Refresh game list icons when profile dialog closes
+    if (game_list_dialog_qt_) {
+      game_list_dialog_qt_->RefreshIcons();
+    }
+  });
 }
 
 void EmulatorWindow::ToggleConfigDialog() {
@@ -1737,21 +1734,15 @@ void EmulatorWindow::OpenConfigDialog(const std::string& category) {
 }
 
 void EmulatorWindow::ToggleXMPConfigDialog() {
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (!qt_window) {
+  if (xmp_dialog_) {
+    xmp_dialog_->CloseDialog();
+    xmp_dialog_ = nullptr;
     return;
   }
 
-  if (xmp_dialog_qt_) {
-    xmp_dialog_qt_->close();
-    return;
-  }
-
-  xmp_dialog_qt_ =
-      new XmpDialogQt(qt_window->qwindow(), this, emulator()->input_system());
-  xmp_dialog_qt_->show();
-  xmp_dialog_qt_->raise();
-  xmp_dialog_qt_->activateWindow();
+  xmp_dialog_ =
+      new ui::ImGuiXmpDialog(imgui_drawer(), this, emulator()->input_system());
+  xmp_dialog_->SetOnCloseCallback([this]() { xmp_dialog_ = nullptr; });
 }
 
 void EmulatorWindow::ToggleControllerVibration() {
@@ -1772,15 +1763,13 @@ void EmulatorWindow::ToggleControllerVibration() {
 
     // Show notification
     bool vibration_enabled = input_sys->GetVibrationCvar();
-    QString status = vibration_enabled ? "On" : "Off";
+    std::string status = vibration_enabled ? "On" : "Off";
 
     app_context_.CallInUIThread([this, status]() {
-      auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-      if (qt_window) {
-        auto* notification = new NotificationWidgetQt(
-            qt_window->qwindow(), "Controller Vibration",
-            QString("Vibration is now %1").arg(status), 2000);
-        notification->Show();
+      if (imgui_drawer()) {
+        new ui::HostNotificationWindow(
+            imgui_drawer(), "Controller Vibration",
+            fmt::format("Vibration is now {}", status), 0);
       }
     });
   }
@@ -2169,12 +2158,9 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
 
   if (!notificationTitle.empty()) {
     app_context_.CallInUIThread([this, notificationTitle, notificationDesc]() {
-      auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-      if (qt_window) {
-        auto* notification = new NotificationWidgetQt(
-            qt_window->qwindow(), SafeQString(notificationTitle),
-            SafeQString(notificationDesc), 3000);
-        notification->Show();
+      if (imgui_drawer()) {
+        new ui::HostNotificationWindow(imgui_drawer(), notificationTitle,
+                                       notificationDesc, 0);
       }
     });
   }
@@ -2313,21 +2299,15 @@ void EmulatorWindow::CycleReadbackResolve() {
 }
 
 void EmulatorWindow::ToggleControllerHotkeysDialog() {
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (!qt_window) {
+  if (controller_hotkeys_dialog_) {
+    controller_hotkeys_dialog_->CloseDialog();
     return;
   }
 
-  if (controller_hotkeys_dialog_qt_) {
-    controller_hotkeys_dialog_qt_->close();
-    return;
-  }
-
-  controller_hotkeys_dialog_qt_ = new ControllerHotkeysDialogQt(
-      qt_window->qwindow(), this, emulator()->input_system());
-  controller_hotkeys_dialog_qt_->show();
-  controller_hotkeys_dialog_qt_->raise();
-  controller_hotkeys_dialog_qt_->activateWindow();
+  controller_hotkeys_dialog_ = new ui::ImGuiControllerHotkeysDialog(
+      imgui_drawer(), this, emulator()->input_system());
+  controller_hotkeys_dialog_->SetOnCloseCallback(
+      [this]() { controller_hotkeys_dialog_ = nullptr; });
 }
 
 std::vector<std::pair<std::string, bool>>
@@ -2546,10 +2526,6 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
   disable_hotkeys_ = false;
 
-  if (postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_->deleteLater();
-  }
-
   ClearDialogs();
 
   if (result) {
@@ -2698,8 +2674,25 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
 }
 
 void EmulatorWindow::ClearDialogs() {
-  if (postprocessing_dialog_qt_) {
-    postprocessing_dialog_qt_->deleteLater();
+  if (postprocessing_dialog_) {
+    postprocessing_dialog_->CloseDialog();
+    postprocessing_dialog_ = nullptr;
+  }
+  if (performance_dialog_) {
+    performance_dialog_->CloseDialog();
+    performance_dialog_ = nullptr;
+  }
+  if (controller_hotkeys_dialog_) {
+    controller_hotkeys_dialog_->CloseDialog();
+    controller_hotkeys_dialog_ = nullptr;
+  }
+  if (xmp_dialog_) {
+    xmp_dialog_->CloseDialog();
+    xmp_dialog_ = nullptr;
+  }
+  if (profile_dialog_) {
+    profile_dialog_->CloseDialog();
+    profile_dialog_ = nullptr;
   }
 
   imgui_drawer_.get()->ClearDialogs();

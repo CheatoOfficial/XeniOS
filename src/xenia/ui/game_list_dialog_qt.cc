@@ -1297,18 +1297,25 @@ void GameListDialogQt::OnSettingsClicked() {
 }
 
 void GameListDialogQt::OnProfileClicked() {
-  // If logged in, show context menu instead
-  if (current_profile_xuid_ != 0) {
-    // Show context menu at the cursor position
-    QPoint global_pos = QCursor::pos();
-    QPoint local_pos = profile_button_->mapFromGlobal(global_pos);
-    OnProfileContextMenu(local_pos);
+  // Left click always opens profile dialog (Qt version for UI process)
+  if (profile_dialog_) {
+    profile_dialog_->raise();
+    profile_dialog_->activateWindow();
     return;
   }
 
-  // Not logged in, open profile dialog via emulator window
-  if (emulator_window_) {
-    emulator_window_->ToggleProfilesConfigDialog();
+  if (emulator_window_ && emulator_window_->emulator()) {
+    profile_dialog_ =
+        new ProfileDialogQt(nullptr, emulator_window_,
+                            emulator_window_->emulator()->input_system());
+    connect(profile_dialog_, &QDialog::finished, this, [this]() {
+      profile_dialog_ = nullptr;
+      UpdateProfileButtonState();
+      RefreshIcons();
+    });
+    profile_dialog_->show();
+    profile_dialog_->raise();
+    profile_dialog_->activateWindow();
   }
 }
 
@@ -1515,8 +1522,25 @@ void GameListDialogQt::OnProfileContextMenu(const QPoint& pos) {
   // Profiles Menu
   QAction* profiles_menu_action = context_menu.addAction("Profiles Menu");
   connect(profiles_menu_action, &QAction::triggered, [this]() {
-    if (emulator_window_) {
-      emulator_window_->ToggleProfilesConfigDialog();
+    // Use Qt profile dialog directly for UI process
+    if (profile_dialog_) {
+      profile_dialog_->raise();
+      profile_dialog_->activateWindow();
+      return;
+    }
+
+    if (emulator_window_ && emulator_window_->emulator()) {
+      profile_dialog_ =
+          new ProfileDialogQt(nullptr, emulator_window_,
+                              emulator_window_->emulator()->input_system());
+      connect(profile_dialog_, &QDialog::finished, this, [this]() {
+        profile_dialog_ = nullptr;
+        UpdateProfileButtonState();
+        RefreshIcons();
+      });
+      profile_dialog_->show();
+      profile_dialog_->raise();
+      profile_dialog_->activateWindow();
     }
   });
 

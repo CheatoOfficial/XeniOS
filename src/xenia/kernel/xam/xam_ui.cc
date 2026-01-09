@@ -234,7 +234,26 @@ X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
   return X_ERROR_SUCCESS;
 }
 
+void MessageBoxDialog::OnGamepadButtonA() {
+  chosen_button_ = focused_button_;
+  Close();
+}
+
+void MessageBoxDialog::OnGamepadDPadLeft() {
+  if (focused_button_ > 0) {
+    focused_button_--;
+  }
+}
+
+void MessageBoxDialog::OnGamepadDPadRight() {
+  if (focused_button_ < buttons_.size() - 1) {
+    focused_button_++;
+  }
+}
+
 void MessageBoxDialog::OnDraw(ImGuiIO& io) {
+  PollGamepad();
+
   bool first_draw = false;
   if (!has_opened_) {
     ImGui::OpenPopup(title_.c_str());
@@ -250,10 +269,19 @@ void MessageBoxDialog::OnDraw(ImGuiIO& io) {
       ImGui::SetKeyboardFocusHere();
     }
     for (size_t i = 0; i < buttons_.size(); ++i) {
+      // Highlight focused button for gamepad navigation
+      bool is_focused = (i == focused_button_);
+      if (is_focused) {
+        ImGui::PushStyleColor(ImGuiCol_Button,
+                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+      }
       if (ImGui::Button(buttons_[i].c_str())) {
         chosen_button_ = static_cast<uint32_t>(i);
         ImGui::CloseCurrentPopup();
         Close();
+      }
+      if (is_focused) {
+        ImGui::PopStyleColor();
       }
       ImGui::SameLine();
     }
@@ -265,7 +293,34 @@ void MessageBoxDialog::OnDraw(ImGuiIO& io) {
   }
 }
 
+void KeyboardInputDialog::OnGamepadButtonA() {
+  if (focused_button_ == 0) {
+    // OK
+    text_ = std::string(text_buffer_.data(), text_buffer_.size());
+    cancelled_ = false;
+  } else {
+    // Cancel
+    text_ = "";
+    cancelled_ = true;
+  }
+  Close();
+}
+
+void KeyboardInputDialog::OnGamepadDPadLeft() {
+  if (focused_button_ > 0) {
+    focused_button_--;
+  }
+}
+
+void KeyboardInputDialog::OnGamepadDPadRight() {
+  if (focused_button_ < 1) {
+    focused_button_++;
+  }
+}
+
 void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
+  PollGamepad();
+
   bool first_draw = false;
   if (!has_opened_) {
     ImGui::OpenPopup(title_.c_str());
@@ -302,18 +357,35 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
       ImGui::CloseCurrentPopup();
       Close();
     }
+    // Highlight focused button for gamepad navigation
+    bool ok_focused = (focused_button_ == 0);
+    if (ok_focused) {
+      ImGui::PushStyleColor(ImGuiCol_Button,
+                            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
     if (ImGui::Button("OK")) {
       text_ = std::string(text_buffer_.data(), text_buffer_.size());
       cancelled_ = false;
       ImGui::CloseCurrentPopup();
       Close();
     }
+    if (ok_focused) {
+      ImGui::PopStyleColor();
+    }
     ImGui::SameLine();
+    bool cancel_focused = (focused_button_ == 1);
+    if (cancel_focused) {
+      ImGui::PushStyleColor(ImGuiCol_Button,
+                            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
     if (ImGui::Button("Cancel")) {
       text_ = "";
       cancelled_ = true;
       ImGui::CloseCurrentPopup();
       Close();
+    }
+    if (cancel_focused) {
+      ImGui::PopStyleColor();
     }
     ImGui::Spacing();
     ImGui::EndPopup();
@@ -361,6 +433,7 @@ static dword_result_t XamShowMessageBoxUi(
 
     const Emulator* emulator = kernel_state()->emulator();
     xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+    xe::hid::InputSystem* input_system = emulator->input_system();
 
     if (flags & XMBox_PASSCODEMODE || flags & XMBox_VERIFYPASSCODEMODE) {
       auto close = [result_ptr,
@@ -383,7 +456,7 @@ static dword_result_t XamShowMessageBoxUi(
       };
 
       result = xeXamDispatchDialog<MessageBoxDialog>(
-          new MessageBoxDialog(imgui_drawer, title, text, buttons,
+          new MessageBoxDialog(imgui_drawer, input_system, title, text, buttons,
                                static_cast<uint32_t>(active_button)),
           close, overlapped);
     }
@@ -492,6 +565,7 @@ dword_result_t XamShowKeyboardUI_entry(
     };
     const Emulator* emulator = kernel_state()->emulator();
     xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+    xe::hid::InputSystem* input_system = emulator->input_system();
 
     std::string title_str = title ? xe::to_utf8(title.value()) : "";
     std::string desc_str = description ? xe::to_utf8(description.value()) : "";
@@ -499,8 +573,8 @@ dword_result_t XamShowKeyboardUI_entry(
         default_text ? xe::to_utf8(default_text.value()) : "";
 
     result = xeXamDispatchDialogEx<KeyboardInputDialog>(
-        new KeyboardInputDialog(imgui_drawer, title_str, desc_str, def_text_str,
-                                buffer_length),
+        new KeyboardInputDialog(imgui_drawer, input_system, title_str, desc_str,
+                                def_text_str, buffer_length),
         close, overlapped);
   }
   return result;
@@ -556,9 +630,10 @@ dword_result_t XamShowDeviceSelectorUI_entry(
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xe::hid::InputSystem* input_system = emulator->input_system();
   return xeXamDispatchDialog<MessageBoxDialog>(
-      new MessageBoxDialog(imgui_drawer, title, desc, buttons, 0), close,
-      overlapped);
+      new MessageBoxDialog(imgui_drawer, input_system, title, desc, buttons, 0),
+      close, overlapped);
 }
 DECLARE_XAM_EXPORT1(XamShowDeviceSelectorUI, kUI, kImplemented);
 
@@ -576,8 +651,9 @@ void XamShowDirtyDiscErrorUI_entry(dword_t user_index) {
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xe::hid::InputSystem* input_system = emulator->input_system();
   xeXamDispatchDialog<MessageBoxDialog>(
-      new MessageBoxDialog(imgui_drawer, title, desc, {"OK"}, 0),
+      new MessageBoxDialog(imgui_drawer, input_system, title, desc, {"OK"}, 0),
       [](MessageBoxDialog*) -> X_RESULT { return X_ERROR_SUCCESS; }, 0);
   // This is death, and should never return.
   // TODO(benvanik): cleaner exit.
@@ -745,8 +821,10 @@ dword_result_t XamShowMarketplaceUIEx_entry(dword_t user_index, dword_t ui_type,
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xe::hid::InputSystem* input_system = emulator->input_system();
   return xeXamDispatchDialogAsync<MessageBoxDialog>(
-      new MessageBoxDialog(imgui_drawer, title, desc, buttons, 0), close);
+      new MessageBoxDialog(imgui_drawer, input_system, title, desc, buttons, 0),
+      close);
 }
 DECLARE_XAM_EXPORT1(XamShowMarketplaceUIEx, kUI, kSketchy);
 
@@ -823,9 +901,10 @@ dword_result_t XamShowMarketplaceDownloadItemsUI_entry(
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xe::hid::InputSystem* input_system = emulator->input_system();
   return xeXamDispatchDialog<MessageBoxDialog>(
-      new MessageBoxDialog(imgui_drawer, title, desc, buttons, 0), close,
-      overlapped);
+      new MessageBoxDialog(imgui_drawer, input_system, title, desc, buttons, 0),
+      close, overlapped);
 }
 DECLARE_XAM_EXPORT1(XamShowMarketplaceDownloadItemsUI, kUI, kSketchy);
 

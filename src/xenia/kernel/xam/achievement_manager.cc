@@ -14,8 +14,8 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/achievement_backends/gpd_achievement_backend.h"
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
-#include "xenia/ui/notification_widget_qt.h"
-#include "xenia/ui/window_qt.h"
+#include "xenia/ui/audio_helper_qt.h"
+#include "xenia/ui/imgui_guest_notification.h"
 
 DEFINE_bool(show_achievement_notification, true,
             "Show achievement notification on screen.", "UI");
@@ -149,16 +149,16 @@ void AchievementManager::ShowAchievementEarnedNotification(
   const Emulator* emulator = kernel_state()->emulator();
   ui::WindowedAppContext& app_context =
       emulator->display_window()->app_context();
+  ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
-  app_context.CallInUIThread([emulator, description]() {
-    auto* qt_window = dynamic_cast<ui::QtWindow*>(emulator->display_window());
-    if (qt_window) {
-      auto* notification = new app::NotificationWidgetQt(
-          qt_window->qwindow(), QString("Achievement unlocked"),
-          QString::fromUtf8(description.c_str()), 4500,
-          true);  // is_achievement = true, plays sound if configured
-      notification->Show();
-    }
+  app_context.CallInUIThread([imgui_drawer, description]() {
+    // Play achievement sound
+    ui::AudioHelperQt::Instance().PlayAchievementSound();
+
+    // Show notification
+    new ui::AchievementNotificationWindow(
+        imgui_drawer, "Achievement unlocked", description, 0,
+        kernel_state()->notification_position_);
   });
 }
 

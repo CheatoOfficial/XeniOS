@@ -19,8 +19,14 @@ class QTimer;
 
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
+#include "xenia/ui/imgui_confirm_dialog.h"
+#include "xenia/ui/imgui_context_menu.h"
+#include "xenia/ui/imgui_controller_hotkeys_dialog.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
+#include "xenia/ui/imgui_performance_dialog.h"
+#include "xenia/ui/imgui_postprocessing_dialog.h"
+#include "xenia/ui/imgui_xmp_dialog.h"
 #include "xenia/ui/immediate_drawer.h"
 #include "xenia/ui/menu_item.h"
 #include "xenia/ui/presenter.h"
@@ -271,15 +277,15 @@ class EmulatorWindow {
   // Disc number after disc swap (0 = use XEX header value)
   uint8_t swapped_disc_number_ = 0;
 
-  QPointer<class PostProcessingDialogQt> postprocessing_dialog_qt_;
-  QPointer<class PerformanceTuningDialogQt> performance_tuning_dialog_qt_;
-  QPointer<class ControllerHotkeysDialogQt> controller_hotkeys_dialog_qt_;
+  ui::ImGuiPostProcessingDialog* postprocessing_dialog_ = nullptr;
+  ui::ImGuiPerformanceDialog* performance_dialog_ = nullptr;
+  ui::ImGuiControllerHotkeysDialog* controller_hotkeys_dialog_ = nullptr;
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
-  QPointer<class ProfileDialogQt> profile_dialog_qt_;
+  ProfileConfigDialog* profile_dialog_ = nullptr;
   QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;
   QPointer<class ConfigDialogQt> config_dialog_qt_;
-  QPointer<class ContextMenuWidgetQt> context_menu_widget_qt_;
-  QPointer<class XmpDialogQt> xmp_dialog_qt_;
+  ui::ImGuiContextMenu* context_menu_ = nullptr;
+  ui::ImGuiXmpDialog* xmp_dialog_ = nullptr;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
 

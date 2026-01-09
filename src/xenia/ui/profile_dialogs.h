@@ -10,8 +10,11 @@
 #ifndef XENIA_UI_PROFILE_DIALOGS_H_
 #define XENIA_UI_PROFILE_DIALOGS_H_
 
+#include <functional>
+
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
+#include "xenia/ui/imgui_gamepad_dialog.h"
 #include "xenia/xbox.h"
 
 namespace xe {
@@ -31,16 +34,29 @@ class NoProfileDialog final : public ui::ImGuiDialog {
   EmulatorWindow* emulator_window_;
 };
 
-class ProfileConfigDialog final : public ui::ImGuiDialog {
+class ProfileConfigDialog final : public ui::ImGuiGamepadDialog {
  public:
   ProfileConfigDialog(ui::ImGuiDrawer* imgui_drawer,
-                      EmulatorWindow* emulator_window)
-      : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {
+                      EmulatorWindow* emulator_window,
+                      hid::InputSystem* input_system)
+      : ui::ImGuiGamepadDialog(imgui_drawer, input_system),
+        emulator_window_(emulator_window) {
     LoadProfileIcon();
+  }
+
+  void CloseDialog() { Close(); }
+
+  void SetOnCloseCallback(std::function<void()> callback) {
+    on_close_callback_ = std::move(callback);
   }
 
  protected:
   void OnDraw(ImGuiIO& io) override;
+  void OnClose() override {
+    if (on_close_callback_) {
+      on_close_callback_();
+    }
+  }
 
  private:
   void LoadProfileIcon();
@@ -50,6 +66,7 @@ class ProfileConfigDialog final : public ui::ImGuiDialog {
 
   uint64_t selected_xuid_ = 0;
   EmulatorWindow* emulator_window_;
+  std::function<void()> on_close_callback_;
 };
 
 }  // namespace app

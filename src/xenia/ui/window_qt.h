@@ -15,6 +15,7 @@
 
 #include <QMainWindow>
 #include <QWidget>
+#include <QWindow>
 
 #include "xenia/ui/menu_item.h"
 #include "xenia/ui/window.h"
@@ -25,6 +26,7 @@ namespace ui {
 class QtWindowedAppContext;
 
 class QtWindowInternal;
+class GameQWindow;
 
 class QtWindow : public Window {
   using super = Window;
@@ -35,11 +37,14 @@ class QtWindow : public Window {
            bool is_game_process = false);
   ~QtWindow() override;
 
+  // UI process window (QMainWindow with menu bar)
   QMainWindow* qwindow() const { return qwindow_; }
+  // Game process window (native QWindow)
+  GameQWindow* game_window() const { return game_qwindow_; }
 
   void TriggerPaint() { OnPaint(); }
 
-  // Public accessors for event handling from ExternalRenderWidget
+  // Public accessors for event handling from GameQWindow
   void OnMouseMoveEvent(QMouseEvent* event);
   void OnMousePressEvent(QMouseEvent* event);
   void OnMouseReleaseEvent(QMouseEvent* event);
@@ -65,7 +70,11 @@ class QtWindow : public Window {
 
  private:
   friend class QtWindowInternal;
-  friend class ExternalRenderWidget;
+  friend class GameQWindow;
+
+  // Separate open implementations for UI vs game process
+  bool OpenUIWindow();
+  bool OpenGameWindow();
 
   void HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver);
   static VirtualKey TranslateVirtualKey(int qt_key);
@@ -82,8 +91,11 @@ class QtWindow : public Window {
   void OnCursorAutoHideTimeout();
   void UpdateCursorVisibility();
 
+  // UI process window (QMainWindow with menu bar, pure Qt widgets)
   QMainWindow* qwindow_ = nullptr;
-  QWidget* drawing_widget_ = nullptr;
+
+  // Game process window (native QWindow for rendering)
+  GameQWindow* game_qwindow_ = nullptr;
 
   bool in_size_update_ = false;
   bool is_game_process_ = false;
@@ -112,6 +124,30 @@ class QtMenuItem : public MenuItem {
 
   QAction* action_ = nullptr;
   QMenu* menu_ = nullptr;
+};
+
+// Native QWindow for game process rendering (similar to RPCS3's gs_frame)
+// Used instead of QWidget to avoid Qt painting system overhead
+class GameQWindow : public QWindow {
+ public:
+  explicit GameQWindow(QtWindow* window);
+
+ protected:
+  void exposeEvent(QExposeEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
+  void mouseDoubleClickEvent(QMouseEvent* event) override;
+  void wheelEvent(QWheelEvent* event) override;
+  void focusInEvent(QFocusEvent* event) override;
+  void focusOutEvent(QFocusEvent* event) override;
+  bool event(QEvent* event) override;
+
+ private:
+  QtWindow* window_;
 };
 
 }  // namespace ui

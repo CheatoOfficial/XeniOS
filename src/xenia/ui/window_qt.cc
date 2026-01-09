@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QCursor>
+#include <QExposeEvent>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QIcon>
@@ -21,6 +22,7 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -51,86 +53,7 @@ inline void InitializeUIResources() { Q_INIT_RESOURCE(ui_resources); }
 namespace xe {
 namespace ui {
 
-// Custom widget for external rendering (Vulkan/D3D12)
-class ExternalRenderWidget : public QWidget {
- public:
-  explicit ExternalRenderWidget(QtWindow* window, QWidget* parent = nullptr)
-      : QWidget(parent), window_(window) {
-    setAttribute(Qt::WA_PaintOnScreen);
-    setAttribute(Qt::WA_NoSystemBackground);
-    setAttribute(Qt::WA_OpaquePaintEvent);
-
-    // Enable mouse tracking for ImGui hover
-    setMouseTracking(true);
-    // Don't accept keyboard focus - let the main window handle keyboard events
-    setFocusPolicy(Qt::NoFocus);
-  }
-
-  QPaintEngine* paintEngine() const override {
-    // Return nullptr to indicate external rendering
-    return nullptr;
-  }
-
-#if defined(XE_PLATFORM_WIN32)
-  bool nativeEvent(const QByteArray& eventType, void* message,
-                   qintptr* result) override {
-    if (eventType == "windows_generic_MSG") {
-      MSG* msg = static_cast<MSG*>(message);
-      if (msg->message == WM_ERASEBKGND) {
-        // Don't erase background - D3D12 handles all rendering
-        *result = 1;
-        return true;
-      }
-    }
-    return QWidget::nativeEvent(eventType, message, result);
-  }
-#endif
-
- protected:
-  void paintEvent(QPaintEvent*) override {
-    // Trigger the presenter to paint (Vulkan/D3D12 renders directly)
-    if (window_) {
-      window_->TriggerPaint();
-    }
-  }
-
-  void mouseMoveEvent(QMouseEvent* event) override {
-    if (window_) {
-      window_->OnMouseMoveEvent(event);
-    }
-  }
-
-  void mousePressEvent(QMouseEvent* event) override {
-    if (window_) {
-      window_->OnMousePressEvent(event);
-    }
-    event->accept();
-  }
-
-  void mouseReleaseEvent(QMouseEvent* event) override {
-    if (window_) {
-      window_->OnMouseReleaseEvent(event);
-    }
-    event->accept();
-  }
-
-  void mouseDoubleClickEvent(QMouseEvent* event) override {
-    if (window_) {
-      window_->OnMouseDoubleClickEvent(event);
-    }
-    event->accept();
-  }
-
-  void wheelEvent(QWheelEvent* event) override {
-    if (window_) {
-      window_->OnWheelEvent(event);
-    }
-  }
-
- private:
-  QtWindow* window_;
-};
-
+// Internal QMainWindow for UI process (game list, menu bar)
 class QtWindowInternal : public QMainWindow {
  public:
   explicit QtWindowInternal(QtWindow* window) : window_(window) {}
@@ -173,6 +96,105 @@ class QtWindowInternal : public QMainWindow {
   QtWindow* window_;
 };
 
+// GameQWindow implementation - native QWindow for game process rendering
+GameQWindow::GameQWindow(QtWindow* window) : QWindow(), window_(window) {
+  // RasterSurface is appropriate for D3D12/Vulkan external rendering
+  setSurfaceType(QSurface::RasterSurface);
+}
+
+void GameQWindow::exposeEvent(QExposeEvent* event) {
+  QWindow::exposeEvent(event);
+  if (isExposed() && window_) {
+    window_->TriggerPaint();
+  }
+}
+
+void GameQWindow::resizeEvent(QResizeEvent* event) {
+  QWindow::resizeEvent(event);
+  if (window_) {
+    window_->OnResizeEvent(event);
+  }
+}
+
+void GameQWindow::keyPressEvent(QKeyEvent* event) {
+  if (window_) {
+    window_->OnKeyPressEvent(event);
+  }
+}
+
+void GameQWindow::keyReleaseEvent(QKeyEvent* event) {
+  if (window_) {
+    window_->OnKeyReleaseEvent(event);
+  }
+}
+
+void GameQWindow::mouseMoveEvent(QMouseEvent* event) {
+  if (window_) {
+    window_->OnMouseMoveEvent(event);
+  }
+}
+
+void GameQWindow::mousePressEvent(QMouseEvent* event) {
+  if (window_) {
+    window_->OnMousePressEvent(event);
+  }
+}
+
+void GameQWindow::mouseReleaseEvent(QMouseEvent* event) {
+  if (window_) {
+    window_->OnMouseReleaseEvent(event);
+  }
+}
+
+void GameQWindow::mouseDoubleClickEvent(QMouseEvent* event) {
+  if (window_) {
+    window_->OnMouseDoubleClickEvent(event);
+  }
+}
+
+void GameQWindow::wheelEvent(QWheelEvent* event) {
+  if (window_) {
+    window_->OnWheelEvent(event);
+  }
+}
+
+void GameQWindow::focusInEvent(QFocusEvent* event) {
+  QWindow::focusInEvent(event);
+  if (window_) {
+    window_->OnFocusInEvent(event);
+  }
+}
+
+void GameQWindow::focusOutEvent(QFocusEvent* event) {
+  QWindow::focusOutEvent(event);
+  if (window_) {
+    window_->OnFocusOutEvent(event);
+  }
+}
+
+bool GameQWindow::event(QEvent* event) {
+  switch (event->type()) {
+    case QEvent::Close:
+      if (window_) {
+        window_->OnCloseEvent(static_cast<QCloseEvent*>(event));
+      }
+      return true;
+    case QEvent::WindowActivate:
+      if (window_) {
+        window_->OnFocusInEvent(nullptr);
+      }
+      break;
+    case QEvent::WindowDeactivate:
+      if (window_) {
+        window_->OnFocusOutEvent(nullptr);
+      }
+      break;
+    default:
+      break;
+  }
+  return QWindow::event(event);
+}
+
 std::unique_ptr<MenuItem> MenuItem::Create(Type type, const std::string& text,
                                            const std::string& hotkey,
                                            std::function<void()> callback) {
@@ -201,10 +223,13 @@ QtWindow::~QtWindow() {
     delete cursor_auto_hide_timer_;
     cursor_auto_hide_timer_ = nullptr;
   }
+  if (game_qwindow_) {
+    delete game_qwindow_;
+    game_qwindow_ = nullptr;
+  }
   if (qwindow_) {
     delete qwindow_;
     qwindow_ = nullptr;
-    drawing_widget_ = nullptr;
   }
 }
 
@@ -212,6 +237,96 @@ bool QtWindow::OpenImpl() {
   // Initialize Qt resources (needed for app icon)
   InitializeUIResources();
 
+  // Branch based on window type
+  if (is_game_process_) {
+    return OpenGameWindow();
+  } else {
+    return OpenUIWindow();
+  }
+}
+
+bool QtWindow::OpenGameWindow() {
+  // Create native QWindow for game rendering (no Qt widget overhead)
+  game_qwindow_ = new GameQWindow(this);
+  game_qwindow_->setTitle(
+      QString::fromUtf8(GetTitle().data(), GetTitle().size()));
+
+  // Set default application icon
+  QIcon app_icon(":/xenia/icon.png");
+  if (!app_icon.isNull()) {
+    game_qwindow_->setIcon(app_icon);
+    QGuiApplication::setWindowIcon(app_icon);
+  }
+
+  // Use the screen where the cursor is, falling back to primary
+  QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+  if (!screen) {
+    screen = QGuiApplication::primaryScreen();
+  }
+
+  // Position window on target screen
+  if (screen) {
+    game_qwindow_->setScreen(screen);
+    QRect screen_geometry = screen->availableGeometry();
+    int x = screen_geometry.x() +
+            (screen_geometry.width() - GetDesiredLogicalWidth()) / 2;
+    int y = screen_geometry.y() +
+            (screen_geometry.height() - GetDesiredLogicalHeight()) / 2;
+    game_qwindow_->setPosition(x, y);
+  }
+
+  game_qwindow_->resize(GetDesiredLogicalWidth(), GetDesiredLogicalHeight());
+
+  if (IsFullscreen()) {
+    game_qwindow_->showFullScreen();
+  } else {
+    game_qwindow_->show();
+  }
+
+  // Bring window to foreground
+  game_qwindow_->requestActivate();
+  game_qwindow_->raise();
+
+  // Ensure native window is created
+  game_qwindow_->winId();
+
+  {
+    WindowDestructionReceiver destruction_receiver(this);
+
+    // Notify that the window is on a monitor (required for presenter to paint)
+    MonitorUpdateEvent monitor_event(this, false);
+    OnMonitorUpdate(monitor_event);
+
+    OnActualSizeUpdate(uint32_t(game_qwindow_->width()),
+                       uint32_t(game_qwindow_->height()), destruction_receiver);
+    if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+      return true;
+    }
+
+    if (game_qwindow_->isActive()) {
+      OnFocusUpdate(true, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        return true;
+      }
+    }
+  }
+
+  // Initialize cursor visibility state
+  cursor_currently_auto_hidden_ = false;
+  CursorVisibility cursor_visibility = GetCursorVisibility();
+  if (cursor_visibility == CursorVisibility::kAutoHidden) {
+    cursor_auto_hide_last_pos_ = QCursor::pos();
+    SetCursorAutoHideTimer();
+  } else if (cursor_visibility == CursorVisibility::kHidden) {
+    UpdateCursorVisibility();
+  }
+
+  return true;
+}
+
+bool QtWindow::OpenUIWindow() {
+  // Create QMainWindow for UI process (with menu bar support)
+  // UI process uses pure Qt widgets - no rendering surface needed
   qwindow_ = new QtWindowInternal(this);
   qwindow_->setWindowTitle(
       QString::fromUtf8(GetTitle().data(), GetTitle().size()));
@@ -238,6 +353,7 @@ bool QtWindow::OpenImpl() {
     XELOGW("Failed to load window icon from Qt resources");
   }
 
+  // Create simple central widget with layout for game list
   QWidget* central_widget = new QWidget(qwindow_);
   qwindow_->setCentralWidget(central_widget);
 
@@ -245,17 +361,8 @@ bool QtWindow::OpenImpl() {
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
 
-  drawing_widget_ = new ExternalRenderWidget(this, central_widget);
-  drawing_widget_->setMinimumSize(GetDesiredLogicalWidth(),
-                                  GetDesiredLogicalHeight());
-
-  // Force creation of native window for external rendering
-  drawing_widget_->setAttribute(Qt::WA_NativeWindow);
-  drawing_widget_->setAutoFillBackground(false);
-
-  drawing_widget_->installEventFilter(qwindow_);
-
-  layout->addWidget(drawing_widget_);
+  // Note: No ExternalRenderWidget created - UI process uses pure Qt widgets
+  // The GameListDialogQt will be added to this layout in OnEmulatorInitialized
 
   const auto* main_menu = dynamic_cast<const QtMenuItem*>(GetMainMenu());
   if (main_menu) {
@@ -274,7 +381,7 @@ bool QtWindow::OpenImpl() {
     screen = QGuiApplication::primaryScreen();
   }
 
-  // Position window on target screen (required for correct fullscreen monitor)
+  // Position window on target screen
   if (screen) {
     QRect screen_geometry = screen->availableGeometry();
     int x = screen_geometry.x() +
@@ -295,64 +402,40 @@ bool QtWindow::OpenImpl() {
   qwindow_->activateWindow();
   qwindow_->raise();
 
-  // Ensure native window is created by accessing winId()
-  // This must be done after show() so Qt creates the platform window
-  drawing_widget_->winId();
-
-  drawing_widget_->setMinimumSize(0, 0);
-
-  {
-    WindowDestructionReceiver destruction_receiver(this);
-
-    // Notify that the window is on a monitor (required for presenter to paint)
-    MonitorUpdateEvent monitor_event(this, false);
-    OnMonitorUpdate(monitor_event);
-
-    OnActualSizeUpdate(uint32_t(drawing_widget_->width()),
-                       uint32_t(drawing_widget_->height()),
-                       destruction_receiver);
-    if (destruction_receiver.IsWindowDestroyedOrClosed()) {
-      return true;
-    }
-
-    if (qwindow_->isActiveWindow()) {
-      OnFocusUpdate(true, destruction_receiver);
-      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
-        return true;
-      }
-    }
-  }
-
-  // Initialize cursor visibility state
-  cursor_currently_auto_hidden_ = false;
-  CursorVisibility cursor_visibility = GetCursorVisibility();
-  if (cursor_visibility == CursorVisibility::kAutoHidden) {
-    cursor_auto_hide_last_pos_ = QCursor::pos();
-    // Start the auto-hide timer immediately
-    SetCursorAutoHideTimer();
-  } else if (cursor_visibility == CursorVisibility::kHidden) {
-    UpdateCursorVisibility();
-  }
-
   return true;
 }
 
 void QtWindow::RequestCloseImpl() {
-  if (qwindow_) qwindow_->close();
+  if (game_qwindow_) {
+    game_qwindow_->close();
+  } else if (qwindow_) {
+    qwindow_->close();
+  }
 }
 
 void QtWindow::ApplyNewFullscreen() {
-  if (!qwindow_) return;
   WindowDestructionReceiver destruction_receiver(this);
 
-  if (IsFullscreen()) {
-    qwindow_->menuBar()->hide();
-    qwindow_->showFullScreen();
-  } else {
-    qwindow_->showNormal();
-    if (GetMainMenu()) {
-      qwindow_->menuBar()->show();
+  if (game_qwindow_) {
+    // Game window (QWindow) - simple fullscreen toggle
+    if (IsFullscreen()) {
+      game_qwindow_->showFullScreen();
+    } else {
+      game_qwindow_->showNormal();
     }
+  } else if (qwindow_) {
+    // UI window (QMainWindow) - handle menu bar visibility
+    if (IsFullscreen()) {
+      qwindow_->menuBar()->hide();
+      qwindow_->showFullScreen();
+    } else {
+      qwindow_->showNormal();
+      if (GetMainMenu()) {
+        qwindow_->menuBar()->show();
+      }
+    }
+  } else {
+    return;
   }
 
   if (!destruction_receiver.IsWindowDestroyedOrClosed()) {
@@ -361,15 +444,17 @@ void QtWindow::ApplyNewFullscreen() {
 }
 
 void QtWindow::ApplyNewTitle() {
-  if (qwindow_) {
-    qwindow_->setWindowTitle(
-        QString::fromUtf8(GetTitle().data(), GetTitle().size()));
+  QString title = QString::fromUtf8(GetTitle().data(), GetTitle().size());
+  if (game_qwindow_) {
+    game_qwindow_->setTitle(title);
+  } else if (qwindow_) {
+    qwindow_->setWindowTitle(title);
   }
 }
 
 void QtWindow::LoadAndApplyIcon(const void* buffer, size_t size,
                                 bool can_apply_state_in_current_phase) {
-  if (!qwindow_) {
+  if (!game_qwindow_ && !qwindow_) {
     return;
   }
 
@@ -377,28 +462,44 @@ void QtWindow::LoadAndApplyIcon(const void* buffer, size_t size,
 
   if (reset) {
     // Reset to default/no icon
-    qwindow_->setWindowIcon(QIcon());
+    if (game_qwindow_) {
+      game_qwindow_->setIcon(QIcon());
+    } else if (qwindow_) {
+      qwindow_->setWindowIcon(QIcon());
+    }
   } else {
     // Load icon from buffer (typically from game executable)
     QPixmap pixmap;
     if (pixmap.loadFromData(static_cast<const uchar*>(buffer),
                             static_cast<uint>(size))) {
       QIcon icon(pixmap);
-      qwindow_->setWindowIcon(icon);
-      // Also set the application-level icon for taskbar/dock
       QGuiApplication::setWindowIcon(icon);
 
+      if (game_qwindow_) {
+        game_qwindow_->setIcon(icon);
 #if defined(XE_PLATFORM_WIN32)
-      // On Windows, also set via Win32 API for taskbar
-      HWND hwnd = reinterpret_cast<HWND>(qwindow_->winId());
-      if (hwnd) {
-        HICON hicon = icon.pixmap(32, 32).toImage().toHICON();
-        if (hicon) {
-          SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
-          SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hicon);
+        HWND hwnd = reinterpret_cast<HWND>(game_qwindow_->winId());
+        if (hwnd) {
+          HICON hicon = icon.pixmap(32, 32).toImage().toHICON();
+          if (hicon) {
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hicon);
+          }
         }
-      }
 #endif
+      } else if (qwindow_) {
+        qwindow_->setWindowIcon(icon);
+#if defined(XE_PLATFORM_WIN32)
+        HWND hwnd = reinterpret_cast<HWND>(qwindow_->winId());
+        if (hwnd) {
+          HICON hicon = icon.pixmap(32, 32).toImage().toHICON();
+          if (hicon) {
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hicon);
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hicon);
+          }
+        }
+#endif
+      }
     }
   }
 }
@@ -445,7 +546,10 @@ void QtWindow::ApplyNewCursorVisibility(
 }
 
 void QtWindow::FocusImpl() {
-  if (qwindow_) {
+  if (game_qwindow_) {
+    game_qwindow_->requestActivate();
+    game_qwindow_->raise();
+  } else if (qwindow_) {
     qwindow_->activateWindow();
     qwindow_->raise();
   }
@@ -453,52 +557,40 @@ void QtWindow::FocusImpl() {
 
 std::unique_ptr<Surface> QtWindow::CreateSurfaceImpl(
     Surface::TypeFlags allowed_types) {
-  if (!drawing_widget_) {
-    XELOGE("CreateSurfaceImpl: drawing_widget_ is null");
+  // UI process doesn't do any rendering - pure Qt widgets
+  if (!is_game_process_) {
+    return nullptr;
+  }
+
+  // Game process needs a rendering surface
+  if (!game_qwindow_) {
+    XELOGE("CreateSurfaceImpl: game_qwindow_ is null for game process");
     return nullptr;
   }
 
 #if defined(XE_PLATFORM_LINUX)
-  XELOGI(
-      "CreateSurfaceImpl: is_game_process={}, platform={}, "
-      "allowed_types=0x{:x}",
-      is_game_process_, QGuiApplication::platformName().toStdString(),
-      allowed_types);
+  XELOGI("CreateSurfaceImpl: platform={}, allowed_types=0x{:x}",
+         QGuiApplication::platformName().toStdString(), allowed_types);
 
-  // UI process on Wayland: Don't create surfaces, Qt handles rendering natively
-  if (!is_game_process_ && QGuiApplication::platformName() == "wayland") {
-    XELOGI(
-        "CreateSurfaceImpl: UI process on Wayland, skipping surface creation "
-        "(Qt renders natively)");
-    return nullptr;
-  }
-
-  // Game process on Wayland: Use native Wayland surfaces for Vulkan
-  if (is_game_process_ && (allowed_types & Surface::kTypeFlag_WaylandWindow)) {
-    XELOGI(
-        "CreateSurfaceImpl: Attempting Wayland surface creation for game "
-        "process");
+  // Try Wayland surface first
+  if (allowed_types & Surface::kTypeFlag_WaylandWindow) {
     auto* waylandApp =
         qApp->nativeInterface<QNativeInterface::QWaylandApplication>();
     if (waylandApp) {
       wl_display* display = waylandApp->display();
       if (display) {
-        QWindow* window = drawing_widget_->windowHandle();
-        if (window) {
-          auto* waylandWindow = window->nativeInterface<
-              QNativeInterface::Private::QWaylandWindow>();
-          if (waylandWindow) {
-            wl_surface* surface = waylandWindow->surface();
-            if (surface) {
-              uint32_t width = drawing_widget_->width();
-              uint32_t height = drawing_widget_->height();
-              XELOGI(
-                  "CreateSurfaceImpl: Created Wayland surface (game process), "
-                  "size={}x{}",
-                  width, height);
-              return std::make_unique<WaylandWindowSurface>(display, surface,
-                                                            width, height);
-            }
+        auto* waylandWindow =
+            game_qwindow_
+                ->nativeInterface<QNativeInterface::Private::QWaylandWindow>();
+        if (waylandWindow) {
+          wl_surface* surface = waylandWindow->surface();
+          if (surface) {
+            uint32_t width = game_qwindow_->width();
+            uint32_t height = game_qwindow_->height();
+            XELOGI("CreateSurfaceImpl: Created Wayland surface, size={}x{}",
+                   width, height);
+            return std::make_unique<WaylandWindowSurface>(display, surface,
+                                                          width, height);
           }
         }
         XELOGW(
@@ -508,7 +600,7 @@ std::unique_ptr<Surface> QtWindow::CreateSurfaceImpl(
     }
   }
 
-  // Use XCB for UI process or as fallback
+  // Fall back to XCB
   if (allowed_types & Surface::kTypeFlag_XcbWindow) {
     auto* x11App = qApp->nativeInterface<QNativeInterface::QX11Application>();
     if (!x11App) {
@@ -520,20 +612,21 @@ std::unique_ptr<Surface> QtWindow::CreateSurfaceImpl(
       XELOGE("CreateSurfaceImpl: XCB connection is null");
       return nullptr;
     }
-    xcb_window_t window = static_cast<xcb_window_t>(drawing_widget_->winId());
+    xcb_window_t window = static_cast<xcb_window_t>(game_qwindow_->winId());
     XELOGI("CreateSurfaceImpl: Created XCB surface with window ID: 0x{:x}",
            window);
     return std::make_unique<XcbWindowSurface>(connection, window);
   }
-  XELOGE("CreateSurfaceImpl: XcbWindow not in allowed_types ({})",
+
+  XELOGE("CreateSurfaceImpl: No supported surface type in allowed_types ({})",
          allowed_types);
   return nullptr;
 #elif defined(XE_PLATFORM_WIN32)
   if (allowed_types & Surface::kTypeFlag_Win32Hwnd) {
     auto& qt_context = static_cast<const QtWindowedAppContext&>(app_context());
-    HWND hwnd = reinterpret_cast<HWND>(drawing_widget_->winId());
+    HWND hwnd = reinterpret_cast<HWND>(game_qwindow_->winId());
     if (!hwnd || !IsWindow(hwnd)) {
-      XELOGE("CreateSurfaceImpl: Invalid HWND from drawing_widget_->winId()");
+      XELOGE("CreateSurfaceImpl: Invalid HWND");
       return nullptr;
     }
     return std::make_unique<Win32HwndSurface>(qt_context.hinstance(), hwnd);
@@ -545,22 +638,31 @@ std::unique_ptr<Surface> QtWindow::CreateSurfaceImpl(
 }
 
 void QtWindow::RequestPaintImpl() {
-  // Trigger a paint event which will call OnPaint() via
-  // ExternalRenderWidget::paintEvent
-  if (drawing_widget_) {
-    drawing_widget_->update();
+  // Only game process does rendering
+  if (!game_qwindow_) {
+    return;
   }
+
+  // For QWindow, we need to trigger a paint as immediately as possible.
+  // QTimer::singleShot(0, ...) executes on the next event loop iteration,
+  // which is more immediate than requestUpdate() which may be batched.
+  QTimer::singleShot(0, game_qwindow_, [this]() {
+    if (game_qwindow_) {
+      TriggerPaint();
+    }
+  });
 }
 
 void QtWindow::HandleSizeUpdate(
     WindowDestructionReceiver& destruction_receiver) {
-  if (in_size_update_ || !drawing_widget_) {
+  // Only game process needs size updates for rendering
+  if (in_size_update_ || !game_qwindow_) {
     return;
   }
 
   in_size_update_ = true;
-  OnActualSizeUpdate(uint32_t(drawing_widget_->width()),
-                     uint32_t(drawing_widget_->height()), destruction_receiver);
+  OnActualSizeUpdate(uint32_t(game_qwindow_->width()),
+                     uint32_t(game_qwindow_->height()), destruction_receiver);
   in_size_update_ = false;
 }
 
@@ -962,10 +1064,16 @@ void QtWindow::SetCursorAutoHideTimer() {
     cursor_auto_hide_timer_ = nullptr;
   }
 
-  // Create new single-shot timer
-  cursor_auto_hide_timer_ = new QTimer(qwindow_);
+  // Create new single-shot timer - parent to the active window object
+  QObject* parent = game_qwindow_ ? static_cast<QObject*>(game_qwindow_)
+                                  : static_cast<QObject*>(qwindow_);
+  if (!parent) {
+    return;
+  }
+
+  cursor_auto_hide_timer_ = new QTimer(parent);
   cursor_auto_hide_timer_->setSingleShot(true);
-  QObject::connect(cursor_auto_hide_timer_, &QTimer::timeout, qwindow_,
+  QObject::connect(cursor_auto_hide_timer_, &QTimer::timeout, parent,
                    [this]() { OnCursorAutoHideTimeout(); });
   cursor_auto_hide_timer_->start(kDefaultCursorAutoHideMilliseconds);
 }
@@ -984,20 +1092,17 @@ void QtWindow::OnCursorAutoHideTimeout() {
 }
 
 void QtWindow::UpdateCursorVisibility() {
-  if (!qwindow_ || !drawing_widget_) {
-    return;
-  }
-
   CursorVisibility visibility = GetCursorVisibility();
+  bool should_hide = (visibility == CursorVisibility::kHidden ||
+                      (visibility == CursorVisibility::kAutoHidden &&
+                       cursor_currently_auto_hidden_));
 
-  if (visibility == CursorVisibility::kHidden ||
-      (visibility == CursorVisibility::kAutoHidden &&
-       cursor_currently_auto_hidden_)) {
-    drawing_widget_->setCursor(Qt::BlankCursor);
-    qwindow_->setCursor(Qt::BlankCursor);
-  } else {
-    drawing_widget_->setCursor(Qt::ArrowCursor);
-    qwindow_->setCursor(Qt::ArrowCursor);
+  Qt::CursorShape cursor = should_hide ? Qt::BlankCursor : Qt::ArrowCursor;
+
+  if (game_qwindow_) {
+    game_qwindow_->setCursor(cursor);
+  } else if (qwindow_) {
+    qwindow_->setCursor(cursor);
   }
 }
 

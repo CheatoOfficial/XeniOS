@@ -126,6 +126,10 @@ void ImGuiDrawer::AddNotification(ImGuiNotification* dialog) {
     }
   }
   notifications_.push_back(dialog);
+  // Request a paint to start the draw cycle for the new notification
+  if (presenter_) {
+    presenter_->RequestUIPaintFromUIThread();
+  }
 }
 
 void ImGuiDrawer::RemoveNotification(ImGuiNotification* dialog) {
@@ -225,6 +229,12 @@ void ImGuiDrawer::LoadInputSystem(hid::InputSystem* input_system) {
 
 void ImGuiDrawer::SetGuideButtonAction(std::function<void(uint8_t)> func) {
   onGuidePressFunction_ = func;
+}
+
+void ImGuiDrawer::PostDeferredCallback(std::function<void()> callback) {
+  if (window_) {
+    window_->app_context().CallInUIThreadDeferred(std::move(callback));
+  }
 }
 
 std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
@@ -931,7 +941,8 @@ void ImGuiDrawer::UpdateGamepads() {
   uint8_t controller_to_poke = XUserIndexNone;
   hid::X_INPUT_STATE gamepad_state;
   for (uint8_t i = 0; i < XUserMaxUserCount; i++) {
-    if (input_system_->GetState(i, 1, &gamepad_state) == X_ERROR_SUCCESS) {
+    // Use GetStateForUI so ImGui navigation works even when input is blocked
+    if (input_system_->GetStateForUI(i, 1, &gamepad_state) == X_ERROR_SUCCESS) {
       if (gamepad_state.gamepad.buttons != 0) {
         controller_to_poke = i;
         break;

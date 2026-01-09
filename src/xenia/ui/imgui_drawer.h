@@ -94,6 +94,9 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   void LoadInputSystem(hid::InputSystem* input_system);
   void SetGuideButtonAction(std::function<void(uint8_t)> func);
 
+  // Post a callback to be executed after the current frame completes
+  void PostDeferredCallback(std::function<void()> callback);
+
  protected:
   void OnKeyDown(KeyEvent& e) override;
   void OnKeyUp(KeyEvent& e) override;
