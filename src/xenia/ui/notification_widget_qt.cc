@@ -9,13 +9,10 @@
 
 #include "xenia/ui/notification_widget_qt.h"
 
-#include <QUrl>
 #include <QVBoxLayout>
-#include <filesystem>
 
 #include "xenia/base/cvar.h"
-#include "xenia/base/string.h"
-#include "xenia/ui/qt_util.h"
+#include "xenia/ui/audio_helper.h"
 
 DEFINE_path(achievement_sound_path, "",
             "Path (including filename) to achievement unlock sound. "
@@ -25,13 +22,11 @@ DEFINE_path(achievement_sound_path, "",
 namespace xe {
 namespace app {
 
-using xe::ui::SafeQString;
-
 NotificationWidgetQt::NotificationWidgetQt(QWidget* parent,
                                            const QString& title,
                                            const QString& message,
                                            int duration_ms, bool is_achievement)
-    : QWidget(parent), media_player_(nullptr), audio_output_(nullptr) {
+    : QWidget(parent), is_achievement_(is_achievement) {
   setAttribute(Qt::WA_DeleteOnClose);
   setAttribute(Qt::WA_TransparentForMouseEvents);
   setAutoFillBackground(true);
@@ -70,20 +65,6 @@ NotificationWidgetQt::NotificationWidgetQt(QWidget* parent,
     deleteLater();  // Ensure widget is actually destroyed
   });
   auto_close_timer_->setInterval(duration_ms);
-
-  // Setup media player for achievement sound (only for achievement
-  // notifications)
-  if (is_achievement && !cvars::achievement_sound_path.empty()) {
-    std::filesystem::path sound_path = cvars::achievement_sound_path;
-    if (std::filesystem::exists(sound_path)) {
-      media_player_ = new QMediaPlayer(this);
-      audio_output_ = new QAudioOutput(this);
-      media_player_->setAudioOutput(audio_output_);
-      media_player_->setSource(
-          QUrl::fromLocalFile(SafeQString(xe::path_to_utf8(sound_path))));
-      audio_output_->setVolume(1.0);
-    }
-  }
 }
 
 void NotificationWidgetQt::Show() {
@@ -102,9 +83,9 @@ void NotificationWidgetQt::Show() {
   raise();
   auto_close_timer_->start();
 
-  // Play sound if configured
-  if (media_player_) {
-    media_player_->play();
+  // Play achievement sound if this is an achievement notification
+  if (is_achievement_) {
+    ui::AudioHelper::Instance().PlayAchievementSound();
   }
 }
 

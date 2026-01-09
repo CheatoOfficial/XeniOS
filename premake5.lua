@@ -198,7 +198,6 @@ filter("platforms:Linux")
       path.join(qt_dir, "include/QtGui", qt_version),
       path.join(qt_dir, "include/QtGui", qt_version, "QtGui"),
       path.join(qt_dir, "include/QtWidgets"),
-      path.join(qt_dir, "include/QtMultimedia"),
     })
     libdirs({
       path.join(qt_dir, "lib"),
@@ -214,7 +213,6 @@ filter("platforms:Linux")
       "Qt6Core",
       "Qt6Gui",
       "Qt6Widgets",
-      "Qt6Multimedia",
     })
   end
 
@@ -222,6 +220,7 @@ filter("platforms:Linux")
     "stdc++fs",
     "dl",
     "lz4",
+    "m",
     "pthread",
     "rt",
   })
@@ -357,7 +356,6 @@ filter("platforms:Windows")
       path.join(qt_dir, "include/QtCore"),
       path.join(qt_dir, "include/QtGui"),
       path.join(qt_dir, "include/QtWidgets"),
-      path.join(qt_dir, "include/QtMultimedia"),
     })
     libdirs({
       path.join(qt_dir, "lib"),
@@ -370,7 +368,6 @@ filter({"platforms:Windows", "configurations:Release"})
       "Qt6Core",
       "Qt6Gui",
       "Qt6Widgets",
-      "Qt6Multimedia",
     })
   end
 
@@ -380,7 +377,6 @@ filter({"platforms:Windows", "configurations:Debug or Checked"})
       "Qt6Cored",
       "Qt6Guid",
       "Qt6Widgetsd",
-      "Qt6Multimediad",
     })
   end
 
@@ -437,6 +433,7 @@ workspace("xenia")
   include("third_party/fmt.lua")
   include("third_party/glslang-spirv.lua")
   include("third_party/imgui.lua")
+  include("third_party/miniaudio.lua")
   include("third_party/mspack.lua")
   include("third_party/snappy.lua")
   include("third_party/xxhash.lua")

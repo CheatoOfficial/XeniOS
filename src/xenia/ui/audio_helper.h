@@ -7,44 +7,43 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_UI_AUDIO_HELPER_QT_H_
-#define XENIA_UI_AUDIO_HELPER_QT_H_
+#ifndef XENIA_UI_AUDIO_HELPER_H_
+#define XENIA_UI_AUDIO_HELPER_H_
 
-#include <QAudioOutput>
-#include <QMediaPlayer>
-#include <QObject>
+// Forward declare miniaudio types to avoid header pollution
+struct ma_engine;
+struct ma_sound;
 
 namespace xe {
 namespace ui {
 
 // Singleton audio helper for playing notification sounds.
-// Uses QMediaPlayer which doesn't require a QWidget parent,
-// so it works with both QWidget and QWindow-based windows.
-class AudioHelperQt : public QObject {
-  Q_OBJECT
-
+// Uses miniaudio for cross-platform audio playback.
+class AudioHelper {
  public:
-  static AudioHelperQt& Instance();
+  static AudioHelper& Instance();
 
   // Play the achievement unlock sound if configured
   void PlayAchievementSound();
 
  private:
-  AudioHelperQt();
-  ~AudioHelperQt();
+  AudioHelper();
+  ~AudioHelper();
 
   // Non-copyable
-  AudioHelperQt(const AudioHelperQt&) = delete;
-  AudioHelperQt& operator=(const AudioHelperQt&) = delete;
+  AudioHelper(const AudioHelper&) = delete;
+  AudioHelper& operator=(const AudioHelper&) = delete;
 
-  void InitializeMediaPlayer();
+  void Initialize();
+  void Shutdown();
 
-  QMediaPlayer* media_player_ = nullptr;
-  QAudioOutput* audio_output_ = nullptr;
+  ma_engine* engine_ = nullptr;
+  ma_sound* sound_ = nullptr;
   bool initialized_ = false;
+  bool sound_loaded_ = false;
 };
 
 }  // namespace ui
 }  // namespace xe
 
-#endif  // XENIA_UI_AUDIO_HELPER_QT_H_
+#endif  // XENIA_UI_AUDIO_HELPER_H_

@@ -10,9 +10,7 @@
 #ifndef XENIA_UI_NOTIFICATION_WIDGET_QT_H_
 #define XENIA_UI_NOTIFICATION_WIDGET_QT_H_
 
-#include <QAudioOutput>
 #include <QLabel>
-#include <QMediaPlayer>
 #include <QTimer>
 #include <QWidget>
 
@@ -32,8 +30,7 @@ class NotificationWidgetQt : public QWidget {
 
  private:
   QTimer* auto_close_timer_;
-  QMediaPlayer* media_player_;
-  QAudioOutput* audio_output_;
+  bool is_achievement_;
 };
 
 }  // namespace app

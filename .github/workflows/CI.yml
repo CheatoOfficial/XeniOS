@@ -85,7 +85,7 @@ jobs:
             pip install aqtinstall
             echo "Available architectures for Qt 6.10.1:"
             aqt list-qt linux desktop --arch 6.10.1 || true
-            aqt install-qt linux desktop 6.10.1 linux_gcc_64 -m qtmultimedia -O /opt/Qt
+            aqt install-qt linux desktop 6.10.1 linux_gcc_64 -O /opt/Qt
           fi
           export PATH="/opt/Qt/6.10.1/gcc_64/bin:$PATH"
           export CMAKE_PREFIX_PATH="/opt/Qt/6.10.1/gcc_64"
@@ -261,7 +261,7 @@ jobs:
           $qtCacheHit = '${{ steps.cache-qt.outputs.cache-hit }}'
           if ($qtCacheHit -ne 'true') {
             pip install aqtinstall
-            aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
+            aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -O C:\Qt
           }
 
           $cacheHit = '${{ steps.cache-submodules.outputs.cache-hit }}'

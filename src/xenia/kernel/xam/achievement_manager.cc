@@ -14,7 +14,7 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/achievement_backends/gpd_achievement_backend.h"
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
-#include "xenia/ui/audio_helper_qt.h"
+#include "xenia/ui/audio_helper.h"
 #include "xenia/ui/imgui_guest_notification.h"
 
 DEFINE_bool(show_achievement_notification, true,
@@ -153,7 +153,7 @@ void AchievementManager::ShowAchievementEarnedNotification(
 
   app_context.CallInUIThread([imgui_drawer, description]() {
     // Play achievement sound
-    ui::AudioHelperQt::Instance().PlayAchievementSound();
+    ui::AudioHelper::Instance().PlayAchievementSound();
 
     // Show notification
     new ui::AchievementNotificationWindow(

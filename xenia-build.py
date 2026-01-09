@@ -330,7 +330,6 @@ def generate_moc_files():
             f"-I{os.path.join(qt_dir, 'include', 'QtCore')}",
             f"-I{os.path.join(qt_dir, 'include', 'QtGui')}",
             f"-I{os.path.join(qt_dir, 'include', 'QtWidgets')}",
-            f"-I{os.path.join(qt_dir, 'include', 'QtMultimedia')}",
             "-Isrc",
         ]
 
