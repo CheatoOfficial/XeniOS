@@ -166,8 +166,6 @@ void ImGuiPerformanceDialog::OnClearMemoryPageStateChanged(bool enabled) {
 }
 
 void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
-  PollGamepad();
-
   // Style - white background, black text, Xbox green accents
   const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
   ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -193,9 +191,9 @@ void ImGuiPerformanceDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Begin("Performance Settings", &is_open,
                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                        ImGuiWindowFlags_NoCollapse)) {
-    // Handle keyboard
+    // Handle keyboard escape, F7, or gamepad B/Back
     if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-        ImGui::IsKeyPressed(ImGuiKey_F7)) {
+        ImGui::IsKeyPressed(ImGuiKey_F7) || ShouldCloseFromGamepad()) {
       Close();
     }
 

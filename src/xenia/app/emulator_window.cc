@@ -1123,6 +1123,10 @@ void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
     if (cvars::disable_game_window_mouse) {
       return;
     }
+    // Don't show context menu if a dialog (other than context menu) is open
+    if (!context_menu_ && imgui_drawer() && imgui_drawer()->HasOpenDialogs()) {
+      return;
+    }
     ToggleContextMenu();
   }
 }
@@ -1158,6 +1162,8 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
       "Performance Settings...", [this]() { TogglePerformanceTuningDialog(); },
       "F7");
 
+  context_menu->AddSeparator();
+
   // Get current vibration state
   bool vibration_enabled = false;
   if (input_sys) {
@@ -1172,10 +1178,10 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
   context_menu->AddAction("Controller Hotkeys...",
                           [this]() { ToggleControllerHotkeysDialog(); });
 
-  context_menu->AddSeparator();
-
   context_menu->AddAction(
       "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
+
+  context_menu->AddSeparator();
 
   context_menu->AddAction("Profiles Menu",
                           [this]() { ToggleProfilesConfigDialog(); });

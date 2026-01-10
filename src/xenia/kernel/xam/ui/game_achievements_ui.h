@@ -17,11 +17,11 @@ namespace kernel {
 namespace xam {
 namespace ui {
 
-class GameAchievementsUI final : public XamDialog {
+class GameAchievementsUI final : public XamGamepadDialog {
  public:
   GameAchievementsUI(xe::ui::ImGuiDrawer* imgui_drawer,
-                     const ImVec2 drawing_position, const TitleInfo* title_info,
-                     const UserProfile* profile);
+                     xe::hid::InputSystem* input_system,
+                     const TitleInfo* title_info, const UserProfile* profile);
 
  private:
   ~GameAchievementsUI();
@@ -43,9 +43,9 @@ class GameAchievementsUI final : public XamDialog {
 
  private:
   bool show_locked_info_ = false;
+  float scroll_accumulator_ = 0.0f;
 
   uint64_t window_id_;
-  const ImVec2 drawing_position_ = {};
 
   const TitleInfo title_info_;
   const UserProfile* profile_;

@@ -561,6 +561,11 @@ void GamercardUI::OnDraw(ImGuiIO& io) {
     return;
   }
 
+  // Handle keyboard escape or gamepad B/Back to cancel
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+    dialog_open = false;
+  }
+
   if (ImGui::BeginTable("###GamercardTable", 2)) {
     ImGui::TableSetupColumn("###Label", ImGuiTableColumnFlags_WidthFixed,
                             350.0f);

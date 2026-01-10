@@ -10,6 +10,7 @@
 #include "xenia/kernel/xam/ui/title_info_ui.h"
 #include "xenia/kernel/xam/ui/game_achievements_ui.h"
 
+#include "xenia/app/emulator_window.h"
 #include "xenia/base/system.h"
 
 namespace xe {
@@ -107,7 +108,8 @@ void TitleListUI::DrawTitleEntry(ImGuiIO& io, TitleInfo& entry) {
                         ImGuiSelectableFlags_SpanAllColumns,
                         end_draw_position)) {
     selected_title_ = entry.id;
-    new GameAchievementsUI(imgui_drawer(), next_window_position, &entry,
+    new GameAchievementsUI(imgui_drawer(),
+                           kernel_state()->emulator()->input_system(), &entry,
                            profile_);
   }
 
@@ -184,6 +186,11 @@ void TitleListUI::OnDraw(ImGuiIO& io) {
     Close();
     ImGui::End();
     return;
+  }
+
+  // Handle keyboard escape or gamepad B/Back to close
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+    dialog_open = false;
   }
 
   if (!info_.empty()) {

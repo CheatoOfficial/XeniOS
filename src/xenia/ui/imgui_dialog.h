@@ -46,6 +46,9 @@ class ImGuiDialog {
   // Closes the dialog and returns to any waiters.
   void Close();
 
+  // Returns true if B button or Back button was pressed (for closing dialogs)
+  bool ShouldCloseFromGamepad() const;
+
   virtual void OnShow() {}
   virtual void OnClose() {}
   virtual void OnDraw(ImGuiIO& io) {}

@@ -149,6 +149,7 @@ void ImGuiDrawer::Initialize() {
   ImGui::SetCurrentContext(internal_state_);
 
   auto& io = ImGui::GetIO();
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
   const float font_size = std::max((float)cvars::font_size, 8.f);
@@ -860,9 +861,6 @@ void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
       break;
     default:
       break;
-  }
-  if (presenter_) {
-    presenter_->RequestUIPaintFromUIThread();
   }
 }
 

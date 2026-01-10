@@ -65,6 +65,7 @@ class ProfileConfigDialog final : public ui::ImGuiGamepadDialog {
   std::map<uint64_t, std::unique_ptr<ui::ImmediateTexture>> profile_icon_;
 
   uint64_t selected_xuid_ = 0;
+  bool context_menu_open_ = false;
   EmulatorWindow* emulator_window_;
   std::function<void()> on_close_callback_;
 };

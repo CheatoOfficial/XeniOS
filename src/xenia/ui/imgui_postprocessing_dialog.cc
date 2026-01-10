@@ -163,8 +163,6 @@ void ImGuiPostProcessingDialog::OnDitherChanged(bool value) {
 }
 
 void ImGuiPostProcessingDialog::OnDraw(ImGuiIO& io) {
-  PollGamepad();
-
   // Style - white background, black text, Xbox green accents
   const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
   ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -198,8 +196,8 @@ void ImGuiPostProcessingDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Begin("Post-Processing Settings", &is_open,
                    ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                        ImGuiWindowFlags_NoCollapse)) {
-    // Handle keyboard
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    // Handle keyboard escape or gamepad B/Back
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
       Close();
     }
 

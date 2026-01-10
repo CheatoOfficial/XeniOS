@@ -27,57 +27,12 @@ ImGuiConfirmDialog::ImGuiConfirmDialog(ImGuiDrawer* drawer,
       input_system_(input_system) {
   if (input_system_) {
     input_system_->AddUIInputBlocker();
-
-    // Initialize prev_buttons_ to current state so held buttons aren't
-    // detected as "just pressed" when the dialog opens
-    hid::X_INPUT_STATE state;
-    for (uint32_t user_index = 0; user_index < 4; user_index++) {
-      if (input_system_->GetStateForUI(user_index, 1, &state) == 0) {
-        prev_buttons_ = state.gamepad.buttons;
-        break;
-      }
-    }
   }
 }
 
 ImGuiConfirmDialog::~ImGuiConfirmDialog() {
   if (input_system_) {
     input_system_->RemoveUIInputBlocker();
-  }
-}
-
-void ImGuiConfirmDialog::PollGamepad() {
-  if (!input_system_) {
-    return;
-  }
-
-  for (uint32_t i = 0; i < 4; ++i) {
-    hid::X_INPUT_STATE state;
-    if (input_system_->GetStateForUI(i, 1, &state) == 0) {
-      uint16_t buttons = state.gamepad.buttons;
-      uint16_t pressed = buttons & ~prev_buttons_;
-
-      // D-pad left/right to switch buttons
-      if (pressed & 0x0004) {  // D-pad left
-        focused_button_ = 0;   // No
-      }
-      if (pressed & 0x0008) {  // D-pad right
-        focused_button_ = 1;   // Yes
-      }
-
-      // A button to confirm selection
-      if (pressed & 0x1000) {
-        Confirm(focused_button_ == 1);
-      }
-
-      // B button to cancel (same as No)
-      if (pressed & 0x2000) {
-        Confirm(false);
-      }
-
-      prev_buttons_ = buttons;
-      break;
-    }
   }
 }
 
@@ -92,9 +47,6 @@ void ImGuiConfirmDialog::Confirm(bool result) {
 }
 
 void ImGuiConfirmDialog::OnDraw(ImGuiIO& io) {
-  // Poll gamepad input
-  PollGamepad();
-
   // Open popup on first draw
   if (!has_opened_) {
     ImGui::OpenPopup(title_.c_str());
@@ -116,19 +68,9 @@ void ImGuiConfirmDialog::OnDraw(ImGuiIO& io) {
                              ImGuiWindowFlags_NoResize |
                                  ImGuiWindowFlags_AlwaysAutoResize |
                                  ImGuiWindowFlags_NoMove)) {
-    // Handle keyboard input
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    // Handle keyboard escape or gamepad B/Back to cancel
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
       Confirm(false);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
-      focused_button_ = 0;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
-      focused_button_ = 1;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-        ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-      Confirm(focused_button_ == 1);
     }
 
     // Message text
@@ -147,57 +89,30 @@ void ImGuiConfirmDialog::OnDraw(ImGuiIO& io) {
 
     ImGui::SetCursorPosX(start_x);
 
-    // No button
-    ImVec4 no_bg = focused_button_ == 0 ? ImVec4(0.27f, 0.27f, 0.27f, 1.0f)
-                                        : ImVec4(0.20f, 0.20f, 0.20f, 1.0f);
-    ImVec4 no_border = focused_button_ == 0
-                           ? ImVec4(0.06f, 0.49f, 0.06f, 1.0f)  // Xbox green
-                           : ImVec4(0.56f, 0.56f, 0.56f, 1.0f);
+    // Style for buttons
+    const ImVec4 button_bg(0.20f, 0.20f, 0.20f, 1.0f);
+    const ImVec4 button_hover(0.27f, 0.27f, 0.27f, 1.0f);
 
-    ImGui::PushStyleColor(ImGuiCol_Button, no_bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.27f, 0.27f, 0.27f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.27f, 0.27f, 0.27f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, button_bg);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, button_hover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, button_hover);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-    ImGui::PushStyleColor(ImGuiCol_Border, no_border);
 
+    // No button
     if (ImGui::Button("No", ImVec2(button_width, 32))) {
       Confirm(false);
     }
-    if (ImGui::IsItemHovered()) {
-      focused_button_ = 0;
-    }
-
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleVar();
 
     ImGui::SameLine(0, spacing);
 
-    // Yes button
-    ImVec4 yes_bg = focused_button_ == 1 ? ImVec4(0.27f, 0.27f, 0.27f, 1.0f)
-                                         : ImVec4(0.20f, 0.20f, 0.20f, 1.0f);
-    ImVec4 yes_border = focused_button_ == 1
-                            ? ImVec4(0.06f, 0.49f, 0.06f, 1.0f)  // Xbox green
-                            : ImVec4(0.56f, 0.56f, 0.56f, 1.0f);
-
-    ImGui::PushStyleColor(ImGuiCol_Button, yes_bg);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                          ImVec4(0.27f, 0.27f, 0.27f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                          ImVec4(0.27f, 0.27f, 0.27f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-    ImGui::PushStyleColor(ImGuiCol_Border, yes_border);
-
+    // Yes button - set as default focus
     if (ImGui::Button("Yes", ImVec2(button_width, 32))) {
       Confirm(true);
     }
-    if (ImGui::IsItemHovered()) {
-      focused_button_ = 1;
-    }
+    ImGui::SetItemDefaultFocus();
 
-    ImGui::PopStyleColor(4);
     ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
 
     ImGui::EndPopup();
   } else {

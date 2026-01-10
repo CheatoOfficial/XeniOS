@@ -9,17 +9,19 @@
 
 #include "xenia/kernel/xam/ui/game_achievements_ui.h"
 
+#include "xenia/hid/input.h"
+#include "xenia/hid/input_system.h"
+
 namespace xe {
 namespace kernel {
 namespace xam {
 namespace ui {
 
 GameAchievementsUI::GameAchievementsUI(xe::ui::ImGuiDrawer* imgui_drawer,
-                                       const ImVec2 drawing_position,
+                                       xe::hid::InputSystem* input_system,
                                        const TitleInfo* title_info,
                                        const UserProfile* profile)
-    : XamDialog(imgui_drawer),
-      drawing_position_(drawing_position),
+    : XamGamepadDialog(imgui_drawer, input_system),
       title_info_(*title_info),
       profile_(profile),
       window_id_(GetWindowId()) {
@@ -172,14 +174,67 @@ void GameAchievementsUI::DrawTitleAchievementInfo(
 }
 
 void GameAchievementsUI::OnDraw(ImGuiIO& io) {
-  ImGui::SetNextWindowPos(drawing_position_, ImGuiCond_FirstUseEver);
+  // Handle keyboard escape or gamepad B/Back to close
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+    Close();
+    return;
+  }
+
+  // Poll right stick for smooth scrolling
+  int scroll_pixels = 0;
+  if (input_system_) {
+    for (uint32_t i = 0; i < 4; ++i) {
+      hid::X_INPUT_STATE state;
+      if (input_system_->GetStateForUI(i, 1, &state) == 0) {
+        int16_t ry = state.gamepad.thumb_ry;
+        if (std::abs(ry) > hid::X_INPUT_GAMEPAD_RIGHT_THUMB_DEADZONE) {
+          // Invert Y axis (up is positive in gamepad coords)
+          // Accumulate fractional scrolling for smooth movement
+          scroll_accumulator_ += -static_cast<float>(ry) / 2000.0f;
+
+          scroll_pixels = static_cast<int>(scroll_accumulator_);
+          if (scroll_pixels != 0) {
+            scroll_accumulator_ -= scroll_pixels;  // Keep fractional part
+          }
+        } else {
+          scroll_accumulator_ = 0.0f;  // Reset when stick released
+        }
+        break;
+      }
+    }
+  }
 
   const auto xenia_window_size = ImGui::GetMainViewport()->Size;
 
-  ImGui::SetNextWindowSizeConstraints(
-      ImVec2(xenia_window_size.x * 0.2f, xenia_window_size.y * 0.3f),
-      ImVec2(xenia_window_size.x * 0.6f, xenia_window_size.y * 0.8f));
-  ImGui::SetNextWindowBgAlpha(0.8f);
+  // Center the window on screen
+  ImVec2 center =
+      ImVec2(xenia_window_size.x * 0.5f, xenia_window_size.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+  // Fixed size: 600px wide, max 500px tall
+  ImGui::SetNextWindowSizeConstraints(ImVec2(600, 200), ImVec2(600, 500));
+
+  // Style like context menu - white background, black text, Xbox green
+  // highlights
+  const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+                        ImVec4(0.85f, 0.85f, 0.85f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_CheckMark, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ScrollbarBg,
+                        ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TableBorderLight,
+                        ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 12));
 
   bool dialog_open = true;
 
@@ -188,16 +243,23 @@ void GameAchievementsUI::OnDraw(ImGuiIO& io) {
                    title_name.end());
 
   const std::string window_name =
-      fmt::format("{} Achievements###{}", title_name, window_id_);
-  if (!ImGui::Begin(window_name.c_str(), &dialog_open,
-                    ImGuiWindowFlags_NoCollapse |
-                        ImGuiWindowFlags_AlwaysAutoResize |
-                        ImGuiWindowFlags_HorizontalScrollbar)) {
+      fmt::format("{} - Achievements###{}", title_name, window_id_);
+  if (!ImGui::Begin(
+          window_name.c_str(), &dialog_open,
+          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_HorizontalScrollbar)) {
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(13);
     Close();
     ImGui::End();
     return;
   }
 
+  // Apply right stick scrolling
+  if (scroll_pixels != 0) {
+    ImGui::SetScrollY(ImGui::GetScrollY() + scroll_pixels);
+  }
+
+  // Checkbox - ImGui handles A button toggle natively
   ImGui::Checkbox("Show locked achievements information", &show_locked_info_);
   ImGui::Separator();
 
@@ -209,19 +271,22 @@ void GameAchievementsUI::OnDraw(ImGuiIO& io) {
         ImGui::TableNextRow(0, xe::ui::default_image_icon_size.y);
         DrawTitleAchievementInfo(io, entry);
       }
-
       ImGui::EndTable();
     }
   }
 
   if (!dialog_open) {
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(13);
     Close();
     ImGui::End();
     return;
   }
 
   ImGui::End();
-};
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(13);
+}
 
 }  // namespace ui
 }  // namespace xam

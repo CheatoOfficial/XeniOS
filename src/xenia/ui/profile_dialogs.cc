@@ -140,8 +140,6 @@ void ProfileConfigDialog::LoadProfileIcon(const uint64_t xuid) {
 }
 
 void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
-  PollGamepad();
-
   if (!emulator_window_->emulator() ||
       !emulator_window_->emulator()->kernel_state() ||
       !emulator_window_->emulator()->kernel_state()->xam_state()) {
@@ -158,29 +156,59 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
 
   auto profiles = profile_manager->GetAccounts();
 
-  ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowBgAlpha(0.8f);
+  // Center the window on screen
+  ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(ImVec2(400, 200), ImVec2(500, 600));
+
+  // Style like Xbox - white background, black text, Xbox green highlights
+  const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+                        ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Header, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
 
   bool dialog_open = true;
   if (!ImGui::Begin("Profiles Menu", &dialog_open,
                     ImGuiWindowFlags_NoCollapse |
                         ImGuiWindowFlags_AlwaysAutoResize |
                         ImGuiWindowFlags_HorizontalScrollbar)) {
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(14);
     ImGui::End();
     return;
   }
 
-  // Handle keyboard escape
-  if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-    dialog_open = false;
+  // Handle close button (X) clicked or B/Esc when no context menu is open
+  bool should_close = !dialog_open;
+  if (!should_close && !context_menu_open_) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+      should_close = true;
+    }
   }
-
-  // Handle close button or escape
-  if (!dialog_open) {
+  if (should_close) {
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(14);
     ImGui::End();
     Close();
     return;
   }
+
+  // Reset context menu state - will be set to true if menu is drawn
+  context_menu_open_ = false;
 
   if (profiles->empty()) {
     ImGui::TextUnformatted("No profiles found!");
@@ -203,8 +231,29 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
                                   : nullptr;
 
     auto context_menu_fun = [=, this]() -> bool {
+      // Style the context menu like Xbox
+      const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+      ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_Header, xbox_green);
+      ImGui::PushStyleColor(ImGuiCol_HeaderHovered, xbox_green);
+      ImGui::PushStyleColor(ImGuiCol_HeaderActive, xbox_green);
+      ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+
       if (ImGui::BeginPopupContextItem("Profile Menu")) {
-        //*selected_xuid = xuid;
+        context_menu_open_ = true;
+
+        // Handle B button to close context menu
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadBack)) {
+          ImGui::CloseCurrentPopup();
+          ImGui::EndPopup();
+          ImGui::PopStyleVar(1);
+          ImGui::PopStyleColor(6);
+          return true;
+        }
+
         if (user_index == XUserIndexAny) {
           if (ImGui::MenuItem("Login")) {
             profile_manager->Login(xuid);
@@ -228,59 +277,10 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
             LoadProfileIcon(xuid);
           }
         }
-
-        if (ImGui::MenuItem("Modify")) {
-          new kernel::xam::ui::GamercardUI(
-              emulator_window_->window(), emulator_window_->imgui_drawer(),
-              emulator_window_->emulator()->kernel_state(), xuid);
-        }
-
-        const bool is_signedin = profile_manager->GetProfile(xuid) != nullptr;
-        ImGui::BeginDisabled(!is_signedin);
-        if (ImGui::MenuItem("Show Played Titles")) {
-          new kernel::xam::ui::TitleListUI(
-              emulator_window_->imgui_drawer(), next_window_position,
-              profile_manager->GetProfile(user_index));
-        }
-        ImGui::EndDisabled();
-
-        if (ImGui::MenuItem("Show Content Directory")) {
-          const auto path = profile_manager->GetProfileContentPath(
-              xuid, emulator_window_->emulator()->kernel_state()->title_id());
-
-          if (!std::filesystem::exists(path)) {
-            std::filesystem::create_directories(path);
-          }
-
-          std::thread path_open(LaunchFileExplorer, path);
-          path_open.detach();
-        }
-
-        if (!emulator_window_->emulator()->is_title_open()) {
-          ImGui::Separator();
-          if (ImGui::BeginMenu("Delete Profile")) {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted(
-                fmt::format(
-                    "You're about to delete profile: {} (XUID: {:016X}). "
-                    "This will remove all data assigned to this profile "
-                    "including savefiles. Are you sure?",
-                    account.GetGamertagString(), xuid)
-                    .c_str());
-            ImGui::EndTooltip();
-
-            if (ImGui::MenuItem("Yes, delete it!")) {
-              profile_manager->DeleteProfile(xuid);
-              ImGui::EndMenu();
-              ImGui::EndPopup();
-              return false;
-            }
-
-            ImGui::EndMenu();
-          }
-        }
         ImGui::EndPopup();
       }
+      ImGui::PopStyleVar(1);
+      ImGui::PopStyleColor(6);
       return true;
     };
 
@@ -289,6 +289,8 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
             context_menu_fun, [=, this]() { LoadProfileIcon(xuid); },
             &selected_xuid_)) {
       ImGui::PopID();
+      ImGui::PopStyleVar(2);
+      ImGui::PopStyleColor(14);
       ImGui::End();
       return;
     }
@@ -304,6 +306,8 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
                                          emulator_window_->emulator());
   }
 
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(14);
   ImGui::End();
 }
 

@@ -44,15 +44,12 @@ class ImGuiConfirmDialog : public ImGuiDialog {
   void OnDraw(ImGuiIO& io) override;
 
  private:
-  void PollGamepad();
   void Confirm(bool result);
 
   std::string title_;
   std::string message_;
   Callback callback_;
   hid::InputSystem* input_system_;
-  int focused_button_ = 0;  // 0 = No, 1 = Yes
-  uint16_t prev_buttons_ = 0;
   bool has_opened_ = false;
   bool callback_invoked_ = false;
 };

@@ -31,8 +31,39 @@ void SigninUI::OnDraw(ImGuiIO& io) {
     first_draw = true;
     ReloadProfiles(true);
   }
+
+  // Center the window on screen
+  ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(ImVec2(400, 0), ImVec2(600, 500));
+
+  // Style like Xbox - white background, black text, Xbox green highlights
+  const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+                        ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Header, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, xbox_green);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
+
   if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
+    // Handle keyboard escape or gamepad B/Back to cancel
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+      ImGui::CloseCurrentPopup();
+      Close();
+    }
     for (uint32_t i = 0; i < users_needed_; i++) {
       ImGui::BeginGroup();
 
@@ -203,6 +234,9 @@ void SigninUI::OnDraw(ImGuiIO& io) {
   } else {
     Close();
   }
+
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(14);
 }
 
 void SigninUI::ReloadProfiles(bool first_draw) {

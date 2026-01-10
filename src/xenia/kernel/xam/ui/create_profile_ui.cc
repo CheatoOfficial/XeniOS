@@ -21,55 +21,76 @@ void CreateProfileUI::OnDraw(ImGuiIO& io) {
     has_opened_ = true;
   }
 
-  auto profile_manager =
-      emulator_->kernel_state()->xam_state()->profile_manager();
+  // Center the window on screen
+  ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(ImVec2(350, 0), ImVec2(400, 300));
 
-  bool dialog_open = true;
-  if (!ImGui::BeginPopupModal("Create Profile", &dialog_open,
-                              ImGuiWindowFlags_NoCollapse |
-                                  ImGuiWindowFlags_AlwaysAutoResize |
-                                  ImGuiWindowFlags_HorizontalScrollbar)) {
-    Close();
-    return;
-  }
+  // Style like Xbox - white background, black text, Xbox green highlights
+  const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+                        ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
 
-  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-      !ImGui::IsAnyItemActive() && !ImGui::IsMouseClicked(0)) {
-    ImGui::SetKeyboardFocusHere(0);
-  }
-
-  ImGui::TextUnformatted("Gamertag:");
-  ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
-
-  const std::string gamertag_string = std::string(gamertag_);
-  bool valid = profile_manager->IsGamertagValid(gamertag_string);
-
-  ImGui::BeginDisabled(!valid);
-  if (ImGui::Button("Create")) {
-    bool autologin = (profile_manager->GetAccountCount() == 0);
-    if (profile_manager->CreateProfile(gamertag_string, autologin,
-                                       migration_) &&
-        migration_) {
-      emulator_->DataMigration(0xB13EBABEBABEBABE);
+  if (ImGui::BeginPopupModal("Create Profile", nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+    // Handle B button or Back to cancel
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+      ImGui::CloseCurrentPopup();
+      Close();
+      ImGui::EndPopup();
+      ImGui::PopStyleVar(2);
+      ImGui::PopStyleColor(10);
+      return;
     }
-    std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
-    dialog_open = false;
-  }
-  ImGui::EndDisabled();
-  ImGui::SameLine();
 
-  if (ImGui::Button("Cancel")) {
-    std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
-    dialog_open = false;
-  }
+    auto profile_manager =
+        emulator_->kernel_state()->xam_state()->profile_manager();
 
-  if (!dialog_open) {
-    ImGui::CloseCurrentPopup();
-    Close();
+    ImGui::Text("Gamertag:");
+    // Set focus to InputText on first frame
+    if (!focus_set_) {
+      ImGui::SetKeyboardFocusHere();
+      focus_set_ = true;
+    }
+    bool enter_pressed = ImGui::InputText("##gt", gamertag_, sizeof(gamertag_),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+
+    std::string gt(gamertag_);
+    bool valid = profile_manager->IsGamertagValid(gt);
+
+    ImGui::BeginDisabled(!valid);
+    if (ImGui::Button("Create") || (enter_pressed && valid)) {
+      bool autologin = (profile_manager->GetAccountCount() == 0);
+      profile_manager->CreateProfile(gt, autologin, migration_);
+      ImGui::CloseCurrentPopup();
+      Close();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      ImGui::CloseCurrentPopup();
+      Close();
+    }
+
     ImGui::EndPopup();
-    return;
+  } else {
+    Close();
   }
-  ImGui::EndPopup();
+
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(10);
 }
 
 }  // namespace ui

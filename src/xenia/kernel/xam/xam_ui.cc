@@ -22,14 +22,11 @@
 #include "xenia/ui/imgui_guest_notification.h"
 
 #include "xenia/kernel/xam/ui/create_profile_ui.h"
+#include "xenia/kernel/xam/ui/game_achievements_ui.h"
 #include "xenia/kernel/xam/ui/gamercard_ui.h"
 #include "xenia/kernel/xam/ui/passcode_ui.h"
 #include "xenia/kernel/xam/ui/signin_ui.h"
 #include "xenia/kernel/xam/ui/title_info_ui.h"
-#include "xenia/ui/achievements_dialog_qt.h"
-#include "xenia/ui/window_qt.h"
-
-#include <QString>
 
 DEFINE_bool(storage_selection_dialog, false,
             "Show storage device selection dialog when the game requests it.",
@@ -234,54 +231,34 @@ X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
   return X_ERROR_SUCCESS;
 }
 
-void MessageBoxDialog::OnGamepadButtonA() {
-  chosen_button_ = focused_button_;
-  Close();
-}
-
-void MessageBoxDialog::OnGamepadDPadLeft() {
-  if (focused_button_ > 0) {
-    focused_button_--;
-  }
-}
-
-void MessageBoxDialog::OnGamepadDPadRight() {
-  if (focused_button_ < buttons_.size() - 1) {
-    focused_button_++;
-  }
-}
-
 void MessageBoxDialog::OnDraw(ImGuiIO& io) {
-  PollGamepad();
-
-  bool first_draw = false;
   if (!has_opened_) {
     ImGui::OpenPopup(title_.c_str());
     has_opened_ = true;
-    first_draw = true;
   }
   if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
+    // Handle keyboard escape or gamepad B/Back to cancel
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+      chosen_button_ = default_button_;
+      ImGui::CloseCurrentPopup();
+      Close();
+    }
+
     if (description_.size()) {
       ImGui::Text("%s", description_.c_str());
     }
-    if (first_draw) {
-      ImGui::SetKeyboardFocusHere();
-    }
+
+    // Buttons - ImGui handles navigation, A button activates via ImGui
     for (size_t i = 0; i < buttons_.size(); ++i) {
-      // Highlight focused button for gamepad navigation
-      bool is_focused = (i == focused_button_);
-      if (is_focused) {
-        ImGui::PushStyleColor(ImGuiCol_Button,
-                              ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      }
       if (ImGui::Button(buttons_[i].c_str())) {
         chosen_button_ = static_cast<uint32_t>(i);
         ImGui::CloseCurrentPopup();
         Close();
       }
-      if (is_focused) {
-        ImGui::PopStyleColor();
+      // Set default focus on the default button
+      if (i == default_button_) {
+        ImGui::SetItemDefaultFocus();
       }
       ImGui::SameLine();
     }
@@ -293,49 +270,53 @@ void MessageBoxDialog::OnDraw(ImGuiIO& io) {
   }
 }
 
-void KeyboardInputDialog::OnGamepadButtonA() {
-  if (focused_button_ == 0) {
-    // OK
-    text_ = std::string(text_buffer_.data(), text_buffer_.size());
-    cancelled_ = false;
-  } else {
-    // Cancel
-    text_ = "";
-    cancelled_ = true;
-  }
-  Close();
-}
-
-void KeyboardInputDialog::OnGamepadDPadLeft() {
-  if (focused_button_ > 0) {
-    focused_button_--;
-  }
-}
-
-void KeyboardInputDialog::OnGamepadDPadRight() {
-  if (focused_button_ < 1) {
-    focused_button_++;
-  }
-}
-
 void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
-  PollGamepad();
-
-  bool first_draw = false;
   if (!has_opened_) {
     ImGui::OpenPopup(title_.c_str());
     has_opened_ = true;
-    first_draw = true;
   }
+
+  // Center the window on screen
+  ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+  ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(ImVec2(350, 0), ImVec2(500, 300));
+
+  // Style like Xbox - white background, black text, Xbox green highlights
+  const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, xbox_green);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.95f, 0.95f, 0.95f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered,
+                        ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
+
   if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
                              ImGuiWindowFlags_AlwaysAutoResize)) {
+    // Handle keyboard escape or gamepad B/Back to cancel
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
+      text_ = "";
+      cancelled_ = true;
+      ImGui::CloseCurrentPopup();
+      Close();
+    }
+
     if (description_.size()) {
       ImGui::TextWrapped("%s", description_.c_str());
     }
-    if (first_draw) {
-      ImGui::SetKeyboardFocusHere();
-    }
+
     ImGui::PushID("input_text");
+    // Set focus to InputText on first frame
+    if (!focus_set_) {
+      ImGui::SetKeyboardFocusHere();
+      focus_set_ = true;
+    }
     bool input_submitted =
         ImGui::InputText("##body", text_buffer_.data(), text_buffer_.size(),
                          ImGuiInputTextFlags_EnterReturnsTrue);
@@ -351,47 +332,40 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
       ImGui::EndPopup();
     }
     ImGui::PopID();
+
     if (input_submitted) {
       text_ = std::string(text_buffer_.data(), text_buffer_.size());
       cancelled_ = false;
       ImGui::CloseCurrentPopup();
       Close();
     }
-    // Highlight focused button for gamepad navigation
-    bool ok_focused = (focused_button_ == 0);
-    if (ok_focused) {
-      ImGui::PushStyleColor(ImGuiCol_Button,
-                            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    }
+
+    // OK button
     if (ImGui::Button("OK")) {
       text_ = std::string(text_buffer_.data(), text_buffer_.size());
       cancelled_ = false;
       ImGui::CloseCurrentPopup();
       Close();
     }
-    if (ok_focused) {
-      ImGui::PopStyleColor();
-    }
+    ImGui::SetItemDefaultFocus();
+
     ImGui::SameLine();
-    bool cancel_focused = (focused_button_ == 1);
-    if (cancel_focused) {
-      ImGui::PushStyleColor(ImGuiCol_Button,
-                            ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    }
+
+    // Cancel button
     if (ImGui::Button("Cancel")) {
       text_ = "";
       cancelled_ = true;
       ImGui::CloseCurrentPopup();
       Close();
     }
-    if (cancel_focused) {
-      ImGui::PopStyleColor();
-    }
     ImGui::Spacing();
     ImGui::EndPopup();
   } else {
     Close();
   }
+
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(10);
 }
 
 static dword_result_t XamShowMessageBoxUi(
@@ -571,6 +545,22 @@ dword_result_t XamShowKeyboardUI_entry(
     std::string desc_str = description ? xe::to_utf8(description.value()) : "";
     std::string def_text_str =
         default_text ? xe::to_utf8(default_text.value()) : "";
+
+    // If no default text provided, use the user's gamertag
+    if (def_text_str.empty()) {
+      auto profile_manager = kernel_state()->xam_state()->profile_manager();
+      if (profile_manager) {
+        // Try the specified user_index first, fall back to slot 0
+        auto profile =
+            profile_manager->GetProfile(static_cast<uint8_t>(user_index));
+        if (!profile) {
+          profile = profile_manager->GetProfile(static_cast<uint8_t>(0));
+        }
+        if (profile) {
+          def_text_str = profile->name();
+        }
+      }
+    }
 
     result = xeXamDispatchDialogEx<KeyboardInputDialog>(
         new KeyboardInputDialog(imgui_drawer, input_system, title_str, desc_str,
@@ -923,6 +913,31 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
                           uint64_t* selected_xuid) {
   const ImVec2 start_position = ImGui::GetCursorPos();
 
+  // Calculate the size for the selectable based on icon + text
+  const float text_height = ImGui::GetTextLineHeight() * 3;  // 3 lines of text
+  const ImVec2 content_size =
+      ImVec2(ImGui::GetContentRegionAvail().x,
+             std::max(xe::ui::default_image_icon_size.y, text_height));
+
+  // Draw selectable first as background
+  bool clicked = false;
+  if (xuid && selected_xuid) {
+    if (ImGui::Selectable("##Selectable", *selected_xuid == xuid,
+                          ImGuiSelectableFlags_SpanAllColumns |
+                              ImGuiSelectableFlags_AllowOverlap,
+                          content_size)) {
+      *selected_xuid = xuid;
+      clicked = true;
+    }
+    // Update selection when focus moves to this item
+    if (ImGui::IsItemFocused()) {
+      *selected_xuid = xuid;
+    }
+    // Reset cursor to draw content on top
+    ImGui::SetCursorPos(start_position);
+  }
+
+  // Draw content on top of selectable
   ImGui::BeginGroup();
   {
     if (profile_icon) {
@@ -956,22 +971,12 @@ bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,
   }
   ImGui::EndGroup();
 
-  if (xuid && selected_xuid) {
-    const ImVec2 end_draw_position =
-        ImVec2(ImGui::GetCursorPos().x - start_position.x,
-               ImGui::GetCursorPos().y - start_position.y);
+  if (clicked) {
+    ImGui::OpenPopup("Profile Menu");
+  }
 
-    ImGui::SetCursorPos(start_position);
-    if (ImGui::Selectable("##Selectable", *selected_xuid == xuid,
-                          ImGuiSelectableFlags_SpanAllColumns,
-                          end_draw_position)) {
-      *selected_xuid = xuid;
-      ImGui::OpenPopup("Profile Menu");
-    }
-
-    if (context_menu) {
-      return context_menu();
-    }
+  if (context_menu) {
+    return context_menu();
   }
 
   return true;
@@ -1090,43 +1095,18 @@ dword_result_t XamShowAchievementsUI_entry(dword_t user_index,
     return X_ERROR_NO_SUCH_USER;
   }
 
-  const Emulator* emulator = kernel_state()->emulator();
-  xe::ui::WindowedAppContext& app_context =
-      emulator->display_window()->app_context();
+  xe::ui::ImGuiDrawer* imgui_drawer =
+      kernel_state()->emulator()->imgui_drawer();
+  xe::hid::InputSystem* input_system =
+      kernel_state()->emulator()->input_system();
 
-  auto* qt_window = dynamic_cast<xe::ui::QtWindow*>(emulator->display_window());
-  if (qt_window && qt_window->qwindow()) {
-    auto* kernel = kernel_state();
-    // Increment dialog counter to notify the system that UI is active
-    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
-    kernel_state()->xam_state()->xam_dialogs_shown_++;
-
-    app_context.CallInUIThread([qt_window, kernel, info, user]() {
-      auto* dialog = new xe::ui::AchievementsDialogQt(
-          qt_window->qwindow(), kernel, &info.value(), user);
-
-      // Connect to the dialog's destroyed signal to decrement counter when
-      // closed
-      QObject::connect(dialog, &QObject::destroyed, [kernel]() {
-        kernel->xam_state()->xam_dialogs_shown_--;
-        // Delay the notification to give games time to process
-        auto run = []() -> void {
-          xe::threading::Sleep(std::chrono::milliseconds(100));
-          kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
-        };
-        std::thread thread(run);
-        thread.detach();
-      });
-
-      dialog->show();
-      dialog->raise();
-      dialog->activateWindow();
-    });
-  }
-
-  return X_ERROR_SUCCESS;
+  auto close = [](ui::GameAchievementsUI* dialog) -> void {};
+  return xeXamDispatchDialogAsync<ui::GameAchievementsUI>(
+      new ui::GameAchievementsUI(imgui_drawer, input_system, &info.value(),
+                                 user),
+      close);
 }
-DECLARE_XAM_EXPORT1(XamShowAchievementsUI, kUserProfiles, kStub);
+DECLARE_XAM_EXPORT1(XamShowAchievementsUI, kUserProfiles, kImplemented);
 
 dword_result_t XamShowGamerCardUI_entry(dword_t user_index) {
   auto user = kernel_state()->xam_state()->GetUserProfile(user_index);

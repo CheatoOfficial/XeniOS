@@ -39,6 +39,11 @@ void ImGuiDialog::Close() { has_close_pending_ = true; }
 
 ImGuiIO& ImGuiDialog::GetIO() { return imgui_drawer()->GetIO(); }
 
+bool ImGuiDialog::ShouldCloseFromGamepad() const {
+  return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight) ||  // B button
+         ImGui::IsKeyPressed(ImGuiKey_GamepadBack);         // Back button
+}
+
 void ImGuiDialog::Draw() {
   // Draw UI.
   if (!has_close_pending_) {

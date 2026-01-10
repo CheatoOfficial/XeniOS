@@ -84,9 +84,11 @@ class QtWindowInternal : public QMainWindow {
   }
   void keyPressEvent(QKeyEvent* event) override {
     window_->OnKeyPressEvent(event);
+    event->accept();
   }
   void keyReleaseEvent(QKeyEvent* event) override {
     window_->OnKeyReleaseEvent(event);
+    event->accept();
   }
   bool eventFilter(QObject* obj, QEvent* event) override {
     return window_->OnEventFilter(obj, event);
@@ -120,12 +122,14 @@ void GameQWindow::keyPressEvent(QKeyEvent* event) {
   if (window_) {
     window_->OnKeyPressEvent(event);
   }
+  event->accept();
 }
 
 void GameQWindow::keyReleaseEvent(QKeyEvent* event) {
   if (window_) {
     window_->OnKeyReleaseEvent(event);
   }
+  event->accept();
 }
 
 void GameQWindow::mouseMoveEvent(QMouseEvent* event) {

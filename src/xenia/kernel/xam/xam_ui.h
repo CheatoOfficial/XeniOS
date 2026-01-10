@@ -82,8 +82,7 @@ class MessageBoxDialog : public XamGamepadDialog {
         description_(description),
         buttons_(std::move(buttons)),
         default_button_(default_button),
-        chosen_button_(default_button),
-        focused_button_(default_button) {
+        chosen_button_(default_button) {
     if (!title_.size()) {
       title_ = "Message Box";
     }
@@ -94,11 +93,6 @@ class MessageBoxDialog : public XamGamepadDialog {
   void OnDraw(ImGuiIO& io) override;
   virtual ~MessageBoxDialog() {}
 
- protected:
-  void OnGamepadButtonA() override;
-  void OnGamepadDPadLeft() override;
-  void OnGamepadDPadRight() override;
-
  private:
   bool has_opened_ = false;
   std::string title_;
@@ -106,7 +100,6 @@ class MessageBoxDialog : public XamGamepadDialog {
   std::vector<std::string> buttons_;
   uint32_t default_button_ = 0;
   uint32_t chosen_button_ = 0;
-  uint32_t focused_button_ = 0;
 };
 
 class KeyboardInputDialog : public XamGamepadDialog {
@@ -141,13 +134,9 @@ class KeyboardInputDialog : public XamGamepadDialog {
 
   void OnDraw(ImGuiIO& io) override;
 
- protected:
-  void OnGamepadButtonA() override;
-  void OnGamepadDPadLeft() override;
-  void OnGamepadDPadRight() override;
-
  private:
   bool has_opened_ = false;
+  bool focus_set_ = false;
   std::string title_;
   std::string description_;
   std::string default_text_;
@@ -155,7 +144,6 @@ class KeyboardInputDialog : public XamGamepadDialog {
   std::vector<char> text_buffer_;
   std::string text_ = "";
   bool cancelled_ = true;
-  int focused_button_ = 0;  // 0 = OK, 1 = Cancel
 };
 
 bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,

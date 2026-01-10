@@ -21,33 +21,19 @@ class InputSystem;
 namespace xe {
 namespace ui {
 
-// Base class for ImGui dialogs with gamepad support.
-// Provides common gamepad polling and virtual methods for button handling.
+// Base class for ImGui dialogs that need to block game input.
+// Gamepad navigation is handled by ImGui's native system.
+// Dialogs should check ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight) for
+// B-to-close.
 class ImGuiGamepadDialog : public ImGuiDialog {
  public:
-  // Set block_input to false if the dialog needs ImGui's built-in navigation
+  // When block_input is true, game input is blocked while dialog is open
   ImGuiGamepadDialog(ImGuiDrawer* drawer, hid::InputSystem* input_system,
                      bool block_input = true);
   ~ImGuiGamepadDialog() override;
 
  protected:
-  // Call this at the start of OnDraw() to poll gamepad input
-  void PollGamepad();
-
-  // Override to customize button behavior
-  virtual void OnGamepadButtonA() {}
-  virtual void OnGamepadButtonB() { Close(); }
-  virtual void OnGamepadButtonX() {}
-  virtual void OnGamepadButtonY() {}
-  virtual void OnGamepadStart() {}
-  virtual void OnGamepadBack() { Close(); }
-  virtual void OnGamepadDPadUp() {}
-  virtual void OnGamepadDPadDown() {}
-  virtual void OnGamepadDPadLeft() {}
-  virtual void OnGamepadDPadRight() {}
-
   hid::InputSystem* input_system_;
-  uint16_t prev_buttons_ = 0;
   bool blocking_input_ = false;
 };
 
