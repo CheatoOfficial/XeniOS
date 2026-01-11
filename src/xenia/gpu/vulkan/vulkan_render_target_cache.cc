@@ -480,12 +480,15 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
                 resolve_copy_shader_code.unscaled_size_bytes &&
                 resolve_copy_shader_code.scaled &&
                 resolve_copy_shader_code.scaled_size_bytes);
+    // Resolve copy shaders use 8x8 = 64 threads per group. Request wave64 mode
+    // on RDNA GPUs to ensure one full wave per group.
     VkPipeline resolve_copy_pipeline = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, resolve_copy_pipeline_layout_,
         draw_resolution_scaled ? resolve_copy_shader_code.scaled
                                : resolve_copy_shader_code.unscaled,
         draw_resolution_scaled ? resolve_copy_shader_code.scaled_size_bytes
-                               : resolve_copy_shader_code.unscaled_size_bytes);
+                               : resolve_copy_shader_code.unscaled_size_bytes,
+        nullptr, "main", 64);
     if (resolve_copy_pipeline == VK_NULL_HANDLE) {
       XELOGE(
           "VulkanRenderTargetCache: Failed to create the resolve copy "
@@ -551,10 +554,13 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
     for (size_t i = 0; i < xe::countof(host_depth_store_shaders); ++i) {
       const std::pair<const uint32_t*, size_t> host_depth_store_shader =
           host_depth_store_shaders[i];
+      // Host depth store shaders use 8x8 = 64 threads per group. Request wave64
+      // mode on RDNA GPUs to ensure one full wave per group.
       VkPipeline host_depth_store_pipeline =
           ui::vulkan::util::CreateComputePipeline(
               vulkan_device, host_depth_store_pipeline_layout_,
-              host_depth_store_shader.first, host_depth_store_shader.second);
+              host_depth_store_shader.first, host_depth_store_shader.second,
+              nullptr, "main", 64);
       if (host_depth_store_pipeline == VK_NULL_HANDLE) {
         XELOGE(
             "VulkanRenderTargetCache: Failed to create the {}-sample host "
@@ -740,12 +746,15 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
       Shutdown();
       return false;
     }
+    // Resolve clear shaders use 8x8 = 64 threads per group. Request wave64
+    // mode on RDNA GPUs to ensure one full wave per group.
     resolve_fsi_clear_32bpp_pipeline_ = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, resolve_fsi_clear_pipeline_layout_,
         draw_resolution_scaled ? shaders::resolve_clear_32bpp_scaled_cs
                                : shaders::resolve_clear_32bpp_cs,
         draw_resolution_scaled ? sizeof(shaders::resolve_clear_32bpp_scaled_cs)
-                               : sizeof(shaders::resolve_clear_32bpp_cs));
+                               : sizeof(shaders::resolve_clear_32bpp_cs),
+        nullptr, "main", 64);
     if (resolve_fsi_clear_32bpp_pipeline_ == VK_NULL_HANDLE) {
       XELOGE(
           "VulkanRenderTargetCache: Failed to create the 32bpp resolve EDRAM "
@@ -758,7 +767,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
         draw_resolution_scaled ? shaders::resolve_clear_64bpp_scaled_cs
                                : shaders::resolve_clear_64bpp_cs,
         draw_resolution_scaled ? sizeof(shaders::resolve_clear_64bpp_scaled_cs)
-                               : sizeof(shaders::resolve_clear_64bpp_cs));
+                               : sizeof(shaders::resolve_clear_64bpp_cs),
+        nullptr, "main", 64);
     if (resolve_fsi_clear_64bpp_pipeline_ == VK_NULL_HANDLE) {
       XELOGE(
           "VulkanRenderTargetCache: Failed to create the 64bpp resolve EDRAM "

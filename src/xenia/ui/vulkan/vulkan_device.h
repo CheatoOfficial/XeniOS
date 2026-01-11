@@ -161,6 +161,17 @@ class VulkanDevice {
     // VK_EXT_non_seamless_cube_map (#423)
 
     bool nonSeamlessCubeMap = false;
+
+    // Vulkan 1.1 Subgroup Properties
+    uint32_t subgroupSize = 32;
+    VkShaderStageFlags subgroupSupportedStages = 0;
+    VkSubgroupFeatureFlags subgroupSupportedOperations = 0;
+
+    // VK_EXT_subgroup_size_control (#226, promoted to 1.3)
+    uint32_t minSubgroupSize = 0;
+    uint32_t maxSubgroupSize = 0;
+    bool subgroupSizeControl = false;
+    bool computeFullSubgroups = false;
   };
 
   // Properties of the core API and enabled extensions, and enabled features.
@@ -188,6 +199,8 @@ class VulkanDevice {
     bool ext_1_3_KHR_maintenance4 = false;  // #414
     // VK_KHR_dynamic_rendering (#55, promoted to 1.3)
     bool ext_1_3_KHR_dynamic_rendering = false;
+    // VK_EXT_subgroup_size_control (#226, promoted to 1.3)
+    bool ext_1_3_EXT_subgroup_size_control = false;
   };
 
   const Extensions& extensions() const { return extensions_; }

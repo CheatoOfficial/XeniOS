@@ -180,16 +180,20 @@ inline VkShaderModule CreateShaderModule(
              : VK_NULL_HANDLE;
 }
 
+// If required_subgroup_size is non-zero and VK_EXT_subgroup_size_control is
+// supported with the requested size in range, the pipeline will be created
+// with that subgroup size requirement. This can be used to request wave64
+// mode on RDNA GPUs for 64-thread compute shaders.
 VkPipeline CreateComputePipeline(
     const VulkanDevice* vulkan_device, VkPipelineLayout layout,
     VkShaderModule shader,
     const VkSpecializationInfo* specialization_info = nullptr,
-    const char* entry_point = "main");
+    const char* entry_point = "main", uint32_t required_subgroup_size = 0);
 VkPipeline CreateComputePipeline(
     const VulkanDevice* vulkan_device, VkPipelineLayout layout,
     const uint32_t* shader_code, size_t shader_code_size_bytes,
     const VkSpecializationInfo* specialization_info = nullptr,
-    const char* entry_point = "main");
+    const char* entry_point = "main", uint32_t required_subgroup_size = 0);
 
 }  // namespace util
 }  // namespace vulkan

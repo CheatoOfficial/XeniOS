@@ -168,6 +168,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   bool ext_1_3_EXT_shader_demote_to_helper_invocation = false;
   bool ext_1_3_KHR_dynamic_rendering = false;
   bool ext_EXT_non_seamless_cube_map = false;
+  bool ext_1_3_EXT_subgroup_size_control = false;
   if (with_gpu_emulation) {
     // #15.
     XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(KHR_sampler_mirror_clamp_to_edge, 1,
@@ -192,6 +193,8 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
           EXT_shader_demote_to_helper_invocation, 1, 3)
       // #423.
       XE_UI_VULKAN_LOCAL_EXTENSION(EXT_non_seamless_cube_map)
+      // #226.
+      XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION(EXT_subgroup_size_control, 1, 3)
     }
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
       // #237.
@@ -299,6 +302,17 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
   VulkanFeatures<VkPhysicalDeviceDynamicRenderingFeatures,
                  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES>
       features_1_3_KHR_dynamic_rendering;
+  // Vulkan 1.1 core subgroup properties.
+  VkPhysicalDeviceSubgroupProperties properties_subgroup = {
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
+  // VK_EXT_subgroup_size_control (#226, promoted to 1.3).
+  VkPhysicalDeviceSubgroupSizeControlProperties
+      properties_1_3_EXT_subgroup_size_control = {
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+  VulkanFeatures<
+      VkPhysicalDeviceSubgroupSizeControlFeatures,
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES>
+      features_1_3_EXT_subgroup_size_control;
 
   if (get_physical_device_properties2_supported) {
     if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
@@ -335,6 +349,18 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     if (ext_EXT_non_seamless_cube_map) {
       features_EXT_non_seamless_cube_map.Link(supported_features_2,
                                               device_create_info);
+    }
+    // Subgroup properties are Vulkan 1.1 core.
+    if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
+      properties_subgroup.pNext = properties_2.pNext;
+      properties_2.pNext = &properties_subgroup;
+    }
+    // VK_EXT_subgroup_size_control properties and features.
+    if (ext_1_3_EXT_subgroup_size_control) {
+      properties_1_3_EXT_subgroup_size_control.pNext = properties_2.pNext;
+      properties_2.pNext = &properties_1_3_EXT_subgroup_size_control;
+      features_1_3_EXT_subgroup_size_control.Link(supported_features_2,
+                                                  device_create_info);
     }
     ifn.vkGetPhysicalDeviceProperties2(physical_device, &properties_2);
     ifn.vkGetPhysicalDeviceFeatures2(physical_device, &supported_features_2);
@@ -712,6 +738,37 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
                              nonSeamlessCubeMap)
     }
   }
+
+  // Vulkan 1.1 core subgroup properties.
+  if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
+    XE_UI_VULKAN_PROPERTY_2(properties_subgroup, subgroupSize);
+    device->properties_.subgroupSupportedStages =
+        properties_subgroup.supportedStages;
+    XELOGI("* subgroupSupportedStages: {}",
+           vk::to_string(
+               vk::ShaderStageFlags(properties_subgroup.supportedStages)));
+    device->properties_.subgroupSupportedOperations =
+        properties_subgroup.supportedOperations;
+    XELOGI("* subgroupSupportedOperations: {}",
+           vk::to_string(vk::SubgroupFeatureFlags(
+               properties_subgroup.supportedOperations)));
+  }
+
+  // VK_EXT_subgroup_size_control (#226, promoted to 1.3).
+  if (ext_1_3_EXT_subgroup_size_control) {
+    XE_UI_VULKAN_PROPERTY_2(properties_1_3_EXT_subgroup_size_control,
+                            minSubgroupSize);
+    XE_UI_VULKAN_PROPERTY_2(properties_1_3_EXT_subgroup_size_control,
+                            maxSubgroupSize);
+    if (with_gpu_emulation) {
+      XE_UI_VULKAN_FEATURE_2(features_1_3_EXT_subgroup_size_control,
+                             subgroupSizeControl);
+      XE_UI_VULKAN_FEATURE_2(features_1_3_EXT_subgroup_size_control,
+                             computeFullSubgroups);
+    }
+  }
+  device->extensions_.ext_1_3_EXT_subgroup_size_control =
+      ext_1_3_EXT_subgroup_size_control;
 
 #undef XE_UI_VULKAN_LIMIT
 #undef XE_UI_VULKAN_ENUM_LIMIT
