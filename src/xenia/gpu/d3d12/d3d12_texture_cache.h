@@ -318,18 +318,21 @@ class D3D12TextureCache final : public TextureCache {
        kLoadShaderIndexR10G11B11ToRGBA16SNorm, false, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB},
       // k_DXT1
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC1_SNORM in DXGI).
       {DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM, kLoadShaderIndex64bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT1ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT1ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_DXT2_3
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC2_SNORM in DXGI).
       {DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC2_UNORM, kLoadShaderIndex128bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT3ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT3ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_DXT4_5
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC3_SNORM in DXGI).
       {DXGI_FORMAT_BC3_UNORM, DXGI_FORMAT_BC3_UNORM, kLoadShaderIndex128bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT5ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT5ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_16_16_16_16_EDRAM
@@ -463,8 +466,9 @@ class D3D12TextureCache final : public TextureCache {
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
       // k_DXN
+      // Signed needs decompression to R8G8_SNORM (no BC5_SNORM in DXGI).
       {DXGI_FORMAT_BC5_UNORM, DXGI_FORMAT_BC5_UNORM, kLoadShaderIndex128bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8_SNORM, kLoadShaderIndexDXNToRG8, true,
        DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndexDXNToRG8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
       // k_8_8_8_8_AS_16_16_16_16
@@ -473,18 +477,21 @@ class D3D12TextureCache final : public TextureCache {
        kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_DXT1_AS_16_16_16_16
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC1_SNORM in DXGI).
       {DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM, kLoadShaderIndex64bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT1ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT1ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_DXT2_3_AS_16_16_16_16
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC2_SNORM in DXGI).
       {DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC2_UNORM, kLoadShaderIndex128bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT3ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT3ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_DXT4_5_AS_16_16_16_16
+      // Signed needs decompression to R8G8B8A8_SNORM (no BC3_SNORM in DXGI).
       {DXGI_FORMAT_BC3_UNORM, DXGI_FORMAT_BC3_UNORM, kLoadShaderIndex128bpb,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
+       DXGI_FORMAT_R8G8B8A8_SNORM, kLoadShaderIndexDXT5ToRGBA8, true,
        DXGI_FORMAT_R8G8B8A8_UNORM, kLoadShaderIndexDXT5ToRGBA8,
        xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
       // k_2_10_10_10_AS_16_16_16_16
@@ -517,8 +524,9 @@ class D3D12TextureCache final : public TextureCache {
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true, DXGI_FORMAT_R8_UNORM,
        kLoadShaderIndexDXT5AToR8, xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR},
       // k_CTX1
-      {DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndexCTX1,
-       DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
+      // Signed uses R8G8_SNORM with same decompression shader.
+      {DXGI_FORMAT_R8G8_TYPELESS, DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndexCTX1,
+       DXGI_FORMAT_R8G8_SNORM, kLoadShaderIndexCTX1, false, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
       // k_DXT3A_AS_1_1_1_1
       {DXGI_FORMAT_B4G4R4A4_UNORM, DXGI_FORMAT_B4G4R4A4_UNORM,
@@ -717,6 +725,22 @@ class D3D12TextureCache final : public TextureCache {
                : host_format.dxgi_format_resource;
   }
   DXGI_FORMAT GetDXGIResourceFormat(TextureKey key) const {
+    const HostFormat& host_format = host_formats_[uint32_t(key.format)];
+    // For signed block-compressed formats without native SNORM BC support
+    // (like DXT1/2/3/4/5, DXN), we must decompress to an uncompressed format
+    // that supports SNORM views. Use TYPELESS to allow creating SNORM SRVs.
+    if (key.signed_separate && host_format.is_block_compressed &&
+        host_format.dxgi_format_signed != DXGI_FORMAT_UNKNOWN) {
+      // Return the appropriate TYPELESS format based on signed format.
+      switch (host_format.dxgi_format_signed) {
+        case DXGI_FORMAT_R8G8B8A8_SNORM:
+          return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+        case DXGI_FORMAT_R8G8_SNORM:
+          return DXGI_FORMAT_R8G8_TYPELESS;
+        default:
+          return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+      }
+    }
     return GetDXGIResourceFormat(key.format, key.GetWidth(), key.GetHeight());
   }
   DXGI_FORMAT GetDXGIUnormFormat(xenos::TextureFormat format, uint32_t width,

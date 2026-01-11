@@ -191,18 +191,24 @@ constexpr VulkanTextureCache::HostFormatPair
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB},
         // k_DXT1
         // VK_FORMAT_BC1_RGBA_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC1_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex64bpb, VK_FORMAT_BC1_RGBA_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT1ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_DXT2_3
         // VK_FORMAT_BC2_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC2_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex128bpb, VK_FORMAT_BC2_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT3ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_DXT4_5
         // VK_FORMAT_BC3_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC3_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex128bpb, VK_FORMAT_BC3_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT5ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_16_16_16_16_EDRAM
         // Not usable as a texture, also has -32...32 range.
@@ -335,8 +341,9 @@ constexpr VulkanTextureCache::HostFormatPair
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
         // k_DXN
         // VK_FORMAT_BC5_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8_SNORM (no BC5_SNORM in Vulkan).
         {{kLoadShaderIndex128bpb, VK_FORMAT_BC5_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXNToRG8, VK_FORMAT_R8G8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
         // k_8_8_8_8_AS_16_16_16_16
         {{kLoadShaderIndex32bpb, VK_FORMAT_R8G8B8A8_UNORM},
@@ -345,18 +352,24 @@ constexpr VulkanTextureCache::HostFormatPair
          true},
         // k_DXT1_AS_16_16_16_16
         // VK_FORMAT_BC1_RGBA_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC1_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex64bpb, VK_FORMAT_BC1_RGBA_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT1ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_DXT2_3_AS_16_16_16_16
         // VK_FORMAT_BC2_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC2_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex128bpb, VK_FORMAT_BC2_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT3ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_DXT4_5_AS_16_16_16_16
         // VK_FORMAT_BC3_UNORM_BLOCK is optional.
+        // Signed needs decompression to R8G8B8A8_SNORM (no BC3_SNORM in
+        // Vulkan).
         {{kLoadShaderIndex128bpb, VK_FORMAT_BC3_UNORM_BLOCK, true},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexDXT5ToRGBA8, VK_FORMAT_R8G8B8A8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA},
         // k_2_10_10_10_AS_16_16_16_16
         // VK_FORMAT_A2B10G10R10_SNORM_PACK32 is optional.
@@ -390,8 +403,9 @@ constexpr VulkanTextureCache::HostFormatPair
          {kLoadShaderIndexUnknown},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RRRR},
         // k_CTX1
+        // Signed uses R8G8_SNORM with same decompression shader.
         {{kLoadShaderIndexCTX1, VK_FORMAT_R8G8_UNORM},
-         {kLoadShaderIndexUnknown},
+         {kLoadShaderIndexCTX1, VK_FORMAT_R8G8_SNORM},
          xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
         // k_DXT3A_AS_1_1_1_1
         {{kLoadShaderIndexDXT3AAs1111ToARGB4, VK_FORMAT_B4G4R4A4_UNORM_PACK16},
