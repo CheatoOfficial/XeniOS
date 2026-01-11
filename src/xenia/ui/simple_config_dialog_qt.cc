@@ -45,54 +45,11 @@ void SimpleConfigDialogQt::ReloadConfigValues() { LoadConfigValues(); }
 void SimpleConfigDialogQt::SetupUI() {
   auto* main_layout = new QVBoxLayout(this);
 
-  // Audio section
-  auto* audio_group = new QGroupBox("Audio", this);
-  auto* audio_layout = new QFormLayout(audio_group);
-
-  auto* apu_combo = new QComboBox(this);
-  const auto& enum_options = ui::GetKnownEnumOptions();
-  auto apu_it = enum_options.find("apu");
-  if (apu_it != enum_options.end()) {
-    for (const auto& opt : apu_it->second) {
-      apu_combo->addItem(SafeQString(opt));
-    }
-  }
-  options_["apu"].cvar_name = "apu";
-  options_["apu"].editor_widget = apu_combo;
-  options_["apu"].label_widget = new QLabel("Audio Backend:", this);
-  connect(apu_combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &SimpleConfigDialogQt::OnValueChanged);
-  audio_layout->addRow(options_["apu"].label_widget, apu_combo);
-
-  auto* xma_combo = new QComboBox(this);
-  auto xma_it = enum_options.find("xma_decoder");
-  if (xma_it != enum_options.end()) {
-    for (const auto& opt : xma_it->second) {
-      xma_combo->addItem(SafeQString(opt));
-    }
-  }
-  options_["xma_decoder"].cvar_name = "xma_decoder";
-  options_["xma_decoder"].editor_widget = xma_combo;
-  options_["xma_decoder"].label_widget = new QLabel("Audio Decoder:", this);
-  connect(xma_combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-          &SimpleConfigDialogQt::OnValueChanged);
-  audio_layout->addRow(options_["xma_decoder"].label_widget, xma_combo);
-
-  auto* xma_thread_check = new QCheckBox(this);
-  options_["use_dedicated_xma_thread"].cvar_name = "use_dedicated_xma_thread";
-  options_["use_dedicated_xma_thread"].editor_widget = xma_thread_check;
-  options_["use_dedicated_xma_thread"].label_widget =
-      new QLabel("Dedicated Thread:", this);
-  connect(xma_thread_check, &QCheckBox::checkStateChanged, this,
-          &SimpleConfigDialogQt::OnValueChanged);
-  audio_layout->addRow(options_["use_dedicated_xma_thread"].label_widget,
-                       xma_thread_check);
-
-  main_layout->addWidget(audio_group);
-
   // Graphics section
   auto* graphics_group = new QGroupBox("Graphics", this);
   auto* graphics_layout = new QFormLayout(graphics_group);
+
+  const auto& enum_options = ui::GetKnownEnumOptions();
 
   auto* gpu_combo = new QComboBox(this);
   auto gpu_it = enum_options.find("gpu");
@@ -149,7 +106,7 @@ void SimpleConfigDialogQt::SetupUI() {
   options_["framerate_limit"].cvar_name = "framerate_limit";
   options_["framerate_limit"].editor_widget = fps_spin;
   options_["framerate_limit"].label_widget =
-      new QLabel("Max Refresh Rate:", this);
+      new QLabel("Framerate Limit:", this);
   connect(fps_spin, QOverload<int>::of(&QSpinBox::valueChanged), this,
           &SimpleConfigDialogQt::OnValueChanged);
   graphics_layout->addRow(options_["framerate_limit"].label_widget, fps_spin);
@@ -208,6 +165,50 @@ void SimpleConfigDialogQt::SetupUI() {
                           letterbox_check);
 
   main_layout->addWidget(graphics_group);
+
+  // Audio section
+  auto* audio_group = new QGroupBox("Audio", this);
+  auto* audio_layout = new QFormLayout(audio_group);
+
+  auto* apu_combo = new QComboBox(this);
+  auto apu_it = enum_options.find("apu");
+  if (apu_it != enum_options.end()) {
+    for (const auto& opt : apu_it->second) {
+      apu_combo->addItem(SafeQString(opt));
+    }
+  }
+  options_["apu"].cvar_name = "apu";
+  options_["apu"].editor_widget = apu_combo;
+  options_["apu"].label_widget = new QLabel("Audio Backend:", this);
+  connect(apu_combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &SimpleConfigDialogQt::OnValueChanged);
+  audio_layout->addRow(options_["apu"].label_widget, apu_combo);
+
+  auto* xma_combo = new QComboBox(this);
+  auto xma_it = enum_options.find("xma_decoder");
+  if (xma_it != enum_options.end()) {
+    for (const auto& opt : xma_it->second) {
+      xma_combo->addItem(SafeQString(opt));
+    }
+  }
+  options_["xma_decoder"].cvar_name = "xma_decoder";
+  options_["xma_decoder"].editor_widget = xma_combo;
+  options_["xma_decoder"].label_widget = new QLabel("Audio Decoder:", this);
+  connect(xma_combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          &SimpleConfigDialogQt::OnValueChanged);
+  audio_layout->addRow(options_["xma_decoder"].label_widget, xma_combo);
+
+  auto* xma_thread_check = new QCheckBox(this);
+  options_["use_dedicated_xma_thread"].cvar_name = "use_dedicated_xma_thread";
+  options_["use_dedicated_xma_thread"].editor_widget = xma_thread_check;
+  options_["use_dedicated_xma_thread"].label_widget =
+      new QLabel("Dedicated Thread:", this);
+  connect(xma_thread_check, &QCheckBox::checkStateChanged, this,
+          &SimpleConfigDialogQt::OnValueChanged);
+  audio_layout->addRow(options_["use_dedicated_xma_thread"].label_widget,
+                       xma_thread_check);
+
+  main_layout->addWidget(audio_group);
 
   // Other section
   auto* other_group = new QGroupBox("Other", this);
