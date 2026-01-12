@@ -613,8 +613,18 @@ uint XeResolveEdramPixelStrideInts(XeResolveInfo resolve_info) {
           pixel_1 += msaa_resolve_pixel_1;
         }
       }
-      pixel_0 *= exp_bias;
-      pixel_1 *= exp_bias;
+      // For k_2_10_10_10_FLOAT, only apply exp_bias to RGB (7e3 float), not
+      // alpha (2-bit fixed-point [0, 1]).
+      dont_flatten_xe if (resolve_info.edram_format ==
+                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
+                          resolve_info.edram_format ==
+                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
+        pixel_0.xyz *= exp_bias;
+        pixel_1.xyz *= exp_bias;
+      } else {
+        pixel_0 *= exp_bias;
+        pixel_1 *= exp_bias;
+      }
       dont_flatten_xe if (resolve_info.dest_swap) {
         pixel_0 = pixel_0.bgra;
         pixel_1 = pixel_1.bgra;
@@ -682,10 +692,22 @@ uint XeResolveEdramPixelStrideInts(XeResolveInfo resolve_info) {
           pixel_3 += msaa_resolve_pixel_3;
         }
       }
-      pixel_0 *= exp_bias;
-      pixel_1 *= exp_bias;
-      pixel_2 *= exp_bias;
-      pixel_3 *= exp_bias;
+      // For k_2_10_10_10_FLOAT, only apply exp_bias to RGB (7e3 float), not
+      // alpha (2-bit fixed-point [0, 1]).
+      dont_flatten_xe if (resolve_info.edram_format ==
+                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
+                          resolve_info.edram_format ==
+                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
+        pixel_0.xyz *= exp_bias;
+        pixel_1.xyz *= exp_bias;
+        pixel_2.xyz *= exp_bias;
+        pixel_3.xyz *= exp_bias;
+      } else {
+        pixel_0 *= exp_bias;
+        pixel_1 *= exp_bias;
+        pixel_2 *= exp_bias;
+        pixel_3 *= exp_bias;
+      }
       dont_flatten_xe if (resolve_info.dest_swap) {
         pixel_0 = pixel_0.bgra;
         pixel_1 = pixel_1.bgra;
