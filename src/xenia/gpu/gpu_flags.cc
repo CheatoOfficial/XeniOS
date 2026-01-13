@@ -182,3 +182,9 @@ DEFINE_bool(
     "improve image quality in some cases but can break games that rely on "
     "reading back specific pixel values (e.g., for gamma detection).",
     "GPU");
+
+DEFINE_int32(gpu_3d_to_2d_texture_mode, 2,
+             "Handle shaders that sample 3D textures as 2D by creating a 2D "
+             "copy of slice 0. 0 = disabled, 1 = GPU copy, "
+             "2 = CPU re-upload from guest memory (default).",
+             "GPU");

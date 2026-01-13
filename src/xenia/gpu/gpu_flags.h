@@ -58,6 +58,8 @@ DECLARE_bool(async_shader_compilation);
 
 DECLARE_bool(readback_resolve_half_pixel_offset);
 
+DECLARE_int32(gpu_3d_to_2d_texture_mode);
+
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1
 
 #endif  // XENIA_GPU_GPU_FLAGS_H_
