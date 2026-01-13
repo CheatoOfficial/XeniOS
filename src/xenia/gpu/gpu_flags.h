@@ -58,7 +58,7 @@ DECLARE_bool(async_shader_compilation);
 
 DECLARE_bool(readback_resolve_half_pixel_offset);
 
-DECLARE_int32(gpu_3d_to_2d_texture_mode);
+DECLARE_bool(gpu_3d_to_2d_texture);
 
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1
 
