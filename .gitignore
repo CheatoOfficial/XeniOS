@@ -65,6 +65,12 @@ obj/
 # Qt MOC generated files
 src/xenia/ui/moc_*.cc
 
+# Generated shader bytecode
+src/xenia/gpu/shaders/bytecode/d3d12_5_1/
+src/xenia/gpu/shaders/bytecode/vulkan_spirv/
+src/xenia/ui/shaders/bytecode/d3d12_5_1/
+src/xenia/ui/shaders/bytecode/vulkan_spirv/
+
 # ==============================================================================
 # Logs and dumps
 # ==============================================================================
