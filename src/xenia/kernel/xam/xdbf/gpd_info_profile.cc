@@ -10,6 +10,7 @@
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 
 #include "third_party/fmt/include/fmt/format.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
 
@@ -229,7 +230,7 @@ std::optional<std::filesystem::path> GpdInfoProfile::GetTitlePath(
   // Strip label if present (format: "label::path")
   paths_utf8 = StripLabel(paths_utf8);
 
-  return std::filesystem::path(paths_utf8);
+  return xe::to_path(paths_utf8);
 }
 
 std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
@@ -251,7 +252,7 @@ std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
   while ((end = paths_utf8.find(kPathDelimiter, start)) != std::string::npos) {
     std::string path_str = paths_utf8.substr(start, end - start);
     if (!path_str.empty()) {
-      paths.push_back(std::filesystem::path(StripLabel(path_str)));
+      paths.push_back(xe::to_path(StripLabel(path_str)));
     }
     start = end + 1;
   }
@@ -260,7 +261,7 @@ std::vector<std::filesystem::path> GpdInfoProfile::GetTitlePaths(
   if (start < paths_utf8.length()) {
     std::string path_str = paths_utf8.substr(start);
     if (!path_str.empty()) {
-      paths.push_back(std::filesystem::path(StripLabel(path_str)));
+      paths.push_back(xe::to_path(StripLabel(path_str)));
     }
   }
 
@@ -289,7 +290,7 @@ std::vector<GpdInfoProfile::DiscInfo> GpdInfoProfile::GetTitleDiscs(
     if (!line.empty()) {
       DiscInfo disc;
       auto [label, path_str] = ParseLabelAndPath(line);
-      disc.path = std::filesystem::path(path_str);
+      disc.path = xe::to_path(path_str);
       disc.label = label;  // Keep empty if no label in storage
       discs.push_back(disc);
       disc_num++;
@@ -303,7 +304,7 @@ std::vector<GpdInfoProfile::DiscInfo> GpdInfoProfile::GetTitleDiscs(
     if (!line.empty()) {
       DiscInfo disc;
       auto [label, path_str] = ParseLabelAndPath(line);
-      disc.path = std::filesystem::path(path_str);
+      disc.path = xe::to_path(path_str);
       disc.label = label;  // Keep empty if no label in storage
       discs.push_back(disc);
     }

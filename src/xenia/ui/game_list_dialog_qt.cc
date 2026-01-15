@@ -820,7 +820,7 @@ void GameListDialogQt::OnGameDoubleClicked(int row, int column) {
     }
   } else {
     // Single disc game, launch directly
-    std::filesystem::path path = SafeStdString(path_str);
+    std::filesystem::path path = xe::to_path(SafeStdString(path_str));
     LaunchGame(path, title_id);
   }
 }
@@ -839,7 +839,7 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
   QString path_str = item->data(Qt::UserRole).toString();
   uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
 
-  std::filesystem::path path = SafeStdString(path_str);
+  std::filesystem::path path = xe::to_path(SafeStdString(path_str));
   bool has_path = !path_str.isEmpty();
 
   // Get profile manager
@@ -1328,7 +1328,7 @@ void GameListDialogQt::OnSelectionChanged() {
       QString path_str = item->data(Qt::UserRole).toString();
       uint32_t title_id = item->data(Qt::UserRole + 1).toUInt();
       if (!path_str.isEmpty()) {
-        selected_game_path_ = SafeStdString(path_str);
+        selected_game_path_ = xe::to_path(SafeStdString(path_str));
         selected_game_title_id_ = title_id;
         UpdatePlayButtonState();
         return;
@@ -1741,50 +1741,50 @@ std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
           &QDialog::accept);
 
   // Delete button handler
-  connect(delete_button, &QPushButton::clicked,
-          [this, list_widget, entry, &disc_dialog]() {
-            auto* selected_item = list_widget->currentItem();
-            if (!selected_item) {
-              return;
-            }
+  connect(
+      delete_button, &QPushButton::clicked,
+      [this, list_widget, entry, &disc_dialog]() {
+        auto* selected_item = list_widget->currentItem();
+        if (!selected_item) {
+          return;
+        }
 
-            QString path_str = selected_item->data(Qt::UserRole).toString();
-            std::filesystem::path disc_path = SafeStdString(path_str);
+        QString path_str = selected_item->data(Qt::UserRole).toString();
+        std::filesystem::path disc_path = xe::to_path(SafeStdString(path_str));
 
-            auto result =
-                QMessageBox::question(this, "Delete Disc Entry",
-                                      QString("Are you sure you want to remove "
-                                              "this disc from the list?\n\n%1")
-                                          .arg(selected_item->text()),
-                                      QMessageBox::Yes | QMessageBox::No);
+        auto result =
+            QMessageBox::question(this, "Delete Disc Entry",
+                                  QString("Are you sure you want to remove "
+                                          "this disc from the list?\n\n%1")
+                                      .arg(selected_item->text()),
+                                  QMessageBox::Yes | QMessageBox::No);
 
-            if (result == QMessageBox::Yes) {
-              if (emulator_window_ && emulator_window_->emulator()) {
-                auto kernel_state =
-                    emulator_window_->emulator()->kernel_state();
-                if (kernel_state) {
-                  auto profile_manager =
-                      kernel_state->xam_state()->profile_manager();
-                  auto profile =
-                      profile_manager->GetProfile(static_cast<uint8_t>(0));
-                  if (profile) {
-                    profile->RemoveDiscPath(entry->title_id, disc_path);
+        if (result == QMessageBox::Yes) {
+          if (emulator_window_ && emulator_window_->emulator()) {
+            auto kernel_state = emulator_window_->emulator()->kernel_state();
+            if (kernel_state) {
+              auto profile_manager =
+                  kernel_state->xam_state()->profile_manager();
+              auto profile =
+                  profile_manager->GetProfile(static_cast<uint8_t>(0));
+              if (profile) {
+                profile->RemoveDiscPath(entry->title_id, disc_path);
 
-                    // Remove from list widget
-                    delete list_widget->takeItem(list_widget->currentRow());
+                // Remove from list widget
+                delete list_widget->takeItem(list_widget->currentRow());
 
-                    // If no more discs, close the dialog
-                    if (list_widget->count() == 0) {
-                      disc_dialog.reject();
-                    }
-
-                    // Reload the game list to refresh
-                    const_cast<GameListDialogQt*>(this)->LoadGameList();
-                  }
+                // If no more discs, close the dialog
+                if (list_widget->count() == 0) {
+                  disc_dialog.reject();
                 }
+
+                // Reload the game list to refresh
+                const_cast<GameListDialogQt*>(this)->LoadGameList();
               }
             }
-          });
+          }
+        }
+      });
 
   // Rename button handler
   connect(rename_button, &QPushButton::clicked, [this, list_widget, entry]() {
@@ -1795,7 +1795,7 @@ std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
 
     QString current_label = selected_item->text();
     QString path_str = selected_item->data(Qt::UserRole).toString();
-    std::filesystem::path disc_path = SafeStdString(path_str);
+    std::filesystem::path disc_path = xe::to_path(SafeStdString(path_str));
 
     bool ok;
     QString new_label = QInputDialog::getText(
@@ -1841,7 +1841,7 @@ std::optional<std::filesystem::path> GameListDialogQt::ShowDiscSelectionDialog(
     auto* selected_item = list_widget->currentItem();
     if (selected_item) {
       QString selected_path = selected_item->data(Qt::UserRole).toString();
-      return std::filesystem::path(SafeStdString(selected_path));
+      return xe::to_path(SafeStdString(selected_path));
     }
   }
 

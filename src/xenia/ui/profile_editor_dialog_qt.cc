@@ -20,6 +20,7 @@
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/string_util.h"
@@ -759,7 +760,7 @@ void ProfileEditorDialogQt::OnChangeIconClicked() {
     return;
   }
 
-  std::filesystem::path path = SafeStdString(file_path);
+  std::filesystem::path path = xe::to_path(SafeStdString(file_path));
 
   if (!IsFilePngImage(path)) {
     QMessageBox::warning(this, "Invalid File",
