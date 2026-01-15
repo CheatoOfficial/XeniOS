@@ -424,6 +424,7 @@ workspace("xenia")
   configurations({"Checked", "Debug", "Release", "Valgrind"})
 
   include("third_party/aes_128.lua")
+  include("third_party/asio.lua")
   include("third_party/capstone.lua")
   include("third_party/dxbc.lua")
   include("third_party/discord-rpc.lua")
