@@ -8,6 +8,14 @@
  */
 
 #include "xenia/gpu/texture_util.h"
+
+#include <algorithm>
+#include <cstring>
+
+#include "xenia/base/assert.h"
+#include "xenia/base/math.h"
+#include "xenia/gpu/texture_address.h"
+
 namespace xe {
 namespace gpu {
 namespace texture_util {
@@ -410,10 +418,10 @@ TextureGuestLayout GetGuestTextureLayout(
       uint32_t bytes_per_block_log2 = xe::log2_floor(bytes_per_block);
       if (dimension == xenos::DataDimension::k3D) {
         level_layout.array_slice_data_extent_bytes =
-            GetTiledAddressUpperBound3D(
+            uint32_t(GetTiledAddressUpperBound3D(
                 level_layout.x_extent_blocks, level_layout.y_extent_blocks,
                 level_layout.z_extent, row_pitch_blocks_tile_aligned,
-                level_layout.y_extent_blocks, bytes_per_block_log2);
+                level_layout.z_slice_stride_block_rows, bytes_per_block_log2));
       } else {
         level_layout.array_slice_data_extent_bytes =
             GetTiledAddressUpperBound2D(
@@ -492,16 +500,16 @@ int32_t GetTiledOffset3D(int32_t x, int32_t y, int32_t z, uint32_t pitch,
 XE_NOINLINE
 XE_NOALIAS
 uint32_t GetTiledAddressUpperBound2D(uint32_t right, uint32_t bottom,
-                                     uint32_t pitch,
+                                     uint32_t pitch_aligned,
                                      uint32_t bytes_per_block_log2) {
   if (!right || !bottom) {
     return 0;
   }
   // Get the origin of the 32x32 tile containing the last texel.
-  uint32_t upper_bound = uint32_t(GetTiledOffset2D(
+  uint32_t upper_bound = uint32_t(texture_address::Tiled2D(
       int32_t((right - 1) & ~(xenos::kTextureTileWidthHeight - 1)),
-      int32_t((bottom - 1) & ~(xenos::kTextureTileWidthHeight - 1)), pitch,
-      bytes_per_block_log2));
+      int32_t((bottom - 1) & ~(xenos::kTextureTileWidthHeight - 1)),
+      pitch_aligned, bytes_per_block_log2));
   switch (bytes_per_block_log2) {
     case 0:
       // Independent addressing within 128x128 portions, but the extent is 0xA00
@@ -521,20 +529,19 @@ uint32_t GetTiledAddressUpperBound2D(uint32_t right, uint32_t bottom,
 }
 XE_NOINLINE
 XE_NOALIAS
-uint32_t GetTiledAddressUpperBound3D(uint32_t right, uint32_t bottom,
-                                     uint32_t back, uint32_t pitch,
-                                     uint32_t height,
+uint64_t GetTiledAddressUpperBound3D(uint32_t right, uint32_t bottom,
+                                     uint32_t back, uint32_t pitch_aligned,
+                                     uint32_t height_aligned,
                                      uint32_t bytes_per_block_log2) {
   if (!right || !bottom || !back) {
     return 0;
   }
   // Get the origin of the 32x32x4 tile containing the last texel.
-  uint32_t upper_bound = uint32_t(GetTiledOffset3D(
+  uint64_t upper_bound = uint64_t(texture_address::Tiled3D(
       int32_t((right - 1) & ~(xenos::kTextureTileWidthHeight - 1)),
       int32_t((bottom - 1) & ~(xenos::kTextureTileWidthHeight - 1)),
-      int32_t((back - 1) & ~(xenos::kTextureTileDepth - 1)), pitch, height,
-      bytes_per_block_log2));
-  uint32_t pitch_aligned = xe::align(pitch, xenos::kTextureTileWidthHeight);
+      int32_t((back - 1) & ~(xenos::kTextureTileDepth - 1)), pitch_aligned,
+      height_aligned, bytes_per_block_log2));
   switch (bytes_per_block_log2) {
     case 0:
       // 64x32x8 portions have independent addressing.
