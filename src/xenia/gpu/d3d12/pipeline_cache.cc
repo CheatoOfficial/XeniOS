@@ -226,7 +226,8 @@ void PipelineCache::Shutdown() {
 }
 
 void PipelineCache::InitializeShaderStorage(
-    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+    std::function<void()> completion_callback) {
   ShutdownShaderStorage();
 
   auto shader_storage_root = cache_root / "shaders";
@@ -576,7 +577,7 @@ void PipelineCache::InitializeShaderStorage(
         std::min(pipeline_stored_descriptions.size(), logical_processor_count) -
             size_t(1),
         creation_thread_original_count);
-    while (creation_threads_.size() < creation_thread_original_count) {
+    while (creation_threads_.size() < creation_thread_needed_count) {
       size_t creation_thread_index = creation_threads_.size();
       std::unique_ptr<xe::threading::Thread> creation_thread =
           xe::threading::Thread::Create({}, [this, creation_thread_index]() {
@@ -588,6 +589,12 @@ void PipelineCache::InitializeShaderStorage(
     }
 
     size_t pipelines_created = 0;
+    size_t pipelines_already_exist = 0;
+    size_t pipelines_vs_not_found = 0;
+    size_t pipelines_vs_translation_missing = 0;
+    size_t pipelines_ps_not_found = 0;
+    size_t pipelines_ps_translation_missing = 0;
+    size_t pipelines_root_sig_failed = 0;
     for (const PipelineStoredDescription& pipeline_stored_description :
          pipeline_stored_descriptions) {
       const PipelineDescription& pipeline_description =
@@ -607,6 +614,7 @@ void PipelineCache::InitializeShaderStorage(
         }
       }
       if (pipeline_found) {
+        ++pipelines_already_exist;
         continue;
       }
 
@@ -614,6 +622,9 @@ void PipelineCache::InitializeShaderStorage(
       auto vertex_shader_it =
           shaders_.find(pipeline_description.vertex_shader_hash);
       if (vertex_shader_it == shaders_.end()) {
+        ++pipelines_vs_not_found;
+        XELOGW("Pipeline cache: VS {:016X} not found in shader storage",
+               pipeline_description.vertex_shader_hash);
         continue;
       }
       D3D12Shader* vertex_shader = vertex_shader_it->second;
@@ -624,6 +635,12 @@ void PipelineCache::InitializeShaderStorage(
       if (!pipeline_runtime_description.vertex_shader ||
           !pipeline_runtime_description.vertex_shader->is_translated() ||
           !pipeline_runtime_description.vertex_shader->is_valid()) {
+        ++pipelines_vs_translation_missing;
+        XELOGW(
+            "Pipeline cache: VS {:016X} mod {:016X} translation "
+            "missing/invalid",
+            pipeline_description.vertex_shader_hash,
+            pipeline_description.vertex_shader_modification);
         continue;
       }
       D3D12Shader* pixel_shader;
@@ -631,6 +648,9 @@ void PipelineCache::InitializeShaderStorage(
         auto pixel_shader_it =
             shaders_.find(pipeline_description.pixel_shader_hash);
         if (pixel_shader_it == shaders_.end()) {
+          ++pipelines_ps_not_found;
+          XELOGW("Pipeline cache: PS {:016X} not found in shader storage",
+                 pipeline_description.pixel_shader_hash);
           continue;
         }
         pixel_shader = pixel_shader_it->second;
@@ -641,6 +661,12 @@ void PipelineCache::InitializeShaderStorage(
         if (!pipeline_runtime_description.pixel_shader ||
             !pipeline_runtime_description.pixel_shader->is_translated() ||
             !pipeline_runtime_description.pixel_shader->is_valid()) {
+          ++pipelines_ps_translation_missing;
+          XELOGW(
+              "Pipeline cache: PS {:016X} mod {:016X} translation "
+              "missing/invalid",
+              pipeline_description.pixel_shader_hash,
+              pipeline_description.pixel_shader_modification);
           continue;
         }
       } else {
@@ -666,6 +692,11 @@ void PipelineCache::InitializeShaderStorage(
                       pipeline_description.vertex_shader_modification)
                       .vertex.host_vertex_shader_type));
       if (!pipeline_runtime_description.root_signature) {
+        ++pipelines_root_sig_failed;
+        XELOGW(
+            "Pipeline cache: Root signature failed for VS {:016X} PS {:016X}",
+            pipeline_description.vertex_shader_hash,
+            pipeline_description.pixel_shader_hash);
         continue;
       }
       std::memcpy(&pipeline_runtime_description.description,
@@ -704,29 +735,36 @@ void PipelineCache::InitializeShaderStorage(
     }
 
     if (!creation_threads_.empty()) {
-      CreateQueuedPipelinesOnProcessorThread();
-      if (creation_threads_.size() > creation_thread_original_count) {
-        {
-          std::lock_guard<xe_mutex> lock(creation_request_lock_);
-          creation_threads_shutdown_from_ = creation_thread_original_count;
-          // Assuming the queue is empty because of
-          // CreateQueuedPipelinesOnProcessorThread.
+      if (blocking) {
+        // Blocking mode: help drain the queue on this thread, then wait for
+        // background threads to finish.
+        CreateQueuedPipelinesOnProcessorThread();
+        if (creation_threads_.size() > creation_thread_original_count) {
+          {
+            std::lock_guard<xe_mutex> lock(creation_request_lock_);
+            creation_threads_shutdown_from_ = creation_thread_original_count;
+            // Assuming the queue is empty because of
+            // CreateQueuedPipelinesOnProcessorThread.
+          }
+          creation_request_cond_.notify_all();
+          while (creation_threads_.size() > creation_thread_original_count) {
+            xe::threading::Wait(creation_threads_.back().get(), false);
+            creation_threads_.pop_back();
+          }
+          {
+            // Cleanup so additional threads can be created later again.
+            std::lock_guard<xe_mutex> lock(creation_request_lock_);
+            creation_threads_shutdown_from_ = SIZE_MAX;
+          }
         }
-        creation_request_cond_.notify_all();
-        while (creation_threads_.size() > creation_thread_original_count) {
-          xe::threading::Wait(creation_threads_.back().get(), false);
-          creation_threads_.pop_back();
-        }
+        // Wait for any background threads (including original ones) to finish
+        // creating pipelines they may have popped from the queue. This ensures
+        // all cached pipelines are fully created before the game starts,
+        // populating the driver's shader cache.
         bool await_creation_completion_event;
         {
-          // Cleanup so additional threads can be created later again.
           std::lock_guard<xe_mutex> lock(creation_request_lock_);
-          creation_threads_shutdown_from_ = SIZE_MAX;
-          // If the invocation is blocking, all the shader storage
-          // initialization is expected to be done before proceeding, to avoid
-          // latency in the command processor after the invocation.
-          await_creation_completion_event =
-              blocking && creation_threads_busy_ != 0;
+          await_creation_completion_event = creation_threads_busy_ != 0;
           if (await_creation_completion_event) {
             creation_completion_event_->Reset();
             creation_completion_set_event_ = true;
@@ -736,15 +774,37 @@ void PipelineCache::InitializeShaderStorage(
           creation_request_cond_.notify_one();
           xe::threading::Wait(creation_completion_event_.get(), false);
         }
+      } else {
+        // Non-blocking mode: let background threads handle all pipeline
+        // creation. Store completion callback to be invoked when done.
+        std::lock_guard<xe_mutex> lock(creation_request_lock_);
+        if (creation_queue_.empty() && creation_threads_busy_ == 0) {
+          // No work pending - callback will be invoked at end of function.
+        } else {
+          creation_completion_callback_ = std::move(completion_callback);
+          completion_callback =
+              nullptr;  // Prevent invocation at end of function
+        }
       }
     }
 
-    XELOGGPU(
-        "Created {} graphics pipelines (not including reading the "
-        "descriptions) from the storage in {} milliseconds",
-        pipelines_created,
-        (xe::Clock::QueryHostTickCount() - pipeline_creation_start_) * 1000 /
-            xe::Clock::QueryHostTickFrequency());
+    XELOGI(
+        "Pipeline cache loaded: {} created, {} already exist, {} total stored",
+        pipelines_created, pipelines_already_exist,
+        pipeline_stored_descriptions.size());
+    if (pipelines_vs_not_found || pipelines_vs_translation_missing ||
+        pipelines_ps_not_found || pipelines_ps_translation_missing ||
+        pipelines_root_sig_failed) {
+      XELOGI(
+          "Pipeline cache skipped: {} VS not found, {} VS translation missing, "
+          "{} PS not found, {} PS translation missing, {} root sig failed",
+          pipelines_vs_not_found, pipelines_vs_translation_missing,
+          pipelines_ps_not_found, pipelines_ps_translation_missing,
+          pipelines_root_sig_failed);
+    }
+    XELOGI("Pipeline creation took {} milliseconds",
+           (xe::Clock::QueryHostTickCount() - pipeline_creation_start_) * 1000 /
+               xe::Clock::QueryHostTickFrequency());
     // If any pipeline descriptions were corrupted (or the whole file has excess
     // bytes in the end), truncate to the last valid pipeline description.
     xe::filesystem::TruncateStdioFile(
@@ -773,6 +833,13 @@ void PipelineCache::InitializeShaderStorage(
       xe::threading::Thread::Create({}, [this]() { StorageWriteThread(); });
   assert_not_null(storage_write_thread_);
   storage_write_thread_->set_name("D3D12 Storage writer");
+
+  // Invoke completion callback if provided (for blocking mode or when no
+  // background work was needed). For non-blocking mode with background work,
+  // the callback is stored and invoked by CreationThread when done.
+  if (completion_callback) {
+    completion_callback();
+  }
 }
 
 void PipelineCache::ShutdownShaderStorage() {
@@ -2904,6 +2971,20 @@ void PipelineCache::EnsurePipelineShadersTranslated(
                                      dxc_utils, dxc_compiler)) {
           XELOGE("Failed to translate {} shader {:016X}", shader_type,
                  shader.ucode_data_hash());
+        } else {
+          // Queue shader for storage writing if not already written.
+          // This ensures shaders translated by background threads are
+          // persisted.
+          if (shader_storage_file_ &&
+              shader.ucode_storage_index() != shader_storage_index_) {
+            shader.set_ucode_storage_index(shader_storage_index_);
+            shader_storage_file_flush_needed_ = true;
+            {
+              std::lock_guard<std::mutex> lock(storage_write_request_lock_);
+              storage_write_shader_queue_.push_back(&shader);
+            }
+            storage_write_request_cond_.notify_all();
+          }
         }
       }
     }
@@ -3496,10 +3577,21 @@ void PipelineCache::CreationThread(size_t thread_index) {
       std::unique_lock<xe_mutex> lock(creation_request_lock_);
       if (thread_index >= creation_threads_shutdown_from_ ||
           creation_queue_.empty()) {
-        if (creation_completion_set_event_ && creation_threads_busy_ == 0) {
-          // Last pipeline in the queue created - signal the event if requested.
-          creation_completion_set_event_ = false;
-          creation_completion_event_->Set();
+        if (creation_threads_busy_ == 0) {
+          // Last pipeline in the queue created.
+          if (creation_completion_set_event_) {
+            // Signal the event if requested (blocking mode).
+            creation_completion_set_event_ = false;
+            creation_completion_event_->Set();
+          }
+          if (creation_completion_callback_) {
+            // Invoke completion callback (non-blocking mode).
+            auto callback = std::move(creation_completion_callback_);
+            creation_completion_callback_ = nullptr;
+            lock.unlock();
+            callback();
+            lock.lock();
+          }
         }
         if (thread_index >= creation_threads_shutdown_from_) {
           // Cleanup thread-local resources.

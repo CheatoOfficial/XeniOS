@@ -62,8 +62,9 @@ class PipelineCache {
   // takes a long time, and if it's not, there will be heavy stuttering for the
   // rest of the execution of the guest).
 
-  void InitializeShaderStorage(const std::filesystem::path& cache_root,
-                               uint32_t title_id, bool blocking);
+  void InitializeShaderStorage(
+      const std::filesystem::path& cache_root, uint32_t title_id, bool blocking,
+      std::function<void()> completion_callback = nullptr);
   void ShutdownShaderStorage();
 
   void EndSubmission();
@@ -466,6 +467,9 @@ class PipelineCache {
   // Whether setting the event on completion is queued. Protected with
   // creation_request_lock_, notify_one creation_request_cond_ when set.
   bool creation_completion_set_event_ = false;
+  // Callback to invoke when all queued pipelines are created (for non-blocking
+  // initialization). Protected with creation_request_lock_.
+  std::function<void()> creation_completion_callback_;
   // Creation threads with this index or above need to be shut down as soon as
   // possible. Protected with creation_request_lock_, notify_all
   // creation_request_cond_ when set.
