@@ -629,11 +629,15 @@ uint XeResolveEdramPixelStrideInts(XeResolveInfo resolve_info) {
         }
       }
       // For k_2_10_10_10_FLOAT, only apply exp_bias to RGB (7e3 float), not
-      // alpha (2-bit fixed-point [0, 1]).
-      dont_flatten_xe if (resolve_info.edram_format ==
-                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
-                          resolve_info.edram_format ==
-                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
+      // alpha (2-bit fixed-point [0, 1]) - unless the destination format can
+      // store alpha > 1.0 (float formats), in which case apply to all channels
+      // as the game expects the expanded range.
+      dont_flatten_xe if ((resolve_info.edram_format ==
+                               kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
+                           resolve_info.edram_format ==
+                               kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) &&
+                          resolve_info.dest_format != kXenosFormat_16_16_16_16_FLOAT &&
+                          resolve_info.dest_format != kXenosFormat_32_32_32_32_FLOAT) {
         pixel_0.xyz *= exp_bias;
         pixel_1.xyz *= exp_bias;
       } else {
@@ -708,11 +712,15 @@ uint XeResolveEdramPixelStrideInts(XeResolveInfo resolve_info) {
         }
       }
       // For k_2_10_10_10_FLOAT, only apply exp_bias to RGB (7e3 float), not
-      // alpha (2-bit fixed-point [0, 1]).
-      dont_flatten_xe if (resolve_info.edram_format ==
-                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
-                          resolve_info.edram_format ==
-                              kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
+      // alpha (2-bit fixed-point [0, 1]) - unless the destination format can
+      // store alpha > 1.0 (float formats), in which case apply to all channels
+      // as the game expects the expanded range.
+      dont_flatten_xe if ((resolve_info.edram_format ==
+                               kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
+                           resolve_info.edram_format ==
+                               kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) &&
+                          resolve_info.dest_format != kXenosFormat_16_16_16_16_FLOAT &&
+                          resolve_info.dest_format != kXenosFormat_32_32_32_32_FLOAT) {
         pixel_0.xyz *= exp_bias;
         pixel_1.xyz *= exp_bias;
         pixel_2.xyz *= exp_bias;
