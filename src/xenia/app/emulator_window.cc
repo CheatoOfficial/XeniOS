@@ -2621,16 +2621,18 @@ void EmulatorWindow::LoadRecentlyLaunchedTitles() {
 
       std::string title_name =
           entry_table->get_as<std::string>("title_name")->get();
-      std::string path = entry_table->get_as<std::string>("path")->get();
+      std::string path_str = entry_table->get_as<std::string>("path")->get();
       std::time_t last_run_time =
           entry_table->get_as<int64_t>("last_run_time")->get();
 
       std::error_code ec = {};
-      if (path.empty() || !std::filesystem::exists(path, ec)) {
+      auto file_path = xe::to_path(path_str);
+      if (path_str.empty() || !std::filesystem::exists(file_path, ec)) {
         continue;
       }
 
-      recently_launched_titles_.push_back({title_name, path, last_run_time});
+      recently_launched_titles_.push_back(
+          {title_name, file_path, last_run_time});
     }
   }
 }
