@@ -9,6 +9,7 @@
 
 #include "xenia/ui/imgui_context_menu.h"
 
+#include <algorithm>
 #include <cfloat>
 
 #include "third_party/imgui/imgui.h"
@@ -115,7 +116,10 @@ void ImGuiContextMenu::PollGamepad() {
         focused_index_ = GetNextSelectableItem(focused_index_, 1);
       }
 
-      // A button is handled by ImGui's nav system via the Selectable
+      // A button to activate focused item
+      if (pressed & 0x1000) {
+        ActivateItem(focused_index_);
+      }
 
       // B button, Back button, or Guide button to close
       if (pressed & (0x2000 | 0x0020 | 0x0400)) {
@@ -129,8 +133,12 @@ void ImGuiContextMenu::PollGamepad() {
 }
 
 void ImGuiContextMenu::ActivateItem(int index) {
+  if (activation_pending_) {
+    return;  // Already activating an item
+  }
   if (index >= 0 && index < static_cast<int>(items_.size()) &&
       !items_[index].is_separator && items_[index].callback) {
+    activation_pending_ = true;
     // Store callback to execute after dialog is fully closed
     pending_callback_ = items_[index].callback;
     Close();
@@ -151,8 +159,6 @@ void ImGuiContextMenu::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
   ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 4));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
   // Position the popup
@@ -164,14 +170,29 @@ void ImGuiContextMenu::OnDraw(ImGuiIO& io) {
                             ImGuiCond_Appearing);
   }
 
-  // Set minimum width for the menu (30% wider than default)
-  ImGui::SetNextWindowSizeConstraints(ImVec2(280, 0), ImVec2(FLT_MAX, FLT_MAX));
+  // Calculate required width for menu items
+  float max_text_width = 0.0f;
+  float max_shortcut_width = 0.0f;
+  for (const auto& item : items_) {
+    if (!item.is_separator) {
+      float text_width = ImGui::CalcTextSize(item.text.c_str()).x;
+      max_text_width = std::max(max_text_width, text_width);
+      if (!item.shortcut.empty()) {
+        float shortcut_width = ImGui::CalcTextSize(item.shortcut.c_str()).x;
+        max_shortcut_width = std::max(max_shortcut_width, shortcut_width);
+      }
+    }
+  }
+  float padding = ImGui::GetStyle().WindowPadding.x;
+  float item_spacing = ImGui::GetStyle().ItemSpacing.x;
+  float gap = item_spacing * 3.0f;  // Gap between text and shortcut
+  float min_width = max_text_width + gap + max_shortcut_width + padding * 2;
 
   bool is_open = true;
-  if (ImGui::BeginPopupModal(
-          "##ContextMenu", &is_open,
-          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+  if (ImGui::BeginPopupModal("##ContextMenu", &is_open,
+                             ImGuiWindowFlags_NoTitleBar |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoMove)) {
     // Handle keyboard input
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       ImGui::CloseCurrentPopup();
@@ -216,11 +237,11 @@ void ImGuiContextMenu::OnDraw(ImGuiIO& io) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
       }
 
-      // Create selectable item
+      // Create selectable item with minimum width
       ImGui::PushID(i);
       if (ImGui::Selectable("##item", is_focused,
                             ImGuiSelectableFlags_SpanAllColumns,
-                            ImVec2(0, 0))) {
+                            ImVec2(min_width, 0))) {
         ActivateItem(i);
       }
 
@@ -231,13 +252,13 @@ void ImGuiContextMenu::OnDraw(ImGuiIO& io) {
 
       // Draw text on same line
       ImGui::SameLine();
-      ImGui::SetCursorPosX(12);
+      ImGui::SetCursorPosX(padding);
       ImGui::TextUnformatted(item.text.c_str());
 
       // Draw shortcut if present
       if (!item.shortcut.empty()) {
         float shortcut_width =
-            ImGui::CalcTextSize(item.shortcut.c_str()).x + 12;
+            ImGui::CalcTextSize(item.shortcut.c_str()).x + padding;
         float window_width = ImGui::GetWindowWidth();
         ImGui::SameLine(window_width - shortcut_width);
         // Lighter text for shortcut, white if focused for contrast on green
@@ -258,7 +279,7 @@ void ImGuiContextMenu::OnDraw(ImGuiIO& io) {
     Close();
   }
 
-  ImGui::PopStyleVar(3);
+  ImGui::PopStyleVar(1);
   ImGui::PopStyleColor(3);
 }
 

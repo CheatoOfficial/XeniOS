@@ -78,6 +78,7 @@ class ImGuiContextMenu : public ImGuiDialog {
   int focused_index_ = 0;
   uint16_t prev_buttons_ = 0;
   bool has_opened_ = false;
+  bool activation_pending_ = false;
   bool center_on_screen_ = true;
   float position_x_ = 0;
   float position_y_ = 0;

@@ -183,18 +183,16 @@ void ImGuiPostProcessingDialog::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                         ImVec4(0.85f, 0.85f, 0.85f, 1.0f));
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
 
   // Center on screen
   ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
   ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSize(ImVec2(500, 0), ImGuiCond_Always);
 
   bool is_open = true;
   if (ImGui::Begin("Post-Processing Settings", &is_open,
-                   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
                        ImGuiWindowFlags_NoCollapse)) {
     // Handle keyboard escape or gamepad B/Back
     if (ImGui::IsKeyPressed(ImGuiKey_Escape) || ShouldCloseFromGamepad()) {
@@ -342,7 +340,7 @@ void ImGuiPostProcessingDialog::OnDraw(ImGuiIO& io) {
     ImGui::End();
   }
 
-  ImGui::PopStyleVar(3);
+  ImGui::PopStyleVar(2);
   ImGui::PopStyleColor(15);
 
   if (!is_open) {

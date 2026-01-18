@@ -41,7 +41,7 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
 
   bool dialog_open = true;
   if (!ImGui::Begin("No Profiles Found", &dialog_open,
-                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_NoCollapse |
                         ImGuiWindowFlags_AlwaysAutoResize |
                         ImGuiWindowFlags_HorizontalScrollbar)) {
     ImGui::End();
@@ -159,7 +159,6 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
   // Center the window on screen
   ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
   ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSizeConstraints(ImVec2(400, 200), ImVec2(500, 600));
 
   // Style like Xbox - white background, black text, Xbox green highlights
   const ImVec4 xbox_green(0.063f, 0.486f, 0.063f, 1.0f);
@@ -179,14 +178,13 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, xbox_green);
   ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 16));
 
   bool dialog_open = true;
   if (!ImGui::Begin("Profiles Menu", &dialog_open,
                     ImGuiWindowFlags_NoCollapse |
                         ImGuiWindowFlags_AlwaysAutoResize |
                         ImGuiWindowFlags_HorizontalScrollbar)) {
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(1);
     ImGui::PopStyleColor(14);
     ImGui::End();
     return;
@@ -200,7 +198,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
     }
   }
   if (should_close) {
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(1);
     ImGui::PopStyleColor(14);
     ImGui::End();
     Close();
@@ -239,7 +237,6 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
       ImGui::PushStyleColor(ImGuiCol_HeaderHovered, xbox_green);
       ImGui::PushStyleColor(ImGuiCol_HeaderActive, xbox_green);
       ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
-      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
 
       if (ImGui::BeginPopupContextItem("Profile Menu")) {
         context_menu_open_ = true;
@@ -249,7 +246,6 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
             ImGui::IsKeyPressed(ImGuiKey_GamepadBack)) {
           ImGui::CloseCurrentPopup();
           ImGui::EndPopup();
-          ImGui::PopStyleVar(1);
           ImGui::PopStyleColor(6);
           return true;
         }
@@ -279,7 +275,6 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
         }
         ImGui::EndPopup();
       }
-      ImGui::PopStyleVar(1);
       ImGui::PopStyleColor(6);
       return true;
     };
@@ -289,7 +284,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
             context_menu_fun, [=, this]() { LoadProfileIcon(xuid); },
             &selected_xuid_)) {
       ImGui::PopID();
-      ImGui::PopStyleVar(2);
+      ImGui::PopStyleVar(1);
       ImGui::PopStyleColor(14);
       ImGui::End();
       return;
@@ -306,7 +301,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
                                          emulator_window_->emulator());
   }
 
-  ImGui::PopStyleVar(2);
+  ImGui::PopStyleVar(1);
   ImGui::PopStyleColor(14);
   ImGui::End();
 }

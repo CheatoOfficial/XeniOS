@@ -32,6 +32,7 @@
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/chrono.h"
+#include "xenia/base/cvar.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
@@ -54,6 +55,8 @@
 #include "xenia/ui/profile_dialog_qt.h"
 #include "xenia/ui/profile_editor_dialog_qt.h"
 #include "xenia/ui/qt_util.h"
+
+DECLARE_uint32(font_size);
 
 namespace xe {
 namespace app {
@@ -119,7 +122,6 @@ void GameListDialogQt::SetupUI() {
 
   auto* open_label = new QLabel("Open", this);
   open_label->setAlignment(Qt::AlignCenter);
-  open_label->setFixedHeight(20);
 
   open_layout->addWidget(open_button);
   open_layout->addWidget(open_label);
@@ -150,10 +152,10 @@ void GameListDialogQt::SetupUI() {
   play_label_ = new QLabel("Play", this);
   play_label_->setAlignment(Qt::AlignCenter);
   QFont text_font = play_label_->font();
-  text_font.setPointSize(10);
+  int toolbar_font_size = cvars::font_size > 0 ? cvars::font_size : 10;
+  text_font.setPointSize(toolbar_font_size);
   play_label_->setFont(text_font);
   open_label->setFont(text_font);  // Apply to open label too
-  play_label_->setFixedHeight(20);
 
   // Create opacity effect for label
   play_label_opacity_ = new QGraphicsOpacityEffect(play_label_);
@@ -181,7 +183,6 @@ void GameListDialogQt::SetupUI() {
   auto* settings_label = new QLabel("Config", this);
   settings_label->setAlignment(Qt::AlignCenter);
   settings_label->setFont(text_font);
-  settings_label->setFixedHeight(20);
 
   settings_layout->addWidget(settings_button_);
   settings_layout->addWidget(settings_label);
@@ -224,7 +225,6 @@ void GameListDialogQt::SetupUI() {
   profile_label_ = new QLabel("Logged Out", this);
   profile_label_->setAlignment(Qt::AlignCenter);
   profile_label_->setFont(text_font);
-  profile_label_->setFixedHeight(20);
 
   profile_layout->addWidget(profile_button_);
   profile_layout->addWidget(profile_label_);
@@ -238,7 +238,8 @@ void GameListDialogQt::SetupUI() {
   search_box_->setClearButtonEnabled(true);
   search_box_->setStyleSheet("padding-left: 8px;");
   QFont search_font = search_box_->font();
-  search_font.setPointSize(16);
+  int search_font_size = cvars::font_size > 0 ? cvars::font_size * 1.5 : 16;
+  search_font.setPointSize(search_font_size);
   search_box_->setFont(search_font);
   connect(search_box_, &QLineEdit::textChanged, this,
           &GameListDialogQt::OnFilterTextChanged);
@@ -706,7 +707,8 @@ void GameListDialogQt::PopulateTable() {
     title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
     QFont title_font = title_label->font();
     title_font.setBold(true);
-    title_font.setPointSize(title_font.pointSize() * 1.5);  // 1.5x larger
+    int base_font_size = cvars::font_size > 0 ? cvars::font_size : 14;
+    title_font.setPointSize(base_font_size * 1.5);  // 1.5x larger
     title_label->setFont(title_font);
     if (file_corrupted) {
       title_label->setStyleSheet("color: red;");

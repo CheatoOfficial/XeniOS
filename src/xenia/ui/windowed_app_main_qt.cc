@@ -9,13 +9,20 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QFont>
+#include <QFontDatabase>
 #include <QPalette>
+#include <QWidget>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 
 #include "xenia/base/cvar.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
+#include "xenia/config.h"
+#include "xenia/ui/game_list_dialog_qt.h"
 #include "xenia/ui/windowed_app.h"
 #include "xenia/ui/windowed_app_context_qt.h"
 
@@ -27,6 +34,9 @@
 // Exists to create a mapping for positional arg.
 DEFINE_transient_path(target, "", "Specifies the target file to run.",
                       "General");
+
+DECLARE_path(custom_font_path);
+DECLARE_uint32(font_size);
 
 int main(int argc, char** argv) {
   // Parse arguments early to determine if this is a game or UI process
@@ -265,7 +275,60 @@ int main(int argc, char** argv) {
 #endif
 
     if (app->OnInitialize()) {
+      // Store the default font to allow resetting
+      QFont default_font = qt_app.font();
+
+      // Helper to apply custom font and/or font size
+      auto apply_font_settings = [&qt_app, default_font]() {
+        // Start from default font to handle clearing custom font
+        QFont app_font = default_font;
+
+        // Load custom font if specified
+        if (!cvars::custom_font_path.empty() &&
+            std::filesystem::exists(cvars::custom_font_path)) {
+          QString font_path =
+              QString::fromStdString(xe::path_to_utf8(cvars::custom_font_path));
+          int font_id = QFontDatabase::addApplicationFont(font_path);
+          if (font_id != -1) {
+            QStringList font_families =
+                QFontDatabase::applicationFontFamilies(font_id);
+            if (!font_families.isEmpty()) {
+              app_font.setFamily(font_families.first());
+            }
+          }
+        }
+
+        // Apply font size (use default size of 14 if not specified)
+        int font_size = cvars::font_size > 0 ? cvars::font_size : 14;
+        app_font.setPointSize(font_size);
+
+        qt_app.setFont(app_font);
+
+        // Force all existing widgets to update their fonts
+        for (QWidget* widget : qt_app.allWidgets()) {
+          widget->setFont(app_font);
+        }
+
+        // Refresh game lists to apply custom font sizes (title +2)
+        for (QWidget* widget : qt_app.allWidgets()) {
+          if (auto* game_list =
+                  qobject_cast<xe::app::GameListDialogQt*>(widget)) {
+            game_list->LoadGameList();
+          }
+        }
+      };
+
+      // Apply font settings initially
+      apply_font_settings();
+
+      // Re-apply font settings when config is saved
+      config::SetConfigSavedCallback(apply_font_settings);
+
       app_context.RunMainQtLoop();
+
+      // Clear callback before qt_app goes out of scope
+      config::SetConfigSavedCallback(nullptr);
+
       result = EXIT_SUCCESS;
     } else {
       result = EXIT_FAILURE;

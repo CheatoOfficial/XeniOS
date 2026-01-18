@@ -330,13 +330,24 @@ QWidget* ConfigDialogQt::CreateEditorWidget(ConfigVarInfo* var_info) {
     connect(browse_button, &QPushButton::clicked,
             [this, line_edit, var_info]() {
               QString path;
-              // Special case for achievement_sound_path - file picker with
-              // audio filters
+              // File pickers for specific path types
               if (var_info->name == "achievement_sound_path") {
                 path = QFileDialog::getOpenFileName(
                     this, "Select Achievement Sound", line_edit->text(),
                     "Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a *.aac *.wma "
                     "*.opus);;All Files (*)");
+              } else if (var_info->name == "custom_font_path") {
+                path = QFileDialog::getOpenFileName(
+                    this, "Select Custom Font", line_edit->text(),
+                    "Font Files (*.ttf *.otf *.ttc);;All Files (*)");
+              } else if (var_info->name == "mappings_file") {
+                path = QFileDialog::getOpenFileName(
+                    this, "Select Controller Mappings File", line_edit->text(),
+                    "Text Files (*.txt);;All Files (*)");
+              } else if (var_info->name == "log_file") {
+                path = QFileDialog::getSaveFileName(
+                    this, "Select Log File", line_edit->text(),
+                    "Log Files (*.log *.txt);;All Files (*)");
               } else {
                 // Default: directory picker
                 path = QFileDialog::getExistingDirectory(

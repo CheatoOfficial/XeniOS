@@ -21,7 +21,6 @@ class QTimer;
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_confirm_dialog.h"
 #include "xenia/ui/imgui_context_menu.h"
-#include "xenia/ui/imgui_controller_hotkeys_dialog.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_performance_dialog.h"
@@ -109,8 +108,6 @@ class EmulatorWindow {
   void ToggleProfilesConfigDialog();
   void ToggleXMPConfigDialog();
   void ToggleConfigDialog();
-  void ToggleControllerHotkeysDialog();
-  std::vector<std::pair<std::string, bool>> GetControllerHotkeysList();
   void OpenConfigDialog(const std::string& category = "");
   void ToggleControllerVibration();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
@@ -279,7 +276,6 @@ class EmulatorWindow {
 
   ui::ImGuiPostProcessingDialog* postprocessing_dialog_ = nullptr;
   ui::ImGuiPerformanceDialog* performance_dialog_ = nullptr;
-  ui::ImGuiControllerHotkeysDialog* controller_hotkeys_dialog_ = nullptr;
   QPointer<class GameListDialogQt> game_list_dialog_qt_;
   ProfileConfigDialog* profile_dialog_ = nullptr;
   QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;

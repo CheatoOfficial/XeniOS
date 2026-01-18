@@ -603,6 +603,30 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   io.DisplaySize.x = window_->GetActualPhysicalWidth() * physical_to_logical;
   io.DisplaySize.y = window_->GetActualPhysicalHeight() * physical_to_logical;
 
+  // Scale based on display resolution (baseline: 1280x720) and font_size cvar
+  constexpr float kBaseWidth = 1280.f;
+  constexpr float kBaseHeight = 720.f;
+  constexpr float kBaseFontSize = 14.f;
+  float resolution_scale =
+      std::fminf(io.DisplaySize.x / kBaseWidth, io.DisplaySize.y / kBaseHeight);
+  float font_size_scale =
+      std::max(static_cast<float>(cvars::font_size), 8.f) / kBaseFontSize;
+  float combined_scale = resolution_scale * font_size_scale;
+
+  // Apply font scaling
+  io.FontGlobalScale = combined_scale;
+
+  // Apply style scaling (padding, spacing, etc.)
+  // Store base style on first frame, then apply scaling each frame
+  auto& style = ImGui::GetStyle();
+  if (!base_style_initialized_) {
+    base_style_ = style;
+    base_style_initialized_ = true;
+  }
+  // Reset to base style and apply current scale
+  style = base_style_;
+  style.ScaleAllSizes(combined_scale);
+
   if (!dialogs_.empty()) {
     UpdateGamepads();
   }

@@ -174,6 +174,10 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   uint64_t last_frame_time_ticks_;
 
   bool are_notifications_enabled_ = true;
+
+  // Store original style for proper scaling (ScaleAllSizes is cumulative)
+  ImGuiStyle base_style_;
+  bool base_style_initialized_ = false;
 };
 
 }  // namespace ui

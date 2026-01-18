@@ -37,7 +37,6 @@
 #include "xenia/ui/game_list_dialog_qt.h"
 #include "xenia/ui/imgui_confirm_dialog.h"
 #include "xenia/ui/imgui_context_menu.h"
-#include "xenia/ui/imgui_controller_hotkeys_dialog.h"
 #include "xenia/ui/imgui_performance_dialog.h"
 #include "xenia/ui/imgui_postprocessing_dialog.h"
 #include "xenia/ui/imgui_xmp_dialog.h"
@@ -1153,17 +1152,6 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
       window_->IsFullscreen() ? "Exit Fullscreen" : "Fullscreen",
       [this]() { ToggleFullscreen(); }, "F11");
 
-  context_menu->AddSeparator();
-
-  context_menu->AddAction(
-      "Post-Processing...", [this]() { ToggleDisplayConfigDialog(); }, "F6");
-
-  context_menu->AddAction(
-      "Performance Settings...", [this]() { TogglePerformanceTuningDialog(); },
-      "F7");
-
-  context_menu->AddSeparator();
-
   // Get current vibration state
   bool vibration_enabled = false;
   if (input_sys) {
@@ -1175,11 +1163,17 @@ void EmulatorWindow::ToggleContextMenu(bool use_cursor_position) {
   context_menu->AddAction(vibration_text,
                           [this]() { ToggleControllerVibration(); });
 
-  context_menu->AddAction("Controller Hotkeys...",
-                          [this]() { ToggleControllerHotkeysDialog(); });
-
   context_menu->AddAction(
       "Take Screenshot", [this]() { TakeScreenshot(); }, "F12");
+
+  context_menu->AddSeparator();
+
+  context_menu->AddAction(
+      "Post-Processing", [this]() { ToggleDisplayConfigDialog(); }, "F6");
+
+  context_menu->AddAction(
+      "Performance Settings", [this]() { TogglePerformanceTuningDialog(); },
+      "F7");
 
   context_menu->AddSeparator();
 
@@ -2304,47 +2298,6 @@ void EmulatorWindow::CycleReadbackResolve() {
   command_processor->SetReadbackResolveMode(next);
 }
 
-void EmulatorWindow::ToggleControllerHotkeysDialog() {
-  if (controller_hotkeys_dialog_) {
-    controller_hotkeys_dialog_->CloseDialog();
-    return;
-  }
-
-  controller_hotkeys_dialog_ = new ui::ImGuiControllerHotkeysDialog(
-      imgui_drawer(), this, emulator()->input_system());
-  controller_hotkeys_dialog_->SetOnCloseCallback(
-      [this]() { controller_hotkeys_dialog_ = nullptr; });
-}
-
-std::vector<std::pair<std::string, bool>>
-EmulatorWindow::GetControllerHotkeysList() {
-  std::vector<std::pair<std::string, bool>> result;
-
-  bool guide_enabled = !IsUseNexusForGameBarEnabled() && cvars::guide_button;
-
-  for (auto const& [key, val] : controller_hotkey_map) {
-    std::string pretty_text = val.pretty;
-
-    if (!guide_enabled) {
-      pretty_text = std::regex_replace(
-          pretty_text, std::regex("Guide", std::regex_constants::icase),
-          "Back");
-    }
-
-    bool enabled = true;
-    if (emulator_->is_title_open() && !val.title_passthru) {
-      enabled = false;
-    }
-    if (val.title_passthru && !cvars::controller_hotkeys) {
-      enabled = false;
-    }
-
-    result.push_back({pretty_text, enabled});
-  }
-
-  return result;
-}
-
 std::string EmulatorWindow::CanonicalizeFileExtension(
     const std::filesystem::path& path) {
   return xe::utf8::lower_ascii(xe::path_to_utf8(path.extension()));
@@ -2689,10 +2642,6 @@ void EmulatorWindow::ClearDialogs() {
   if (performance_dialog_) {
     performance_dialog_->CloseDialog();
     performance_dialog_ = nullptr;
-  }
-  if (controller_hotkeys_dialog_) {
-    controller_hotkeys_dialog_->CloseDialog();
-    controller_hotkeys_dialog_ = nullptr;
   }
   if (xmp_dialog_) {
     xmp_dialog_->CloseDialog();
