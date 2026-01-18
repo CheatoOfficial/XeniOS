@@ -35,11 +35,11 @@
 #include <fontconfig/fontconfig.h>
 #endif
 
-DEFINE_path(
-    custom_font_path, "",
-    "Allows user to load custom font and use it instead of default one.", "UI");
+DEFINE_path(custom_font_path, "assets/font/Inter-VariableFont_opsz,wght.ttf",
+            "Path to custom font file. Set to empty to use system fonts.",
+            "UI");
 
-DEFINE_uint32(font_size, 14, "Allows user to set custom font size.", "UI");
+DEFINE_uint32(font_size, 13, "Allows user to set custom font size.", "UI");
 UPDATE_from_uint32(font_size, 2024, 8, 31, 20, 12);
 
 namespace xe {
@@ -345,12 +345,18 @@ bool ImGuiDrawer::LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config,
     return false;
   }
 
-  if (!std::filesystem::exists(cvars::custom_font_path)) {
+  // Resolve relative paths from executable directory
+  std::filesystem::path font_path = cvars::custom_font_path;
+  if (font_path.is_relative()) {
+    font_path = xe::filesystem::GetExecutableFolder() / font_path;
+  }
+
+  if (!std::filesystem::exists(font_path)) {
     return false;
   }
 
-  const std::string font_path = xe::path_to_utf8(cvars::custom_font_path);
-  ImFont* font = io.Fonts->AddFontFromFileTTF(font_path.c_str(), font_size,
+  const std::string font_path_str = xe::path_to_utf8(font_path);
+  ImFont* font = io.Fonts->AddFontFromFileTTF(font_path_str.c_str(), font_size,
                                               &font_config, font_glyph_ranges);
 
   io.Fonts->Build();
@@ -393,6 +399,57 @@ bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
   CoTaskMemFree(static_cast<void*>(fonts_dir));
   return true;
 #endif
+
+#if XE_PLATFORM_LINUX
+  // On Linux, use fontconfig to find the system's default sans-serif font
+  FcConfig* config = FcInitLoadConfigAndFonts();
+  if (!config) {
+    XELOGW("Unable to initialize fontconfig for system font");
+    return false;
+  }
+
+  // Request the default sans-serif font
+  FcPattern* pattern = FcPatternCreate();
+  FcPatternAddString(pattern, FC_FAMILY, (const FcChar8*)"sans-serif");
+
+  FcConfigSubstitute(config, pattern, FcMatchPattern);
+  FcDefaultSubstitute(pattern);
+
+  FcResult result;
+  FcPattern* font = FcFontMatch(config, pattern, &result);
+
+  bool success = false;
+  if (font) {
+    FcChar8* file = nullptr;
+    if (FcPatternGetString(font, FC_FILE, 0, &file) == FcResultMatch) {
+      const char* font_path = reinterpret_cast<const char*>(file);
+
+      if (std::filesystem::exists(font_path)) {
+        ImFont* loaded_font = io.Fonts->AddFontFromFileTTF(
+            font_path, font_size, &font_config, font_glyph_ranges);
+
+        io.Fonts->Build();
+
+        if (loaded_font && loaded_font->IsLoaded()) {
+          success = true;
+        } else {
+          XELOGE("Failed to load system font: {}", font_path);
+          io.Fonts->Clear();
+        }
+      }
+    }
+    FcPatternDestroy(font);
+  }
+
+  FcPatternDestroy(pattern);
+  FcConfigDestroy(config);
+
+  if (!success) {
+    XELOGW("Unable to find system sans-serif font via fontconfig");
+  }
+  return success;
+#endif
+
   return false;
 }
 

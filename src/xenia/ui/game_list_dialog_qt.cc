@@ -707,7 +707,7 @@ void GameListDialogQt::PopulateTable() {
     title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
     QFont title_font = title_label->font();
     title_font.setBold(true);
-    int base_font_size = cvars::font_size > 0 ? cvars::font_size : 14;
+    int base_font_size = cvars::font_size > 0 ? cvars::font_size : 13;
     title_font.setPointSize(base_font_size * 1.5);  // 1.5x larger
     title_label->setFont(title_font);
     if (file_corrupted) {

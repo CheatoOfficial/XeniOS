@@ -284,22 +284,29 @@ int main(int argc, char** argv) {
         QFont app_font = default_font;
 
         // Load custom font if specified
-        if (!cvars::custom_font_path.empty() &&
-            std::filesystem::exists(cvars::custom_font_path)) {
-          QString font_path =
-              QString::fromStdString(xe::path_to_utf8(cvars::custom_font_path));
-          int font_id = QFontDatabase::addApplicationFont(font_path);
-          if (font_id != -1) {
-            QStringList font_families =
-                QFontDatabase::applicationFontFamilies(font_id);
-            if (!font_families.isEmpty()) {
-              app_font.setFamily(font_families.first());
+        if (!cvars::custom_font_path.empty()) {
+          // Resolve relative paths from executable directory
+          std::filesystem::path font_path = cvars::custom_font_path;
+          if (font_path.is_relative()) {
+            font_path = xe::filesystem::GetExecutableFolder() / font_path;
+          }
+
+          if (std::filesystem::exists(font_path)) {
+            QString font_path_str =
+                QString::fromStdString(xe::path_to_utf8(font_path));
+            int font_id = QFontDatabase::addApplicationFont(font_path_str);
+            if (font_id != -1) {
+              QStringList font_families =
+                  QFontDatabase::applicationFontFamilies(font_id);
+              if (!font_families.isEmpty()) {
+                app_font.setFamily(font_families.first());
+              }
             }
           }
         }
 
         // Apply font size (use default size of 14 if not specified)
-        int font_size = cvars::font_size > 0 ? cvars::font_size : 14;
+        int font_size = cvars::font_size > 0 ? cvars::font_size : 13;
         app_font.setPointSize(font_size);
 
         qt_app.setFont(app_font);

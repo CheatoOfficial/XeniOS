@@ -174,6 +174,14 @@ project("xenia-app")
       'xcopy /I /Y /Q "' .. game_patches_src .. '\\*.toml" "$(TargetDir)game_patches\\"'
     }
 
+  -- Copy assets/font next to executable
+  filter("platforms:Windows")
+    local assets_font_src = path.translate(path.getabsolute(path.join(project_root, "assets", "font")), "\\")
+    postbuildcommands {
+      'if not exist "$(TargetDir)assets\\font" mkdir "$(TargetDir)assets\\font"',
+      'xcopy /I /Y /Q "' .. assets_font_src .. '\\*.*" "$(TargetDir)assets\\font\\"'
+    }
+
   filter("platforms:Linux")
     local optimized_settings_src = path.getabsolute(path.join(project_root, ".data_repos", "optimized-settings", "settings"))
     local optimized_settings_dst = path.getabsolute(path.join(project_root, "build", "bin", "Linux")) .. "/%{cfg.buildcfg}/optimized_settings"
@@ -188,4 +196,13 @@ project("xenia-app")
     postbuildcommands {
       '{MKDIR} ' .. game_patches_dst,
       '{COPY} ' .. game_patches_src .. '/*.toml ' .. game_patches_dst
+    }
+
+  -- Copy assets/font next to executable
+  filter("platforms:Linux")
+    local assets_font_src = path.getabsolute(path.join(project_root, "assets", "font"))
+    local assets_font_dst = path.getabsolute(path.join(project_root, "build", "bin", "Linux")) .. "/%{cfg.buildcfg}/assets/font"
+    postbuildcommands {
+      '{MKDIR} ' .. assets_font_dst,
+      '{COPY} ' .. assets_font_src .. '/* ' .. assets_font_dst
     }
