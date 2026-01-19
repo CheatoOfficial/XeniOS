@@ -674,15 +674,19 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   io.FontGlobalScale = combined_scale;
 
   // Apply style scaling (padding, spacing, etc.)
-  // Store base style on first frame, then apply scaling each frame
+  // Cache base style on first frame, then only recalculate scaled style when
+  // scale changes to avoid expensive ScaleAllSizes call every frame
   auto& style = ImGui::GetStyle();
   if (!base_style_initialized_) {
     base_style_ = style;
     base_style_initialized_ = true;
+    last_combined_scale_ = 0.f;  // Force initial scaling
   }
-  // Reset to base style and apply current scale
-  style = base_style_;
-  style.ScaleAllSizes(combined_scale);
+  if (last_combined_scale_ != combined_scale) {
+    last_combined_scale_ = combined_scale;
+    style = base_style_;
+    style.ScaleAllSizes(combined_scale);
+  }
 
   if (!dialogs_.empty()) {
     UpdateGamepads();
@@ -736,8 +740,22 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   // it now if needed.
   DetachIfLastWindowRemoved();
 
-  if (!dialogs_.empty() || !notifications_.empty()) {
-    // Repaint (and handle input) continuously if still active.
+  // Request continuous repaints only when necessary:
+  // - Dialogs always need continuous repaints for input handling
+  // - Notifications only need continuous repaints while animating
+  // (FazeIn/FazeOut) During static display (Present stage), game frames will
+  // trigger repaints via RefreshGuestOutput ->
+  // RequestPaintOrConnectionRecoveryViaWindow
+  bool needs_continuous_repaint = !dialogs_.empty();
+  if (!needs_continuous_repaint) {
+    for (const auto* notification : notifications_) {
+      if (notification->IsAnimating()) {
+        needs_continuous_repaint = true;
+        break;
+      }
+    }
+  }
+  if (needs_continuous_repaint) {
     presenter_->RequestUIPaintFromUIThread();
   }
 }

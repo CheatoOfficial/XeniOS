@@ -311,24 +311,20 @@ int main(int argc, char** argv) {
 
         qt_app.setFont(app_font);
 
-        // Force all existing widgets to update their fonts
-        for (QWidget* widget : qt_app.allWidgets()) {
-          widget->setFont(app_font);
-        }
-
-        // Refresh game lists to apply custom font sizes (title +2)
+        // Refresh game lists to re-apply font settings
         for (QWidget* widget : qt_app.allWidgets()) {
           if (auto* game_list =
                   qobject_cast<xe::app::GameListDialogQt*>(widget)) {
-            game_list->LoadGameList();
+            game_list->RefreshFonts();
           }
         }
       };
 
-      // Apply font settings initially
+      // Set application font immediately so new widgets inherit it
       apply_font_settings();
 
-      // Re-apply font settings when config is saved
+      // Re-apply font settings when config is saved (also used by
+      // OnEmulatorInitialized to apply fonts after GameListDialogQt is created)
       config::SetConfigSavedCallback(apply_font_settings);
 
       app_context.RunMainQtLoop();

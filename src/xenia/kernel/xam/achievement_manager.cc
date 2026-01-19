@@ -20,6 +20,11 @@
 DEFINE_bool(show_achievement_notification, true,
             "Show achievement notification on screen.", "UI");
 
+DEFINE_bool(achievement_notification_position_by_game, false,
+            "Use game-specified notification position for achievements. "
+            "When disabled, achievements always appear at center-bottom.",
+            "UI");
+
 DEFINE_string(
     default_achievements_backend, "GPD",
     "Defines which achievements backend should be used as an default. "
@@ -151,14 +156,18 @@ void AchievementManager::ShowAchievementEarnedNotification(
       emulator->display_window()->app_context();
   ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
-  app_context.CallInUIThread([imgui_drawer, description]() {
+  // Use game-specified position if enabled, otherwise default to center-bottom
+  const uint8_t position = cvars::achievement_notification_position_by_game
+                               ? kernel_state()->notification_position_
+                               : 2;
+
+  app_context.CallInUIThread([imgui_drawer, description, position]() {
     // Play achievement sound
     ui::AudioHelper::Instance().PlayAchievementSound();
 
     // Show notification
-    new ui::AchievementNotificationWindow(
-        imgui_drawer, "Achievement unlocked", description, 0,
-        kernel_state()->notification_position_);
+    new ui::AchievementNotificationWindow(imgui_drawer, "Achievement unlocked",
+                                          description, 0, position);
   });
 }
 

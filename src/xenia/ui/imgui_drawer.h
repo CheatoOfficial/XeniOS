@@ -178,6 +178,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   // Store original style for proper scaling (ScaleAllSizes is cumulative)
   ImGuiStyle base_style_;
   bool base_style_initialized_ = false;
+  float last_combined_scale_ = 0.f;
 };
 
 }  // namespace ui

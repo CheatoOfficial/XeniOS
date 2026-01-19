@@ -65,6 +65,11 @@ class ImGuiNotification {
 
   void SetDeletionPending() { marked_for_deletion_ = true; }
 
+  // Returns true if the notification is animating and needs continuous
+  // repaints. Default returns true for safety; subclasses can override to
+  // optimize.
+  virtual bool IsAnimating() const { return true; }
+
  protected:
   ImGuiDrawer* GetDrawer() { return imgui_drawer_; }
 

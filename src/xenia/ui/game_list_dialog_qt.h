@@ -63,6 +63,7 @@ class GameListDialogQt : public QWidget {
   ~GameListDialogQt() override;
 
   void LoadGameList();
+  void RefreshFonts();
   void RefreshIcons();
   void UpdateProfileButtonState();
 
@@ -109,8 +110,13 @@ class GameListDialogQt : public QWidget {
   QToolButton* settings_button_;
   QToolButton* profile_button_;
   QLabel* play_label_;
+  QLabel* open_label_;
+  QLabel* settings_label_;
   QLabel* profile_label_;
   QLabel* profile_question_label_;
+  QLabel* icon_header_;
+  QLabel* title_header_;
+  QLabel* last_played_header_;
   QTimer* game_state_timer_;
   QGraphicsOpacityEffect* play_opacity_;
   QGraphicsOpacityEffect* play_label_opacity_;

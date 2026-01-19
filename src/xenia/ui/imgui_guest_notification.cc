@@ -99,10 +99,14 @@ void AchievementNotificationWindow::OnDraw(ImGuiIO& io) {
   const float window_scale =
       std::fminf(screen_size.x / default_drawing_resolution.x,
                  screen_size.y / default_drawing_resolution.y);
-  const float font_scale = default_font_size / io.Fonts->Fonts[0]->FontSize;
-  const ImVec2 text_size = io.Fonts->Fonts[0]->CalcTextSizeA(
-      default_font_size * default_notification_text_scale * window_scale,
-      FLT_MAX, -1.0f, longest_notification_text_line.c_str());
+  // Calculate effective font size accounting for global scale (resolution +
+  // font_size cvar) and notification's own text scale multiplier
+  const float effective_font_size = io.Fonts->Fonts[0]->FontSize *
+                                    io.FontGlobalScale *
+                                    default_notification_text_scale;
+  const ImVec2 text_size =
+      io.Fonts->Fonts[0]->CalcTextSizeA(effective_font_size, FLT_MAX, -1.0f,
+                                        longest_notification_text_line.c_str());
 
   const ImVec2 final_notification_size =
       CalculateNotificationSize(text_size, window_scale);
@@ -134,8 +138,9 @@ void AchievementNotificationWindow::OnDraw(ImGuiIO& io) {
 
   ImGui::Begin("Notification Window", NULL, NOTIFY_TOAST_FLAGS);
   {
-    ImGui::SetWindowFontScale(default_notification_text_scale * font_scale *
-                              window_scale);
+    // Only apply notification's own text scale - global scale already handles
+    // resolution and font_size cvar scaling
+    ImGui::SetWindowFontScale(default_notification_text_scale);
     // Set offset to image to prevent it from being right on border.
     ImGui::SetCursorPos(ImVec2(final_notification_size.x * 0.005f,
                                final_notification_size.y * 0.05f));
@@ -173,10 +178,14 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
   const float window_scale =
       std::fminf(screen_size.x / default_drawing_resolution.x,
                  screen_size.y / default_drawing_resolution.y);
-  const float font_scale = default_font_size / io.Fonts->Fonts[0]->FontSize;
-  const ImVec2 text_size = io.Fonts->Fonts[0]->CalcTextSizeA(
-      default_font_size * default_notification_text_scale * window_scale,
-      FLT_MAX, -1.0f, longest_notification_text_line.c_str());
+  // Calculate effective font size accounting for global scale (resolution +
+  // font_size cvar) and notification's own text scale multiplier
+  const float effective_font_size = io.Fonts->Fonts[0]->FontSize *
+                                    io.FontGlobalScale *
+                                    default_notification_text_scale;
+  const ImVec2 text_size =
+      io.Fonts->Fonts[0]->CalcTextSizeA(effective_font_size, FLT_MAX, -1.0f,
+                                        longest_notification_text_line.c_str());
 
   const ImVec2 final_notification_size =
       CalculateNotificationSize(text_size, window_scale);
@@ -208,8 +217,9 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
 
   ImGui::Begin("Notification Window", NULL, NOTIFY_TOAST_FLAGS);
   {
-    ImGui::SetWindowFontScale(default_notification_text_scale * font_scale *
-                              window_scale);
+    // Only apply notification's own text scale - global scale already handles
+    // resolution and font_size cvar scaling
+    ImGui::SetWindowFontScale(default_notification_text_scale);
     // Set offset to image to prevent it from being right on border.
     ImGui::SetCursorPos(ImVec2(final_notification_size.x * 0.005f,
                                final_notification_size.y * 0.05f));
@@ -218,10 +228,6 @@ void XNotifyWindow::OnDraw(ImGuiIO& io) {
                      GetDrawer()->GetNotificationIcon(GetUserIndex())),
                  ImVec2(default_notification_icon_size.x * window_scale,
                         default_notification_icon_size.y * window_scale));
-
-    // Set offset to image to prevent it from being right on border.
-    // ImGui::SetCursorPos(ImVec2(final_notification_size.x * 0.1f,
-    //                           final_notification_size.y * 0.2f));
 
     ImGui::SameLine();
     if (notification_draw_progress_ > 0.5f) {

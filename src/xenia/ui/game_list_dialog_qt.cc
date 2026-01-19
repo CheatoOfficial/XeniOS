@@ -9,6 +9,7 @@
 
 #include "xenia/ui/game_list_dialog_qt.h"
 
+#include <QApplication>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDialog>
@@ -68,8 +69,6 @@ GameListDialogQt::GameListDialogQt(QWidget* parent,
                                    EmulatorWindow* emulator_window)
     : QWidget(parent), emulator_window_(emulator_window) {
   SetupUI();
-  LoadGameList();
-  TryLoadIcons();
 
   // Start timer to monitor game state and profile state
   game_state_timer_ = new QTimer(this);
@@ -85,6 +84,39 @@ GameListDialogQt::~GameListDialogQt() {
     game_state_timer_->stop();
   }
   // Cleanup is handled automatically by Qt
+}
+
+void GameListDialogQt::RefreshFonts() {
+  int toolbar_font_size = cvars::font_size > 0 ? cvars::font_size : 10;
+  int search_font_size = cvars::font_size > 0 ? cvars::font_size * 1.5 : 16;
+
+  QFont toolbar_font = QApplication::font();
+  toolbar_font.setPointSize(toolbar_font_size);
+
+  QFont search_font = QApplication::font();
+  search_font.setPointSize(search_font_size);
+
+  QFont question_font = QApplication::font();
+  question_font.setPointSize(32);
+  question_font.setBold(true);
+
+  // Apply fonts to toolbar labels
+  if (open_label_) open_label_->setFont(toolbar_font);
+  if (play_label_) play_label_->setFont(toolbar_font);
+  if (settings_label_) settings_label_->setFont(toolbar_font);
+  if (profile_label_) profile_label_->setFont(toolbar_font);
+  if (search_box_) search_box_->setFont(search_font);
+  if (profile_question_label_) profile_question_label_->setFont(question_font);
+
+  // Apply fonts to table header labels
+  QFont header_font = QApplication::font();
+  header_font.setBold(true);
+  if (icon_header_) icon_header_->setFont(header_font);
+  if (title_header_) title_header_->setFont(header_font);
+  if (last_played_header_) last_played_header_->setFont(header_font);
+
+  // Reload game list to refresh game item fonts
+  LoadGameList();
 }
 
 void GameListDialogQt::SetupUI() {
@@ -120,11 +152,11 @@ void GameListDialogQt::SetupUI() {
     }
   });
 
-  auto* open_label = new QLabel("Open", this);
-  open_label->setAlignment(Qt::AlignCenter);
+  open_label_ = new QLabel("Open", this);
+  open_label_->setAlignment(Qt::AlignCenter);
 
   open_layout->addWidget(open_button);
-  open_layout->addWidget(open_label);
+  open_layout->addWidget(open_label_);
   toolbar_layout->addWidget(open_container);
 
   // Play button
@@ -151,11 +183,6 @@ void GameListDialogQt::SetupUI() {
 
   play_label_ = new QLabel("Play", this);
   play_label_->setAlignment(Qt::AlignCenter);
-  QFont text_font = play_label_->font();
-  int toolbar_font_size = cvars::font_size > 0 ? cvars::font_size : 10;
-  text_font.setPointSize(toolbar_font_size);
-  play_label_->setFont(text_font);
-  open_label->setFont(text_font);  // Apply to open label too
 
   // Create opacity effect for label
   play_label_opacity_ = new QGraphicsOpacityEffect(play_label_);
@@ -180,12 +207,11 @@ void GameListDialogQt::SetupUI() {
   connect(settings_button_, &QToolButton::clicked, this,
           &GameListDialogQt::OnSettingsClicked);
 
-  auto* settings_label = new QLabel("Config", this);
-  settings_label->setAlignment(Qt::AlignCenter);
-  settings_label->setFont(text_font);
+  settings_label_ = new QLabel("Config", this);
+  settings_label_->setAlignment(Qt::AlignCenter);
 
   settings_layout->addWidget(settings_button_);
-  settings_layout->addWidget(settings_label);
+  settings_layout->addWidget(settings_label_);
   toolbar_layout->addWidget(settings_container);
 
   // Spacer to push profile button to the right
@@ -211,10 +237,6 @@ void GameListDialogQt::SetupUI() {
   // Question mark overlay for logged out state
   profile_question_label_ = new QLabel("?", profile_button_);
   profile_question_label_->setAlignment(Qt::AlignCenter);
-  QFont question_font = profile_question_label_->font();
-  question_font.setPointSize(32);
-  question_font.setBold(true);
-  profile_question_label_->setFont(question_font);
   profile_question_label_->setGeometry(0, 0, 100, 80);
   profile_question_label_->setAttribute(Qt::WA_TransparentForMouseEvents);
   profile_question_label_->setStyleSheet(
@@ -224,7 +246,6 @@ void GameListDialogQt::SetupUI() {
 
   profile_label_ = new QLabel("Logged Out", this);
   profile_label_->setAlignment(Qt::AlignCenter);
-  profile_label_->setFont(text_font);
 
   profile_layout->addWidget(profile_button_);
   profile_layout->addWidget(profile_label_);
@@ -237,10 +258,6 @@ void GameListDialogQt::SetupUI() {
   search_box_->setPlaceholderText("Search games...");
   search_box_->setClearButtonEnabled(true);
   search_box_->setStyleSheet("padding-left: 8px;");
-  QFont search_font = search_box_->font();
-  int search_font_size = cvars::font_size > 0 ? cvars::font_size * 1.5 : 16;
-  search_font.setPointSize(search_font_size);
-  search_box_->setFont(search_font);
   connect(search_box_, &QLineEdit::textChanged, this,
           &GameListDialogQt::OnFilterTextChanged);
 
@@ -255,23 +272,18 @@ void GameListDialogQt::SetupUI() {
   header_layout->setContentsMargins(10, 5, 10, 5);
   header_layout->setSpacing(15);
 
-  auto* icon_header = new QLabel("Icon", this);
-  icon_header->setMinimumWidth(80);
-  icon_header->setMaximumWidth(80);
-  QFont header_font = icon_header->font();
-  header_font.setBold(true);
-  icon_header->setFont(header_font);
-  header_layout->addWidget(icon_header);
+  icon_header_ = new QLabel("Icon", this);
+  icon_header_->setMinimumWidth(80);
+  icon_header_->setMaximumWidth(80);
+  header_layout->addWidget(icon_header_);
 
-  auto* title_header = new QLabel("Title", this);
-  title_header->setFont(header_font);
-  header_layout->addWidget(title_header, 1);
+  title_header_ = new QLabel("Title", this);
+  header_layout->addWidget(title_header_, 1);
 
-  auto* last_played_header = new QLabel("Last Played", this);
-  last_played_header->setFont(header_font);
-  last_played_header->setMinimumWidth(200);
-  last_played_header->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-  header_layout->addWidget(last_played_header);
+  last_played_header_ = new QLabel("Last Played", this);
+  last_played_header_->setMinimumWidth(200);
+  last_played_header_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  header_layout->addWidget(last_played_header_);
 
   main_layout->addWidget(header_widget);
 
@@ -319,6 +331,9 @@ void GameListDialogQt::SetupUI() {
           &GameListDialogQt::OnSelectionChanged);
 
   main_layout->addWidget(table_widget_);
+
+  // Apply initial fonts to all widgets
+  RefreshFonts();
 }
 
 void GameListDialogQt::LoadGameList() {
@@ -705,7 +720,7 @@ void GameListDialogQt::PopulateTable() {
     auto* title_label = new QLabel(display_title);
     title_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     title_label->setAttribute(Qt::WA_TransparentForMouseEvents);
-    QFont title_font = title_label->font();
+    QFont title_font = QApplication::font();
     title_font.setBold(true);
     int base_font_size = cvars::font_size > 0 ? cvars::font_size : 13;
     title_font.setPointSize(base_font_size * 1.5);  // 1.5x larger
@@ -721,8 +736,8 @@ void GameListDialogQt::PopulateTable() {
           new QLabel(SafeQString(xe::path_to_utf8(entry.path_to_file)));
       path_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
       path_label->setAttribute(Qt::WA_TransparentForMouseEvents);
-      QFont path_font = path_label->font();
-      path_font.setPointSize(path_font.pointSize() * 0.8);  // Smaller font
+      QFont path_font = QApplication::font();
+      path_font.setPointSize(base_font_size * 0.8);  // Smaller font
       path_label->setFont(path_font);
       path_label->setStyleSheet("color: gray;");
       title_layout->addWidget(path_label);
@@ -739,9 +754,8 @@ void GameListDialogQt::PopulateTable() {
       auto* achievement_label = new QLabel(achievement_text);
       achievement_label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
       achievement_label->setAttribute(Qt::WA_TransparentForMouseEvents);
-      QFont achievement_font = achievement_label->font();
-      achievement_font.setPointSize(achievement_font.pointSize() *
-                                    0.8);  // Smaller font
+      QFont achievement_font = QApplication::font();
+      achievement_font.setPointSize(base_font_size * 0.8);  // Smaller font
       achievement_label->setFont(achievement_font);
 
       // Color based on completion

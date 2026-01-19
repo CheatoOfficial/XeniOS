@@ -53,6 +53,12 @@ class ImGuiGuestNotification : public ImGuiNotification {
     return current_stage_ == NotificationStage::Finished;
   }
 
+  // Returns true if the notification is animating and needs continuous repaints
+  bool IsAnimating() const override {
+    return current_stage_ == NotificationStage::FazeIn ||
+           current_stage_ == NotificationStage::FazeOut;
+  }
+
   void UpdateNotificationState();
   const ImVec2 CalculateNotificationSize(ImVec2 text_size,
                                          float scale) override;
