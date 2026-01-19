@@ -461,7 +461,7 @@ bool D3D12SharedMemory::UploadRanges(
         return false;
       }
       MakeRangeValid(upload_range_start << page_size_log2(),
-                     uint32_t(upload_buffer_size), false, false);
+                     uint32_t(upload_buffer_size), false);
 
       if (upload_buffer_size < (1ULL << 32) && upload_buffer_size > 8192) {
         memory::vastcpy(
@@ -469,9 +469,8 @@ bool D3D12SharedMemory::UploadRanges(
             memory().TranslatePhysical(upload_range_start << page_size_log2()),
             static_cast<uint32_t>(upload_buffer_size));
         swcache::WriteFence();
-
       } else {
-        memcpy(
+        std::memcpy(
             upload_buffer_mapping,
             memory().TranslatePhysical(upload_range_start << page_size_log2()),
             upload_buffer_size);

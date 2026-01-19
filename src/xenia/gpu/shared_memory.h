@@ -75,13 +75,12 @@ class SharedMemory {
   // Checks if the range has been updated, uploads new data if needed and
   // ensures the host GPU memory backing the range are resident. Returns true if
   // the range has been fully updated and is usable.
-  bool RequestRange(uint32_t start, uint32_t length,
-                    bool* any_data_resolved_out = nullptr);
+  bool RequestRange(uint32_t start, uint32_t length);
 
   void TryFindUploadRange(const uint32_t& block_first,
                           const uint32_t& block_last,
                           const uint32_t& page_first, const uint32_t& page_last,
-                          bool& any_data_resolved, uint32_t& range_start,
+                          uint32_t& range_start,
                           unsigned int& current_upload_range,
                           std::pair<uint32_t, uint32_t>* uploads);
 
@@ -104,7 +103,7 @@ class SharedMemory {
   // be called, to make sure, if the GPU writes don't overwrite *everything* in
   // the pages they touch, the CPU data is properly loaded to the unmodified
   // regions in those pages.
-  void RangeWrittenByGpu(uint32_t start, uint32_t length, bool is_resolve);
+  void RangeWrittenByGpu(uint32_t start, uint32_t length);
 
  protected:
   SharedMemory(Memory& memory);
@@ -138,8 +137,7 @@ class SharedMemory {
                                                 uint32_t length_allocations);
 
   // Mark the memory range as updated and protect it.
-  void MakeRangeValid(uint32_t start, uint32_t length, bool written_by_gpu,
-                      bool written_by_gpu_resolve);
+  void MakeRangeValid(uint32_t start, uint32_t length, bool written_by_gpu);
 
   // Uploads a range of host pages - only called if host GPU sparse memory
   // allocation succeeded if needed. While uploading, MakeRangeValid must be
@@ -208,9 +206,6 @@ class SharedMemory {
     // Subset of valid pages - whether each page in the GPU buffer contains data
     // that was written on the GPU, thus should not be invalidated spuriously.
     uint64_t valid_and_gpu_written;
-    // Subset of valid_and_gpu_written - whether each page in the GPU buffer
-    // contains data written specifically by resolving from EDRAM.
-    uint64_t valid_and_gpu_resolved;
   };
 
   // chrispy: todo, systempageflagsblock should be 3 different arrays
@@ -236,8 +231,7 @@ class SharedMemory {
   // this reduces copy overhead by 80-95%.
   std::atomic<uint32_t> dirty_blocks_{0};
 
-  uint64_t *system_page_flags_valid_and_gpu_written_ = nullptr,
-           *system_page_flags_valid_and_gpu_resolved_ = nullptr;
+  uint64_t* system_page_flags_valid_and_gpu_written_ = nullptr;
   unsigned num_system_page_flags_ = 0;
   static std::pair<uint32_t, uint32_t> MemoryInvalidationCallbackThunk(
       void* context_ptr, uint32_t physical_address_start, uint32_t length,

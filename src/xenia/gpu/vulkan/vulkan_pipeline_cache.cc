@@ -113,7 +113,6 @@ bool VulkanPipelineCache::Initialize() {
       render_target_cache_.msaa_2x_attachments_supported(),
       render_target_cache_.msaa_2x_no_attachments_supported(),
       edram_fragment_shader_interlock,
-      render_target_cache_.gamma_render_target_as_srgb(),
       render_target_cache_.draw_resolution_scale_x(),
       render_target_cache_.draw_resolution_scale_y(), nullptr,
       false);  // Never optimize during initial translation
@@ -1013,38 +1012,36 @@ void VulkanPipelineCache::TranslateShadersForStorage(
       render_target_cache_.msaa_2x_attachments_supported();
   bool msaa_2x_no_attachments =
       render_target_cache_.msaa_2x_no_attachments_supported();
-  bool gamma_as_srgb = render_target_cache_.gamma_render_target_as_srgb();
   uint32_t draw_res_x = render_target_cache_.draw_resolution_scale_x();
   uint32_t draw_res_y = render_target_cache_.draw_resolution_scale_y();
 
-  auto translate_function =
-      [this, &translations_to_do, &translation_index, &translations_completed,
-       vulkan_device, msaa_2x_attachments, msaa_2x_no_attachments,
-       edram_fsi_used, gamma_as_srgb, draw_res_x, draw_res_y]() {
-        // Each thread needs its own translator.
-        SpirvShaderTranslator translator(
-            SpirvShaderTranslator::Features(vulkan_device), msaa_2x_attachments,
-            msaa_2x_no_attachments, edram_fsi_used, gamma_as_srgb, draw_res_x,
-            draw_res_y, nullptr,
-            false);  // Don't optimize during parallel translation
+  auto translate_function = [this, &translations_to_do, &translation_index,
+                             &translations_completed, vulkan_device,
+                             msaa_2x_attachments, msaa_2x_no_attachments,
+                             edram_fsi_used, draw_res_x, draw_res_y]() {
+    // Each thread needs its own translator.
+    SpirvShaderTranslator translator(
+        SpirvShaderTranslator::Features(vulkan_device), msaa_2x_attachments,
+        msaa_2x_no_attachments, edram_fsi_used, draw_res_x, draw_res_y, nullptr,
+        false);  // Don't optimize during parallel translation
 
-        while (true) {
-          size_t index = translation_index.fetch_add(1);
-          if (index >= translations_to_do.size()) {
-            break;
-          }
-          VulkanShader* shader = translations_to_do[index].first;
-          uint64_t modification = translations_to_do[index].second;
-          VulkanShader::VulkanTranslation* translation =
-              static_cast<VulkanShader::VulkanTranslation*>(
-                  shader->GetTranslation(modification));
-          if (translation && !translation->is_translated()) {
-            if (TranslateAnalyzedShader(translator, *translation)) {
-              translations_completed.fetch_add(1);
-            }
-          }
+    while (true) {
+      size_t index = translation_index.fetch_add(1);
+      if (index >= translations_to_do.size()) {
+        break;
+      }
+      VulkanShader* shader = translations_to_do[index].first;
+      uint64_t modification = translations_to_do[index].second;
+      VulkanShader::VulkanTranslation* translation =
+          static_cast<VulkanShader::VulkanTranslation*>(
+              shader->GetTranslation(modification));
+      if (translation && !translation->is_translated()) {
+        if (TranslateAnalyzedShader(translator, *translation)) {
+          translations_completed.fetch_add(1);
         }
-      };
+      }
+    }
+  };
 
   size_t thread_count = 0;
   if (cvars::vulkan_pipeline_creation_threads != 0) {

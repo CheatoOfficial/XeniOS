@@ -329,7 +329,7 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled,
 
   // Invalidate textures. Toggling individual textures between scaled and
   // unscaled also relies on invalidation through shared memory.
-  shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled, true);
+  shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
 }
 
 uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle,
@@ -508,8 +508,6 @@ TextureCache::Texture::Texture(TextureCache& texture_cache,
     : texture_cache_(texture_cache),
       key_(key),
       guest_layout_(key.GetGuestLayout()),
-      base_resolved_(key.scaled_resolve),
-      mips_resolved_(key.scaled_resolve),
       last_usage_submission_index_(texture_cache.current_submission_index_),
       last_usage_time_(texture_cache.current_submission_time_),
       used_previous_(track_usage ? texture_cache.texture_used_last_ : nullptr),
@@ -767,21 +765,17 @@ void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
     // portion of its pages is invalidated, in this case we'll need the texture
     // from the shared memory to load the unscaled parts.
     // TODO(Triang3l): Load unscaled parts.
-    bool base_resolved = texture.GetBaseResolved();
     if (index_base_outdated & (1ULL << i)) {
       if (!shared_memory().RequestRange(
               texture_key.base_page << 12,
-              xe::align(texture.GetGuestBaseSize(), UINT32_C(16)),
-              texture_key.scaled_resolve ? nullptr : &base_resolved)) {
+              xe::align(texture.GetGuestBaseSize(), UINT32_C(16)))) {
         continue;
       }
     }
-    bool mips_resolved = texture.GetMipsResolved();
     if (index_mips_outdated & (1ULL << i)) {
       if (!shared_memory().RequestRange(
               texture_key.mip_page << 12,
-              xe::align(texture.GetGuestMipsSize(), UINT32_C(16)),
-              texture_key.scaled_resolve ? nullptr : &mips_resolved)) {
+              xe::align(texture.GetGuestMipsSize(), UINT32_C(16)))) {
         continue;
       }
     }
@@ -807,13 +801,6 @@ void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
       continue;
     }
 
-    // Update the source of the texture (resolve vs. CPU or memexport) for
-    // purposes of handling piecewise gamma emulation via sRGB and for
-    // resolution scale in sampling offsets.
-    if (!texture_key.scaled_resolve) {
-      texture.SetBaseResolved(base_resolved);
-      texture.SetMipsResolved(mips_resolved);
-    }
     // reque for makeuptodatandwatch
     textures[i] = &texture;
   }
@@ -870,21 +857,17 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   // its pages is invalidated, in this case we'll need the texture from the
   // shared memory to load the unscaled parts.
   // TODO(Triang3l): Load unscaled parts.
-  bool base_resolved = texture.GetBaseResolved();
   if (base_outdated) {
     if (!shared_memory().RequestRange(
             texture_key.base_page << 12,
-            xe::align(texture.GetGuestBaseSize(), UINT32_C(16)),
-            texture_key.scaled_resolve ? nullptr : &base_resolved)) {
+            xe::align(texture.GetGuestBaseSize(), UINT32_C(16)))) {
       return false;
     }
   }
-  bool mips_resolved = texture.GetMipsResolved();
   if (mips_outdated) {
     if (!shared_memory().RequestRange(
             texture_key.mip_page << 12,
-            xe::align(texture.GetGuestMipsSize(), UINT32_C(16)),
-            texture_key.scaled_resolve ? nullptr : &mips_resolved)) {
+            xe::align(texture.GetGuestMipsSize(), UINT32_C(16)))) {
       return false;
     }
   }
@@ -907,14 +890,6 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   if (!LoadTextureDataFromResidentMemoryImpl(texture, base_outdated,
                                              mips_outdated)) {
     return false;
-  }
-
-  // Update the source of the texture (resolve vs. CPU or memexport) for
-  // purposes of handling piecewise gamma emulation via sRGB and for resolution
-  // scale in sampling offsets.
-  if (!texture_key.scaled_resolve) {
-    texture.SetBaseResolved(base_resolved);
-    texture.SetMipsResolved(mips_resolved);
   }
 
   // Mark the ranges as uploaded and watch them. This is needed for scaled

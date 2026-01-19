@@ -507,8 +507,13 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   if (path_ == Path::kHostRenderTargets) {
     // Host render targets.
 
+    // TODO(Triang3l): When color space conversion is implemented in the
+    // ownership transfer and resolve dump shaders, allow
+    // `gamma_render_target_as_unorm16` if VK_FORMAT_R16G16B16A16_UNORM supports
+    // the SAMPLED_IMAGE | COLOR_ATTACHMENT | COLOR_ATTACHMENT_BLEND features.
+    gamma_render_target_as_unorm16_ = false;
+
     depth_float24_round_ = cvars::depth_float24_round;
-    gamma_render_target_as_srgb_ = cvars::gamma_render_target_as_srgb;
 
     // Host depth storing pipeline layout.
     VkDescriptorSetLayout host_depth_store_descriptor_set_layouts[] = {
@@ -712,8 +717,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   } else if (path_ == Path::kPixelShaderInterlock) {
     // Pixel (fragment) shader interlock.
 
-    // Blending is done in linear space directly in shaders.
-    gamma_render_target_as_srgb_ = false;
+    // Piecewise linear gamma is 8-bit with programmable blending.
+    gamma_render_target_as_unorm16_ = false;
 
     // Always true float24 depth rounded to the nearest even.
     depth_float24_round_ = true;
@@ -1417,11 +1422,6 @@ bool VulkanRenderTargetCache::Update(
                                        depth_and_color_render_targets,
                                        last_update_transfers());
 
-      uint32_t render_targets_are_srgb =
-          gamma_render_target_as_srgb_
-              ? last_update_accumulated_color_targets_are_gamma()
-              : 0;
-
       if (depth_and_color_render_targets[0]) {
         render_pass_key.depth_and_color_used |= 1 << 0;
         render_pass_key.depth_format =
@@ -1430,30 +1430,22 @@ bool VulkanRenderTargetCache::Update(
       if (depth_and_color_render_targets[1]) {
         render_pass_key.depth_and_color_used |= 1 << 1;
         render_pass_key.color_0_view_format =
-            (render_targets_are_srgb & (1 << 0))
-                ? xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA
-                : depth_and_color_render_targets[1]->key().GetColorFormat();
+            depth_and_color_render_targets[1]->key().GetColorFormat();
       }
       if (depth_and_color_render_targets[2]) {
         render_pass_key.depth_and_color_used |= 1 << 2;
         render_pass_key.color_1_view_format =
-            (render_targets_are_srgb & (1 << 1))
-                ? xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA
-                : depth_and_color_render_targets[2]->key().GetColorFormat();
+            depth_and_color_render_targets[2]->key().GetColorFormat();
       }
       if (depth_and_color_render_targets[3]) {
         render_pass_key.depth_and_color_used |= 1 << 3;
         render_pass_key.color_2_view_format =
-            (render_targets_are_srgb & (1 << 2))
-                ? xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA
-                : depth_and_color_render_targets[3]->key().GetColorFormat();
+            depth_and_color_render_targets[3]->key().GetColorFormat();
       }
       if (depth_and_color_render_targets[4]) {
         render_pass_key.depth_and_color_used |= 1 << 4;
         render_pass_key.color_3_view_format =
-            (render_targets_are_srgb & (1 << 3))
-                ? xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA
-                : depth_and_color_render_targets[4]->key().GetColorFormat();
+            depth_and_color_render_targets[4]->key().GetColorFormat();
       }
 
       const Framebuffer* framebuffer = last_update_framebuffer_;
@@ -1756,8 +1748,8 @@ VkFormat VulkanRenderTargetCache::GetColorVulkanFormat(
     case xenos::ColorRenderTargetFormat::k_8_8_8_8:
       return VK_FORMAT_R8G8B8A8_UNORM;
     case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA:
-      return gamma_render_target_as_srgb_ ? VK_FORMAT_R8G8B8A8_SRGB
-                                          : VK_FORMAT_R8G8B8A8_UNORM;
+      return gamma_render_target_as_unorm16_ ? VK_FORMAT_R16G16B16A16_UNORM
+                                             : VK_FORMAT_R8G8B8A8_UNORM;
     case xenos::ColorRenderTargetFormat::k_2_10_10_10:
     case xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10:
       return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
@@ -1828,9 +1820,6 @@ VulkanRenderTargetCache::VulkanRenderTarget::~VulkanRenderTarget() {
   if (view_color_transfer_separate_ != VK_NULL_HANDLE) {
     dfn.vkDestroyImageView(device, view_color_transfer_separate_, nullptr);
   }
-  if (view_srgb_ != VK_NULL_HANDLE) {
-    dfn.vkDestroyImageView(device, view_srgb_, nullptr);
-  }
   if (view_stencil_ != VK_NULL_HANDLE) {
     dfn.vkDestroyImageView(device, view_stencil_, nullptr);
   }
@@ -1840,6 +1829,10 @@ VulkanRenderTargetCache::VulkanRenderTarget::~VulkanRenderTarget() {
   dfn.vkDestroyImageView(device, view_depth_color_, nullptr);
   dfn.vkDestroyImage(device, image_, nullptr);
   dfn.vkFreeMemory(device, memory_, nullptr);
+}
+
+bool VulkanRenderTargetCache::IsGammaFormatHostStorageSeparate() const {
+  return gamma_render_target_as_unorm16_;
 }
 
 uint32_t VulkanRenderTargetCache::GetMaxRenderTargetWidth() const {
@@ -1891,7 +1884,6 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
   image_create_info.pQueueFamilyIndices = nullptr;
   image_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkFormat transfer_format;
-  bool is_srgb_view_needed = false;
   if (key.is_depth) {
     image_create_info.format = GetDepthVulkanFormat(key.GetDepthFormat());
     transfer_format = image_create_info.format;
@@ -1900,11 +1892,7 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
     xenos::ColorRenderTargetFormat color_format = key.GetColorFormat();
     image_create_info.format = GetColorVulkanFormat(color_format);
     transfer_format = GetColorOwnershipTransferVulkanFormat(color_format);
-    is_srgb_view_needed =
-        gamma_render_target_as_srgb_ &&
-        (color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8 ||
-         color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA);
-    if (image_create_info.format != transfer_format || is_srgb_view_needed) {
+    if (image_create_info.format != transfer_format) {
       image_create_info.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     }
     image_create_info.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -1962,7 +1950,6 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
   }
   VkImageView view_depth_stencil = VK_NULL_HANDLE;
   VkImageView view_stencil = VK_NULL_HANDLE;
-  VkImageView view_srgb = VK_NULL_HANDLE;
   VkImageView view_color_transfer_separate = VK_NULL_HANDLE;
   if (key.is_depth) {
     view_create_info.subresourceRange.aspectMask =
@@ -1996,22 +1983,6 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
       return nullptr;
     }
   } else {
-    if (is_srgb_view_needed) {
-      view_create_info.format = VK_FORMAT_R8G8B8A8_SRGB;
-      if (dfn.vkCreateImageView(device, &view_create_info, nullptr,
-                                &view_srgb) != VK_SUCCESS) {
-        XELOGE(
-            "VulkanRenderTarget: Failed to create an sRGB view for a {}x{} "
-            "{}xMSAA render target",
-            image_create_info.extent.width, image_create_info.extent.height,
-            uint32_t(1) << uint32_t(key.msaa_samples),
-            xenos::GetColorRenderTargetFormatName(key.GetColorFormat()));
-        dfn.vkDestroyImageView(device, view_depth_color, nullptr);
-        dfn.vkDestroyImage(device, image, nullptr);
-        dfn.vkFreeMemory(device, memory, nullptr);
-        return nullptr;
-      }
-    }
     if (transfer_format != image_create_info.format) {
       view_create_info.format = transfer_format;
       if (dfn.vkCreateImageView(device, &view_create_info, nullptr,
@@ -2021,9 +1992,6 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
             "{}xMSAA {} render target",
             image_create_info.extent.width, image_create_info.extent.height,
             uint32_t(1) << uint32_t(key.msaa_samples), key.GetFormatName());
-        if (view_srgb != VK_NULL_HANDLE) {
-          dfn.vkDestroyImageView(device, view_srgb, nullptr);
-        }
         dfn.vkDestroyImageView(device, view_depth_color, nullptr);
         dfn.vkDestroyImage(device, image, nullptr);
         dfn.vkFreeMemory(device, memory, nullptr);
@@ -2043,9 +2011,6 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
         key.is_depth ? "depth/stencil" : "color");
     if (view_color_transfer_separate != VK_NULL_HANDLE) {
       dfn.vkDestroyImageView(device, view_color_transfer_separate, nullptr);
-    }
-    if (view_srgb != VK_NULL_HANDLE) {
-      dfn.vkDestroyImageView(device, view_srgb, nullptr);
     }
     dfn.vkDestroyImageView(device, view_depth_color, nullptr);
     dfn.vkDestroyImage(device, image, nullptr);
@@ -2094,7 +2059,7 @@ RenderTargetCache::RenderTarget* VulkanRenderTargetCache::CreateRenderTarget(
                              0, nullptr);
 
   return new VulkanRenderTarget(key, *this, image, memory, view_depth_color,
-                                view_depth_stencil, view_stencil, view_srgb,
+                                view_depth_stencil, view_stencil,
                                 view_color_transfer_separate,
                                 descriptor_set_index_transfer_source);
 }
