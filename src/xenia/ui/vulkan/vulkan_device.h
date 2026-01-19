@@ -202,6 +202,10 @@ class VulkanDevice {
     bool ext_1_3_KHR_dynamic_rendering = false;
     // VK_EXT_subgroup_size_control (#226, promoted to 1.3)
     bool ext_1_3_EXT_subgroup_size_control = false;
+#if XE_PLATFORM_WIN32
+    // VK_EXT_full_screen_exclusive (#256, Windows only)
+    bool ext_EXT_full_screen_exclusive = false;
+#endif
   };
 
   const Extensions& extensions() const { return extensions_; }
