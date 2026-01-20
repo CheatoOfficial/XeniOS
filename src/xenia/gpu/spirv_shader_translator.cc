@@ -41,6 +41,14 @@ DEFINE_bool(
     "capability.",
     "GPU");
 
+DEFINE_bool(
+    vulkan_precise_interpolation, true,
+    "Use manual barycentric interpolation in fragment shaders to avoid "
+    "precision issues on Nvidia GPUs. Fixes noise artifacts in games like "
+    "Perfect Dark and Tenchu Z that do exact equality comparisons on "
+    "interpolated values. Requires VK_KHR_fragment_shader_barycentric.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 
@@ -119,7 +127,8 @@ SpirvShaderTranslator::Features::Features(bool all)
       denorm_flush_to_zero_float32(all),
       rounding_mode_rte_float32(all),
       fragment_shader_sample_interlock(all),
-      demote_to_helper_invocation(all) {}
+      demote_to_helper_invocation(all),
+      fragment_shader_barycentric(all) {}
 
 SpirvShaderTranslator::Features::Features(
     const ui::vulkan::VulkanDevice* const vulkan_device)
@@ -143,7 +152,9 @@ SpirvShaderTranslator::Features::Features(
       fragment_shader_sample_interlock(
           vulkan_device->properties().fragmentShaderSampleInterlock),
       demote_to_helper_invocation(
-          vulkan_device->properties().shaderDemoteToHelperInvocation) {
+          vulkan_device->properties().shaderDemoteToHelperInvocation),
+      fragment_shader_barycentric(
+          vulkan_device->properties().fragmentShaderBarycentric) {
   // Check for SPIR-V version override from CVAR.
   const std::string& override_version = cvars::spirv_version_override;
   if (override_version == "1.0") {
@@ -199,6 +210,8 @@ uint64_t SpirvShaderTranslator::GetDefaultPixelShaderModification(
   Modification shader_modification;
   shader_modification.pixel.dynamic_addressable_register_count =
       dynamic_addressable_register_count;
+  shader_modification.pixel.precise_interpolation =
+      cvars::vulkan_precise_interpolation ? 1 : 0;
   return shader_modification.value;
 }
 
@@ -232,6 +245,11 @@ void SpirvShaderTranslator::Reset() {
   input_fragment_coordinates_ = spv::NoResult;
   input_front_facing_ = spv::NoResult;
   input_sample_mask_ = spv::NoResult;
+  // Barycentric interpolation inputs.
+  input_barycentric_coord_ = spv::NoResult;
+  input_barycentric_coord_no_persp_ = spv::NoResult;
+  std::fill(input_interpolators_per_vertex_.begin(),
+            input_interpolators_per_vertex_.end(), spv::NoResult);
   std::fill(input_output_interpolators_.begin(),
             input_output_interpolators_.end(), spv::NoResult);
   output_point_coordinates_ = spv::NoResult;
@@ -2291,7 +2309,56 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
     uint32_t input_location = 0;
 
     // Interpolator inputs.
-    {
+    // When fragment_shader_barycentric is enabled, create per-vertex
+    // interpolator arrays (float4[3]) with PerVertexKHR decoration for manual
+    // barycentric interpolation. This works around Nvidia driver differences
+    // in hardware interpolation that can cause noise artifacts in games that
+    // do exact equality comparisons in shaders (e.g., Perfect Dark, Tenchu Z).
+    // Skip barycentric for point primitives - barycentric coordinates are only
+    // meaningful for triangles.
+    bool use_barycentric_interpolation =
+        shader_modification.pixel.precise_interpolation &&
+        features_.fragment_shader_barycentric &&
+        !shader_modification.pixel.param_gen_point;
+    if (use_barycentric_interpolation) {
+      // Add extension and capability for barycentric interpolation.
+      builder_->addExtension("SPV_KHR_fragment_shader_barycentric");
+      builder_->addCapability(spv::CapabilityFragmentBarycentricKHR);
+
+      // Create gl_BaryCoordKHR builtin input (float3).
+      input_barycentric_coord_ =
+          builder_->createVariable(spv::NoPrecision, spv::StorageClassInput,
+                                   type_float3_, "gl_BaryCoordKHR");
+      builder_->addDecoration(input_barycentric_coord_, spv::DecorationBuiltIn,
+                              static_cast<int>(spv::BuiltInBaryCoordKHR));
+      main_interface_.push_back(input_barycentric_coord_);
+
+      // Create per-vertex interpolator inputs as float4[3] arrays with
+      // PerVertexKHR decoration.
+      spv::Id type_float4_array_3 = builder_->makeArrayType(
+          type_float4_, builder_->makeUintConstant(3), 0);
+      uint32_t interpolators_remaining = GetModificationInterpolatorMask();
+      uint32_t interpolator_index;
+      while (
+          xe::bit_scan_forward(interpolators_remaining, &interpolator_index)) {
+        interpolators_remaining &= ~(UINT32_C(1) << interpolator_index);
+        spv::Id interpolator_per_vertex = builder_->createVariable(
+            spv::NoPrecision, spv::StorageClassInput, type_float4_array_3,
+            fmt::format("xe_in_interpolator_{}_per_vertex", interpolator_index)
+                .c_str());
+        input_interpolators_per_vertex_[interpolator_index] =
+            interpolator_per_vertex;
+        builder_->addDecoration(interpolator_per_vertex,
+                                spv::DecorationLocation, int(input_location));
+        builder_->addDecoration(interpolator_per_vertex,
+                                spv::DecorationPerVertexKHR);
+        // Note: Centroid decoration is not applicable with PerVertexKHR since
+        // we're doing manual interpolation.
+        main_interface_.push_back(interpolator_per_vertex);
+        ++input_location;
+      }
+    } else {
+      // Standard hardware interpolation path.
       uint32_t interpolators_remaining = GetModificationInterpolatorMask();
       uint32_t interpolator_index;
       while (
@@ -2578,18 +2645,148 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
   // references them after only initializing them conditionally, and copy
   // interpolants to GPRs.
   uint32_t interpolator_mask = GetModificationInterpolatorMask();
+
+  // When barycentric interpolation is enabled, manually compute interpolated
+  // values using barycentric coordinates to avoid Nvidia driver interpolation
+  // differences. Skip for point primitives since barycentric coordinates are
+  // only meaningful for triangles.
+  Modification shader_modification = GetSpirvShaderModification();
+  bool use_barycentric_interpolation =
+      shader_modification.pixel.precise_interpolation &&
+      features_.fragment_shader_barycentric &&
+      !shader_modification.pixel.param_gen_point;
+  spv::Id barycentric_coords = spv::NoResult;
+  spv::Id bary_x_vec4 = spv::NoResult;
+  spv::Id bary_y_vec4 = spv::NoResult;
+  spv::Id bary_z_vec4 = spv::NoResult;
+  spv::Id one_third_vec4 = spv::NoResult;
+  if (use_barycentric_interpolation && interpolator_mask) {
+    // Load barycentric coordinates once for all interpolators.
+    barycentric_coords =
+        builder_->createLoad(input_barycentric_coord_, spv::NoPrecision);
+
+    // Extract and smear barycentric coordinates to float4 once for all
+    // interpolators.
+    spv::Id bary_x =
+        builder_->createCompositeExtract(barycentric_coords, type_float_, 0);
+    spv::Id bary_y =
+        builder_->createCompositeExtract(barycentric_coords, type_float_, 1);
+    spv::Id bary_z =
+        builder_->createCompositeExtract(barycentric_coords, type_float_, 2);
+    id_vector_temp_util_.clear();
+    id_vector_temp_util_.push_back(bary_x);
+    id_vector_temp_util_.push_back(bary_x);
+    id_vector_temp_util_.push_back(bary_x);
+    id_vector_temp_util_.push_back(bary_x);
+    bary_x_vec4 =
+        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
+    id_vector_temp_util_.clear();
+    id_vector_temp_util_.push_back(bary_y);
+    id_vector_temp_util_.push_back(bary_y);
+    id_vector_temp_util_.push_back(bary_y);
+    id_vector_temp_util_.push_back(bary_y);
+    bary_y_vec4 =
+        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
+    id_vector_temp_util_.clear();
+    id_vector_temp_util_.push_back(bary_z);
+    id_vector_temp_util_.push_back(bary_z);
+    id_vector_temp_util_.push_back(bary_z);
+    id_vector_temp_util_.push_back(bary_z);
+    bary_z_vec4 =
+        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
+
+    // Create the 1/3 constant once for all interpolators.
+    spv::Id one_third = builder_->makeFloatConstant(1.0f / 3.0f);
+    id_vector_temp_util_.clear();
+    id_vector_temp_util_.push_back(one_third);
+    id_vector_temp_util_.push_back(one_third);
+    id_vector_temp_util_.push_back(one_third);
+    id_vector_temp_util_.push_back(one_third);
+    one_third_vec4 =
+        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
+  }
+
   for (uint32_t i = 0; i < register_count(); ++i) {
     if (i == param_gen_interpolator) {
       continue;
     }
     id_vector_temp_.clear();
     id_vector_temp_.push_back(builder_->makeIntConstant(int(i)));
+
+    spv::Id interpolated_value;
+    if (i < xenos::kMaxInterpolators &&
+        (interpolator_mask & (UINT32_C(1) << i))) {
+      if (use_barycentric_interpolation) {
+        // Delta-from-average barycentric interpolation for numerical stability.
+        // When all vertices have equal values (v0 = v1 = v2 = V), this produces
+        // exactly V, avoiding floating-point precision issues that cause noise
+        // artifacts on Nvidia GPUs.
+        //
+        // Formula: avg = (v0 + v1 + v2) / 3
+        //          result = avg + (v0-avg)*bary.x + (v1-avg)*bary.y +
+        //          (v2-avg)*bary.z
+        //
+        // When v0 = v1 = v2 = V:
+        //   avg = V, deltas = 0, result = V + 0 = V (exact)
+        spv::Id per_vertex_array = input_interpolators_per_vertex_[i];
+
+        // Load per-vertex values (vertex 0, 1, 2).
+        id_vector_temp_util_.clear();
+        id_vector_temp_util_.push_back(builder_->makeIntConstant(0));
+        spv::Id v0 = builder_->createLoad(
+            builder_->createAccessChain(spv::StorageClassInput,
+                                        per_vertex_array, id_vector_temp_util_),
+            spv::NoPrecision);
+        id_vector_temp_util_.clear();
+        id_vector_temp_util_.push_back(builder_->makeIntConstant(1));
+        spv::Id v1 = builder_->createLoad(
+            builder_->createAccessChain(spv::StorageClassInput,
+                                        per_vertex_array, id_vector_temp_util_),
+            spv::NoPrecision);
+        id_vector_temp_util_.clear();
+        id_vector_temp_util_.push_back(builder_->makeIntConstant(2));
+        spv::Id v2 = builder_->createLoad(
+            builder_->createAccessChain(spv::StorageClassInput,
+                                        per_vertex_array, id_vector_temp_util_),
+            spv::NoPrecision);
+
+        // Compute average: avg = (v0 + v1 + v2) * (1/3)
+        spv::Id sum_v0_v1 =
+            builder_->createBinOp(spv::OpFAdd, type_float4_, v0, v1);
+        spv::Id sum_all =
+            builder_->createBinOp(spv::OpFAdd, type_float4_, sum_v0_v1, v2);
+        spv::Id avg = builder_->createBinOp(spv::OpFMul, type_float4_, sum_all,
+                                            one_third_vec4);
+
+        // Compute deltas from average.
+        spv::Id d0 = builder_->createBinOp(spv::OpFSub, type_float4_, v0, avg);
+        spv::Id d1 = builder_->createBinOp(spv::OpFSub, type_float4_, v1, avg);
+        spv::Id d2 = builder_->createBinOp(spv::OpFSub, type_float4_, v2, avg);
+
+        // Compute: avg + d0*bary.x + d1*bary.y + d2*bary.z
+        spv::Id term0 =
+            builder_->createBinOp(spv::OpFMul, type_float4_, d0, bary_x_vec4);
+        spv::Id term1 =
+            builder_->createBinOp(spv::OpFMul, type_float4_, d1, bary_y_vec4);
+        spv::Id term2 =
+            builder_->createBinOp(spv::OpFMul, type_float4_, d2, bary_z_vec4);
+        spv::Id sum_terms =
+            builder_->createBinOp(spv::OpFAdd, type_float4_, term0, term1);
+        sum_terms =
+            builder_->createBinOp(spv::OpFAdd, type_float4_, sum_terms, term2);
+        interpolated_value =
+            builder_->createBinOp(spv::OpFAdd, type_float4_, avg, sum_terms);
+      } else {
+        // Standard hardware interpolation path.
+        interpolated_value = builder_->createLoad(
+            input_output_interpolators_[i], spv::NoPrecision);
+      }
+    } else {
+      interpolated_value = const_float4_0_;
+    }
+
     builder_->createStore(
-        (i < xenos::kMaxInterpolators &&
-         (interpolator_mask & (UINT32_C(1) << i)))
-            ? builder_->createLoad(input_output_interpolators_[i],
-                                   spv::NoPrecision)
-            : const_float4_0_,
+        interpolated_value,
         builder_->createAccessChain(spv::StorageClassFunction,
                                     var_main_registers_, id_vector_temp_));
   }

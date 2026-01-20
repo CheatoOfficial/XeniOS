@@ -39,7 +39,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // TODO(Triang3l): Change to 0xYYYYMMDD once it's out of the rapid
     // prototyping stage (easier to do small granular updates with an
     // incremental counter).
-    static constexpr uint32_t kVersion = 8;
+    static constexpr uint32_t kVersion = 9;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -97,6 +97,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
       // For host render targets - which color render targets are actually
       // bound.
       uint32_t color_targets_used : xenos::kMaxColorRenderTargets;
+      // Whether to use manual barycentric interpolation for precision.
+      uint32_t precise_interpolation : 1;
     } pixel;
     uint64_t value = 0;
 
@@ -392,6 +394,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
     bool fragment_shader_sample_interlock;
 
     bool demote_to_helper_invocation;
+
+    bool fragment_shader_barycentric;
   };
 
   SpirvShaderTranslator(
@@ -940,6 +944,16 @@ class SpirvShaderTranslator : public ShaderTranslator {
   spv::Id input_front_facing_;
   // PS, only when needed - int[1].
   spv::Id input_sample_mask_;
+
+  // PS, barycentric coordinate inputs (when fragment_shader_barycentric is
+  // enabled) - float3.
+  spv::Id input_barycentric_coord_;
+  spv::Id input_barycentric_coord_no_persp_;
+
+  // PS, per-vertex interpolator arrays for barycentric interpolation (when
+  // fragment_shader_barycentric is enabled). Stores the array variable
+  // (float4[3]) for each interpolator.
+  std::array<spv::Id, xenos::kMaxInterpolators> input_interpolators_per_vertex_;
 
   // VS output or PS input, only the ones that are needed (spv::NoResult for the
   // unneeded interpolators), indexed by the guest interpolator index - float4.
