@@ -3621,6 +3621,10 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
                 DxbcShaderTranslator::PreSaturatedLinearToPWLGamma(
                     a, 1, i, 1, i, 2, 0, 2, 1);
               }
+              if (osgn_parameter_index_sv_stencil_ref != UINT32_MAX) {
+                DxbcShaderTranslator::PreSaturatedLinearToPWLGamma(
+                    a, 1, 0, 1, 0, 2, 0, 2, 1);
+              }
             }
             // When need only depth, not stencil, skip the red component.
             a.OpMAd(dxbc::Dest::R(
