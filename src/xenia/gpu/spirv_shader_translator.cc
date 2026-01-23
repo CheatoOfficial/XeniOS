@@ -2655,31 +2655,21 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
       shader_modification.pixel.precise_interpolation &&
       features_.fragment_shader_barycentric &&
       !shader_modification.pixel.param_gen_point;
-  spv::Id barycentric_coords = spv::NoResult;
-  spv::Id bary_x_vec4 = spv::NoResult;
+  // Barycentric weights splatted to float4 for interpolation.
+  // Using only bary.y and bary.z since we anchor on v0 (bary.x = 1 - y - z).
   spv::Id bary_y_vec4 = spv::NoResult;
   spv::Id bary_z_vec4 = spv::NoResult;
-  spv::Id one_third_vec4 = spv::NoResult;
   if (use_barycentric_interpolation && interpolator_mask) {
     // Load barycentric coordinates once for all interpolators.
-    barycentric_coords =
+    spv::Id barycentric_coords =
         builder_->createLoad(input_barycentric_coord_, spv::NoPrecision);
 
-    // Extract and smear barycentric coordinates to float4 once for all
-    // interpolators.
-    spv::Id bary_x =
-        builder_->createCompositeExtract(barycentric_coords, type_float_, 0);
+    // Extract and smear bary.y and bary.z to float4 for vectorized ops.
+    // We don't need bary.x since we use v0 as anchor (AMD-style interpolation).
     spv::Id bary_y =
         builder_->createCompositeExtract(barycentric_coords, type_float_, 1);
     spv::Id bary_z =
         builder_->createCompositeExtract(barycentric_coords, type_float_, 2);
-    id_vector_temp_util_.clear();
-    id_vector_temp_util_.push_back(bary_x);
-    id_vector_temp_util_.push_back(bary_x);
-    id_vector_temp_util_.push_back(bary_x);
-    id_vector_temp_util_.push_back(bary_x);
-    bary_x_vec4 =
-        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
     id_vector_temp_util_.clear();
     id_vector_temp_util_.push_back(bary_y);
     id_vector_temp_util_.push_back(bary_y);
@@ -2694,16 +2684,6 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
     id_vector_temp_util_.push_back(bary_z);
     bary_z_vec4 =
         builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
-
-    // Create the 1/3 constant once for all interpolators.
-    spv::Id one_third = builder_->makeFloatConstant(1.0f / 3.0f);
-    id_vector_temp_util_.clear();
-    id_vector_temp_util_.push_back(one_third);
-    id_vector_temp_util_.push_back(one_third);
-    id_vector_temp_util_.push_back(one_third);
-    id_vector_temp_util_.push_back(one_third);
-    one_third_vec4 =
-        builder_->createCompositeConstruct(type_float4_, id_vector_temp_util_);
   }
 
   for (uint32_t i = 0; i < register_count(); ++i) {
@@ -2717,17 +2697,18 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
     if (i < xenos::kMaxInterpolators &&
         (interpolator_mask & (UINT32_C(1) << i))) {
       if (use_barycentric_interpolation) {
-        // Delta-from-average barycentric interpolation for numerical stability.
-        // When all vertices have equal values (v0 = v1 = v2 = V), this produces
-        // exactly V, avoiding floating-point precision issues that cause noise
-        // artifacts on Nvidia GPUs.
+        // AMD-style barycentric interpolation using v0 as anchor.
+        // This matches real AMD GPU hardware (V_INTERP_P1_F32/V_INTERP_P2_F32):
+        //   result = v0 + (v1 - v0) * bary.y + (v2 - v0) * bary.z
         //
-        // Formula: avg = (v0 + v1 + v2) / 3
-        //          result = avg + (v0-avg)*bary.x + (v1-avg)*bary.y +
-        //          (v2-avg)*bary.z
+        // Since bary.x + bary.y + bary.z = 1, this is equivalent to:
+        //   result = v0 * bary.x + v1 * bary.y + v2 * bary.z
         //
         // When v0 = v1 = v2 = V:
-        //   avg = V, deltas = 0, result = V + 0 = V (exact)
+        //   (v1 - v0) = 0, (v2 - v0) = 0, result = v0 = V (exact)
+        //
+        // This avoids floating-point precision issues that cause noise
+        // artifacts on Nvidia GPUs when games do exact equality comparisons.
         spv::Id per_vertex_array = input_interpolators_per_vertex_[i];
 
         // Load per-vertex values (vertex 0, 1, 2).
@@ -2750,32 +2731,19 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
                                         per_vertex_array, id_vector_temp_util_),
             spv::NoPrecision);
 
-        // Compute average: avg = (v0 + v1 + v2) * (1/3)
-        spv::Id sum_v0_v1 =
-            builder_->createBinOp(spv::OpFAdd, type_float4_, v0, v1);
-        spv::Id sum_all =
-            builder_->createBinOp(spv::OpFAdd, type_float4_, sum_v0_v1, v2);
-        spv::Id avg = builder_->createBinOp(spv::OpFMul, type_float4_, sum_all,
-                                            one_third_vec4);
+        // Compute deltas from v0 (anchor vertex).
+        spv::Id d1 = builder_->createBinOp(spv::OpFSub, type_float4_, v1, v0);
+        spv::Id d2 = builder_->createBinOp(spv::OpFSub, type_float4_, v2, v0);
 
-        // Compute deltas from average.
-        spv::Id d0 = builder_->createBinOp(spv::OpFSub, type_float4_, v0, avg);
-        spv::Id d1 = builder_->createBinOp(spv::OpFSub, type_float4_, v1, avg);
-        spv::Id d2 = builder_->createBinOp(spv::OpFSub, type_float4_, v2, avg);
-
-        // Compute: avg + d0*bary.x + d1*bary.y + d2*bary.z
-        spv::Id term0 =
-            builder_->createBinOp(spv::OpFMul, type_float4_, d0, bary_x_vec4);
+        // Compute: v0 + d1*bary.y + d2*bary.z
         spv::Id term1 =
             builder_->createBinOp(spv::OpFMul, type_float4_, d1, bary_y_vec4);
         spv::Id term2 =
             builder_->createBinOp(spv::OpFMul, type_float4_, d2, bary_z_vec4);
         spv::Id sum_terms =
-            builder_->createBinOp(spv::OpFAdd, type_float4_, term0, term1);
-        sum_terms =
-            builder_->createBinOp(spv::OpFAdd, type_float4_, sum_terms, term2);
+            builder_->createBinOp(spv::OpFAdd, type_float4_, term1, term2);
         interpolated_value =
-            builder_->createBinOp(spv::OpFAdd, type_float4_, avg, sum_terms);
+            builder_->createBinOp(spv::OpFAdd, type_float4_, v0, sum_terms);
       } else {
         // Standard hardware interpolation path.
         interpolated_value = builder_->createLoad(
