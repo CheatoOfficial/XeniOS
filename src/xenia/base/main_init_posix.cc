@@ -21,11 +21,8 @@ class StartupCpuFeatureCheck {
           "the "
           "FAQ for system requirements at https://xenia.jp";
     }
-    if (error_message == nullptr) {
-      return;
-    } else {
-      fprintf(stderr, "ERROR: %s\n", error_message);
-      exit(1);
+    if (error_message != nullptr) {
+      fprintf(stderr, "WARNING: %s\n", error_message);
     }
   }
 };
