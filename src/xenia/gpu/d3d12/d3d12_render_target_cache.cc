@@ -2172,10 +2172,7 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
     assert_zero(rs & kTransferUsedRootParameterDepthSRVBit);
     assert_zero(rs & kTransferUsedRootParameterStencilSRVBit);
     source_is_64bpp =
-        xenos::IsColorRenderTargetFormat64bpp(source_color_format) ||
-        (source_color_format ==
-             xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA &&
-         gamma_render_target_as_unorm16_);
+        xenos::IsColorRenderTargetFormat64bpp(source_color_format);
     source_color_format_component_count =
         xenos::GetColorRenderTargetFormatComponentCount(source_color_format);
     if (dest_is_stencil_bit) {
