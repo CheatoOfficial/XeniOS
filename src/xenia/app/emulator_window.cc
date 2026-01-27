@@ -10,6 +10,7 @@
 #include "xenia/app/emulator_window.h"
 
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <thread>
 
@@ -43,6 +44,8 @@
 #include "xenia/ui/profile_dialogs.h"
 #include "xenia/ui/qt_util.h"
 #include "xenia/ui/simple_config_dialog_qt.h"
+#include "xenia/vfs/devices/disc_zarchive_device.h"
+#include "xenia/vfs/devices/xcontent_container_device.h"
 
 #if XE_PLATFORM_WIN32
 #include <windows.h>
@@ -1434,59 +1437,86 @@ void EmulatorWindow::ExtractZarchive() {
     return;
   }
 
-  std::string extract_overview = "";
+  auto zarchive_entries =
+      std::make_shared<std::vector<Emulator::ZarchiveEntry>>();
 
   for (auto& zarchive_file_path : zarchive_files) {
-    extract_overview += "\n" + path_to_utf8(zarchive_file_path);
-  }
+    auto abs_path = std::filesystem::absolute(zarchive_file_path);
+    std::filesystem::path abs_extract_dir;
 
-  app_context_.CallInUIThread([&]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Extracting...",
-                                       string_util::trim(extract_overview), 0);
-  });
-
-  auto run = [this, extract_dir, zarchive_files]() -> void {
-    std::string summary = "";
-
-    for (auto& zarchive_file_path : zarchive_files) {
-      // Normalize the path and make absolute.
-      auto abs_path = std::filesystem::absolute(zarchive_file_path);
-      std::filesystem::path abs_extract_dir;
-
-      if (zarchive_files.size() > 1) {
-        abs_extract_dir =
-            std::filesystem::absolute((extract_dir / abs_path.stem()));
-      } else {
-        abs_extract_dir = std::filesystem::absolute(extract_dir);
-      }
-
-      XELOGI("Extracting zar package: {}\n",
-             zarchive_file_path.filename().string());
-
-      auto result =
-          emulator_->ExtractZarchivePackage(abs_path, abs_extract_dir);
-
-      if (result != X_STATUS_SUCCESS) {
-        std::error_code ec;
-
-        if (!std::filesystem::is_empty(abs_extract_dir)) {
-          std::filesystem::remove(abs_extract_dir, ec);
-        }
-
-        summary += fmt::format("\nFailed: {}", zarchive_file_path);
-
-        XELOGE("Failed to extract Zarchive package.", result);
-      } else {
-        summary += fmt::format("\nSuccess: {}", abs_extract_dir);
-      }
+    if (zarchive_files.size() > 1) {
+      abs_extract_dir =
+          std::filesystem::absolute((extract_dir / abs_path.stem()));
+    } else {
+      abs_extract_dir = std::filesystem::absolute(extract_dir);
     }
 
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Zar Extraction Summary",
-                                       string_util::trim(summary), 0);
-  };
+    zarchive_entries->emplace_back(abs_path, abs_extract_dir,
+                                   Emulator::ZarchiveOperation::Extract);
+    auto& entry = zarchive_entries->back();
+    entry.name_ = xe::path_to_utf8(abs_path.filename());
 
-  auto zarThread = std::thread(run);
-  zarThread.detach();
+    // Extract icon/title from STFS content within the archive
+    auto device = std::make_unique<vfs::DiscZarchiveDevice>("", abs_path);
+    if (device->Initialize()) {
+      std::function<void(vfs::Entry*)> find_stfs_info = [&](vfs::Entry* e) {
+        if (!entry.icon_data_.empty()) return;
+        if (e->attributes() & vfs::kFileAttributeDirectory) {
+          for (auto& child : e->children()) {
+            find_stfs_info(child.get());
+          }
+        } else if (e->size() >= sizeof(vfs::XContentContainerHeader)) {
+          vfs::File* file = nullptr;
+          if (e->Open(vfs::FileAccess::kGenericRead, &file) ==
+                  X_STATUS_SUCCESS &&
+              file) {
+            std::vector<uint8_t> header_data(
+                sizeof(vfs::XContentContainerHeader));
+            size_t bytes_read = 0;
+            if (file->ReadSync(header_data, 0, &bytes_read) ==
+                    X_STATUS_SUCCESS &&
+                bytes_read == sizeof(vfs::XContentContainerHeader)) {
+              auto* header = reinterpret_cast<vfs::XContentContainerHeader*>(
+                  header_data.data());
+              if (header->content_header.is_magic_valid()) {
+                auto title_name = xe::to_utf8(
+                    header->content_metadata.display_name(XLanguage::kEnglish));
+                if (!title_name.empty()) {
+                  entry.name_ = title_name;
+                }
+
+                if (header->content_metadata.title_thumbnail_size > 0 &&
+                    header->content_metadata.title_thumbnail_size <=
+                        vfs::XContentMetadata::kThumbLengthV1) {
+                  entry.icon_data_.assign(
+                      header->content_metadata.title_thumbnail,
+                      header->content_metadata.title_thumbnail +
+                          header->content_metadata.title_thumbnail_size);
+                }
+              }
+            }
+            file->Destroy();
+          }
+        }
+      };
+      auto* root = device->ResolvePath("/");
+      if (root) {
+        find_stfs_info(root);
+      }
+    }
+  }
+
+  auto* dialog = new ui::ContentInstallDialogQt(nullptr, zarchive_entries);
+  dialog->show();
+  dialog->raise();
+  dialog->activateWindow();
+
+  auto extractThread = std::thread([this, zarchive_entries] {
+    for (auto& entry : *zarchive_entries) {
+      emulator_->ExtractZarchivePackage(entry);
+    }
+  });
+  extractThread.detach();
 }
 
 void EmulatorWindow::CreateZarchive() {
@@ -1534,12 +1564,10 @@ void EmulatorWindow::CreateZarchive() {
     return;
   }
 
-  std::string create_overview = "";
-
-  std::map<std::filesystem::path, std::filesystem::path> zarchive_files{};
+  auto zarchive_entries =
+      std::make_shared<std::vector<Emulator::ZarchiveEntry>>();
 
   for (auto& content_path : content_dirs) {
-    // Normalize the path and make absolute.
     auto abs_content_dir = std::filesystem::absolute(content_path);
     std::filesystem::path abs_zarchive_file;
 
@@ -1550,48 +1578,54 @@ void EmulatorWindow::CreateZarchive() {
       abs_zarchive_file = std::filesystem::absolute(zarchive_dir);
     }
 
-    zarchive_files[content_path] = abs_zarchive_file;
+    zarchive_entries->emplace_back(abs_content_dir, abs_zarchive_file,
+                                   Emulator::ZarchiveOperation::Create);
+    auto& entry = zarchive_entries->back();
+    entry.name_ = xe::path_to_utf8(abs_zarchive_file.filename());
 
-    create_overview += "\n" + path_to_utf8(abs_zarchive_file);
-  }
+    // Extract icon/title from STFS content, use title for output filename
+    std::error_code ec;
+    for (auto const& dirEntry :
+         std::filesystem::recursive_directory_iterator(abs_content_dir, ec)) {
+      if (!entry.icon_data_.empty()) break;
+      if (dirEntry.is_regular_file()) {
+        const auto header =
+            vfs::XContentContainerDevice::ReadContainerHeader(dirEntry.path());
+        if (header && header->content_header.is_magic_valid()) {
+          auto title_name = xe::to_utf8(
+              header->content_metadata.display_name(XLanguage::kEnglish));
+          if (!title_name.empty()) {
+            auto new_zarchive_file =
+                abs_zarchive_file.parent_path() / (title_name + ".zar");
+            entry.data_installation_path_ = new_zarchive_file;
+            entry.name_ = title_name + ".zar";
+          }
 
-  app_context_.CallInUIThread([&]() {
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Creating...",
-                                       string_util::trim(create_overview), 0);
-  });
-
-  auto run = [this, zarchive_files]() -> void {
-    std::string summary = "";
-
-    for (auto const& [content_path, zarchive_file] : zarchive_files) {
-      // Normalize the path and make absolute.
-      auto abs_content_dir = std::filesystem::absolute(content_path);
-
-      XELOGI("Creating zar package: {}\n", zarchive_file.filename().string());
-
-      auto result =
-          emulator_->CreateZarchivePackage(abs_content_dir, zarchive_file);
-
-      if (result != X_ERROR_SUCCESS) {
-        std::error_code ec;
-
-        // delete incomplete output file
-        std::filesystem::remove(zarchive_file, ec);
-
-        summary += fmt::format("\nFailed: {}", abs_content_dir);
-
-        XELOGE("Failed to create Zarchive package.", result);
-      } else {
-        summary += fmt::format("\nSuccess: {}", zarchive_file);
+          if (header->content_metadata.title_thumbnail_size > 0 &&
+              header->content_metadata.title_thumbnail_size <=
+                  vfs::XContentMetadata::kThumbLengthV1) {
+            entry.icon_data_.assign(
+                header->content_metadata.title_thumbnail,
+                header->content_metadata.title_thumbnail +
+                    header->content_metadata.title_thumbnail_size);
+          }
+        }
       }
     }
+  }
 
-    new xe::ui::HostNotificationWindow(imgui_drawer(), "Zar Creation Summary",
-                                       string_util::trim(summary), 0);
-  };
+  // Show dialog first, then start creation
+  auto* dialog = new ui::ContentInstallDialogQt(nullptr, zarchive_entries);
+  dialog->show();
+  dialog->raise();
+  dialog->activateWindow();
 
-  auto zarThread = std::thread(run);
-  zarThread.detach();
+  auto createThread = std::thread([this, zarchive_entries] {
+    for (auto& entry : *zarchive_entries) {
+      emulator_->CreateZarchivePackage(entry);
+    }
+  });
+  createThread.detach();
 }
 
 void EmulatorWindow::ShowContentDirectory() {

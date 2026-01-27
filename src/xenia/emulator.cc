@@ -62,6 +62,8 @@
 #include "xenia/vfs/devices/host_path_device.h"
 #include "xenia/vfs/devices/null_device.h"
 #include "xenia/vfs/devices/xcontent_container_device.h"
+#include "xenia/vfs/entry.h"
+#include "xenia/vfs/file.h"
 #include "xenia/vfs/virtual_file_system.h"
 
 #if XE_ARCH_AMD64
@@ -862,11 +864,14 @@ X_STATUS Emulator::ProcessContentPackageHeader(
   installation_info.content_size_ = header->content_metadata.content_size;
   installation_info.installation_state_ = InstallState::pending;
 
-  // Store raw PNG data for Qt dialog
-  installation_info.icon_data_.assign(
-      header->content_metadata.title_thumbnail,
-      header->content_metadata.title_thumbnail +
-          header->content_metadata.title_thumbnail_size);
+  if (header->content_metadata.title_thumbnail_size > 0 &&
+      header->content_metadata.title_thumbnail_size <=
+          vfs::XContentMetadata::kThumbLengthV1) {
+    installation_info.icon_data_.assign(
+        header->content_metadata.title_thumbnail,
+        header->content_metadata.title_thumbnail +
+            header->content_metadata.title_thumbnail_size);
+  }
 
   return X_STATUS_SUCCESS;
 }
@@ -999,14 +1004,42 @@ X_STATUS Emulator::InstallContentPackage(
   return error_code;
 }
 
-X_STATUS Emulator::ExtractZarchivePackage(
-    const std::filesystem::path& path,
-    const std::filesystem::path& extract_dir) {
+X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
+  const auto& path = entry.path_;
+  const auto& extract_dir = entry.data_installation_path_;
+
+  entry.installation_state_ = InstallState::preparing;
+
+  if (entry.cancelled_.load()) {
+    entry.installation_result_ = X_ERROR_CANCELLED;
+    entry.installation_error_message_ = "Cancelled";
+    entry.installation_state_ = InstallState::failed;
+    return X_ERROR_CANCELLED;
+  }
+
   std::unique_ptr<vfs::Device> device =
       std::make_unique<vfs::DiscZarchiveDevice>("", path);
   if (!device->Initialize()) {
     XELOGE("Failed to initialize device");
+    entry.installation_result_ = X_STATUS_INVALID_PARAMETER;
+    entry.installation_error_message_ = "Failed to initialize device";
+    entry.installation_state_ = InstallState::failed;
     return X_STATUS_INVALID_PARAMETER;
+  }
+
+  entry.content_size_ = 0;
+  auto* root = device->ResolvePath("/");
+  if (root) {
+    std::function<void(vfs::Entry*)> calc_size = [&](vfs::Entry* e) {
+      if (e->attributes() & vfs::kFileAttributeDirectory) {
+        for (auto& child : e->children()) {
+          calc_size(child.get());
+        }
+      } else {
+        entry.content_size_ += e->size();
+      }
+    };
+    calc_size(root);
   }
 
   if (std::filesystem::exists(extract_dir)) {
@@ -1016,22 +1049,70 @@ X_STATUS Emulator::ExtractZarchivePackage(
     std::error_code error_code;
     std::filesystem::create_directories(extract_dir, error_code);
     if (error_code) {
+      entry.installation_result_ = error_code.value();
+      entry.installation_error_message_ =
+          "Failed to create extraction directory";
+      entry.installation_state_ = InstallState::failed;
       return error_code.value();
     }
   }
 
-  uint64_t progress = 0;
-  return vfs::VirtualFileSystem::ExtractContentFiles(device.get(), extract_dir,
-                                                     progress);
+  entry.installation_state_ = InstallState::installing;
+
+  X_STATUS result = vfs::VirtualFileSystem::ExtractContentFiles(
+      device.get(), extract_dir, entry.currently_installed_size_,
+      [&entry]() { return entry.cancelled_.load(); });
+
+  if (entry.cancelled_.load()) {
+    // Clean up partial extraction
+    std::error_code ec;
+    std::filesystem::remove_all(extract_dir, ec);
+    entry.installation_result_ = X_ERROR_CANCELLED;
+    entry.installation_error_message_ = "Cancelled";
+    entry.installation_state_ = InstallState::failed;
+    return X_ERROR_CANCELLED;
+  }
+
+  if (result != X_STATUS_SUCCESS) {
+    entry.installation_result_ = result;
+    entry.installation_error_message_ = "Extraction failed";
+    entry.installation_state_ = InstallState::failed;
+    return result;
+  }
+
+  entry.installation_result_ = X_STATUS_SUCCESS;
+  entry.installation_state_ = InstallState::installed;
+  return X_STATUS_SUCCESS;
 }
 
-X_STATUS Emulator::CreateZarchivePackage(
-    const std::filesystem::path& inputDirectory,
-    const std::filesystem::path& outputFile) {
+X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
+  const auto& inputDirectory = entry.path_;
+  const auto& outputFile = entry.data_installation_path_;
+
+  entry.installation_state_ = InstallState::preparing;
+
+  if (entry.cancelled_.load()) {
+    entry.installation_result_ = X_ERROR_CANCELLED;
+    entry.installation_error_message_ = "Cancelled";
+    entry.installation_state_ = InstallState::failed;
+    return X_ERROR_CANCELLED;
+  }
+
+  std::error_code ec;
+  entry.content_size_ = 0;
+  for (auto const& dirEntry :
+       std::filesystem::recursive_directory_iterator(inputDirectory, ec)) {
+    if (dirEntry.is_regular_file() && dirEntry.path() != outputFile) {
+      entry.content_size_ += std::filesystem::file_size(dirEntry.path(), ec);
+    }
+  }
+
+  entry.installation_state_ = InstallState::installing;
+  entry.currently_installed_size_ = 0;
+
   std::vector<uint8_t> buffer;
   buffer.resize(64 * 1024);
 
-  std::error_code ec;
   PackContext packContext;
   packContext.outputFilePath = outputFile;
 
@@ -1055,23 +1136,40 @@ X_STATUS Emulator::CreateZarchivePackage(
       &packContext);
 
   if (packContext.hasError) {
+    entry.installation_result_ = X_STATUS_UNSUCCESSFUL;
+    entry.installation_error_message_ = "Failed to create output file";
+    entry.installation_state_ = InstallState::failed;
     return X_STATUS_UNSUCCESSFUL;
   }
 
+  auto cleanup_and_fail = [&](const std::string& message, X_STATUS status) {
+    entry.installation_error_message_ = message;
+    entry.installation_result_ = status;
+    std::filesystem::remove(outputFile, ec);
+    entry.installation_state_ = InstallState::failed;
+    return status;
+  };
+
   for (auto const& dirEntry :
        std::filesystem::recursive_directory_iterator(inputDirectory)) {
+    if (entry.cancelled_.load()) {
+      return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+    }
+
     std::filesystem::path pathEntry =
         std::filesystem::relative(dirEntry.path(), inputDirectory, ec);
 
     if (ec) {
       XELOGI("Failed to get relative path {}\n", pathEntry.string());
-      return X_STATUS_UNSUCCESSFUL;
+      return cleanup_and_fail("Failed to get relative path",
+                              X_STATUS_UNSUCCESSFUL);
     }
 
     if (dirEntry.is_directory()) {
       if (!zWriter.MakeDir(pathEntry.generic_string().c_str(), false)) {
         XELOGI("Failed to create directory {}\n", pathEntry.string());
-        return X_STATUS_UNSUCCESSFUL;
+        return cleanup_and_fail("Failed to create directory in archive",
+                                X_STATUS_UNSUCCESSFUL);
       }
     } else if (dirEntry.is_regular_file()) {
       // Don't pack itself to prevent infinite packing.
@@ -1083,7 +1181,8 @@ X_STATUS Emulator::CreateZarchivePackage(
 
       if (!zWriter.StartNewFile(pathEntry.generic_string().c_str())) {
         XELOGI("Failed to create archive file {}\n", pathEntry.string());
-        return X_STATUS_UNSUCCESSFUL;
+        return cleanup_and_fail("Failed to create file in archive",
+                                X_STATUS_UNSUCCESSFUL);
       }
 
       std::filesystem::path file_to_pack_path = inputDirectory / pathEntry;
@@ -1091,16 +1190,23 @@ X_STATUS Emulator::CreateZarchivePackage(
 
       if (!file) {
         XELOGI("Failed to open input file {}\n", pathEntry.string());
-        return X_STATUS_UNSUCCESSFUL;
+        return cleanup_and_fail("Failed to open input file",
+                                X_STATUS_UNSUCCESSFUL);
       }
 
       const uint64_t file_size = std::filesystem::file_size(file_to_pack_path);
       uint64_t total_bytes_read = 0;
 
       while (total_bytes_read < file_size) {
+        if (entry.cancelled_.load()) {
+          fclose(file);
+          return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+        }
+
         uint64_t bytes_read = fread(buffer.data(), 1, buffer.size(), file);
 
         total_bytes_read += bytes_read;
+        entry.currently_installed_size_ += bytes_read;
 
         zWriter.AppendData(buffer.data(), bytes_read);
       }
@@ -1109,12 +1215,14 @@ X_STATUS Emulator::CreateZarchivePackage(
     }
 
     if (packContext.hasError) {
-      return X_STATUS_UNSUCCESSFUL;
+      return cleanup_and_fail("Write error", X_STATUS_UNSUCCESSFUL);
     }
   }
 
   zWriter.Finalize();
 
+  entry.installation_result_ = X_STATUS_SUCCESS;
+  entry.installation_state_ = InstallState::installed;
   return X_STATUS_SUCCESS;
 }
 
