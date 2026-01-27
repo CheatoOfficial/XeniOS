@@ -1380,20 +1380,20 @@ void EmulatorWindow::InstallContent() {
     emulator_->ProcessContentPackageHeader(entry.path_, entry);
   }
 
+  // Show dialog first, then start installation so the dialog is visible
+  // before any fast-completing installations finish
+  auto* dialog = new ui::ContentInstallDialogQt(
+      nullptr, emulator_->content_root(), content_installation_status);
+  dialog->show();
+  dialog->raise();
+  dialog->activateWindow();
+
   auto installationThread = std::thread([this, content_installation_status] {
     for (auto& entry : *content_installation_status) {
       emulator_->InstallContentPackage(entry.path_, entry);
     }
   });
   installationThread.detach();
-
-  auto* qt_window = dynamic_cast<ui::QtWindow*>(window_.get());
-  if (qt_window) {
-    auto* dialog = new ui::ContentInstallDialogQt(qt_window->qwindow(),
-                                                  emulator_->content_root(),
-                                                  content_installation_status);
-    dialog->show();
-  }
 }
 
 void EmulatorWindow::ExtractZarchive() {
