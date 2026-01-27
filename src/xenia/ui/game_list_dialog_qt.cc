@@ -146,11 +146,8 @@ void GameListDialogQt::SetupUI() {
   open_button->setIconSize(QSize(64, 64));
   open_button->setMinimumSize(100, 80);
   open_button->setMaximumSize(100, 80);
-  connect(open_button, &QToolButton::clicked, [this]() {
-    if (emulator_window_) {
-      emulator_window_->FileOpen();
-    }
-  });
+  connect(open_button, &QToolButton::clicked,
+          [this]() { emit fileOpenRequested(); });
 
   open_label_ = new QLabel("Open", this);
   open_label_->setAlignment(Qt::AlignCenter);
@@ -1154,11 +1151,11 @@ void GameListDialogQt::LaunchGame(const std::filesystem::path& path,
       LoadGameList();
 
       // Open file picker
-      emulator_window_->FileOpen();
+      emit fileOpenRequested();
       return;
     }
 
-    emulator_window_->LaunchTitleInNewProcess(path);
+    emit launchGameRequested(path);
   }
 }
 
@@ -1169,9 +1166,7 @@ void GameListDialogQt::LaunchGameWithFilePicker() {
                            "Please select the game file to launch it.");
 
   // Open file picker
-  if (emulator_window_) {
-    emulator_window_->FileOpen();
-  }
+  emit fileOpenRequested();
 }
 
 void GameListDialogQt::OpenContainingFolder(const std::filesystem::path& path) {
@@ -1306,11 +1301,7 @@ void GameListDialogQt::OnPlayClicked() {
   }
 }
 
-void GameListDialogQt::OnSettingsClicked() {
-  if (emulator_window_) {
-    emulator_window_->ToggleConfigDialog();
-  }
-}
+void GameListDialogQt::OnSettingsClicked() { emit settingsRequested(); }
 
 void GameListDialogQt::OnProfileClicked() {
   // Left click always opens profile dialog (Qt version for UI process)

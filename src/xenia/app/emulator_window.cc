@@ -372,6 +372,18 @@ void EmulatorWindow::OnEmulatorInitialized() {
       QWidget* central_widget = qt_window->qwindow()->centralWidget();
       if (central_widget && central_widget->layout()) {
         game_list_dialog_qt_ = new GameListDialogQt(central_widget, this);
+        // Connect signals from game list dialog
+        QObject::connect(game_list_dialog_qt_,
+                         &GameListDialogQt::fileOpenRequested,
+                         [this]() { FileOpen(); });
+        QObject::connect(game_list_dialog_qt_,
+                         &GameListDialogQt::launchGameRequested,
+                         [this](const std::filesystem::path& path) {
+                           LaunchTitleInNewProcess(path);
+                         });
+        QObject::connect(game_list_dialog_qt_,
+                         &GameListDialogQt::settingsRequested,
+                         [this]() { ToggleConfigDialog(); });
         // Add it to the layout so it fills the window
         central_widget->layout()->addWidget(game_list_dialog_qt_);
       }

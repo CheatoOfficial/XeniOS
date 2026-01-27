@@ -12,8 +12,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/ui/renderdoc_api.h"
 
-// Declared in xboxkrnl_video.cc
-DECLARE_bool(use_50Hz_mode);
+DEFINE_bool(use_50Hz_mode, false, "Enables usage of PAL-50 mode.", "Video");
 
 DEFINE_path(trace_gpu_prefix, "scratch/gpu/",
             "Prefix path for GPU trace files.", "GPU");
