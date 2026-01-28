@@ -852,12 +852,6 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     if (xam_for_path) {
       xam_for_path->loader_data().host_path = xe::path_to_utf8(abs_path);
     }
-
-    // Add to recent titles if this is a game process
-    if (is_game_process && emulator_window_) {
-      emulator_window_->AddRecentlyLaunchedTitle(abs_path,
-                                                 emulator_->title_name());
-    }
   }
 
   auto xam = emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(

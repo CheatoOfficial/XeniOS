@@ -360,128 +360,24 @@ void GameListDialogQt::LoadGameList() {
     return;
   }
 
-  // Phase 1: Load game metadata from dashboard GPDs directly
-  // This works even without a logged-in profile
-  std::map<uint32_t, GameListEntry> titles_by_id;
+  auto scanned_titles = profile_manager->ScanAllProfilesForTitles();
 
-  // Scan all profile directories for dashboard GPDs
-  auto content_root = emulator_window_->emulator()->content_root();
-  auto profiles_directory = xe::filesystem::FilterByName(
-      xe::filesystem::ListDirectories(content_root),
-      std::regex("[0-9A-F]{16}"));
-
-  for (const auto& profile_dir : profiles_directory) {
-    const std::string profile_xuid = xe::path_to_utf8(profile_dir.name);
-    if (profile_xuid == fmt::format("{:016X}", 0)) {
-      continue;  // Skip shared content directory
+  for (const auto& scanned : scanned_titles) {
+    std::vector<DiscInfo> all_discs;
+    for (const auto& disc : scanned.all_discs) {
+      all_discs.push_back({disc.path, disc.label});
     }
 
-    // Construct path to dashboard GPD
-    std::filesystem::path dashboard_gpd_path =
-        profile_dir.path / profile_dir.name / kernel::xam::kDashboardStringID /
-        fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
-        profile_dir.name / fmt::format("{:08X}.gpd", kernel::kDashboardID);
-
-    if (!std::filesystem::exists(dashboard_gpd_path)) {
-      continue;
-    }
-
-    // Read dashboard GPD file directly
-    std::ifstream file(dashboard_gpd_path, std::ios::binary);
-    if (!file.is_open()) {
-      continue;
-    }
-
-    file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::vector<uint8_t> gpd_data(file_size);
-    file.read(reinterpret_cast<char*>(gpd_data.data()), file_size);
-    file.close();
-
-    // Parse dashboard GPD
-    kernel::xam::GpdInfoProfile dashboard_gpd(gpd_data);
-    if (!dashboard_gpd.IsValid()) {
-      continue;
-    }
-
-    // Extract title information from this dashboard GPD
-    auto titles_info = dashboard_gpd.GetTitlesInfo();
-    for (const auto& title_info : titles_info) {
-      uint32_t title_id = title_info->title_id;
-
-      // Get last played time for this profile
-      time_t last_played = 0;
-      if (title_info->last_played.is_valid()) {
-        auto last_played_tp = chrono::WinSystemClock::to_sys(
-            title_info->last_played.to_time_point());
-        last_played = std::chrono::system_clock::to_time_t(last_played_tp);
-      }
-
-      // Check if we already have this title
-      if (titles_by_id.find(title_id) != titles_by_id.end()) {
-        // Update with most recent timestamp
-        if (last_played > titles_by_id[title_id].last_run_time) {
-          titles_by_id[title_id].last_run_time = last_played;
-        }
-        continue;
-      }
-
-      // Get title name
-      std::string title_name =
-          xe::to_utf8(dashboard_gpd.GetTitleName(title_id));
-      // Remove null terminator if present
-      if (!title_name.empty() && title_name.back() == '\0') {
-        title_name.pop_back();
-      }
-
-      // Get file path(s) from dashboard GPD
-      std::filesystem::path path_to_file;
-      auto gpd_path = dashboard_gpd.GetTitlePath(title_id);
-      if (gpd_path.has_value()) {
-        path_to_file = *gpd_path;
-      }
-
-      // Get all discs with labels for multi-disc games
-      auto all_discs_gpd = dashboard_gpd.GetTitleDiscs(title_id);
-      std::vector<DiscInfo> all_discs;
-      for (const auto& disc : all_discs_gpd) {
-        all_discs.push_back({disc.path, disc.label});
-      }
-
-      // Sort discs alphanumerically by label
-      if (all_discs.size() > 1) {
-        std::sort(all_discs.begin(), all_discs.end(),
-                  [](const DiscInfo& a, const DiscInfo& b) {
-                    return a.label < b.label;
-                  });
-        XELOGI("Title {:08X} has {} discs", title_id, all_discs.size());
-      }
-
-      // Add to our map (without icon for now)
-      titles_by_id[title_id] = {title_name, path_to_file,
-                                all_discs,  last_played,
-                                title_id,   std::vector<uint8_t>()};
-    }
+    game_entries_.push_back({scanned.title_name, scanned.path_to_file,
+                             all_discs, scanned.last_run_time, scanned.title_id,
+                             std::vector<uint8_t>()});
   }
-
-  // Convert map to vector and sort by last played time (most recent first)
-  for (auto& [title_id, title] : titles_by_id) {
-    game_entries_.push_back(std::move(title));
-  }
-
-  std::sort(game_entries_.begin(), game_entries_.end(),
-            [](const GameListEntry& a, const GameListEntry& b) {
-              return a.last_run_time > b.last_run_time;
-            });
 
   // Show/hide search box based on number of entries
   if (search_box_) {
     search_box_->setVisible(game_entries_.size() > 5);
   }
 
-  // Phase 2: Load icons if a profile is logged in
   TryLoadIcons();
   PopulateTable();
 }
@@ -1206,66 +1102,7 @@ void GameListDialogQt::RemoveTitleFromDashboard(uint32_t title_id) {
     return;
   }
 
-  // Remove the title from all profiles' dashboard GPDs
-  auto content_root = emulator_window_->emulator()->content_root();
-  auto profiles_directory = xe::filesystem::FilterByName(
-      xe::filesystem::ListDirectories(content_root),
-      std::regex("[0-9A-F]{16}"));
-
-  bool removed_from_any = false;
-
-  for (const auto& profile_dir : profiles_directory) {
-    const std::string profile_xuid = xe::path_to_utf8(profile_dir.name);
-    if (profile_xuid == fmt::format("{:016X}", 0)) {
-      continue;  // Skip shared content directory
-    }
-
-    // Construct path to dashboard GPD
-    std::filesystem::path dashboard_gpd_path =
-        profile_dir.path / profile_dir.name / kernel::xam::kDashboardStringID /
-        fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
-        profile_dir.name / fmt::format("{:08X}.gpd", kernel::kDashboardID);
-
-    if (!std::filesystem::exists(dashboard_gpd_path)) {
-      continue;
-    }
-
-    // Read dashboard GPD file
-    std::ifstream file(dashboard_gpd_path, std::ios::binary);
-    if (!file.is_open()) {
-      continue;
-    }
-
-    file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::vector<uint8_t> gpd_data(file_size);
-    file.read(reinterpret_cast<char*>(gpd_data.data()), file_size);
-    file.close();
-
-    // Parse dashboard GPD
-    kernel::xam::GpdInfoProfile dashboard_gpd(gpd_data);
-    if (!dashboard_gpd.IsValid()) {
-      continue;
-    }
-
-    // Try to remove the title
-    if (dashboard_gpd.RemoveTitle(title_id)) {
-      // Write back the modified GPD
-      std::vector<uint8_t> serialized_gpd = dashboard_gpd.Serialize();
-
-      std::ofstream out_file(dashboard_gpd_path, std::ios::binary);
-      if (out_file.is_open()) {
-        out_file.write(reinterpret_cast<const char*>(serialized_gpd.data()),
-                       serialized_gpd.size());
-        out_file.close();
-        removed_from_any = true;
-      }
-    }
-  }
-
-  if (removed_from_any) {
+  if (profile_manager->RemoveTitleFromAllProfiles(title_id)) {
     // Reload the game list
     LoadGameList();
   } else {
