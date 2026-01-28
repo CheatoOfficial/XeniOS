@@ -2152,10 +2152,13 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
   xenos::DepthRenderTargetFormat dest_depth_format =
       xenos::DepthRenderTargetFormat(key.dest_resource_format);
   bool dest_is_64bpp =
+      dest_is_color && xenos::IsColorRenderTargetFormat64bpp(dest_color_format);
+  // Whether dest is gamma stored as R16G16B16A16_UNORM (64bpp host storage but
+  // 32bpp coordinate addressing).
+  bool dest_is_gamma_unorm16 =
       dest_is_color &&
-      (xenos::IsColorRenderTargetFormat64bpp(dest_color_format) ||
-       (dest_color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA &&
-        gamma_render_target_as_unorm16_));
+      dest_color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA &&
+      gamma_render_target_as_unorm16_;
 
   xenos::ColorRenderTargetFormat source_color_format =
       xenos::ColorRenderTargetFormat(key.source_resource_format);
@@ -3407,7 +3410,7 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
     a.OpMov(dxbc::Dest::OStencilRef(), dxbc::Src::R(1, dxbc::Src::kXXXX));
   }
 
-  if (dest_is_64bpp) {
+  if (dest_is_64bpp || dest_is_gamma_unorm16) {
     // Handle construction of 64bpp color, either from two 32-bit samples in r0
     // and r1, or from one 64bpp sample in r1. Using r2.xy as temporary when
     // needed.
@@ -3419,6 +3422,10 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
         case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA: {
           // 8_8_8_8_GAMMA is represented by linear stored in
           // R16G16B16A16_UNORM.
+          if (dest_is_gamma_unorm16) {
+            a.OpMov(dxbc::Dest::O(0), dxbc::Src::R(1));
+            break;
+          }
           for (uint32_t i = 0; i < 2; ++i) {
             for (uint32_t j = 0; j < 3; ++j) {
               DxbcShaderTranslator::PreSaturatedLinearToPWLGamma(a, i, j, i, j,
@@ -3428,6 +3435,15 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
         }
           [[fallthrough]];
         case xenos::ColorRenderTargetFormat::k_8_8_8_8: {
+          if (dest_is_gamma_unorm16) {
+            // Convert gamma-encoded source to linear for gamma_unorm16 dest.
+            for (uint32_t j = 0; j < 3; ++j) {
+              DxbcShaderTranslator::PWLGammaToLinear(a, 1, j, 1, j, true, 2, 0,
+                                                     2, 1);
+            }
+            a.OpMov(dxbc::Dest::O(0), dxbc::Src::R(1));
+            break;
+          }
           color_packed_in_r0x_and_r1x = true;
           for (uint32_t i = 0; i < 2; ++i) {
             a.OpMAd(dxbc::Dest::R(i), dxbc::Src::R(i), dxbc::Src::LF(255.0f),
