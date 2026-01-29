@@ -168,6 +168,12 @@ class Emulator {
       std::function<std::vector<std::unique_ptr<hid::InputDriver>>(ui::Window*)>
           input_driver_factory);
 
+  // Tears down all subsystems. Called by the destructor and by RelaunchTitle.
+  void Shutdown();
+
+  // Mounts scratch, cache, and devkit drives based on cvars.
+  void MountStandardDrives();
+
   // Terminates the currently running title.
   X_STATUS TerminateTitle();
 
@@ -370,6 +376,12 @@ class Emulator {
   bool SaveToFile(const std::filesystem::path& path);
   bool RestoreFromFile(const std::filesystem::path& path);
 
+  // Full in-process relaunch: terminates threads, Shutdown(), Setup(),
+  // then launches with new params. Must be called from a non-guest thread.
+  void RelaunchTitle(const std::string& host_path,
+                     const std::string& launch_module, uint32_t launch_flags,
+                     std::vector<uint8_t> launch_data);
+
   // The game can request another title to be loaded.
   const std::filesystem::path GetNewDiscPath(std::string window_message = "");
 
@@ -381,6 +393,9 @@ class Emulator {
   xe::Delegate<> on_patch_apply;
   xe::Delegate<> on_terminate;
   xe::Delegate<> on_exit;
+
+  // Fired before Shutdown() during relaunch, while subsystems are still alive.
+  xe::Delegate<> on_before_shutdown;
 
   // Called when XamLoaderLaunchTitle requests launching a new title.
   // The callback should spawn a new process with the given parameters.
@@ -416,6 +431,7 @@ class Emulator {
                           const std::string_view module_path);
 
   std::filesystem::path command_line_;
+  std::filesystem::path last_launch_path_;  // persists across relaunch
   std::filesystem::path storage_root_;
   std::filesystem::path content_root_;
   std::filesystem::path cache_root_;
@@ -448,7 +464,17 @@ class Emulator {
 
   bool paused_;
   bool restoring_;
+  bool relaunching_ = false;
   threading::Fence restore_fence_;  // Fired on restore finish.
+
+  // Persisted across Shutdown/Setup for relaunch.
+  bool require_cpu_backend_ = false;
+  std::function<std::unique_ptr<apu::AudioSystem>(cpu::Processor*)>
+      audio_system_factory_;
+  std::function<std::unique_ptr<gpu::GraphicsSystem>()>
+      graphics_system_factory_;
+  std::function<std::vector<std::unique_ptr<hid::InputDriver>>(ui::Window*)>
+      input_driver_factory_;
 
   LaunchNewTitleCallback on_launch_new_title_;
   DiscSwapCallback on_disc_swap_;

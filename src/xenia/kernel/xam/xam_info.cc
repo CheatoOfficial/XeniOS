@@ -7,9 +7,13 @@
  ******************************************************************************
  */
 
+#include <thread>
+
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
+#include "xenia/base/utf8.h"
+#include "xenia/emulator.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/title_id_utils.h"
 #include "xenia/kernel/user_module.h"
@@ -47,6 +51,11 @@ DECLARE_uint32(audio_flag);
 
 DEFINE_bool(staging_mode, 0,
             "Enables preview mode in dashboards to render debug information.",
+            "Kernel");
+
+DEFINE_bool(in_process_title_relaunch, true,
+            "Handle title-to-title launches in-process via full "
+            "Shutdown/Setup cycle instead of spawning a new emulator process.",
             "Kernel");
 
 namespace xe {
@@ -416,6 +425,34 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
 
       XELOGI("XamLoaderLaunchTitle: normalized host_path={}, launch_path={}",
              xe::path_to_utf8(host_path), launch_path);
+
+      // Handle title launch in-process via full Shutdown/Setup cycle
+      if (cvars::in_process_title_relaunch) {
+        auto emulator = kernel_state()->emulator();
+
+        XELOGI("XamLoaderLaunchTitle: in-process relaunch to '{}'",
+               xe::path_to_utf8(host_path));
+
+        auto new_host_path = xe::path_to_utf8(host_path);
+        auto new_launch_module = launch_path;
+        auto new_flags = loader_data.launch_flags;
+        auto new_data = loader_data.launch_data;
+        auto current_thread = XThread::GetCurrentThread();
+
+        // Must dispatch from a non-guest thread — RelaunchTitle terminates
+        // all guest threads including the caller.
+        std::thread([emulator, new_host_path = std::move(new_host_path),
+                     new_launch_module = std::move(new_launch_module),
+                     new_flags, new_data = std::move(new_data)]() mutable {
+          emulator->RelaunchTitle(new_host_path, new_launch_module, new_flags,
+                                  std::move(new_data));
+        }).detach();
+
+        current_thread->Suspend(nullptr);
+
+        // Unreachable — thread is terminated during relaunch.
+        assert_always();
+      }
 
       // Convert launch_data to hex string
       std::string launch_data_hex;

@@ -101,6 +101,10 @@ DECLARE_string(user_language);
 
 DECLARE_bool(allow_plugins);
 
+DECLARE_bool(mount_scratch);
+DECLARE_bool(mount_cache);
+DECLARE_bool(force_mount_devkit);
+
 DEFINE_int32(priority_class, 0,
              "Forces Xenia to use different process priority than default one. "
              "It might affect performance and cause unexpected bugs. Possible "
@@ -169,7 +173,18 @@ Emulator::Emulator(const std::filesystem::path& command_line,
 #endif
 }
 
-Emulator::~Emulator() {
+Emulator::~Emulator() { Shutdown(); }
+
+void Emulator::Shutdown() {
+  XELOGI("Emulator::Shutdown: starting teardown");
+
+  // During relaunch, notify listeners before teardown so they can disconnect
+  // UI resources while subsystems are still alive. Skip during normal
+  // destructor — the UI loop may not be running.
+  if (relaunching_) {
+    on_before_shutdown();
+  }
+
   // Note that we delete things in the reverse order they were initialized.
 
   // Give the systems time to shutdown before we delete them.
@@ -180,19 +195,35 @@ Emulator::~Emulator() {
     audio_system_->Shutdown();
   }
 
-  input_system_.reset();
+  main_thread_ = nullptr;
+
+  // Keep input_system_ alive across relaunch — it's bound to the persistent
+  // window and SDL requires init/quit on the same thread.
+  if (!relaunching_) {
+    input_system_.reset();
+  }
   graphics_system_.reset();
   audio_system_.reset();
   audio_media_player_.reset();
 
   kernel_state_.reset();
   file_system_.reset();
+  patcher_.reset();
+  plugin_loader_.reset();
 
   processor_.reset();
-
   export_resolver_.reset();
+  memory_.reset();
 
   ExceptionHandler::Uninstall(Emulator::ExceptionCallbackThunk, this);
+
+  title_id_ = std::nullopt;
+  title_name_.clear();
+  title_version_.clear();
+  game_info_database_.reset();
+  paused_ = false;
+
+  XELOGI("Emulator::Shutdown: teardown complete");
 }
 
 X_STATUS Emulator::Setup(
@@ -206,8 +237,15 @@ X_STATUS Emulator::Setup(
         input_driver_factory) {
   X_STATUS result = X_STATUS_UNSUCCESSFUL;
 
-  display_window_ = display_window;
-  imgui_drawer_ = imgui_drawer;
+  // Store parameters for reuse across Shutdown/Setup cycles.
+  // Only overwrite if non-null so re-calls after Shutdown keep prior values.
+  if (display_window) display_window_ = display_window;
+  if (imgui_drawer) imgui_drawer_ = imgui_drawer;
+  require_cpu_backend_ = require_cpu_backend;
+  if (audio_system_factory) audio_system_factory_ = audio_system_factory;
+  if (graphics_system_factory)
+    graphics_system_factory_ = graphics_system_factory;
+  if (input_driver_factory) input_driver_factory_ = input_driver_factory;
 
   // Initialize clock.
   // 360 uses a 50MHz clock.
@@ -246,7 +284,7 @@ X_STATUS Emulator::Setup(
 #endif  // XE_ARCH
     }
   }
-  if (!backend && !require_cpu_backend) {
+  if (!backend && !require_cpu_backend_) {
     backend.reset(new xe::cpu::backend::NullBackend());
   }
 
@@ -260,9 +298,9 @@ X_STATUS Emulator::Setup(
   }
 
   // Initialize the APU (optional for UI process).
-  if (audio_system_factory) {
+  if (audio_system_factory_) {
     XELOGI("{}: Initializing Audio...", __func__);
-    audio_system_ = audio_system_factory(processor_.get());
+    audio_system_ = audio_system_factory_(processor_.get());
     if (!audio_system_) {
       XELOGE("{}: Cannot initalize audio_system!", __func__);
       return X_STATUS_NOT_IMPLEMENTED;
@@ -270,32 +308,35 @@ X_STATUS Emulator::Setup(
   }
 
   // Initialize the GPU (optional for UI process).
-  if (graphics_system_factory) {
+  if (graphics_system_factory_) {
     XELOGI("{}: Initializing Graphics...", __func__);
-    graphics_system_ = graphics_system_factory();
+    graphics_system_ = graphics_system_factory_();
     if (!graphics_system_) {
       XELOGE("{}: Cannot initalize graphics_system!", __func__);
       return X_STATUS_NOT_IMPLEMENTED;
     }
   }
 
-  XELOGI("{}: Initializing HID...", __func__);
-  // Initialize the HID.
-  input_system_ = std::make_unique<xe::hid::InputSystem>(display_window_);
+  // Input system persists across relaunch — SDL requires init/quit on the
+  // same thread.
   if (!input_system_) {
-    XELOGE("{}: Cannot initalize input_system!", __func__);
-    return X_STATUS_NOT_IMPLEMENTED;
-  }
-  if (input_driver_factory) {
-    auto input_drivers = input_driver_factory(display_window_);
-    for (size_t i = 0; i < input_drivers.size(); ++i) {
-      input_system_->AddDriver(std::move(input_drivers[i]));
+    XELOGI("{}: Initializing HID...", __func__);
+    input_system_ = std::make_unique<xe::hid::InputSystem>(display_window_);
+    if (!input_system_) {
+      XELOGE("{}: Cannot initalize input_system!", __func__);
+      return X_STATUS_NOT_IMPLEMENTED;
     }
-  }
+    if (input_driver_factory_) {
+      auto input_drivers = input_driver_factory_(display_window_);
+      for (size_t i = 0; i < input_drivers.size(); ++i) {
+        input_system_->AddDriver(std::move(input_drivers[i]));
+      }
+    }
 
-  result = input_system_->Setup();
-  if (result) {
-    return result;
+    result = input_system_->Setup();
+    if (result) {
+      return result;
+    }
   }
 
   // Add inputSystem to UI (if imgui is enabled)
@@ -539,6 +580,11 @@ Emulator::FileSignatureType Emulator::GetFileSignature(
 }
 
 X_STATUS Emulator::LaunchPath(const std::filesystem::path& path) {
+  // Remember for relaunch fallback
+  if (!path.empty()) {
+    last_launch_path_ = path;
+  }
+
   X_STATUS mount_result = X_STATUS_SUCCESS;
 
   switch (GetFileSignature(path)) {
@@ -1384,6 +1430,135 @@ bool Emulator::RestoreFromFile(const std::filesystem::path& path) {
   return true;
 }
 
+void Emulator::RelaunchTitle(const std::string& host_path,
+                             const std::string& launch_module,
+                             uint32_t launch_flags,
+                             std::vector<uint8_t> launch_data) {
+  XELOGI(
+      "RelaunchTitle: starting full in-process relaunch, target={}, module={}",
+      host_path, launch_module);
+
+  // Tell WaitUntilExit not to fire on_exit when main thread dies.
+  relaunching_ = true;
+
+  // Force-terminate all threads. Cooperative shutdown isn't possible since
+  // workers may be stuck in processor_->Execute().
+  {
+    auto threads =
+        kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
+            kernel::XObject::Type::Thread);
+    XELOGI("RelaunchTitle: terminating {} threads", threads.size());
+    for (auto thread : threads) {
+      thread->Terminate(0);
+    }
+  }
+
+  Shutdown();
+  Setup(nullptr, nullptr, require_cpu_backend_, nullptr, nullptr, nullptr);
+  MountStandardDrives();
+
+  // Populate launch data on the fresh xam module.
+  auto xam_new =
+      kernel_state_->GetKernelModule<kernel::xam::XamModule>("xam.xex");
+  if (xam_new) {
+    auto& ld = xam_new->loader_data();
+    ld.host_path =
+        host_path.empty() ? xe::path_to_utf8(command_line_) : host_path;
+    ld.launch_flags = launch_flags;
+    ld.launch_data = std::move(launch_data);
+    ld.launch_data_present = !ld.launch_data.empty();
+  }
+
+  // CompleteLaunch reads this cvar to determine the executable module.
+  cvars::launch_module = launch_module;
+
+  // Fall back to the initial launch path if host_path is empty (command-line
+  // launch rather than loader_data-driven).
+  auto launch_target =
+      host_path.empty() ? last_launch_path_ : xe::to_path(host_path);
+  XELOGI("RelaunchTitle: launching '{}'", xe::path_to_utf8(launch_target));
+  LaunchPath(launch_target);
+
+  relaunching_ = false;
+  XELOGI("RelaunchTitle: relaunch complete");
+}
+
+void Emulator::MountStandardDrives() {
+  auto fs = file_system_.get();
+
+  if (cvars::mount_scratch) {
+    auto scratch_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\SCRATCH", storage_root_ / "scratch", false);
+    if (!scratch_device->Initialize()) {
+      XELOGE("Unable to scan scratch path");
+    } else {
+      if (!fs->RegisterDevice(std::move(scratch_device))) {
+        XELOGE("Unable to register scratch path");
+      } else {
+        fs->RegisterSymbolicLink("scratch:", "\\SCRATCH");
+      }
+    }
+  }
+
+  if (cvars::mount_cache) {
+    auto cache0_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE0", storage_root_ / "cache0", false);
+    if (!cache0_device->Initialize()) {
+      XELOGE("Unable to scan cache0 path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache0_device))) {
+        XELOGE("Unable to register cache0 path");
+      } else {
+        fs->RegisterSymbolicLink("cache0:", "\\CACHE0");
+      }
+    }
+
+    auto cache1_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE1", storage_root_ / "cache1", false);
+    if (!cache1_device->Initialize()) {
+      XELOGE("Unable to scan cache1 path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache1_device))) {
+        XELOGE("Unable to register cache1 path");
+      } else {
+        fs->RegisterSymbolicLink("cache1:", "\\CACHE1");
+      }
+    }
+
+    // Some (older?) games try accessing cache:\ too
+    // NOTE: this must be registered _after_ the cache0/cache1 devices, due to
+    // substring/start_with logic inside VirtualFileSystem::ResolvePath, else
+    // accesses to those devices will go here instead
+    auto cache_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE", storage_root_ / "cache", false);
+    if (!cache_device->Initialize()) {
+      XELOGE("Unable to scan cache path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache_device))) {
+        XELOGE("Unable to register cache path");
+      } else {
+        fs->RegisterSymbolicLink("cache:", "\\CACHE");
+      }
+    }
+  }
+
+  if (cvars::force_mount_devkit) {
+    auto devkit_device =
+        std::make_unique<xe::vfs::HostPathDevice>("\\DEVKIT", "devkit", false);
+
+    if (!devkit_device->Initialize()) {
+      XELOGE("Unable to scan devkit path");
+    }
+
+    if (!fs->RegisterDevice(std::move(devkit_device))) {
+      XELOGE("Unable to register devkit path");
+    }
+
+    fs->RegisterSymbolicLink("DEVKIT:", "\\DEVKIT");
+    fs->RegisterSymbolicLink("e:", "\\DEVKIT");
+  }
+}
+
 const std::filesystem::path Emulator::GetNewDiscPath(
     std::string window_message) {
   std::filesystem::path path = "";
@@ -1628,8 +1803,14 @@ void Emulator::WaitUntilExit() {
 
     if (restoring_) {
       restore_fence_.Wait();
+    } else if (relaunching_) {
+      // RelaunchTitle is running on another thread - wait for it to finish
+      // and set the new main_thread_, then loop back to wait on it.
+      while (relaunching_) {
+        xe::threading::Sleep(std::chrono::milliseconds(10));
+      }
     } else {
-      // Not restoring and the thread exited. We're finished.
+      // Not restoring/relaunching and the thread exited. We're finished.
       break;
     }
   }
