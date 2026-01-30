@@ -427,7 +427,10 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
       XELOGI("XamLoaderLaunchTitle: normalized host_path={}, launch_path={}",
              xe::path_to_utf8(host_path), launch_path);
 
-      // Handle title launch in-process via full Shutdown/Setup cycle
+      // Handle title launch in-process via full Shutdown/Setup cycle.
+      // Disabled on Linux — pthread_cancel corrupts global mutex state and
+      // cooperative shutdown is not yet reliable. Windows uses TerminateThread.
+#if XE_PLATFORM_WIN32
       if (cvars::in_process_title_relaunch) {
         auto emulator = kernel_state()->emulator();
 
@@ -454,6 +457,7 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
         // Unreachable — thread is terminated during relaunch.
         assert_always();
       }
+#endif  // XE_PLATFORM_WIN32
 
       // Convert launch_data to hex string
       std::string launch_data_hex;

@@ -778,31 +778,11 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     path = cvars::target;
   }
 
-  if (!path.empty()) {
-    // Normalize the path and make absolute.
-    auto abs_path = std::filesystem::absolute(path);
-
-    // TODO(has207): Add archive format check like in RunTitle?
-    result = emulator_->LaunchPath(abs_path);
-    if (XFAILED(result)) {
-      xe::FatalError(fmt::format("Failed to launch target: {:08X}", result));
-      app_context().RequestDeferredQuit();
-      return;
-    }
-
-    // Store the host path in loader_data for title-to-title launches
-    auto xam_for_path =
-        emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
-            "xam.xex");
-    if (xam_for_path) {
-      xam_for_path->loader_data().host_path = xe::path_to_utf8(abs_path);
-    }
-  }
-
+  // Set up launch data BEFORE LaunchPath — LaunchPath starts the game thread,
+  // and the game may query XamLoaderGetLaunchData during early init.
   auto xam = emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>(
       "xam.xex");
 
-  // Check if launch data was passed via command line (for title-to-title)
   if (xam && (cvars::launch_flags != 0 || !cvars::launch_data.empty())) {
     auto& loader_data = xam->loader_data();
     loader_data.launch_data_present = true;
@@ -817,6 +797,25 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
         uint8_t byte = static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
         loader_data.launch_data.push_back(byte);
       }
+    }
+  }
+
+  if (!path.empty()) {
+    // Normalize the path and make absolute.
+    auto abs_path = std::filesystem::absolute(path);
+
+    // Store the host path in loader_data for title-to-title launches
+    // (must be set before LaunchPath so the game sees it immediately)
+    if (xam) {
+      xam->loader_data().host_path = xe::path_to_utf8(abs_path);
+    }
+
+    // TODO(has207): Add archive format check like in RunTitle?
+    result = emulator_->LaunchPath(abs_path);
+    if (XFAILED(result)) {
+      xe::FatalError(fmt::format("Failed to launch target: {:08X}", result));
+      app_context().RequestDeferredQuit();
+      return;
     }
   }
 
