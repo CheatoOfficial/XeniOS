@@ -33,6 +33,7 @@
 #include "xenia/ui/window_listener.h"
 #include "xenia/ui/windowed_app.h"
 #include "xenia/ui/windowed_app_context.h"
+#include "xenia/vfs/devices/host_path_device.h"
 
 // Available audio systems:
 #include "xenia/apu/nop/nop_audio_system.h"
@@ -473,13 +474,11 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
   Factory<gpu::GraphicsSystem> factory;
 #if XE_PLATFORM_WIN32
   factory.Add<gpu::d3d12::D3D12GraphicsSystem>("d3d12");
-  factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
 #endif  // XE_PLATFORM_WIN32
-#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID
-  factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
-#endif  // XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID
 #if XE_PLATFORM_MAC
   factory.Add<gpu::metal::MetalGraphicsSystem>("metal");
+#else
+  factory.Add<gpu::vulkan::VulkanGraphicsSystem>("vulkan");
 #endif  // XE_PLATFORM_MAC
   std::unique_ptr<gpu::GraphicsSystem> gpu_implementation =
       factory.Create(gpu_implementation_name);
@@ -725,7 +724,79 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
   app_context().CallInUIThread(
       [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 
-  emulator_->MountStandardDrives();
+  const auto fs = emulator_->file_system();
+
+  if (cvars::mount_scratch) {
+    auto scratch_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\SCRATCH", emulator_->storage_root() / "scratch", false);
+    if (!scratch_device->Initialize()) {
+      XELOGE("Unable to scan scratch path");
+    } else {
+      if (!fs->RegisterDevice(std::move(scratch_device))) {
+        XELOGE("Unable to register scratch path");
+      } else {
+        fs->RegisterSymbolicLink("scratch:", "\\SCRATCH");
+      }
+    }
+  }
+
+  if (cvars::mount_cache) {
+    auto cache0_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE0", emulator_->storage_root() / "cache0", false);
+    if (!cache0_device->Initialize()) {
+      XELOGE("Unable to scan cache0 path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache0_device))) {
+        XELOGE("Unable to register cache0 path");
+      } else {
+        fs->RegisterSymbolicLink("cache0:", "\\CACHE0");
+      }
+    }
+
+    auto cache1_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE1", emulator_->storage_root() / "cache1", false);
+    if (!cache1_device->Initialize()) {
+      XELOGE("Unable to scan cache1 path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache1_device))) {
+        XELOGE("Unable to register cache1 path");
+      } else {
+        fs->RegisterSymbolicLink("cache1:", "\\CACHE1");
+      }
+    }
+
+    // Some (older?) games try accessing cache:\ too
+    // NOTE: this must be registered _after_ the cache0/cache1 devices, due to
+    // substring/start_with logic inside VirtualFileSystem::ResolvePath, else
+    // accesses to those devices will go here instead
+    auto cache_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\CACHE", emulator_->storage_root() / "cache", false);
+    if (!cache_device->Initialize()) {
+      XELOGE("Unable to scan cache path");
+    } else {
+      if (!fs->RegisterDevice(std::move(cache_device))) {
+        XELOGE("Unable to register cache path");
+      } else {
+        fs->RegisterSymbolicLink("cache:", "\\CACHE");
+      }
+    }
+  }
+
+  if (cvars::force_mount_devkit) {
+    auto devkit_device =
+        std::make_unique<xe::vfs::HostPathDevice>("\\DEVKIT", "devkit", false);
+
+    if (!devkit_device->Initialize()) {
+      XELOGE("Unable to scan devkit path");
+    }
+
+    if (!fs->RegisterDevice(std::move(devkit_device))) {
+      XELOGE("Unable to register devkit path");
+    }
+
+    fs->RegisterSymbolicLink("DEVKIT:", "\\DEVKIT");
+    fs->RegisterSymbolicLink("e:", "\\DEVKIT");
+  }
 
   // Set a debug handler.
   // This will respond to debugging requests so we can open the debug UI.
@@ -766,17 +837,7 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
       discord::DiscordPresence::PlayingTitle(
           game_title.empty() ? "Unknown Title" : std::string(game_title));
     }
-    // Re-setup presenter painting — needed after in-process relaunch
-    // creates a new graphics system.
-    if (app_context().IsInUIThread()) {
-      emulator_window_->SetupGraphicsSystemPresenterPainting();
-      emulator_window_->UpdateTitle();
-    } else {
-      app_context().CallInUIThread([this]() {
-        emulator_window_->SetupGraphicsSystemPresenterPainting();
-        emulator_window_->UpdateTitle();
-      });
-    }
+    app_context().CallInUIThread([this]() { emulator_window_->UpdateTitle(); });
     emulator_thread_event_->Set();
   });
 
@@ -795,14 +856,6 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     if (cvars::discord) {
       discord::DiscordPresence::NotPlaying();
     }
-  });
-
-  emulator_->on_before_shutdown.AddListener([this]() {
-    // Tear down presenter painting while the graphics system is still alive,
-    // so the D3D12 immediate drawer can release its resources cleanly.
-    app_context().CallInUIThreadSynchronous([this]() {
-      emulator_window_->ShutdownGraphicsSystemPresenterPainting();
-    });
   });
 
   // Enable emulator input now that the emulator is properly loaded.
