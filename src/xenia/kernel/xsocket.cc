@@ -80,6 +80,12 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
     return X_STATUS_UNSUCCESSFUL;
   }
 
+  // Allow port reuse so that in-process relaunches can rebind ports
+  // immediately without waiting for TIME_WAIT to expire.
+  int reuse = 1;
+  setsockopt(native_handle_, SOL_SOCKET, SO_REUSEADDR,
+             reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+
   return X_STATUS_SUCCESS;
 }
 
