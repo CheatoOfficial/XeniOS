@@ -17,6 +17,7 @@ from shutil import rmtree
 import subprocess
 import sys
 import stat
+import enum
 
 __author__ = "ben.vanik@gmail.com (Ben Vanik)"
 
@@ -28,11 +29,29 @@ class bcolors:
 #    OKBLUE = "\033[94m"
     OKCYAN = "\033[96m"
 #    OKGREEN = "\033[92m"
-#    WARNING = "\033[93m"
+    WARNING = "\033[93m"
     FAIL = "\033[91m"
     ENDC = "\033[0m"
 #    BOLD = "\033[1m"
 #    UNDERLINE = "\033[4m"
+
+def print_error(text: str):
+    print(f"{bcolors.FAIL}ERROR: {text}{bcolors.ENDC}")
+
+def print_warning(text: str):
+    print(f"{bcolors.WARNING}WARNING: {text}{bcolors.ENDC}")
+
+class ResultStatus(enum.Enum):
+    SUCCESS = enum.auto()
+    FAILURE = enum.auto()
+
+def print_status(status: ResultStatus):
+    match status:
+        case ResultStatus.SUCCESS:
+            print(f"{bcolors.OKCYAN}Success!{bcolors.ENDC}")
+        case ResultStatus.FAILURE:
+            print(f"{bcolors.FAIL}Error!{bcolors.ENDC}")
+
 
 # Detect if building on Android via Termux.
 host_linux_platform_is_android = False
@@ -152,9 +171,9 @@ def setup_vulkan_sdk():
             if has_bin("spirv-opt"):
                 print(f"VULKAN_SDK is set to {existing_vulkan_sdk}")
                 return True
-            print(f"WARNING: VULKAN_SDK is set to {existing_vulkan_sdk} but spirv-opt not found in PATH")
+            print_warning(f"VULKAN_SDK is set to {existing_vulkan_sdk} but spirv-opt not found in PATH")
         else:
-            print(f"WARNING: VULKAN_SDK is set to {existing_vulkan_sdk} but directory does not exist")
+            print_warning(f"VULKAN_SDK is set to {existing_vulkan_sdk} but directory does not exist")
         return False
 
     if sys.platform != "win32":
@@ -207,7 +226,7 @@ def setup_qt():
             print(f"QT_DIR is set to {existing_qt_dir}")
             return True
         else:
-            print(f"WARNING: QT_DIR is set to {existing_qt_dir} but directory does not exist")
+            print_warning(f"QT_DIR is set to {existing_qt_dir} but directory does not exist")
         return False
 
     # Determine Qt base directory based on platform
@@ -342,7 +361,7 @@ def generate_moc_files():
             moc_path = os.path.join(qt_dir, "bin", "moc")
 
     if not os.path.exists(moc_path):
-        print(f"WARNING: moc not found at {moc_path}")
+        print_warning(f"moc not found at {moc_path}")
         return False
 
     # Find all Qt headers with Q_OBJECT
@@ -399,7 +418,7 @@ def generate_moc_files():
 
         result = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if result != 0:
-            print(f"  ERROR: Failed to generate {moc_name}")
+            print_error(f"Failed to generate {moc_name}")
             any_errors = True
         else:
             print(f"- generated {moc_name}")
@@ -429,19 +448,19 @@ def main():
 
     # Check git exists.
     if not has_bin("git"):
-        print("WARNING: Git should be installed and on PATH. Version info will be omitted from all binaries!\n")
+        print_warning("Git should be installed and on PATH. Version info will be omitted from all binaries!\n")
     elif not git_is_repository():
-        print("WARNING: The source tree is unversioned. Version info will be omitted from all binaries!\n")
+        print_warning("The source tree is unversioned. Version info will be omitted from all binaries!\n")
 
     # Check python version.
     python_minimum_ver = 3,9
     if not sys.version_info[:2] >= (python_minimum_ver[0], python_minimum_ver[1]) or not sys.maxsize > 2**32:
-        print(f"ERROR: Python {python_minimum_ver[0]}.{python_minimum_ver[1]}+ 64-bit must be installed and on PATH")
+        print_error(f"Python {python_minimum_ver[0]}.{python_minimum_ver[1]}+ 64-bit must be installed and on PATH")
         sys.exit(1)
 
     # Grab Visual Studio version and execute shell to set up environment.
     if sys.platform == "win32" and not vs_version:
-        print("WARNING: Visual Studio not found!"
+        print_warning("Visual Studio not found!"
               "\nBuilding for Windows will not be supported."
               " Please refer to the building guide:"
               f"\nhttps://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
@@ -610,7 +629,7 @@ def generate_source_class(path):
     source_path = f"{path}.cc"
 
     if os.path.isfile(header_path) or os.path.isfile(source_path):
-        print("ERROR: Target file already exists")
+        print_error("Target file already exists")
         return 1
 
     if generate_source_file(header_path) > 0:
@@ -635,13 +654,13 @@ def generate_source_file(path):
  */"""
 
     if os.path.isfile(path):
-        print("ERROR: Target file already exists")
+        print_error("Target file already exists")
         return 1
     try:
         with open(path, "w") as f:
             f.write(copyright)
     except Exception as e:
-        print(f"ERROR: Could not write to file [path {path}]")
+        print_error(f"Could not write to file [path {path}]")
         return 1
 
     return 0
@@ -844,7 +863,7 @@ def get_clang_format_binary():
         print(best_output)
         return best_binary
 
-    print(f"{bcolors.FAIL}ERROR: clang-format {clang_format_version_min} or newer is not on PATH{bcolors.ENDC}")
+    print_error(f"clang-format {clang_format_version_min} or newer is not on PATH")
     sys.exit(1)
 
 
@@ -873,8 +892,8 @@ def get_premake_target_os(target_os_override=None):
         if target_os_override == "android":
             target_os = target_os_override
         else:
-            print(
-                "ERROR: cross-compilation is only supported for Android target")
+            print_error(
+                "cross-compilation is only supported for Android target")
             sys.exit(1)
     return target_os
 
@@ -969,7 +988,7 @@ def run_windeployqt(bin_path, config):
 
     windeployqt_path = os.path.join(qt_dir, "bin", "windeployqt.exe")
     if not os.path.exists(windeployqt_path):
-        print(f"WARNING: windeployqt not found at {windeployqt_path}")
+        print_warning(f"windeployqt not found at {windeployqt_path}")
         return True
 
     # Find the xenia executable
@@ -1003,7 +1022,7 @@ def run_windeployqt(bin_path, config):
         print("  Qt dependencies deployed successfully")
         return True
     else:
-        print(f"WARNING: windeployqt failed with exit code {result}")
+        print_warning(f"windeployqt failed with exit code {result}")
         return False
 
 
@@ -1137,12 +1156,11 @@ class SetupCommand(Command):
             git_submodule_update()
             fetch_data_repos()
         else:
-            print("WARNING: Git not available or not a repository. Dependencies may be missing.")
+            print_warning("Git not available or not a repository. Dependencies may be missing.")
 
         print("\n- running premake...")
         ret = run_platform_premake(target_os_override=args["target_os"])
-        print("\nSuccess!" if ret == 0 else "\nError!")
-
+        print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
         return ret
 
 
@@ -1163,7 +1181,7 @@ class FetchDataCommand(Command):
         if git_is_repository():
             fetch_data_repos()
         else:
-            print("WARNING: Git not available or not a repository.")
+            print_warning("Git not available or not a repository.")
             return 1
 
         print("\nSuccess!")
@@ -1217,7 +1235,7 @@ class PullCommand(Command):
 
         print("- running premake...")
         if run_platform_premake(target_os_override=args["target_os"]) == 0:
-            print("\nSuccess!")
+            print_status(ResultStatus.SUCCESS)
 
         return 0
 
@@ -1245,7 +1263,7 @@ class PremakeCommand(Command):
         print("Running premake...\n")
         ret = run_platform_premake(target_os_override=args["target_os"],
                                    cc=args["cc"], devenv=args["devenv"])
-        print("Success!" if ret == 0 else "Error!")
+        print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
 
         return ret
 
@@ -1276,7 +1294,7 @@ class BaseBuildCommand(Command):
     def execute(self, args, pass_args, cwd):
         # Check Vulkan SDK availability
         if not os.environ.get("VULKAN_SDK"):
-            print("ERROR: Vulkan SDK not found!"
+            print_error("Vulkan SDK not found!"
                   "\nPlease install Vulkan SDK from:"
                   "\nhttps://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
                   f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
@@ -1292,7 +1310,7 @@ class BaseBuildCommand(Command):
             args["config"]))
         if sys.platform == "win32":
             if not vs_version:
-                print("ERROR: Visual Studio is not installed.")
+                print_error("Visual Studio is not installed.")
                 result = 1
             else:
                 targets = None
@@ -1306,7 +1324,7 @@ class BaseBuildCommand(Command):
                     for target in args["target"]:
                         project_file = f"build/{target}.vcxproj"
                         if not os.path.exists(project_file):
-                            print(f"ERROR: Project file {project_file} does not exist")
+                            print_error(f"Project file {project_file} does not exist")
                             result = 1
                             break
 
@@ -1357,14 +1375,14 @@ class BaseBuildCommand(Command):
             ] + pass_args, env=dict(os.environ))
             print("")
             if result != 0:
-                print("ERROR: cmake failed with one or more errors.")
+                print_error("cmake failed with one or more errors.")
                 return result
             result = subprocess.call([
                     "ninja",
                     f"-Cbuild/build_{args['config']}",
                 ] + pass_args, env=dict(os.environ))
             if result != 0:
-                print("ERROR: ninja failed with one or more errors.")
+                print_error("ninja failed with one or more errors.")
         return result
 
 
@@ -1384,13 +1402,13 @@ class BuildCommand(BaseBuildCommand):
 
         # Generate MOC files before building
         if not generate_moc_files():
-            print(f"{bcolors.FAIL}ERROR: MOC generation failed{bcolors.ENDC}")
+            print_error("MOC generation failed")
             return 1
 
         # Generate shader bytecode before building
         shader_result = build_shaders()
         if shader_result != 0:
-            print(f"{bcolors.FAIL}ERROR: Shader generation failed{bcolors.ENDC}")
+            print_error("Shader generation failed")
             return shader_result
 
         result = super(BuildCommand, self).execute(args, pass_args, cwd)
@@ -1400,9 +1418,7 @@ class BuildCommand(BaseBuildCommand):
             bin_path = get_build_bin_path(args)
             run_windeployqt(bin_path, args["config"])
 
-            print(f"{bcolors.OKCYAN}Success!{bcolors.ENDC}")
-        else:
-            print(f"{bcolors.FAIL}Failed!{bcolors.ENDC}")
+        print_status(ResultStatus.SUCCESS if not result else ResultStatus.FAILURE)
 
         return result
 
@@ -1501,7 +1517,7 @@ def build_shaders(targets=None):
             fxc = glob(os.path.join(os.environ.get("ProgramFiles(x86)", ""),
                        "Windows Kits", "10", "bin", "*", "x64", "fxc.exe"))
             if not fxc:
-                print("ERROR: could not find fxc! Set FXC_PATH environment variable or install Windows SDK.")
+                print_error("could not find fxc! Set FXC_PATH environment variable or install Windows SDK.")
                 return 1
             fxc = fxc[-1]  # Highest version is last
         else:
@@ -1543,7 +1559,7 @@ def build_shaders(targets=None):
             src_dir = os.path.dirname(src_path)
             if is_dxc:
                 # DXC only supports SM 6.0+, cannot compile SM 5.1
-                print("WARNING: DXC doesn't support SM 5.1, using SM 6.0")
+                print_warning("DXC doesn't support SM 5.1, using SM 6.0")
                 compiler_args.extend([
                     "-T", f"{dxbc_stage}_6_0",
                     "-HV", "2017",
@@ -1572,7 +1588,7 @@ def build_shaders(targets=None):
                     src_path,
                 ])
             if subprocess.call(compiler_args, stdout=subprocess.DEVNULL) != 0:
-                print(f"ERROR: failed to compile DXBC shader: {src_path}")
+                print_error(f"failed to compile DXBC shader: {src_path}")
                 return 1
 
     # Vulkan SPIR-V.
@@ -1582,7 +1598,7 @@ def build_shaders(targets=None):
         # Get the SPIR-V tool paths.
         vulkan_sdk_path = os.environ.get("VULKAN_SDK")
         if not vulkan_sdk_path:
-            print("ERROR: VULKAN_SDK environment variable is not set")
+            print_error("VULKAN_SDK environment variable is not set")
             if sys.platform == "win32":
                 print("Please install Vulkan SDK from:")
                 print("https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe")
@@ -1590,23 +1606,23 @@ def build_shaders(targets=None):
                 print("Please install Vulkan SDK and set VULKAN_SDK environment variable")
             return 1
         if not os.path.exists(vulkan_sdk_path):
-            print(f"ERROR: could not find the Vulkan SDK at {vulkan_sdk_path}")
+            print_error(f"could not find the Vulkan SDK at {vulkan_sdk_path}")
             return 1
         vulkan_bin_path = os.path.join(vulkan_sdk_path, "bin")
         if not os.path.exists(vulkan_bin_path):
-            print("ERROR: could not find the Vulkan SDK binaries")
+            print_error("could not find the Vulkan SDK binaries")
             return 1
         glslang = os.path.join(vulkan_bin_path, "glslangValidator")
         if not has_bin(glslang):
-            print("ERROR: could not find glslangValidator")
+            print_error("could not find glslangValidator")
             return 1
         spirv_opt = os.path.join(vulkan_bin_path, "spirv-opt")
         if not has_bin(spirv_opt):
-            print("ERROR: could not find spirv-opt")
+            print_error("could not find spirv-opt")
             return 1
         spirv_dis = os.path.join(vulkan_bin_path, "spirv-dis")
         if not has_bin(spirv_dis):
-            print("ERROR: could not find spirv-dis")
+            print_error("could not find spirv-dis")
             return 1
 
         # Build SPIR-V.
@@ -1650,20 +1666,20 @@ def build_shaders(targets=None):
                    glslang_arguments,
                    input=(spirv_xesl_wrapper % src_name) if src_is_xesl else None,
                    text=True).returncode != 0:
-                print("ERROR: failed to build a SPIR-V shader")
+                print_error("failed to build a SPIR-V shader")
                 return 1
 
             spirv_file_path = f"{spirv_file_path_base}.spv"
             if subprocess.call([spirv_opt, "-O", "-O", "--canonicalize-ids",
                                spirv_glslang_file_path, "-o", spirv_file_path]) != 0:
-                print("ERROR: failed to optimize a SPIR-V shader")
+                print_error("failed to optimize a SPIR-V shader")
                 return 1
             os.remove(spirv_glslang_file_path)
 
             spirv_dis_file_path = f"{spirv_file_path_base}.txt"
             if subprocess.call([spirv_dis, "-o", spirv_dis_file_path,
                                spirv_file_path]) != 0:
-                print("ERROR: failed to disassemble a SPIR-V shader")
+                print_error("failed to disassemble a SPIR-V shader")
                 return 1
 
             # Generate the header from the disassembly and the binary.
@@ -1681,7 +1697,7 @@ def build_shaders(targets=None):
                     c = spirv_file.read(4)
                     while len(c) != 0:
                         if len(c) != 4:
-                            print("ERROR: a SPIR-V shader is misaligned")
+                            print_error("a SPIR-V shader is misaligned")
                             return 1
                         if index % 6 == 0:
                             out_file.write("\n    ")
@@ -1745,7 +1761,7 @@ class TestCommand(BaseBuildCommand):
             for test_target in test_targets]
         for i in range(0, len(test_targets)):
             if test_executables[i] is None:
-                print(f"ERROR: Unable to find {test_targets[i]} - build it.")
+                print_error(f"Unable to find {test_targets[i]} - build it.")
                 return 1
 
         # Prepare environment with Qt bin directory in PATH if available
@@ -1797,10 +1813,10 @@ class TestCommand(BaseBuildCommand):
 
                     result = subprocess.call(cmd, env=test_env)
                     if result:
-                        print(f"ERROR: {test_name} failed with {cpu_name}")
+                        print_error(f"{test_name} failed with {cpu_name}")
                         any_failed = True
                         if not args["continue"]:
-                            print("ERROR: test failed, aborting, use --continue to keep going.")
+                            print_error("test failed, aborting, use --continue to keep going.")
                             return result
             else:
                 # Non-CPU tests or SDE not available - run normally
@@ -1809,13 +1825,13 @@ class TestCommand(BaseBuildCommand):
                 if result:
                     any_failed = True
                     if args["continue"]:
-                        print("ERROR: test failed but continuing due to --continue.")
+                        print_error("test failed but continuing due to --continue.")
                     else:
-                        print("ERROR: test failed, aborting, use --continue to keep going.")
+                        print_error("test failed, aborting, use --continue to keep going.")
                         return result
 
         if any_failed:
-            print("ERROR: one or more tests failed.")
+            print_error("one or more tests failed.")
             result = 1
         return result
 
@@ -1948,7 +1964,7 @@ class GenTestsCommand(Command):
                 print(f"- {src_file}")
 
         if any_errors:
-            print("ERROR: failed to build one or more tests.")
+            print_error("failed to build one or more tests.")
             return 1
 
         return 0
@@ -1999,7 +2015,7 @@ class GpuTestCommand(BaseBuildCommand):
             for test_target in test_targets]
         for i in range(0, len(test_targets)):
             if test_executables[i] is None:
-                print(f"ERROR: Unable to find {test_targets[i]} - build it.")
+                print_error(f"Unable to find {test_targets[i]} - build it.")
                 return 1
 
         output_path = os.path.join(self_path, "build", "gputest")
@@ -2028,7 +2044,7 @@ class GpuTestCommand(BaseBuildCommand):
             any_failed = True
 
         if any_failed:
-            print("ERROR: one or more tests failed.")
+            print_error("one or more tests failed.")
             result = 1
         print(f"Check {output_path}/results.html for more details.")
         return result
@@ -2056,7 +2072,7 @@ class CleanCommand(Command):
         # Also clean generated files
         clean_generated_files()
 
-        print("\nSuccess!")
+        print_status(ResultStatus.SUCCESS)
         return 0
 
 
@@ -2125,7 +2141,7 @@ class NukeCommand(Command):
         print("\n- running premake...")
         run_platform_premake(target_os_override=args["target_os"])
 
-        print("\nSuccess!")
+        print_status(ResultStatus.SUCCESS)
         return 0
 
 
@@ -2226,7 +2242,7 @@ class LintCommand(Command):
                         os.remove(difftemp)
                     print("")
             if any_errors:
-                print("\nERROR: 1+ diffs. Stage changes and run 'xb format' to fix.")
+                print_error("1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
             else:
                 print("\nLinting completed successfully.")
@@ -2267,7 +2283,7 @@ class LintCommand(Command):
                 for generated_file in GENERATED_FILES:
                     cmd.append(f":(exclude){generated_file}")
                 shell_call(cmd, throw_on_error=False)
-                print("ERROR: 1+ diffs. Stage changes and run 'xb format' to fix.")
+                print_error("1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
             else:
                 print("Linting completed successfully.")
@@ -2309,7 +2325,7 @@ class FormatCommand(Command):
                 if ret:
                     any_errors = True
             if any_errors:
-                print("\nERROR: 1+ clang-format calls failed."
+                print_error("1+ clang-format calls failed."
                       " Ensure all files are staged.")
                 return 1
             else:
@@ -2363,7 +2379,7 @@ class StyleCommand(Command):
             "--root=src",
             ] + all_files, throw_on_error=False)
         if ret:
-            print("\nERROR: 1+ cpplint calls failed.")
+            print_error("1+ cpplint calls failed.")
             return 1
         else:
             print("\nStyle linting completed successfully.")
@@ -2429,7 +2445,7 @@ class TidyCommand(Command):
                 any_errors = True
 
         if any_errors:
-            print("\nERROR: 1+ clang-tidy calls failed.")
+            print_error("1+ clang-tidy calls failed.")
             return 1
         else:
             print("\nTidy completed successfully.")
@@ -2482,7 +2498,7 @@ class StubCommand(Command):
             print(f"Created file '{file_name}' at {target_dir}")
 
         else:
-            print("ERROR: Please specify a file/class to generate")
+            print_error("Please specify a file/class to generate")
             return 1
 
         run_platform_premake(target_os_override=args["target_os"])
@@ -2504,7 +2520,7 @@ class DevenvCommand(Command):
         show_reload_prompt = False
         if sys.platform == "win32":
             if not vs_version:
-                print("ERROR: Visual Studio is not installed.");
+                print_error("Visual Studio is not installed.");
                 return 1
             print("Launching Visual Studio...")
         elif sys.platform == "darwin":

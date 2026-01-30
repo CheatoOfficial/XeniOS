@@ -41,6 +41,8 @@ void SetOcclusionQueryEnable(bool value);
 // Based on use_50Hz_mode cvar.
 uint32_t GetGuestVblankRateHz();
 
+DECLARE_int32(anisotropic_override);
+
 DECLARE_bool(disassemble_pm4);
 
 DECLARE_bool(gpu_debug_markers);
