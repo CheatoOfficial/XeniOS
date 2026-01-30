@@ -407,9 +407,10 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
       XELOGI("XamLoaderLaunchTitle: original host_path={}, launch_path={}",
              loader_data.host_path, launch_path);
 
-      // Remove common guest path prefixes
+      // Remove common guest path prefixes (case-insensitive since Xbox
+      // paths are case-insensitive, games may pass e.g. "GAME:\")
       auto remove_prefix = [&launch_path](std::string_view prefix) {
-        if (launch_path.compare(0, prefix.length(), prefix) == 0) {
+        if (xe::utf8::starts_with_case(launch_path, prefix)) {
           launch_path = launch_path.substr(prefix.length());
         }
       };
