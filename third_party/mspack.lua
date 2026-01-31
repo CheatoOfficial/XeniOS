@@ -11,13 +11,9 @@ project("mspack")
   })
   includedirs({
       "mspack",
-      "%{wks.location}/../third_party/mspack",
   })
-  externalincludedirs({
+  sysincludedirs({
       "mspack",
-      -- libmspack uses angle-bracket local includes (<config.h>, <system.h>,
-      -- etc.), so expose the same directory as external/system includes.
-      "%{wks.location}/../third_party/mspack",
   })
   files({
       "mspack/logging.cc",

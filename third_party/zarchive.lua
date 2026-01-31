@@ -9,7 +9,7 @@ project("zarchive")
   includedirs({
     "zarchive/include",
   })
-  externalincludedirs({
+  sysincludedirs({
     "zstd/lib",
   })
   files({
