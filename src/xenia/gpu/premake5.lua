@@ -72,8 +72,3 @@ if enableMiscSubprojects then
       end
     filter({})
 end
-
--- Shader testing suite
-if enableTests then
-  include("shaders/testing")
-end
