@@ -689,6 +689,10 @@ bool Processor::OnThreadBreakpointHit(Exception* ex) {
 void Processor::OnStepCompleted(ThreadDebugInfo* thread_info) {
   auto global_lock = global_critical_region_.Acquire();
   execution_state_ = ExecutionState::kPaused;
+
+  // Unlock before notifying to avoid deadlock with debugger stub.
+  global_lock.unlock();
+
   if (debug_listener_) {
     debug_listener_->OnExecutionPaused();
   }
@@ -723,15 +727,19 @@ bool Processor::OnUnhandledException(Exception* ex) {
                               ex->thread_context());
 
   // Stop and notify the listener.
-  // This will take control.
-  assert_true(execution_state_ == ExecutionState::kRunning);
+  if (execution_state_ != ExecutionState::kRunning) {
+    global_lock.unlock();
+    Thread::GetCurrentThread()->thread()->Suspend();
+    return true;
+  }
   execution_state_ = ExecutionState::kPaused;
 
-  // Notify debugger that exceution stopped.
+  // Notify debugger that execution stopped.
   debug_listener_->OnUnhandledException(ex);
   debug_listener_->OnExecutionPaused();
 
-  // Suspend self.
+  // Unlock before suspending to avoid deadlock with debugger stub.
+  global_lock.unlock();
   Thread::GetCurrentThread()->thread()->Suspend();
 
   return true;

@@ -63,6 +63,7 @@ constexpr char kTargetXml[] =
     R"(l<?xml version="1.0"?>
 <!DOCTYPE target SYSTEM "gdb-target.dtd">
 <target version="1.0">
+<architecture>powerpc:common</architecture>
 <feature name="org.gnu.gdb.power.core">
   <reg name="r0" bitsize="32" type="uint32"/>
   <reg name="r1" bitsize="32" type="uint32"/>
@@ -211,9 +212,10 @@ bool GDBStub::Initialize() {
 }
 
 void GDBStub::Listen(GDBClient& client) {
-  // Client is connected - pause execution
+  XELOGI("GDBStub: Client connected");
   ExecutionPause();
   UpdateCache();
+  XELOGI("GDBStub: Ready, cur_thread={}", cache_.cur_thread_id);
 
   client.socket->set_nonblocking(true);
 
@@ -256,6 +258,7 @@ void GDBStub::Listen(GDBClient& client) {
                      GetThreadStateReply(cache_.notify_thread_id, signal));
           cache_.notify_thread_id = -1;
           cache_.notify_stopped = false;
+          client.has_resumed = false;
         } else if (cache_.notify_debug_prints.size() && client.has_resumed) {
           // Send the oldest message in our queue, only send 1 per loop to
           // reduce spamming the client & process any incoming packets
@@ -375,7 +378,16 @@ bool GDBStub::ProcessIncomingData(GDBClient& client) {
         }
 
         std::string response = HandleGDBCommand(client, command);
-        SendPacket(client, response);
+        XELOGD(
+            "GDBStub: cmd='{}' data='{}' -> '{}'", command.cmd, command.data,
+            response.size() > 120 ? response.substr(0, 120) + "..." : response);
+        // Resume/interrupt: reply comes as a stop notification later.
+        bool is_resume = command.cmd == "c" || command.cmd == "C" ||
+                         command.cmd == "s" ||
+                         command.cmd[0] == char(ControlCode::Interrupt);
+        if (!is_resume) {
+          SendPacket(client, response);
+        }
       } else {
         if (!client.no_ack_mode) {
           ControlCode result = ControlCode::Nack;
@@ -503,8 +515,16 @@ void GDBStub::UpdateCache() {
       object_table->GetObjectsByType<XModule>(XObject::Type::Module);
 
   cache_.thread_debug_infos = processor_->QueryThreadDebugInfos();
-  if (cache_.cur_thread_id == -1) {
+
+  // Filter to guest threads only.
+  std::erase_if(cache_.thread_debug_infos, [&](cpu::ThreadDebugInfo* info) {
+    auto thread = object_table->LookupObject<XThread>(info->thread_handle);
+    return !thread || !thread->is_guest_thread();
+  });
+
+  if (!cache_.thread_info(cache_.cur_thread_id)) {
     cache_.cur_thread_id = emulator_->main_thread_id();
+    XELOGD("GDBStub: UpdateCache selected thread {}", cache_.cur_thread_id);
   }
 }
 
@@ -550,8 +570,12 @@ std::string GDBStub::RegisterRead(xe::cpu::ThreadDebugInfo* thread,
       return string_util::to_hex_string((uint32_t)thread->guest_context.lr);
     case RegisterIndex::CTR:
       return string_util::to_hex_string((uint32_t)thread->guest_context.ctr);
-    case RegisterIndex::XER:
-      return std::string(8, 'x');
+    case RegisterIndex::XER: {
+      uint32_t xer = (thread->guest_context.xer_so ? (1u << 31) : 0) |
+                     (thread->guest_context.xer_ov ? (1u << 30) : 0) |
+                     (thread->guest_context.xer_ca ? (1u << 29) : 0);
+      return string_util::to_hex_string(xer);
+    }
     case RegisterIndex::FPSCR:
       return string_util::to_hex_string(thread->guest_context.fpscr.value);
   }
@@ -709,16 +733,11 @@ std::string GDBStub::ExecutionContinue() {
 }
 
 std::string GDBStub::ExecutionStep() {
-#ifdef DEBUG
-  debugging::DebugPrint("GDBStub: ExecutionStep (thread {})\n",
-                        cache_.last_bp_thread_id);
-#endif
   std::unique_lock<std::mutex> lock(mtx_);
-
-  if (cache_.last_bp_thread_id != -1) {
-    processor_->StepGuestInstruction(cache_.last_bp_thread_id);
-  }
-
+  uint32_t thread_id = cache_.last_bp_thread_id != uint32_t(-1)
+                           ? cache_.last_bp_thread_id
+                           : cache_.cur_thread_id;
+  processor_->StepGuestInstruction(thread_id);
   return "";
 }
 
@@ -1135,29 +1154,28 @@ std::string GDBStub::HandleGDBCommand(GDBClient& client,
              }
              return "QC" + std::to_string(thread->thread_id);
            }},
-          // Set current debugger thread ID
+          // Hg = register r/w thread, Hc = continue/step thread
           {"H",
            [&](const GDBCommand& cmd) {
-             std::unique_lock<std::mutex> lock(mtx_);
+             char op = cmd.data[0];
              int threadId = std::stol(cmd.data.substr(1), 0, 16);
 
-             if (!threadId) {
-               // Treat Thread 0 as main thread, seems to work for IDA
-               cache_.cur_thread_id = emulator_->main_thread_id();
-             } else {
-               uint32_t thread_id = -1;
-
-               // Check if the desired thread ID exists
-               for (auto& thread : cache_.thread_debug_infos) {
-                 if (thread->thread_id == threadId) {
-                   thread_id = threadId;
-                   break;
-                 }
-               }
-
-               cache_.cur_thread_id = thread_id;
+             // Ignore Hc, we don't track a separate continue thread.
+             if (op == 'c') {
+               return kGdbReplyOK;
              }
 
+             std::unique_lock<std::mutex> lock(mtx_);
+             if (threadId <= 0) {
+               cache_.cur_thread_id = emulator_->main_thread_id();
+             } else {
+               for (auto& thread : cache_.thread_debug_infos) {
+                 if (thread->thread_id == threadId) {
+                   cache_.cur_thread_id = threadId;
+                   return kGdbReplyOK;
+                 }
+               }
+             }
              return kGdbReplyOK;
            }},
 
