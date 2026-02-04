@@ -14,15 +14,14 @@ project("xenia-gpu-d3d12")
     "xenia-ui-d3d12",
     "xxhash",
   })
+  -- DXC includes needed for dxcapi.h (via d3d12_api.h -> DxbcConverter.h)
+  includedirs({
+    project_root.."/third_party/DirectXShaderCompiler/include",
+  })
   local_platform_files()
   files({
     "../shaders/bytecode/d3d12_5_1/*.h",
   })
-  filter("system:windows")
-    includedirs({
-      project_root.."/third_party/DirectXShaderCompiler/include",
-    })
-  filter({})
 
 if enableMiscSubprojects then
   group("src")
