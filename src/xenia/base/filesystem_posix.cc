@@ -23,7 +23,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <vector>
 
 #if XE_PLATFORM_MAC
 #include <limits.h>
@@ -50,37 +49,39 @@ namespace filesystem {
 
 std::filesystem::path GetExecutablePath() {
 #if XE_PLATFORM_MAC
-  auto canonicalize_path = [](const char* input_path) -> std::filesystem::path {
-    char real_path[PATH_MAX] = {};
-    if (realpath(input_path, real_path) != nullptr) {
-      return std::string(real_path);
-    }
-    // Fall back to the unresolved path if canonicalization fails.
-    return std::string(input_path);
-  };
-
   char path[PATH_MAX];
   uint32_t size = sizeof(path);
   if (_NSGetExecutablePath(path, &size) == 0) {
-    return canonicalize_path(path);
+    char real_path[PATH_MAX];
+    realpath(path, real_path);
+    return std::string(real_path);
   } else {
     // Buffer too small; allocate the required size
-    std::vector<char> path2(size);
-    if (_NSGetExecutablePath(path2.data(), &size) == 0) {
-      return canonicalize_path(path2.data());
+    char* path2 = (char*)malloc(size);
+    if (_NSGetExecutablePath(path2, &size) == 0) {
+      char real_path[PATH_MAX];
+      realpath(path2, real_path);
+      std::string result(real_path);
+      free(path2);
+      return result;
     } else {
       // Shouldn't happen
+      free(path2);
       return std::string();
     }
   }
-#else
+#elif XE_PLATFORM_LINUX
   char buff[FILENAME_MAX] = "";
   ssize_t len = readlink("/proc/self/exe", buff, sizeof(buff) - 1);
   if (len != -1) {
     buff[len] = '\0';
     return std::string(buff);
+  } else {
+    // Error handling
+    return std::string();
   }
-  // Fallback for targets without /proc/self/exe support.
+#else
+  // Other platforms.
   return std::string();
 #endif
 }

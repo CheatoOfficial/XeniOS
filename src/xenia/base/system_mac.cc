@@ -8,13 +8,10 @@
  */
 
 #include <alloca.h>
-#include <crt_externs.h>
 #include <dlfcn.h>
-#include <spawn.h>
 #include <stdlib.h>
 #include <sys/resource.h>
 
-#include <array>
 #include <cstring>
 
 #include "xenia/base/assert.h"
@@ -27,38 +24,13 @@
 
 namespace xe {
 
-namespace {
-
-bool LaunchWithOpen(const std::string_view target) {
-  if (target.empty()) {
-    return false;
-  }
-  constexpr char kOpenPath[] = "/usr/bin/open";
-  std::string target_string(target);
-  std::array<char*, 4> argv = {
-      const_cast<char*>(kOpenPath), const_cast<char*>("--"),
-      const_cast<char*>(target_string.c_str()), nullptr};
-  char** envp = *_NSGetEnviron();
-  pid_t pid = 0;
-  int spawn_result =
-      posix_spawn(&pid, kOpenPath, nullptr, nullptr, argv.data(), envp);
-  return spawn_result == 0;
-}
-
-}  // namespace
-
 void LaunchWebBrowser(const std::string_view url) {
-  if (!LaunchWithOpen(url)) {
-    XELOGW("Failed to open browser URL {}", url);
-  }
+  auto cmd = std::string("open ");
+  cmd.append(url);
+  system(cmd.c_str());
 }
 
-void LaunchFileExplorer(const std::filesystem::path& path) {
-  const std::string path_string = path.string();
-  if (!LaunchWithOpen(path_string)) {
-    XELOGW("Failed to open file explorer for path {}", path.string());
-  }
-}
+void LaunchFileExplorer(const std::filesystem::path& path) { assert_always(); }
 
 void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
   // Try multiple library names for cross-platform compatibility

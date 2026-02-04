@@ -38,7 +38,7 @@
 #include "xenia/cpu/backend/x64/x64_backend.h"
 #elif XE_ARCH_ARM64
 #include "xenia/cpu/backend/a64/a64_backend.h"
-#endif
+#endif  // XE_ARCH
 
 #if 0 && DEBUG
 #define DEFAULT_DEBUG_FLAG true

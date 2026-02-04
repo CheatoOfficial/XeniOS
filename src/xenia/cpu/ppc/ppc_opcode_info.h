@@ -12,6 +12,12 @@
 
 #include <cstdint>
 
+#include "xenia/base/platform.h"
+
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#include <vector>
+#endif
+
 #include "xenia/base/string_buffer.h"
 #include "xenia/cpu/ppc/ppc_opcode.h"
 
@@ -133,9 +139,9 @@ enum class PPCOpcodeField : uint32_t {
   kTO,
   kLEV,
 };
-#if XE_ARCH_AMD64
-// Preserve legacy packed layout on x64, but avoid forced unaligned function
-// pointers on ARM64.
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+// Avoid unaligned pointers in opcode tables on macOS ARM64.
+#else
 #pragma pack(push, 1)
 #endif
 struct PPCOpcodeDisasmInfo {
@@ -144,11 +150,16 @@ struct PPCOpcodeDisasmInfo {
   uint32_t opcode;
   const char* name;
   const char* description;
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+  std::vector<PPCOpcodeField> reads;
+  std::vector<PPCOpcodeField> writes;
+#else
   // std::vector<PPCOpcodeField> reads;
   // std::vector<PPCOpcodeField> writes;
+#endif
   InstrDisasmFn disasm;
 };
-#if XE_ARCH_AMD64
+#if !(XE_PLATFORM_MAC && XE_ARCH_ARM64)
 #pragma pack(pop)
 #endif
 PPCOpcode LookupOpcode(uint32_t code);
