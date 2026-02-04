@@ -8,8 +8,6 @@ project("zarchive")
   })
   includedirs({
     "zarchive/include",
-  })
-  sysincludedirs({
     "zstd/lib",
   })
   files({
