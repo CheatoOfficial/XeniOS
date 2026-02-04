@@ -168,8 +168,7 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          release_dir="build/bin/Linux-x86_64/Release"
-          binary="$release_dir/xenia_edge"
+          binary=build/bin/Linux-x86_64/Release/xenia_edge
           if [ $(stat -c%s $binary) -le 100000 ]; then
             echo "::error::Binary is too small."
           fi
@@ -202,7 +201,7 @@ jobs:
           # Copy all necessary files (excluding build artifacts) next to the binary in AppDir
           mkdir -p artifacts/xenia_edge/usr/bin
           # Copy directories (optimized_settings, game_patches, etc.)
-          find "$release_dir" -maxdepth 1 -type d ! -name Release -exec cp -r {} artifacts/xenia_edge/usr/bin/ \;
+          find build/bin/Linux-x86_64/Release -maxdepth 1 -type d ! -name Release -exec cp -r {} artifacts/xenia_edge/usr/bin/ \;
           # Copy any additional runtime files if needed (currently just directories are copied)
 
           # Run linuxdeploy with Qt plugin to deploy all Qt dependencies and create AppImage
@@ -239,8 +238,6 @@ jobs:
 
   build-macos-arm64:
     name: Build macOS ARM64
-    # Disabled temporarily. Re-enable by removing the if:false line below.
-    if: ${{ false }}
     needs: lint
     runs-on: macos-15
     steps:
@@ -754,14 +751,13 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          $releaseDir = 'build\bin\Windows-x86_64\Release'
-          $binary = Join-Path $releaseDir 'xenia_edge.exe'
+          $binary = 'build\bin\Windows-x86_64\Release\xenia_edge.exe'
           if ((get-item $binary).Length -le 100000) {
             echo "::error::$binary is too small."
           }
-          robocopy . $releaseDir LICENSE /r:0 /w:0
+          robocopy . build\bin\Windows-x86_64\Release LICENSE /r:0 /w:0
           # Copy all files and directories (Qt DLLs, plugins, etc.) excluding build artifacts
-          robocopy $releaseDir artifacts\xenia_edge /MIR /r:0 /w:0 /XF *.lib *.idb *.exp /XD generic iconengines imageformats networkinformation styles tls
+          robocopy build\bin\Windows-x86_64\Release artifacts\xenia_edge /MIR /r:0 /w:0 /XF *.lib *.idb *.exp /XD generic iconengines imageformats networkinformation styles tls
           If ($LastExitCode -le 7) { echo "LastExitCode = $LastExitCode";$LastExitCode = 0 }
       - name: Upload xenia edge artifacts
         if: steps.prepare_artifacts.outcome == 'success'
@@ -773,7 +769,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux-x86_64, build-windows-x86_64]
+    needs: [build-linux-x86_64, build-macos-arm64, build-windows-x86_64]
     runs-on: ubuntu-latest
     if: |
       github.repository == 'has207/xenia-edge' &&
@@ -785,6 +781,18 @@ jobs:
         with:
           name: xenia_edge_linux_x86_64
           path: linux_x86_64_artifacts
+
+      - name: Download macOS ARM64 artifacts
+        uses: actions/download-artifact@main
+        with:
+          name: xenia_edge_macos_arm64
+          path: macos_arm64_artifacts
+
+      - name: Download macOS x86_64 artifacts
+        uses: actions/download-artifact@main
+        with:
+          name: xenia_edge_macos_x86_64
+          path: macos_x86_64_artifacts
 
       - name: Download Windows x86_64 artifacts
         uses: actions/download-artifact@main
@@ -800,6 +808,10 @@ jobs:
           # Prepare release artifacts
           cd linux_x86_64_artifacts
           mv xenia_edge.AppImage ../xenia_edge_linux_x86_64.AppImage
+          cd ../macos_arm64_artifacts
+          mv xenia_edge_macos.dmg ../xenia_edge_macos_arm64.dmg
+          cd ../macos_x86_64_artifacts
+          mv xenia_edge_macos_x86_64.dmg ../
           cd ../windows_x86_64_artifacts
           7z a ../xenia_edge_windows_x86_64.zip * -xr!'*.pdb' -mx9 -bb3
           cd ..
@@ -808,5 +820,7 @@ jobs:
           tag=${GITHUB_SHA::7}
           gh release create $tag \
             xenia_edge_linux_x86_64.AppImage \
+            xenia_edge_macos_arm64.dmg \
+            xenia_edge_macos_x86_64.dmg \
             xenia_edge_windows_x86_64.zip \
             --target $GITHUB_SHA -t "xenia_edge" --generate-notes

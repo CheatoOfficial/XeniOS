@@ -146,6 +146,9 @@ project("xenia-app")
 
   filter("system:macosx")
     xcodebuildsettings({
+      ["INFOPLIST_FILE"] = path.getabsolute("Info.plist"),
+      ["CODE_SIGN_ENTITLEMENTS"] =
+          path.getabsolute(path.join(project_root, "xenia.entitlements")),
       ["LD_RUNPATH_SEARCH_PATHS"] =
           "@executable_path/../Frameworks @loader_path/../Frameworks",
     })
@@ -294,29 +297,91 @@ project("xenia-app")
       '{COPY} ' .. assets_font_src .. '/* ' .. assets_font_dst
     }
 
-  -- macOS app bundle resources and code signing metadata.
-  filter("system:macosx")
+  -- macOS app bundle configuration.
+  filter("platforms:Mac-*")
+    local entitlements_path = path.getabsolute(project_root .. "/xenia.entitlements")
+    local app_bundle = "${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"
+    local app_contents = app_bundle .. "/Contents"
+    local app_frameworks = app_contents .. "/Frameworks"
+    local app_macos = app_contents .. "/MacOS"
+    local app_executable = app_macos .. "/xenia_edge"
     files({
       "Info.plist",
       project_root.."/xenia.entitlements",
       project_root.."/assets/icon/xenia.icns",
     })
-    -- Remove stale runtime logs from prior app launches so code signing
-    -- doesn't fail on extra unsigned files in the bundle.
-    prebuildcommands({
-      'if [ -f "${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}/Contents/MacOS/xenia.log" ]; then rm -f "${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}/Contents/MacOS/xenia.log"; fi',
+    linkoptions({
+      "-Wl,-rpath,@executable_path/../Frameworks",
+      "-Wl,-rpath,@loader_path/../Frameworks",
     })
     xcodebuildsettings({
       ["INFOPLIST_FILE"] = path.getabsolute("Info.plist"),
-      ["CODE_SIGN_ENTITLEMENTS"] =
-          path.getabsolute(path.join(project_root, "xenia.entitlements")),
       ["MACOSX_DEPLOYMENT_TARGET"] = "15.0",
       ["PRODUCT_NAME"] = "Xenia-Edge",
       ["EXECUTABLE_NAME"] = "xenia_edge",
       ["PRODUCT_BUNDLE_IDENTIFIER"] = "com.xenia.xenia-edge",
       ["CODE_SIGN_STYLE"] = "Automatic",
+      ["CODE_SIGN_ENTITLEMENTS"] = entitlements_path,
       ["CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION"] = "YES",
+      ["LD_RUNPATH_SEARCH_PATHS"] =
+          "@executable_path/../Frameworks @loader_path/../Frameworks",
     })
-  filter({"system:macosx", "files:**.icns"})
+    local optimized_settings_src =
+        path.getabsolute(path.join(project_root, ".data_repos",
+                                   "optimized-settings", "settings"))
+    local game_patches_src =
+        path.getabsolute(path.join(project_root, ".data_repos",
+                                   "game-patches", "patches"))
+    local assets_font_src =
+        path.getabsolute(path.join(project_root, "assets", "font"))
+    postbuildcommands({
+      'mkdir -p "' .. app_frameworks .. '"',
+      'mkdir -p "' .. app_macos .. '/optimized_settings"',
+      'mkdir -p "' .. app_macos .. '/game_patches"',
+      'mkdir -p "' .. app_macos .. '/assets/font"',
+      'if ls "' .. optimized_settings_src .. '/*.json" >/dev/null 2>&1; then '
+          .. 'cp -f "' .. optimized_settings_src .. '/*.json" "'
+          .. app_macos .. '/optimized_settings/"; fi; true',
+      'if ls "' .. game_patches_src .. '/*.toml" >/dev/null 2>&1; then '
+          .. 'cp -f "' .. game_patches_src .. '/*.toml" "'
+          .. app_macos .. '/game_patches/"; fi; true',
+      'if ls "' .. assets_font_src .. '/*" >/dev/null 2>&1; then '
+          .. 'cp -f "' .. assets_font_src .. '/*" "'
+          .. app_macos .. '/assets/font/"; fi; true',
+      'cp -f "' .. path.join(metal_converter_libdir, "libmetalirconverter.dylib")
+          .. '" "' .. app_frameworks .. '/"',
+      'if ! otool -l "' .. app_executable
+          .. '" | grep -q "@executable_path/../Frameworks"; then '
+          .. 'install_name_tool -add_rpath "@executable_path/../Frameworks" "'
+          .. app_executable .. '"; fi',
+      'if ! otool -l "' .. app_executable
+          .. '" | grep -q "@loader_path/../Frameworks"; then '
+          .. 'install_name_tool -add_rpath "@loader_path/../Frameworks" "'
+          .. app_executable .. '"; fi',
+      'if otool -l "' .. app_executable
+          .. '" | grep -q "/opt/homebrew/opt/qt/lib"; then '
+          .. 'install_name_tool -delete_rpath "/opt/homebrew/opt/qt/lib" "'
+          .. app_executable .. '"; fi',
+      'if otool -l "' .. app_executable
+          .. '" | grep -q "/usr/local/opt/qt/lib"; then '
+          .. 'install_name_tool -delete_rpath "/usr/local/opt/qt/lib" "'
+          .. app_executable .. '"; fi',
+      'codesign --force --sign - "' .. app_frameworks
+          .. '/libmetalirconverter.dylib"',
+      'codesign --force --deep --sign - --entitlements "'
+          .. entitlements_path .. '" "' .. app_bundle .. '"',
+    })
+  filter({"platforms:Mac-*", "architecture:arm64"})
+    postbuildcommands({
+      'cp -f "' .. path.join(dxilconv_libdir_arm64, "libdxilconv.dylib")
+          .. '" "' .. app_frameworks .. '/"',
+      'codesign --force --sign - "' .. app_frameworks .. '/libdxilconv.dylib"',
+    })
+  filter({"platforms:Mac-*", "architecture:x86_64"})
+    postbuildcommands({
+      'cp -f "' .. path.join(dxilconv_libdir_x86_64, "libdxilconv.dylib")
+          .. '" "' .. app_frameworks .. '/"',
+      'codesign --force --sign - "' .. app_frameworks .. '/libdxilconv.dylib"',
+    })
+  filter({"platforms:Mac-*", "files:**.icns"})
     buildaction("Resources")
-  filter({})

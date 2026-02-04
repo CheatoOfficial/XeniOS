@@ -134,11 +134,9 @@ def is_premake_usable(premake5_bin):
         return False
     if sys.platform == "darwin":
         try:
-            subprocess.check_call(
-                [premake5_bin, "--version"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            subprocess.check_call([premake5_bin, "--version"],
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL)
         except OSError as e:
             # Errno 86: Bad CPU type in executable (wrong arch).
             if e.errno == 86:
