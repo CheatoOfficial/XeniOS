@@ -73,8 +73,7 @@ using xe::cpu::hir::Instr;
 
 typedef bool (*SequenceSelectFn)(X64Emitter&, const Instr*, InstrKeyValue ikey);
 std::unordered_map<uint32_t, SequenceSelectFn>& SequenceTable() {
-  static auto* table =
-      new std::unordered_map<uint32_t, SequenceSelectFn>();
+  static auto* table = new std::unordered_map<uint32_t, SequenceSelectFn>();
   return *table;
 }
 
@@ -3223,8 +3222,14 @@ struct CNTLZ_I64 : Sequence<CNTLZ_I64, I<OPCODE_CNTLZ, I8Op, I64Op>> {
       e.mov(i.dest, 0x40);
       e.jz(end);
 
-      e.xor_(e.rax, 0x3F);
+      // macOS: avoid 64-bit register size mismatch in Xbyak on some hosts.
+#if XE_PLATFORM_MAC
+      e.xor_(e.eax, 0x3F);
       e.mov(i.dest, e.al);
+#else
+      e.xor_(e.rax, 0x3F);
+      e.mov(i.dest, e.rax);
+#endif
 
       e.L(end);
       e.outLocalLabel();
