@@ -2991,7 +2991,7 @@ void MetalRenderTargetCache::BeginFrame() {
     XELOGI(
         "Metal mem: frame={} rt={} map={} dummy={} pipelines={} "
         "tile_pipelines={} inst_buf_sizes=[{}, {}, {}]",
-        frame_id_, render_targets().size(), render_target_map_.size(),
+        frame_id_, render_target_map_.size(), render_target_map_.size(),
         dummy_color_targets_.size(), transfer_pipelines_.size(),
         transfer_tile_pipelines_.size(),
         transfer_tile_instance_buffer_sizes_[0],
@@ -3018,7 +3018,7 @@ bool MetalRenderTargetCache::Update(
       XELOGI(
           "Metal mem: frame={} rt={} map={} dummy={} pipelines={} "
           "tile_pipelines={} inst_buf_sizes=[{}, {}, {}]",
-          frame_id_, render_targets().size(), render_target_map_.size(),
+          frame_id_, render_target_map_.size(), render_target_map_.size(),
           dummy_color_targets_.size(), transfer_pipelines_.size(),
           transfer_tile_pipelines_.size(),
           transfer_tile_instance_buffer_sizes_[0],

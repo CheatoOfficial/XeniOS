@@ -17,14 +17,18 @@
 #include <utility>
 #include <vector>
 
+#include "xenia/base/platform.h"
 #include "xenia/gpu/shader_translator.h"
 #include "xenia/gpu/spirv_builder.h"
 #include "xenia/gpu/xenos.h"
+#if !XE_PLATFORM_MAC
 #include "xenia/ui/vulkan/vulkan_device.h"
+#endif  // !XE_PLATFORM_MAC
 
 namespace xe {
 namespace ui {
 namespace vulkan {
+class VulkanDevice;
 class SpirvToolsContext;
 }  // namespace vulkan
 }  // namespace ui

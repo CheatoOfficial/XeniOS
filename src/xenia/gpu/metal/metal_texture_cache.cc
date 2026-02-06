@@ -2330,20 +2330,32 @@ MTL::Texture* MetalTextureCache::RequestSwapTexture(
   return view;
 }
 
-MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
-    const DxbcShader::SamplerBinding& binding) const {
-  const RegisterFile& regs = register_file();
-  xenos::xe_gpu_texture_fetch_t fetch =
-      regs.GetTextureFetch(binding.fetch_constant);
+// Shared helper: build SamplerParameters from fetch constant + filter
+// overrides.
+static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
+    const RegisterFile& regs, uint32_t fetch_constant,
+    xenos::TextureFilter req_mag_filter, xenos::TextureFilter req_min_filter,
+    xenos::TextureFilter req_mip_filter, xenos::AnisoFilter req_aniso_filter) {
+  auto normalize_clamp_mode = [](xenos::ClampMode clamp_mode) {
+    if (clamp_mode == xenos::ClampMode::kClampToHalfway) {
+      return xenos::ClampMode::kClampToEdge;
+    }
+    if (clamp_mode == xenos::ClampMode::kMirrorClampToHalfway ||
+        clamp_mode == xenos::ClampMode::kMirrorClampToBorder) {
+      return xenos::ClampMode::kMirrorClampToEdge;
+    }
+    return clamp_mode;
+  };
+  xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(fetch_constant);
 
-  SamplerParameters parameters;
+  MetalTextureCache::SamplerParameters parameters;
 
   xenos::ClampMode fetch_clamp_x, fetch_clamp_y, fetch_clamp_z;
   texture_util::GetClampModesForDimension(fetch, fetch_clamp_x, fetch_clamp_y,
                                           fetch_clamp_z);
-  parameters.clamp_x = NormalizeClampMode(fetch_clamp_x);
-  parameters.clamp_y = NormalizeClampMode(fetch_clamp_y);
-  parameters.clamp_z = NormalizeClampMode(fetch_clamp_z);
+  parameters.clamp_x = normalize_clamp_mode(fetch_clamp_x);
+  parameters.clamp_y = normalize_clamp_mode(fetch_clamp_y);
+  parameters.clamp_z = normalize_clamp_mode(fetch_clamp_z);
 
   if (xenos::ClampModeUsesBorder(parameters.clamp_x) ||
       xenos::ClampModeUsesBorder(parameters.clamp_y) ||
@@ -2360,16 +2372,15 @@ MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
   parameters.mip_min_level = mip_min_level;
 
   xenos::AnisoFilter aniso_filter =
-      binding.aniso_filter == xenos::AnisoFilter::kUseFetchConst
+      req_aniso_filter == xenos::AnisoFilter::kUseFetchConst
           ? fetch.aniso_filter
-          : binding.aniso_filter;
+          : req_aniso_filter;
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
 
   xenos::TextureFilter mip_filter =
-      binding.mip_filter == xenos::TextureFilter::kUseFetchConst
-          ? fetch.mip_filter
-          : binding.mip_filter;
+      req_mip_filter == xenos::TextureFilter::kUseFetchConst ? fetch.mip_filter
+                                                             : req_mip_filter;
 
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
@@ -2377,15 +2388,15 @@ MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
     parameters.mip_linear = 1;
   } else {
     xenos::TextureFilter mag_filter =
-        binding.mag_filter == xenos::TextureFilter::kUseFetchConst
+        req_mag_filter == xenos::TextureFilter::kUseFetchConst
             ? fetch.mag_filter
-            : binding.mag_filter;
+            : req_mag_filter;
     parameters.mag_linear = mag_filter == xenos::TextureFilter::kLinear;
 
     xenos::TextureFilter min_filter =
-        binding.min_filter == xenos::TextureFilter::kUseFetchConst
+        req_min_filter == xenos::TextureFilter::kUseFetchConst
             ? fetch.min_filter
-            : binding.min_filter;
+            : req_min_filter;
     parameters.min_linear = min_filter == xenos::TextureFilter::kLinear;
 
     parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
@@ -2395,6 +2406,22 @@ MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
       mip_filter == xenos::TextureFilter::kBaseMap ? 1 : 0;
 
   return parameters;
+}
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
+    const DxbcShader::SamplerBinding& binding) const {
+  return BuildSamplerParametersFromFetch(
+      register_file(), binding.fetch_constant, binding.mag_filter,
+      binding.min_filter, binding.mip_filter, binding.aniso_filter);
+}
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
+MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
+    const SpirvShader::SamplerBinding& binding) const {
+  return BuildSamplerParametersFromFetch(
+      register_file(), binding.fetch_constant, binding.mag_filter,
+      binding.min_filter, binding.mip_filter, binding.aniso_filter);
 }
 
 MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(

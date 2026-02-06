@@ -17,8 +17,11 @@
 #include <unordered_map>
 #include <vector>
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/gpu/dxbc_shader.h"
+#endif
 #include "xenia/gpu/register_file.h"
+#include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/texture_cache.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/xenos.h"
@@ -98,8 +101,12 @@ class MetalTextureCache : public TextureCache {
     }
   };
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
   SamplerParameters GetSamplerParameters(
       const DxbcShader::SamplerBinding& binding) const;
+#endif
+  SamplerParameters GetSamplerParameters(
+      const SpirvShader::SamplerBinding& binding) const;
   MTL::SamplerState* GetOrCreateSampler(SamplerParameters parameters);
 
   // TextureCache virtual method overrides

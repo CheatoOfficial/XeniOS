@@ -184,6 +184,12 @@ project("xenia-app")
 
   filter("system:macosx")
     links({
+      "spirv-cross",
+    })
+  filter({})
+
+  filter("system:macosx")
+    links({
       "xenia-gpu-metal",
       "xenia-ui-metal",
       "dxilconv",

@@ -11,6 +11,7 @@ local dxilconv_includes = {
   path.join(dxilconv_root, "include"),
   path.join(dxilconv_root, "projects/dxilconv/include"),
 }
+local spirvcross_root = path.join(project_root, "third_party/SPIRV-Cross")
 
 include(path.join(project_root, "tools/build"))
 
@@ -30,17 +31,14 @@ project("xenia-gpu-metal")
     "xenia-ui",
     "fmt",
     "metal-cpp",
+    "spirv-cross",
   }
 
-  filter "system:macosx"
+  -- Shared source files (both MSC and SPIRV-Cross paths).
+  filter {"system:macosx or system:ios"}
     files {
-      "dxbc_to_dxil_converter.cc",
-      "dxbc_to_dxil_converter.h",
-      "ir_runtime_impl.mm",
       "metal_command_processor.cc",
       "metal_command_processor.h",
-      "metal_geometry_shader.cc",
-      "metal_geometry_shader.h",
       "metal_graphics_system.cc",
       "metal_graphics_system.h",
       "metal_heap_pool.cc",
@@ -49,27 +47,54 @@ project("xenia-gpu-metal")
       "metal_primitive_processor.h",
       "metal_render_target_cache.cc",
       "metal_render_target_cache.h",
+      "metal_shared_memory.cc",
+      "metal_shared_memory.h",
+      "metal_texture_cache.cc",
+      "metal_texture_cache.h",
+      "msl_bindings.h",
+      "msl_shader.cc",
+      "msl_shader.h",
+    }
+    includedirs {
+      spirvcross_root,
+      path.join(project_root, "third_party/glslang"),
+    }
+    externalincludedirs {
+      path.join(project_root, "third_party/Vulkan-Headers/include"),
+    }
+    defines {
+      "SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS",
+    }
+    links {
+      "Metal.framework",
+      "MetalKit.framework",
+    }
+
+  -- MSC-only source files (macOS only, excluded on iOS).
+  filter "system:macosx"
+    files {
+      "dxbc_to_dxil_converter.cc",
+      "dxbc_to_dxil_converter.h",
+      "ir_runtime_impl.mm",
+      "metal_geometry_shader.cc",
+      "metal_geometry_shader.h",
       "metal_shader.cc",
       "metal_shader.h",
       "metal_shader_cache.cc",
       "metal_shader_cache.h",
       "metal_shader_converter.cc",
       "metal_shader_converter.h",
-      "metal_shared_memory.cc",
-      "metal_shared_memory.h",
-      "metal_texture_cache.cc",
-      "metal_texture_cache.h",
     }
-
     includedirs {
       dxilconv_includes[1],
       dxilconv_includes[2],
       path.join(project_root, "third_party/metal-shader-converter/include"),
-      "/usr/local/include/metal_irconverter_runtime"
+      "/usr/local/include/metal_irconverter_runtime",
     }
-
-    defines { "METAL_SHADER_CONVERTER_AVAILABLE", "IR_RUNTIME_METALCPP" }
-
+    defines {
+      "METAL_SHADER_CONVERTER_AVAILABLE",
+      "IR_RUNTIME_METALCPP",
+    }
     libdirs     { metal_converter_libdir }
     runpathdirs {
       "@executable_path/../Frameworks",
@@ -81,10 +106,7 @@ project("xenia-gpu-metal")
       "-Wl,-rpath,@loader_path/../Frameworks",
       "-Wl,-headerpad_max_install_names",
     })
-
     links {
-      "Metal.framework",
-      "MetalKit.framework",
       "metalirconverter",
       "dxilconv",
       "LLVMDxcSupport",
@@ -100,7 +122,7 @@ project("xenia-gpu-metal")
       path.getabsolute(path.join(dxilconv_libdir_x86_64,
                                  "libLLVMDxcSupport.a")),
     }
-  filter "not system:macosx"
+  filter {"not system:macosx", "not system:ios"}
     removefiles "**"
   filter {}
 
