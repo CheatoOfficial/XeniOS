@@ -4,7 +4,10 @@
 --
 
 -- SDL2 is not used on iOS or Android.
+-- `is_ios_target()` handles sentinel/env/option fallback for broken premake
+-- host binaries restored from CI caches.
 if is_ios_target and is_ios_target() then
+  print("SDL2.lua: skipping (iOS target detected)")
   function sdl2_include() end
   return
 end

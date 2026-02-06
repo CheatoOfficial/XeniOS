@@ -1,8 +1,14 @@
--- Robust iOS target detection: checks both os.istarget("ios") (which
--- requires the premake binary to recognise "ios" as a valid --os value)
--- and the raw _OPTIONS["os"] command-line value as a fallback.
+-- Robust iOS target detection.  Uses multiple fallback signals:
+--   1. Sentinel file (.ios_target) created by CI before running premake
+--   2. XE_TARGET_IOS env-var set by xenia-build.py
+--   3. premake os.target() / os.istarget()
+--   4. Raw _OPTIONS["os"] from command line
 function is_ios_target()
-  return os.istarget("ios") or (_OPTIONS["os"] == "ios")
+  return os.isfile(".ios_target")
+      or os.getenv("XE_TARGET_IOS") == "1"
+      or (os.target and os.target() == "ios")
+      or os.istarget("ios")
+      or (_OPTIONS and _OPTIONS["os"] == "ios")
 end
 
 build_root = "build"

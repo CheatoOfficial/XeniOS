@@ -51,12 +51,10 @@ jobs:
         id: cache-build
         uses: actions/cache@v3
         with:
-          path: |
-            build/obj
-            build/bin/Linux-x86_64/Release/*.a
-          key: ${{ runner.os }}-x86_64-build-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          path: build/build_release
+          key: ${{ runner.os }}-x86_64-ninja-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
           restore-keys: |
-            ${{ runner.os }}-x86_64-build-
+            ${{ runner.os }}-x86_64-ninja-
 
       - name: Cache Qt6
         id: cache-qt-linux
@@ -161,10 +159,7 @@ jobs:
         env:
           CC: clang-21
           CXX: clang++-21
-        run: |
-          # Clear cmake cache to ensure fresh build with updated files
-          rm -rf build/build_release
-          ./xenia-build.py build --config=Release
+        run: ./xenia-build.py build --config=Release
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
@@ -256,12 +251,10 @@ jobs:
         id: cache-build
         uses: actions/cache@v3
         with:
-          path: |
-            build/obj
-            build/bin/Mac-ARM64/Release/*.a
-          key: ${{ runner.os }}-ARM64-build-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          path: build/DerivedData
+          key: ${{ runner.os }}-ARM64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
           restore-keys: |
-            ${{ runner.os }}-ARM64-build-
+            ${{ runner.os }}-ARM64-deriveddata-
 
       - name: Cache Qt6
         id: cache-qt-macos
@@ -433,6 +426,103 @@ jobs:
           path: artifacts/release
           if-no-files-found: error
 
+  build-ios-arm64:
+    name: Build iOS ARM64
+    needs: lint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Cache premake5
+        id: cache-premake5
+        uses: actions/cache@main
+        with:
+          path: tools/build/bin/premake5
+          key: ${{ runner.os }}-premake5-${{ hashFiles('third_party/premake-core/**') }}
+
+      - name: Cache build output
+        id: cache-build-ios
+        uses: actions/cache@v3
+        with:
+          path: build/DerivedData
+          key: ${{ runner.os }}-ios-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          restore-keys: |
+            ${{ runner.os }}-ios-deriveddata-
+
+      - name: Cache submodules
+        id: cache-submodules-ios
+        uses: actions/cache@v3
+        with:
+          path: |
+            third_party
+            .git/modules/third_party
+          key: ${{ runner.os }}-${{ runner.arch }}-submodules-ios-v2-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
+
+      - name: Setup
+        env:
+          XE_TARGET_IOS: "1"
+        run: |
+          retry() {
+            local n=0
+            until "$@"; do
+              n=$((n+1))
+              if [ $n -ge 5 ]; then
+                return 1
+              fi
+              sleep 5
+            done
+          }
+
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 60
+          git config --global http.postBuffer 524288000
+
+          # No SDL2/Qt/Vulkan needed for iOS library builds
+          brew install ninja
+
+          # Update submodules (no DirectXShaderCompiler needed for iOS)
+          retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler')
+
+          # Remove any stale premake5 binary left in the submodule tree by
+          # a previous cache run.  premake.py checks this path first and
+          # would use an outdated binary that doesn't support --os=ios.
+          rm -f third_party/premake-core/bin/release/premake5
+
+          # Build premake5 as a macOS host tool if not cached, then generate
+          # iOS project files.
+          mkdir -p tools/build/bin
+          if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
+            # Build premake5 from source (host macOS binary).
+            cd third_party/premake-core
+            make -f Bootstrap.mak PLATFORM=ARM64 osx
+            cd ../..
+            cp third_party/premake-core/bin/release/premake5 tools/build/bin/
+            chmod +x tools/build/bin/premake5
+            echo "premake5 built and copied to tools/build/bin/"
+          else
+            echo "premake5 restored from cache"
+          fi
+          # Verify premake5 is usable before proceeding.
+          if [ ! -x tools/build/bin/premake5 ]; then
+            echo "ERROR: tools/build/bin/premake5 not found or not executable"
+            ls -la tools/build/bin/ || true
+            exit 1
+          fi
+          tools/build/bin/premake5 --version
+
+          # Create a sentinel file so premake Lua scripts can reliably
+          # detect an iOS build even if --os=ios handling is broken.
+          touch .ios_target
+          ./xenia-build.py premake --target_os=ios
+
+      - name: Build
+        run: |
+          # Build the full iOS app target (no code signing on CI).
+          # Use --no_premake since premake was already run in the Setup step.
+          ./xenia-build.py build --config=Release --target_os=ios --no_premake -- CODE_SIGNING_ALLOWED=NO
+
   build-macos-x86_64:
     name: Build macOS x86_64
     # Disabled temporarily. Re-enable by removing the if:false line below.
@@ -455,12 +545,10 @@ jobs:
         id: cache-build
         uses: actions/cache@v3
         with:
-          path: |
-            build/obj
-            build/bin/Mac-x86_64/Release/*.a
-          key: ${{ runner.os }}-x86_64-build-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          path: build/DerivedData
+          key: ${{ runner.os }}-x86_64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
           restore-keys: |
-            ${{ runner.os }}-x86_64-build-
+            ${{ runner.os }}-x86_64-deriveddata-
 
       - name: Cache Qt6
         id: cache-qt-macos
