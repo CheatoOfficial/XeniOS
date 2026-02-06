@@ -124,6 +124,9 @@ local function detect_target_arch()
   if option_arch then
     return option_arch
   end
+  if is_ios_target() then
+    return "ARM64"
+  end
   if os.istarget("macosx") then
     if _OPTIONS["mac-x86_64"] then
       return "x86_64"
@@ -260,7 +263,7 @@ filter("configurations:Release")
   -- (such as constant propagation) emulation as predictable as possible,
   -- including handling of specials since games make assumptions about them.
 
-filter({"configurations:Release", "platforms:Linux-* or Mac-* or Android-*"})
+filter({"configurations:Release", "platforms:Linux-* or Mac-* or iOS-* or Android-*"})
   symbols("On")  -- Enable debug symbols for crash debugging
   linktimeoptimization("On")
   buildoptions({
@@ -384,7 +387,7 @@ end
 filter({"platforms:Linux-*", "kind:*App"})
   linkgroups("On")
 
-if os.istarget("macosx") then
+if os.istarget("macosx") and not is_ios_target() then
   filter("platforms:Mac-*")
     buildoptions({
       "-mmacosx-version-min=15.0",
@@ -457,6 +460,21 @@ filter({"platforms:Mac-x86_64", "toolset:clang"})
     "-mavx",
   })
 filter({})
+
+if is_ios_target() then
+  filter("platforms:iOS-*")
+    system("ios")
+    xcodebuildsettings({
+      ["IPHONEOS_DEPLOYMENT_TARGET"] = "17.0",
+      ["SDKROOT"] = "iphoneos",
+      ["TARGETED_DEVICE_FAMILY"] = "1,2",  -- iPhone and iPad
+    })
+    buildoptions({
+      "-w",
+    })
+    removefatalwarnings("All")
+  filter({})
+end
 
 filter({"language:C++", "toolset:clang or gcc"}) -- "platforms:Linux-*"
   disablewarnings({
@@ -663,6 +681,16 @@ workspace("xenia")
         platforms({"Linux-x86_64"})
         architecture("x86_64")
       end
+    elseif is_ios_target() then
+      platforms({"iOS-ARM64"})
+      filter("platforms:iOS-ARM64")
+        architecture("ARM64")
+        xcodebuildsettings({
+          ["ARCHS"] = "arm64",
+          ["IPHONEOS_DEPLOYMENT_TARGET"] = "17.0",
+          ["SDKROOT"] = "iphoneos",
+        })
+      filter({})
     elseif os.istarget("macosx") then
       local mac_platforms = nil
       if is_macos_arm64_host() then
@@ -732,14 +760,17 @@ workspace("xenia")
     include("third_party/libusb.lua")
   end
 
-  if not os.istarget("android") then
+  if not os.istarget("android") and not is_ios_target() then
     -- SDL2 requires sdl2-config, and as of November 2020 isn't high-quality on
     -- Android yet, most importantly in game controllers - the keycode and axis
     -- enums are being ruined during conversion to SDL2 enums resulting in only
     -- one controller (Nvidia Shield) being supported, digital triggers are also
     -- not supported; lifecycle management (especially surface loss) is also
-    -- complicated.
+    -- complicated. SDL2 is also not appropriate for iOS.
     include("third_party/SDL2.lua")
+  else
+    -- Provide a no-op stub so callers don't need to guard every call.
+    function sdl2_include() end
   end
 
   -- Disable treating warnings as fatal errors for all third party projects, as
@@ -815,7 +846,7 @@ workspace("xenia")
   end
   include("src/xenia/debug/ui")
   include("src/xenia/gpu")
-  if os.istarget("macosx") then
+  if os.istarget("macosx") or is_ios_target() then
     include("src/xenia/gpu/metal")
   end
   include("src/xenia/gpu/null")
@@ -826,13 +857,13 @@ workspace("xenia")
   include("src/xenia/kernel")
   include("src/xenia/patcher")
   include("src/xenia/ui")
-  if os.istarget("macosx") then
+  if os.istarget("macosx") or is_ios_target() then
     include("src/xenia/ui/metal")
   end
   include("src/xenia/ui/vulkan")
   include("src/xenia/vfs")
 
-  if not os.istarget("android") then
+  if not os.istarget("android") and not is_ios_target() then
     include("src/xenia/apu/sdl")
     include("src/xenia/helper/sdl")
     include("src/xenia/hid/sdl")
