@@ -9,10 +9,7 @@ local dxilconv_libdir_x86_64 =
                                "third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib"))
 include(project_root.."/tools/build")
 
--- iOS builds use a native UIKit host app; this Qt-based target is not needed.
-if os.istarget("ios") then
-  return
-end
+-- iOS builds use a native UIKit entry point instead of the Qt-based one.
 
 group("src")
 project("xenia-app")
@@ -55,8 +52,22 @@ project("xenia-app")
   local_platform_files()
   files({
     "../base/main_init_"..platform_suffix..".cc",
-    "../ui/windowed_app_main_qt.cc",
   })
+  filter("not system:ios")
+    files({
+      "../ui/windowed_app_main_qt.cc",
+    })
+  filter("system:ios")
+    files({
+      "../ui/windowed_app_main_ios.mm",
+    })
+    -- iOS uses native UIKit, not the Qt-based desktop emulator window.
+    removefiles({
+      "emulator_window.cc",
+      "emulator_window.h",
+      "xenia_main.cc",
+    })
+  filter({})
 
   resincludedirs({
     project_root,
@@ -158,74 +169,7 @@ project("xenia-app")
           "@executable_path/../Frameworks @loader_path/../Frameworks",
     })
     links({
-      "xenia-gpu-metal",
-      "xenia-ui-metal",
-      "dxilconv",
-      "metalirconverter",
-      "Cocoa.framework",
-      "CoreFoundation.framework",
-      "CoreServices.framework",
-      "Foundation.framework",
-      "Metal.framework",
-      "MetalFX.framework",
-      "MetalKit.framework",
-      "QuartzCore.framework",
-      "SDL2",
-    })
-    linkoptions({
-      "-ldxilconv",
-      "-lLLVMDxcSupport",
-    })
-    libdirs({
-      metal_converter_libdir,
-      "/opt/homebrew/opt/sdl2/lib",
-      "/usr/local/opt/sdl2/lib",
-    })
-  filter({"system:macosx", "architecture:arm64"})
-    libdirs({ dxilconv_libdir_arm64 })
-  filter({"system:macosx", "architecture:x86_64"})
-    libdirs({ dxilconv_libdir_x86_64 })
-  filter({})
-
-  filter("system:macosx")
-    links({
       "spirv-cross",
-    })
-  filter({})
-
-  filter("system:macosx")
-    links({
-      "xenia-gpu-metal",
-      "xenia-ui-metal",
-      "dxilconv",
-      "metalirconverter",
-      "Cocoa.framework",
-      "CoreFoundation.framework",
-      "CoreServices.framework",
-      "Foundation.framework",
-      "Metal.framework",
-      "MetalFX.framework",
-      "MetalKit.framework",
-      "QuartzCore.framework",
-      "SDL2",
-    })
-    linkoptions({
-      "-ldxilconv",
-      "-lLLVMDxcSupport",
-    })
-    libdirs({
-      metal_converter_libdir,
-      "/opt/homebrew/opt/sdl2/lib",
-      "/usr/local/opt/sdl2/lib",
-    })
-  filter({"system:macosx", "architecture:arm64"})
-    libdirs({ dxilconv_libdir_arm64 })
-  filter({"system:macosx", "architecture:x86_64"})
-    libdirs({ dxilconv_libdir_x86_64 })
-  filter({})
-
-  filter("system:macosx")
-    links({
       "xenia-gpu-metal",
       "xenia-ui-metal",
       "dxilconv",
