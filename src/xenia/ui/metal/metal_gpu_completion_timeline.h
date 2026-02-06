@@ -38,7 +38,6 @@ class MetalGPUCompletionTimeline : public GPUCompletionTimeline {
 
   MTL::SharedEvent* shared_event() const { return shared_event_; }
 
-  // Returns whether signaling was scheduled successfully.
   bool SignalAndAdvance(MTL::CommandBuffer* command_buffer);
 
   void UpdateCompletedSubmission() override;

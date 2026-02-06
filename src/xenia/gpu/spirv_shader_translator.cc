@@ -22,9 +22,9 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/spirv_compatibility.h"
 #include "xenia/gpu/spirv_shader.h"
-#if !XE_PLATFORM_APPLE
+#if !XE_PLATFORM_MAC
 #include "xenia/ui/vulkan/spirv_tools_context.h"
-#endif  // !XE_PLATFORM_APPLE
+#endif  // !XE_PLATFORM_MAC
 
 DEFINE_string(spirv_version_override, "1.0",
               "Override the SPIR-V version used in shader translation.\n"
@@ -56,7 +56,7 @@ namespace xe {
 namespace gpu {
 
 namespace {
-#if !XE_PLATFORM_APPLE
+#if !XE_PLATFORM_MAC
 // Cache for auto-detected SPIR-V version to avoid re-testing on every
 // Features construction.
 static std::optional<spv::SpvVersion> g_cached_spirv_version;
@@ -115,7 +115,7 @@ bool TestSpirvVersionSupport(const ui::vulkan::VulkanDevice* vulkan_device,
 
   return false;
 }
-#endif  // !XE_PLATFORM_APPLE
+#endif  // !XE_PLATFORM_MAC
 
 }  // namespace
 
@@ -135,7 +135,7 @@ SpirvShaderTranslator::Features::Features(bool all)
       demote_to_helper_invocation(all),
       fragment_shader_barycentric(all) {}
 
-#if !XE_PLATFORM_APPLE
+#if !XE_PLATFORM_MAC
 SpirvShaderTranslator::Features::Features(
     const ui::vulkan::VulkanDevice* const vulkan_device)
     : max_storage_buffer_range(
@@ -200,7 +200,7 @@ SpirvShaderTranslator::Features::Features(
     }
   }
 }
-#endif  // !XE_PLATFORM_APPLE
+#endif  // !XE_PLATFORM_MAC
 
 uint64_t SpirvShaderTranslator::GetDefaultVertexShaderModification(
     uint32_t dynamic_addressable_register_count,
@@ -1092,7 +1092,7 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
   builder_->dump(module_uints);
 
   // Optimize the SPIR-V if optimization is enabled and tools are available.
-#if !XE_PLATFORM_APPLE
+#if !XE_PLATFORM_MAC
   if (spirv_optimize_ && spirv_tools_context_) {
     size_t original_size = module_uints.size();
     std::vector<uint32_t> optimized_module;
@@ -1109,7 +1109,7 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
              static_cast<int>(result));
     }
   }
-#endif  // !XE_PLATFORM_APPLE
+#endif  // !XE_PLATFORM_MAC
 
   std::vector<uint8_t> module_bytes;
   module_bytes.reserve(sizeof(unsigned int) * module_uints.size());

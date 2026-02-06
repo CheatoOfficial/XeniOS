@@ -29,21 +29,23 @@
 #include "xenia/base/string_buffer.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/draw_util.h"
+#include "xenia/gpu/metal/metal_primitive_processor.h"
+#include "xenia/gpu/metal/metal_render_target_cache.h"
+#include "xenia/gpu/metal/metal_shared_memory.h"
+#include "xenia/gpu/metal/metal_texture_cache.h"
+#include "xenia/gpu/metal/msl_shader.h"
+#include "xenia/gpu/spirv_shader_translator.h"
+#if METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/metal/dxbc_to_dxil_converter.h"
 #include "xenia/gpu/metal/metal_geometry_shader.h"
-#include "xenia/gpu/metal/metal_pipeline_cache.h"
-#include "xenia/gpu/metal/metal_primitive_processor.h"
-#include "xenia/gpu/metal/metal_render_target_cache.h"
 #include "xenia/gpu/metal/metal_shader.h"
 #include "xenia/gpu/metal/metal_shader_converter.h"
-#include "xenia/gpu/metal/metal_shared_memory.h"
-#include "xenia/gpu/metal/metal_texture_cache.h"
-#include "xenia/gpu/metal/metal_upload_buffer_pool.h"
 // clang-format off
 // Must come after metal_texture_cache.h which includes Metal.hpp
 #include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
 // clang-format on
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/ui/metal/metal_api.h"
 #include "xenia/ui/metal/metal_provider.h"
 
@@ -230,6 +232,14 @@ class MetalCommandProcessor : public CommandProcessor {
   bool IssueDraw(xenos::PrimitiveType primitive_type, uint32_t index_count,
                  IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override;
+  // SPIRV-Cross draw path — called from IssueDraw when metal_use_spirvcross is
+  // enabled. Handles shader translation, pipeline creation, resource binding,
+  // and draw dispatch using native Metal encoder calls.
+  bool IssueDrawMsl(
+      Shader* vertex_shader, Shader* pixel_shader,
+      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+      bool primitive_polygonal, bool is_rasterization_done, bool memexport_used,
+      uint32_t normalized_color_mask, const RegisterFile& regs);
   bool IssueCopy() override;
   void WriteRegister(uint32_t index, uint32_t value) override;
 
@@ -317,6 +327,19 @@ class MetalCommandProcessor : public CommandProcessor {
   virtual void EndResolveOrdering();
 
  private:
+  // Initialize shader translation pipeline
+  bool InitializeShaderTranslation();
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  // Request shared-memory ranges needed for the current draw, mirroring
+  // D3D12/Vulkan behavior (vertex buffers, memexport streams).
+  bool RequestSharedMemoryRangesForCurrentDraw(MetalShader* vertex_shader,
+                                               MetalShader* pixel_shader,
+                                               bool memexport_used_vertex,
+                                               bool memexport_used_pixel,
+                                               bool* any_data_resolved_out);
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
   // Command buffer management
   void FlushCommandBufferAndWait(uint64_t timeout_ns, const char* context);
   void BeginCommandBuffer();
@@ -327,20 +350,137 @@ class MetalCommandProcessor : public CommandProcessor {
 
   void UseRenderEncoderAttachmentHeaps(MTL::RenderPassDescriptor* descriptor);
   void UseRenderEncoderHeap(MTL::Heap* heap);
-  uint64_t GetBindlessDescriptorRetirementSubmission() const;
-  void FreeViewBindlessIndexNow(uint32_t index);
-  void FreeSamplerBindlessIndexNow(uint32_t index);
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  // Pipeline state management (MSC path)
+  MTL::RenderPipelineState* GetOrCreatePipelineState(
+      MetalShader::MetalTranslation* vertex_translation,
+      MetalShader::MetalTranslation* pixel_translation,
+      const RegisterFile& regs);
+
+  struct GeometryVertexStageState {
+    MTL::Library* library = nullptr;
+    MTL::Library* stage_in_library = nullptr;
+    std::string function_name;
+    uint32_t vertex_output_size_in_bytes = 0;
+  };
+
+  struct GeometryShaderStageState {
+    MTL::Library* library = nullptr;
+    std::string function_name;
+    uint32_t max_input_primitives_per_mesh_threadgroup = 0;
+    std::vector<MetalShaderFunctionConstant> function_constants;
+  };
+
+  struct GeometryPipelineState {
+    MTL::RenderPipelineState* pipeline = nullptr;
+    uint32_t gs_vertex_size_in_bytes = 0;
+    uint32_t gs_max_input_primitives_per_mesh_threadgroup = 0;
+  };
+
+  struct TessellationVertexStageState {
+    MTL::Library* library = nullptr;
+    MTL::Library* stage_in_library = nullptr;
+    std::string function_name;
+    uint32_t vertex_output_size_in_bytes = 0;
+  };
+
+  struct TessellationHullStageState {
+    MTL::Library* library = nullptr;
+    std::string function_name;
+    MetalShaderReflectionInfo reflection;
+  };
+
+  struct TessellationDomainStageState {
+    MTL::Library* library = nullptr;
+    std::string function_name;
+    MetalShaderReflectionInfo reflection;
+  };
+
+  struct TessellationPipelineState {
+    MTL::RenderPipelineState* pipeline = nullptr;
+    IRRuntimeTessellationPipelineConfig config = {};
+    IRRuntimePrimitiveType primitive = IRRuntimePrimitiveTypeTriangle;
+  };
+
+  struct DrawRingBuffers {
+    MTL::Buffer* res_heap_ab = nullptr;
+    MTL::Buffer* smp_heap_ab = nullptr;
+    MTL::Buffer* cbv_heap_ab = nullptr;
+    MTL::Buffer* uniforms_buffer = nullptr;
+    MTL::Buffer* top_level_ab = nullptr;
+    MTL::Buffer* draw_args_buffer = nullptr;
+
+    ~DrawRingBuffers();
+  };
+
+  GeometryPipelineState* GetOrCreateGeometryPipelineState(
+      MetalShader::MetalTranslation* vertex_translation,
+      MetalShader::MetalTranslation* pixel_translation,
+      GeometryShaderKey geometry_shader_key, const RegisterFile& regs);
+
+  TessellationPipelineState* GetOrCreateTessellationPipelineState(
+      MetalShader::MetalTranslation* domain_translation,
+      MetalShader::MetalTranslation* pixel_translation,
+      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+      const RegisterFile& regs);
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   // Fixed-function depth/stencil state (mirrors Vulkan/D3D12 dynamic state).
   void ApplyDepthStencilState(bool primitive_polygonal,
                               reg::RB_DEPTHCONTROL normalized_depth_control);
   void ApplyRasterizerState(bool primitive_polygonal);
 
-  // Constants for the MSC path.
+  // Constants shared between MSC and SPIRV-Cross paths.
   static constexpr size_t kStageCount = 2;  // Vertex + pixel.
   static constexpr size_t kNullBufferSize = 4096;
   static constexpr size_t kCbvSizeBytes = 4096;
-  static constexpr size_t kUniformsBytesPerTable = 6 * kCbvSizeBytes;
+  static constexpr size_t kUniformsBytesPerTable = 5 * kCbvSizeBytes;
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  bool EnsureDepthOnlyPixelShader();
+
+  struct PipelineDiskCacheVertexAttribute {
+    uint32_t attribute_index;
+    uint32_t format;
+    uint32_t offset;
+    uint32_t buffer_index;
+  };
+
+  struct PipelineDiskCacheVertexLayout {
+    uint32_t buffer_index;
+    uint32_t stride;
+    uint32_t step_function;
+    uint32_t step_rate;
+  };
+
+  struct PipelineDiskCacheEntry {
+    uint64_t pipeline_key = 0;
+    uint64_t vertex_shader_cache_key = 0;
+    uint64_t pixel_shader_cache_key = 0;
+    uint32_t sample_count = 1;
+    uint32_t depth_format = 0;
+    uint32_t stencil_format = 0;
+    uint32_t color_formats[4] = {};
+    uint32_t normalized_color_mask = 0;
+    uint32_t alpha_to_mask_enable = 0;
+    uint32_t blendcontrol[4] = {};
+    std::vector<PipelineDiskCacheVertexAttribute> vertex_attributes;
+    std::vector<PipelineDiskCacheVertexLayout> vertex_layouts;
+  };
+
+  bool InitializeShaderStorageInternal(const std::filesystem::path& cache_root,
+                                       uint32_t title_id, bool blocking);
+  void ShutdownShaderStorage();
+  std::string GetShaderStorageDeviceTag() const;
+  bool LoadPipelineDiskCache(const std::filesystem::path& path,
+                             std::vector<PipelineDiskCacheEntry>* entries);
+  bool AppendPipelineDiskCacheEntry(const PipelineDiskCacheEntry& entry);
+  bool InitializePipelineBinaryArchive(
+      const std::filesystem::path& archive_path);
+  void SerializePipelineBinaryArchive();
+  void PrewarmPipelineBinaryArchive(
+      const std::vector<PipelineDiskCacheEntry>& entries);
 
   // Constants for MSC descriptor heap sizes.
   static constexpr size_t kResourceHeapSlotsPerTable = 1025 + 2;
@@ -359,6 +499,33 @@ class MetalCommandProcessor : public CommandProcessor {
                                   uint32_t used_texture_mask,
                                   reg::RB_DEPTHCONTROL normalized_depth_control,
                                   uint32_t normalized_color_mask);
+
+  // Shader modification selection (mirrors D3D12 PipelineCache logic).
+  DxbcShaderTranslator::Modification GetCurrentVertexShaderModification(
+      const Shader& shader,
+      Shader::HostVertexShaderType host_vertex_shader_type,
+      uint32_t interpolator_mask) const;
+  DxbcShaderTranslator::Modification GetCurrentPixelShaderModification(
+      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
+      reg::RB_DEPTHCONTROL normalized_depth_control) const;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
+  // SPIRV-Cross (MSL) path - shader modification and pipeline helpers.
+  SpirvShaderTranslator::Modification GetCurrentSpirvVertexShaderModification(
+      const Shader& shader,
+      Shader::HostVertexShaderType host_vertex_shader_type,
+      uint32_t interpolator_mask) const;
+  SpirvShaderTranslator::Modification GetCurrentSpirvPixelShaderModification(
+      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
+      reg::RB_DEPTHCONTROL normalized_depth_control) const;
+  void UpdateSpirvSystemConstantValues(
+      bool primitive_polygonal, uint32_t line_loop_closing_index,
+      xenos::Endian index_endian, const draw_util::ViewportInfo& viewport_info,
+      uint32_t used_texture_mask, reg::RB_DEPTHCONTROL normalized_depth_control,
+      uint32_t normalized_color_mask);
+  MTL::RenderPipelineState* GetOrCreateMslPipelineState(
+      MslShader::MslTranslation* vertex_translation,
+      MslShader::MslTranslation* pixel_translation, const RegisterFile& regs);
 
   // Metal device and command queue (from provider)
   MTL::Device* device_ = nullptr;
@@ -392,8 +559,49 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t last_swap_height_ = 0;
   std::unordered_map<uint32_t, bool> swap_dest_swaps_by_base_;
 
-  // Pipeline cache (owns shaders, pipelines, shader translation components).
-  std::unique_ptr<MetalPipelineCache> pipeline_cache_;
+ public:
+  MetalSharedMemory* shared_memory() const { return shared_memory_.get(); }
+  MetalRenderTargetCache* render_target_cache() const {
+    return render_target_cache_.get();
+  }
+  MetalTextureCache* texture_cache() const { return texture_cache_.get(); }
+
+ private:
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  // MSC shader translation components
+  std::unique_ptr<DxbcShaderTranslator> shader_translator_;
+  std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
+  std::unique_ptr<MetalShaderConverter> metal_shader_converter_;
+  StringBuffer ucode_disasm_buffer_;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
+  // SPIRV-Cross (MSL) path - shader translator and cache.
+  std::unique_ptr<SpirvShaderTranslator> spirv_shader_translator_;
+  std::unordered_map<uint64_t, std::unique_ptr<MslShader>> msl_shader_cache_;
+  SpirvShaderTranslator::SystemConstants spirv_system_constants_ = {};
+  std::unordered_map<uint64_t, MTL::RenderPipelineState*> msl_pipeline_cache_;
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  // MSC shader cache (keyed by ucode hash)
+  std::unordered_map<uint64_t, std::unique_ptr<MetalShader>> shader_cache_;
+
+  // MSC pipeline caches (keyed by shader combination)
+  std::unordered_map<uint64_t, MTL::RenderPipelineState*> pipeline_cache_;
+  std::unordered_map<uint64_t, GeometryPipelineState> geometry_pipeline_cache_;
+  std::unordered_map<MetalShader::MetalTranslation*, GeometryVertexStageState>
+      geometry_vertex_stage_cache_;
+  std::unordered_map<GeometryShaderKey, GeometryShaderStageState,
+                     GeometryShaderKey::Hasher>
+      geometry_shader_stage_cache_;
+  std::unordered_map<uint32_t, TessellationVertexStageState>
+      tessellation_vertex_stage_cache_;
+  std::unordered_map<uint64_t, TessellationHullStageState>
+      tessellation_hull_stage_cache_;
+  std::unordered_map<uint64_t, TessellationDomainStageState>
+      tessellation_domain_stage_cache_;
+  std::unordered_map<uint64_t, TessellationPipelineState>
+      tessellation_pipeline_cache_;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   struct DepthStencilStateKey {
     uint32_t depth_control;
@@ -429,10 +637,28 @@ class MetalCommandProcessor : public CommandProcessor {
   // Render target cache for framebuffer management
   std::unique_ptr<MetalRenderTargetCache> render_target_cache_;
 
-  // Null resources for unbound slots
+  // Null resources for unbound slots (shared between MSC and SPIRV-Cross)
   MTL::Buffer* null_buffer_ = nullptr;
   MTL::Texture* null_texture_ = nullptr;
   MTL::SamplerState* null_sampler_ = nullptr;
+
+  // Uniforms buffer and draw ring count (shared between MSC and SPIRV-Cross)
+  MTL::Buffer* uniforms_buffer_ = nullptr;
+  size_t draw_ring_count_ = 0;
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  // IR Converter runtime buffers for shader resource binding (MSC path)
+  MTL::Buffer* res_heap_ab_ = nullptr;
+  MTL::Buffer* smp_heap_ab_ = nullptr;
+  MTL::Buffer* cbv_heap_ab_ = nullptr;
+  MTL::Buffer* top_level_ab_ = nullptr;
+  MTL::Buffer* draw_args_buffer_ = nullptr;
+  MTL::Buffer* tessellator_tables_buffer_ = nullptr;
+  std::shared_ptr<DrawRingBuffers> active_draw_ring_;
+  std::vector<std::shared_ptr<DrawRingBuffers>> draw_ring_pool_;
+  std::vector<std::shared_ptr<DrawRingBuffers>> command_buffer_draw_rings_;
+  std::mutex draw_ring_mutex_;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   // Persistent bindless descriptor heaps.
   // Canonical texture views and samplers get stable slot indices allocated on
@@ -472,8 +698,12 @@ class MetalCommandProcessor : public CommandProcessor {
 
   MTL::Buffer* tessellator_tables_buffer_ = nullptr;
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
   // System constants - matches DxbcShaderTranslator::SystemConstants layout
   DxbcShaderTranslator::SystemConstants system_constants_;
+  bool system_constants_dirty_ = true;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+  bool logged_missing_texture_warning_ = false;
 
   // Fixed-function dynamic state cached per render encoder.
   MTL::RenderPipelineState* current_render_pipeline_state_ = nullptr;
@@ -493,24 +723,19 @@ class MetalCommandProcessor : public CommandProcessor {
   bool scissor_dirty_ = true;
   MTL::ScissorRect cached_scissor_ = {};
 
-  // Constant buffer dirty tracking (D3D12 pattern).
-  // Each binding records the pool-allocated buffer, offset, and GPU address
-  // for the most recent constant upload.  When up_to_date is true the data
-  // from the previous allocation can be copied instead of re-gathering from
-  // the register file.
-  struct ConstantBufferBinding {
-    MTL::Buffer* buffer = nullptr;
-    NS::UInteger offset = 0;
-    uint64_t gpu_address = 0;
-    bool up_to_date = false;
-  };
-  bool cbuffer_binding_system_up_to_date_ = false;
-  ConstantBufferBinding cbuffer_binding_float_vertex_;
-  ConstantBufferBinding cbuffer_binding_float_pixel_;
-  ConstantBufferBinding cbuffer_binding_bool_loop_;
-  ConstantBufferBinding cbuffer_binding_fetch_;
-  bool cbuffer_binding_descriptor_indices_vertex_up_to_date_ = false;
-  bool cbuffer_binding_descriptor_indices_pixel_up_to_date_ = false;
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  std::filesystem::path shader_storage_root_;
+  std::filesystem::path shader_storage_local_root_;
+  std::filesystem::path shader_storage_title_root_;
+  std::filesystem::path metallib_cache_dir_;
+  std::filesystem::path pipeline_disk_cache_path_;
+  std::filesystem::path pipeline_binary_archive_path_;
+  std::unordered_set<uint64_t> pipeline_disk_cache_keys_;
+  std::vector<PipelineDiskCacheEntry> pipeline_disk_cache_entries_;
+  FILE* pipeline_disk_cache_file_ = nullptr;
+  MTL::BinaryArchive* pipeline_binary_archive_ = nullptr;
+  bool pipeline_binary_archive_dirty_ = false;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   // Float constant usage bitmaps for the current shader pair.
   // Used to gate WriteRegister invalidation: only dirty the float CBV

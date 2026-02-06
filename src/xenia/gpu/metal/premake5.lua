@@ -32,9 +32,6 @@ project("xenia-gpu-metal")
     "metal-cpp",
     "spirv-cross",
   }
-  includedirs {
-    path.join(project_root, "third_party/glslang"),
-  }
 
   -- Shared source files (both MSC and SPIRV-Cross paths).
   filter {"system:macosx or system:ios"}
@@ -51,51 +48,39 @@ project("xenia-gpu-metal")
       "metal_render_target_cache.h",
       "metal_shared_memory.cc",
       "metal_shared_memory.h",
-      "metal_shader_cache.cc",
-      "metal_shader_cache.h",
       "metal_texture_cache.cc",
       "metal_texture_cache.h",
-      "metal_upload_buffer_pool.cc",
-      "metal_upload_buffer_pool.h",
+      "msl_bindings.h",
+      "msl_shader.cc",
+      "msl_shader.h",
     }
     includedirs {
       spirvcross_root,
-      -- metal_command_processor.h transitively includes metal_irconverter_runtime.h;
-      -- that header has two modes and we need metal-cpp mode on both Apple
-      -- targets so it parses as C++. The MSC *.cc sources that call into
-      -- libmetalirconverter are macOS-only (filter "system:macosx" below),
-      -- so iOS gets the declarations without a link dependency.
-      path.join(project_root, "third_party/metal-shader-converter/include"),
+      path.join(project_root, "third_party/glslang"),
+    }
+    externalincludedirs {
+      path.join(project_root, "third_party/Vulkan-Headers/include"),
     }
     defines {
-      "IR_RUNTIME_METALCPP",
+      "SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS",
     }
     links {
       "Metal.framework",
       "MetalKit.framework",
     }
 
-  -- The Metal IR runtime header only emits its bind-point and helper function
-  -- definitions when compiled once with IR_PRIVATE_IMPLEMENTATION. Shared GPU
-  -- sources use those symbols on both macOS and iOS, so keep the runtime
-  -- implementation in both Apple builds even though the rest of the MSC tool
-  -- chain stays macOS-only.
-  filter {"system:macosx or system:ios"}
-    files {
-      "ir_runtime_impl.mm",
-    }
-
-  -- MSC-only source files that require the macOS-only converter toolchain.
+  -- MSC-only source files (macOS only, excluded on iOS).
   filter "system:macosx"
     files {
       "dxbc_to_dxil_converter.cc",
       "dxbc_to_dxil_converter.h",
+      "ir_runtime_impl.mm",
       "metal_geometry_shader.cc",
       "metal_geometry_shader.h",
-      "metal_pipeline_cache.cc",
-      "metal_pipeline_cache.h",
       "metal_shader.cc",
       "metal_shader.h",
+      "metal_shader_cache.cc",
+      "metal_shader_cache.h",
       "metal_shader_converter.cc",
       "metal_shader_converter.h",
     }

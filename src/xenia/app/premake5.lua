@@ -231,6 +231,12 @@ project("xenia-app")
       project_root.."/assets/apple/AppIcon.xcassets",
     })
     links({
+      "spirv-cross",
+    })
+  filter({})
+
+  filter("system:macosx")
+    links({
       "xenia-gpu-metal",
       "xenia-ui-metal",
       "spirv-cross",
