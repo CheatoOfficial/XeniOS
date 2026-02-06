@@ -37,25 +37,29 @@ bool MetalPrimitiveProcessor::Initialize() {
   // are no geometry shaders available.  The SpirvShaderTranslator has
   // built-in support for kPointListAsTriangleStrip and
   // kRectangleListAsTriangleStrip host vertex shader types.
-  bool spirvcross = cvars::metal_use_spirvcross;
+  bool spirvcross = true;
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  spirvcross = cvars::metal_use_spirvcross;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
   bool point_sprites_without_expansion = !spirvcross;
   bool rect_lists_without_expansion = !spirvcross;
 
-  if (!InitializeCommon(true,   // full_32bit_vertex_indices_supported
-                        false,  // triangle_fans_supported (will convert)
-                        false,  // line_loops_supported (will convert)
-                        false,  // quad_lists_supported (will convert)
-                        point_sprites_without_expansion,
-                        rect_lists_without_expansion)) {
+  if (!InitializeCommon(
+          true,   // full_32bit_vertex_indices_supported
+          false,  // triangle_fans_supported (will convert)
+          false,  // line_loops_supported (will convert)
+          false,  // quad_lists_supported (will convert)
+          point_sprites_without_expansion,
+          rect_lists_without_expansion))
+  {
     Shutdown();
     return false;
   }
 
-  XELOGI(
-      "MetalPrimitiveProcessor initialized (spirvcross={}, "
-      "vs_point_expansion={}, vs_rect_expansion={})",
-      spirvcross, !point_sprites_without_expansion,
-      !rect_lists_without_expansion);
+  XELOGI("MetalPrimitiveProcessor initialized (spirvcross={}, "
+         "vs_point_expansion={}, vs_rect_expansion={})",
+         spirvcross, !point_sprites_without_expansion,
+         !rect_lists_without_expansion);
   return true;
 }
 
