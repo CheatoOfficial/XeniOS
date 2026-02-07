@@ -28,9 +28,13 @@
 #include "xenia/base/literals.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/mapped_memory.h"
+#include "xenia/base/memory.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/string.h"
 #include "xenia/base/system.h"
+#if XE_PLATFORM_IOS
+#include <sys/mman.h>
+#endif
 #include "xenia/cpu/backend/code_cache.h"
 #include "xenia/cpu/backend/null_backend.h"
 #if XE_ARCH_ARM64
@@ -279,17 +283,44 @@ X_STATUS Emulator::Setup(
   export_resolver_ = std::make_unique<xe::cpu::ExportResolver>();
 
   std::unique_ptr<xe::cpu::backend::Backend> backend;
+
+  // On iOS, probe whether JIT (executable memory) is available at runtime.
+  // JIT requires a debugger attachment (e.g. StikDebug/AltJIT/SideJITServer)
+  // to set the CS_DEBUGGED flag, which allows mmap with PROT_EXEC.
+  // We use the dual-mapping (split W^X via vm_remap) approach, not MAP_JIT.
+#if XE_PLATFORM_IOS
+  bool jit_available = []() {
+    // Test whether we can mmap executable memory (requires CS_DEBUGGED).
+    const size_t test_size = xe::memory::page_size();
+    void* test = mmap(nullptr, test_size, PROT_READ | PROT_EXEC,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (test == MAP_FAILED) {
+      return false;
+    }
+    munmap(test, test_size);
+    return true;
+  }();
+  if (!jit_available) {
+    XELOGW(
+        "JIT is not available. Games will not run.\n"
+        "Enable JIT via StikDebug, AltJIT, or SideJITServer.\n"
+        "If installed via Xcode, launch with the debugger attached.");
+  }
+#else
+  constexpr bool jit_available = true;
+#endif
+
 #if XE_ARCH_AMD64
-  if (cvars::cpu == "x64") {
+  if (jit_available && cvars::cpu == "x64") {
     backend.reset(new xe::cpu::backend::x64::X64Backend());
   }
 #endif  // XE_ARCH_AMD64
 #if XE_ARCH_ARM64
-  if (cvars::cpu == "a64") {
+  if (jit_available && cvars::cpu == "a64") {
     backend.reset(new xe::cpu::backend::a64::A64Backend());
   }
 #endif  // XE_ARCH_ARM64
-  if (cvars::cpu == "any") {
+  if (jit_available && cvars::cpu == "any") {
     if (!backend) {
 #if XE_ARCH_AMD64
       backend.reset(new xe::cpu::backend::x64::X64Backend());
