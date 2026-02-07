@@ -756,54 +756,43 @@ workspace("xenia")
   include("third_party/discord-rpc.lua")
   include("third_party/cxxopts.lua")
   include("third_party/tomlplusplus.lua")
-  include("third_party/ffmpeg-xenia/premake5.lua")
-  -- The FFmpeg premake files are auto-generated and only know about
-  -- Mac/Linux/Windows/Android platforms. Patch in iOS-ARM64 support here so
-  -- the submodule stays unmodified.
+  include("third_party/FFmpeg/premake5.lua")
+  -- The FFmpeg premake files are auto-generated and only know about Mac/Linux/
+  -- Windows/Android platforms.  Patch in iOS-ARM64 support here so the
+  -- submodule stays unmodified.
   if is_ios_target() then
     local ffmpeg_dir = "third_party/FFmpeg"
     project("libavcodec")
       filter("platforms:iOS-ARM64")
-        -- FFmpeg now uses a unified config.h with platform detection.
-        -- Mirror Mac ARM64 FFmpeg source selection on iOS and only force the
-        -- unified config include.
-        buildoptions({ "-include config.h" })
+        buildoptions({ "-include config_macos_aarch64.h" })
         includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
-      filter({})
-    project("libavutil")
-      filter("platforms:iOS-ARM64")
-        buildoptions({ "-include config.h" })
-        includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
-      filter({})
-    project("libavformat")
-      filter("platforms:iOS-ARM64")
-        buildoptions({ "-include config.h" })
-        includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
-      filter({})
-  end
-  -- The generated FFmpeg premake files currently don't include macOS x86_64 in
-  -- their x86 source filters. Add the x86 init sources here so the symbols used
-  -- by common codec/util code are available when targeting Mac-x86_64.
-  if os.istarget("macosx") then
-    local ffmpeg_dir = "third_party/FFmpeg"
-    project("libavcodec")
-      filter("platforms:Mac-x86_64")
         files({
-          ffmpeg_dir .. "/libavcodec/x86/constants.c",
-          ffmpeg_dir .. "/libavcodec/x86/fdctdsp_init.c",
-          ffmpeg_dir .. "/libavcodec/x86/idctdsp_init.c",
-          ffmpeg_dir .. "/libavcodec/x86/mpegaudiodsp.c",
-          ffmpeg_dir .. "/libavcodec/x86/fdct.c",
+          ffmpeg_dir .. "/libavcodec/aarch64/fft_init_aarch64.c",
+          ffmpeg_dir .. "/libavcodec/aarch64/idctdsp_init_aarch64.c",
+          ffmpeg_dir .. "/libavcodec/aarch64/fft_neon.S",
+          ffmpeg_dir .. "/libavcodec/aarch64/simple_idct_neon.S",
+          ffmpeg_dir .. "/libavcodec/aarch64/mdct_neon.S",
         })
       filter({})
     project("libavutil")
-      filter("platforms:Mac-x86_64")
+      filter("platforms:iOS-ARM64")
+        buildoptions({ "-include config_macos_aarch64.h" })
+        includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
         files({
-          ffmpeg_dir .. "/libavutil/x86/cpu.c",
-          ffmpeg_dir .. "/libavutil/x86/fixed_dsp_init.c",
-          ffmpeg_dir .. "/libavutil/x86/float_dsp_init.c",
-          ffmpeg_dir .. "/libavutil/x86/imgutils_init.c",
-          ffmpeg_dir .. "/libavutil/x86/lls_init.c",
+          ffmpeg_dir .. "/libavutil/aarch64/cpu.c",
+          ffmpeg_dir .. "/libavutil/aarch64/float_dsp_init.c",
+          ffmpeg_dir .. "/libavutil/aarch64/float_dsp_neon.S",
+        })
+      filter({})
+    project("libavformat")
+      filter("platforms:iOS-ARM64")
+        buildoptions({ "-include config_macos_aarch64.h" })
+        includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
+        files({
+          ffmpeg_dir .. "/libavformat/network.c",
+          ffmpeg_dir .. "/libavformat/riffdec.c",
+          ffmpeg_dir .. "/libavformat/wavdec.c",
+          ffmpeg_dir .. "/libavformat/pcm.c",
         })
       filter({})
   end
