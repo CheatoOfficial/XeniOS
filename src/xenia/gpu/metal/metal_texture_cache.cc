@@ -2330,22 +2330,25 @@ MTL::Texture* MetalTextureCache::RequestSwapTexture(
   return view;
 }
 
+// Normalize clamp modes to values Metal supports.
+static xenos::ClampMode NormalizeClampModeStatic(
+    xenos::ClampMode clamp_mode) {
+  if (clamp_mode == xenos::ClampMode::kClampToHalfway) {
+    return xenos::ClampMode::kClampToEdge;
+  }
+  if (clamp_mode == xenos::ClampMode::kMirrorClampToHalfway ||
+      clamp_mode == xenos::ClampMode::kMirrorClampToBorder) {
+    return xenos::ClampMode::kMirrorClampToEdge;
+  }
+  return clamp_mode;
+}
+
 // Shared helper: build SamplerParameters from fetch constant + filter
 // overrides.
 static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
     const RegisterFile& regs, uint32_t fetch_constant,
     xenos::TextureFilter req_mag_filter, xenos::TextureFilter req_min_filter,
     xenos::TextureFilter req_mip_filter, xenos::AnisoFilter req_aniso_filter) {
-  auto normalize_clamp_mode = [](xenos::ClampMode clamp_mode) {
-    if (clamp_mode == xenos::ClampMode::kClampToHalfway) {
-      return xenos::ClampMode::kClampToEdge;
-    }
-    if (clamp_mode == xenos::ClampMode::kMirrorClampToHalfway ||
-        clamp_mode == xenos::ClampMode::kMirrorClampToBorder) {
-      return xenos::ClampMode::kMirrorClampToEdge;
-    }
-    return clamp_mode;
-  };
   xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(fetch_constant);
 
   MetalTextureCache::SamplerParameters parameters;
@@ -2353,9 +2356,9 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
   xenos::ClampMode fetch_clamp_x, fetch_clamp_y, fetch_clamp_z;
   texture_util::GetClampModesForDimension(fetch, fetch_clamp_x, fetch_clamp_y,
                                           fetch_clamp_z);
-  parameters.clamp_x = normalize_clamp_mode(fetch_clamp_x);
-  parameters.clamp_y = normalize_clamp_mode(fetch_clamp_y);
-  parameters.clamp_z = normalize_clamp_mode(fetch_clamp_z);
+  parameters.clamp_x = NormalizeClampModeStatic(fetch_clamp_x);
+  parameters.clamp_y = NormalizeClampModeStatic(fetch_clamp_y);
+  parameters.clamp_z = NormalizeClampModeStatic(fetch_clamp_z);
 
   if (xenos::ClampModeUsesBorder(parameters.clamp_x) ||
       xenos::ClampModeUsesBorder(parameters.clamp_y) ||
@@ -2513,14 +2516,7 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
 
 xenos::ClampMode MetalTextureCache::NormalizeClampMode(
     xenos::ClampMode clamp_mode) const {
-  if (clamp_mode == xenos::ClampMode::kClampToHalfway) {
-    return xenos::ClampMode::kClampToEdge;
-  }
-  if (clamp_mode == xenos::ClampMode::kMirrorClampToHalfway ||
-      clamp_mode == xenos::ClampMode::kMirrorClampToBorder) {
-    return xenos::ClampMode::kMirrorClampToEdge;
-  }
-  return clamp_mode;
+  return NormalizeClampModeStatic(clamp_mode);
 }
 
 // GetHostFormatSwizzle implementation
