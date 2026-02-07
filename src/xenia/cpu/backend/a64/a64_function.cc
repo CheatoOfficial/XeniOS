@@ -9,16 +9,7 @@
 
 #include "xenia/cpu/backend/a64/a64_function.h"
 
-#ifdef XE_PLATFORM_APPLE
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#include <mach/vm_map.h>
-#endif
-
-// pthread_jit_write_protect_np is only available on macOS ARM64.
-// On iOS, the dual-mapping (split W^X via vm_remap) path is used instead,
-// so we never need to toggle JIT write protection per-thread.
-#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
+#if XE_PLATFORM_MAC
 #include <pthread.h>
 #endif
 
