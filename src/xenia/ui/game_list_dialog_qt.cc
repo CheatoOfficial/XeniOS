@@ -39,6 +39,7 @@
 #include "xenia/base/string_util.h"
 #include "xenia/base/system.h"
 #include "xenia/base/utf8.h"
+#include "xenia/config.h"
 #include "xenia/emulator.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
@@ -1516,9 +1517,7 @@ std::vector<std::filesystem::path> GameListDialogQt::FindPatchesForTitle(
   scan_patch_directory(storage_patches_dir, true);
 
   // Second, scan executable_dir/game_patches (bundled, read-only patches)
-  auto executable_path = xe::filesystem::GetExecutablePath();
-  auto executable_dir = executable_path.parent_path();
-  auto bundled_patches_dir = executable_dir / "game_patches";
+  auto bundled_patches_dir = config::GetBundledDataPath("game_patches");
   scan_patch_directory(bundled_patches_dir,
                        false);  // Don't overwrite storage_root patches
 

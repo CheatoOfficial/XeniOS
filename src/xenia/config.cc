@@ -50,6 +50,10 @@ std::filesystem::path GetGameConfigPath(const std::string& title_id) {
   return config_folder / "config" / (title_id + game_config_suffix);
 }
 
+std::filesystem::path GetBundledDataPath(const std::string& subdirectory) {
+  return xe::filesystem::GetExecutablePath().parent_path() / subdirectory;
+}
+
 bool sortCvar(cvar::IConfigVar* a, cvar::IConfigVar* b) {
   if (a->category() < b->category()) return true;
   if (a->category() > b->category()) return false;
