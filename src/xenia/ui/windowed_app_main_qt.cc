@@ -45,18 +45,6 @@ int main(int argc, char** argv) {
 
   bool is_game_process = !cvars::target.empty();
 
-#if XE_PLATFORM_LINUX
-  // UI process: Force X11 backend for proper Qt rendering
-  // Game process: Use QT_QPA_PLATFORM if set, otherwise auto-detect
-  if (!is_game_process) {
-    qputenv("QT_QPA_PLATFORM", "xcb");
-  } else {
-    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
-      qunsetenv("QT_QPA_PLATFORM");
-    }
-  }
-#endif
-
   QApplication qt_app(argc, argv);
 
   // Force Fusion style to ensure consistent styling across platforms
