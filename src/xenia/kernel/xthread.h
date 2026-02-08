@@ -487,6 +487,8 @@ class XThread : public XObject, public cpu::Thread {
   // Reentry context for setjmp/longjmp based stack unwinding
   std::jmp_buf reentry_jmp_buf_;
   uint32_t reentry_address_ = 0;
+
+  std::mutex thread_lock_;
 };
 
 class XHostThread : public XThread {
