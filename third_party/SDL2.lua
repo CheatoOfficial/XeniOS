@@ -3,12 +3,17 @@
 -- since SDL2 is our robust API there like DirectX is on Windows.
 --
 
--- SDL2 is not used on iOS or Android.
--- `is_ios_target()` handles sentinel/env/option fallback for broken premake
--- host binaries restored from CI caches.
+-- iOS is handled via the shared target-detection helper so cached premake
+-- host binaries and the explicit XE_TARGET_IOS export all resolve the same way.
 if is_ios_target and is_ios_target() then
-  print("SDL2.lua: skipping (iOS target detected)")
-  function sdl2_include() end
+  print("SDL2.lua: iOS target detected, building from source")
+  include("SDL2-static-ios.lua")
+  function sdl2_include()
+    local third_party_path = os.getcwd()
+    includedirs({
+      path.getrelative(".", third_party_path) .. "/SDL2/include",
+    })
+  end
   return
 end
 
