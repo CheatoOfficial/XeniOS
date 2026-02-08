@@ -9,7 +9,7 @@
 
 #include "xenia/cpu/backend/a64/a64_function.h"
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <pthread.h>
 #endif
 
