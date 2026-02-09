@@ -3,13 +3,18 @@
 -- since SDL2 is our robust API there like DirectX is on Windows.
 --
 
--- iOS is handled via the shared target-detection helper so cached premake
--- host binaries and the explicit XE_TARGET_IOS export all resolve the same way.
-if is_ios_target and is_ios_target() then
+-- iOS detection: on iOS we build SDL2 from source as a static library.
+local _ios =
+    os.isfile(".ios_target")
+    or os.getenv("XE_TARGET_IOS") == "1"
+    or (os.target and os.target() == "ios")
+    or os.istarget("ios")
+    or (_OPTIONS and _OPTIONS["os"] == "ios")
+if _ios then
   print("SDL2.lua: iOS target detected, building from source")
   include("SDL2-static-ios.lua")
+  local third_party_path = os.getcwd()
   function sdl2_include()
-    local third_party_path = os.getcwd()
     includedirs({
       path.getrelative(".", third_party_path) .. "/SDL2/include",
     })
