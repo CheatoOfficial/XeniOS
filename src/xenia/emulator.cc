@@ -1461,8 +1461,11 @@ void Emulator::RelaunchTitle(const std::string& host_path,
   // Tell WaitUntilExit not to fire on_exit when main thread dies.
   relaunching_ = true;
 
-  // Force-terminate all threads. Cooperative shutdown isn't possible since
-  // workers may be stuck in processor_->Execute().
+  // Stop the dispatch thread gracefully before force-terminating threads,
+  // otherwise TerminateThread corrupts the CV it's blocked on.
+  kernel_state_->ShutdownDispatchThread();
+
+  // Force-terminate remaining threads.
   {
     auto threads =
         kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
@@ -2012,7 +2015,10 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
     game_info_database_ =
         std::make_unique<kernel::util::GameInfoDatabase>(db.get());
-    kernel_state_->xam_state()->LoadSpaInfo(db.get(), path);
+    // Don't persist disc path during in-process relaunch; only for
+    // user-initiated file opens.
+    kernel_state_->xam_state()->LoadSpaInfo(
+        db.get(), relaunching_ ? std::filesystem::path{} : path);
 
     // AddTitleToPlayedList is now called inside LoadSpaInfo/UpdateSpaInfo
 

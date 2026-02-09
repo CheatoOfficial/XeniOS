@@ -80,15 +80,7 @@ KernelState::KernelState(Emulator* emulator)
 KernelState::~KernelState() {
   SetExecutableModule(nullptr);
 
-  if (dispatch_thread_running_) {
-    dispatch_thread_running_ = false;
-    if (dispatch_thread_ && dispatch_thread_->is_running()) {
-      dispatch_cond_.notify_all();
-      dispatch_thread_->Wait(0, 0, 0, nullptr);
-    }
-    // Skip notify/Wait if already force-terminated — mutex may be abandoned.
-    dispatch_thread_.reset();
-  }
+  ShutdownDispatchThread();
 
   executable_module_.reset();
   user_modules_.clear();
@@ -101,6 +93,14 @@ KernelState::~KernelState() {
 
   assert_true(shared_kernel_state_ == this);
   shared_kernel_state_ = nullptr;
+}
+
+void KernelState::ShutdownDispatchThread() {
+  if (dispatch_thread_running_) {
+    dispatch_thread_running_ = false;
+    dispatch_cond_.notify_all();
+    dispatch_thread_->Wait(0, 0, 0, nullptr);
+  }
 }
 
 KernelState* KernelState::shared() { return shared_kernel_state_; }
