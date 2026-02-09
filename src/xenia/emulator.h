@@ -313,6 +313,7 @@ class Emulator {
         : name_(std::move(other.name_)),
           path_(std::move(other.path_)),
           data_installation_path_(std::move(other.data_installation_path_)),
+          stfs_path_(std::move(other.stfs_path_)),
           operation_(other.operation_),
           content_size_(other.content_size_),
           currently_installed_size_(other.currently_installed_size_),
@@ -328,6 +329,7 @@ class Emulator {
         name_ = std::move(other.name_);
         path_ = std::move(other.path_);
         data_installation_path_ = std::move(other.data_installation_path_);
+        stfs_path_ = std::move(other.stfs_path_);
         operation_ = other.operation_;
         content_size_ = other.content_size_;
         currently_installed_size_ = other.currently_installed_size_;
@@ -347,6 +349,7 @@ class Emulator {
     std::string name_{};
     std::filesystem::path path_;
     std::filesystem::path data_installation_path_;
+    std::filesystem::path stfs_path_;  // Set when source contains STFS content
     ZarchiveOperation operation_;
 
     uint64_t content_size_ = 0;

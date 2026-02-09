@@ -693,7 +693,9 @@ X_STATUS Emulator::LaunchDiscImage(const std::filesystem::path& path) {
 
 X_STATUS Emulator::LaunchDiscArchive(const std::filesystem::path& path) {
   std::string module_path = FindLaunchModule();
+  XELOGI("LaunchDiscArchive: FindLaunchModule returned '{}'", module_path);
   X_STATUS result = CompleteLaunch(path, module_path);
+  XELOGI("LaunchDiscArchive: CompleteLaunch returned {:08X}", result);
 
   if (result == X_STATUS_NOT_FOUND && !cvars::launch_module.empty()) {
     return LaunchDefaultModule(path);
@@ -1164,12 +1166,46 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
     return X_ERROR_CANCELLED;
   }
 
+  // Mount STFS content via VFS to pack the real game files.
+  std::unique_ptr<vfs::Device> stfs_device;
+  if (!entry.stfs_path_.empty()) {
+    stfs_device =
+        vfs::XContentContainerDevice::CreateContentDevice("", entry.stfs_path_);
+    if (!stfs_device || !stfs_device->Initialize()) {
+      XELOGE("CreateZarchivePackage: Failed to mount STFS content at '{}'",
+             xe::path_to_utf8(entry.stfs_path_));
+      entry.installation_result_ = X_STATUS_UNSUCCESSFUL;
+      entry.installation_error_message_ = "Failed to mount STFS content";
+      entry.installation_state_ = InstallState::failed;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    XELOGI("CreateZarchivePackage: Mounted STFS content from '{}'",
+           xe::path_to_utf8(entry.stfs_path_));
+  }
+
   std::error_code ec;
   entry.content_size_ = 0;
-  for (auto const& dirEntry :
-       std::filesystem::recursive_directory_iterator(inputDirectory, ec)) {
-    if (dirEntry.is_regular_file() && dirEntry.path() != outputFile) {
-      entry.content_size_ += std::filesystem::file_size(dirEntry.path(), ec);
+
+  if (stfs_device) {
+    auto* root = stfs_device->ResolvePath("/");
+    if (root) {
+      std::function<void(vfs::Entry*)> calc_size = [&](vfs::Entry* e) {
+        if (e->attributes() & vfs::kFileAttributeDirectory) {
+          for (auto& child : e->children()) {
+            calc_size(child.get());
+          }
+        } else {
+          entry.content_size_ += e->size();
+        }
+      };
+      calc_size(root);
+    }
+  } else {
+    for (auto const& dirEntry :
+         std::filesystem::recursive_directory_iterator(inputDirectory, ec)) {
+      if (dirEntry.is_regular_file() && dirEntry.path() != outputFile) {
+        entry.content_size_ += std::filesystem::file_size(dirEntry.path(), ec);
+      }
     }
   }
 
@@ -1216,72 +1252,159 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
     return status;
   };
 
-  for (auto const& dirEntry :
-       std::filesystem::recursive_directory_iterator(inputDirectory)) {
-    if (entry.cancelled_.load()) {
-      return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
-    }
-
-    std::filesystem::path pathEntry =
-        std::filesystem::relative(dirEntry.path(), inputDirectory, ec);
-
-    if (ec) {
-      XELOGI("Failed to get relative path {}\n", pathEntry.string());
-      return cleanup_and_fail("Failed to get relative path",
+  if (stfs_device) {
+    // Pack from mounted STFS VFS device
+    auto* root = stfs_device->ResolvePath("/");
+    if (!root) {
+      return cleanup_and_fail("Failed to resolve STFS root",
                               X_STATUS_UNSUCCESSFUL);
     }
 
-    if (dirEntry.is_directory()) {
-      if (!zWriter.MakeDir(pathEntry.generic_string().c_str(), false)) {
-        XELOGI("Failed to create directory {}\n", pathEntry.string());
-        return cleanup_and_fail("Failed to create directory in archive",
-                                X_STATUS_UNSUCCESSFUL);
-      }
-    } else if (dirEntry.is_regular_file()) {
-      // Don't pack itself to prevent infinite packing.
-      if (dirEntry == outputFile) {
-        continue;
+    std::function<X_STATUS(vfs::Entry*)> pack_entry =
+        [&](vfs::Entry* e) -> X_STATUS {
+      if (entry.cancelled_.load()) {
+        return X_ERROR_CANCELLED;
       }
 
-      XELOGI("Adding file: {}\n", pathEntry.string());
-
-      if (!zWriter.StartNewFile(pathEntry.generic_string().c_str())) {
-        XELOGI("Failed to create archive file {}\n", pathEntry.string());
-        return cleanup_and_fail("Failed to create file in archive",
-                                X_STATUS_UNSUCCESSFUL);
+      // Use forward slashes for zarchive paths, skip leading separator
+      std::string entry_path = utf8::fix_path_separators(e->path(), '/');
+      if (!entry_path.empty() && entry_path[0] == '/') {
+        entry_path = entry_path.substr(1);
       }
 
-      std::filesystem::path file_to_pack_path = inputDirectory / pathEntry;
-      FILE* file = xe::filesystem::OpenFile(file_to_pack_path, "rb");
+      if (e->attributes() & vfs::kFileAttributeDirectory) {
+        if (!entry_path.empty()) {
+          if (!zWriter.MakeDir(entry_path.c_str(), false)) {
+            XELOGI("Failed to create directory {}", entry_path);
+            return X_STATUS_UNSUCCESSFUL;
+          }
+        }
+        for (auto& child : e->children()) {
+          X_STATUS result = pack_entry(child.get());
+          if (result != X_STATUS_SUCCESS) {
+            return result;
+          }
+        }
+      } else {
+        XELOGI("Adding file: {}", entry_path);
 
-      if (!file) {
-        XELOGI("Failed to open input file {}\n", pathEntry.string());
-        return cleanup_and_fail("Failed to open input file",
-                                X_STATUS_UNSUCCESSFUL);
-      }
-
-      const uint64_t file_size = std::filesystem::file_size(file_to_pack_path);
-      uint64_t total_bytes_read = 0;
-
-      while (total_bytes_read < file_size) {
-        if (entry.cancelled_.load()) {
-          fclose(file);
-          return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+        if (!zWriter.StartNewFile(entry_path.c_str())) {
+          XELOGI("Failed to create archive file {}", entry_path);
+          return X_STATUS_UNSUCCESSFUL;
         }
 
-        uint64_t bytes_read = fread(buffer.data(), 1, buffer.size(), file);
+        vfs::File* vfs_file = nullptr;
+        X_STATUS result = e->Open(vfs::FileAccess::kFileReadData, &vfs_file);
+        if (result != X_STATUS_SUCCESS || !vfs_file) {
+          XELOGI("Failed to open VFS file {}", entry_path);
+          return X_STATUS_UNSUCCESSFUL;
+        }
 
-        total_bytes_read += bytes_read;
-        entry.currently_installed_size_ += bytes_read;
+        size_t remaining = e->size();
+        size_t offset = 0;
+        while (remaining > 0) {
+          if (entry.cancelled_.load()) {
+            vfs_file->Destroy();
+            return X_ERROR_CANCELLED;
+          }
 
-        zWriter.AppendData(buffer.data(), bytes_read);
+          size_t bytes_read = 0;
+          vfs_file->ReadSync(std::span<uint8_t>(buffer.data(), buffer.size()),
+                             offset, &bytes_read);
+          if (bytes_read == 0) break;
+
+          zWriter.AppendData(buffer.data(), bytes_read);
+          offset += bytes_read;
+          remaining -= bytes_read;
+          entry.currently_installed_size_ += bytes_read;
+        }
+        vfs_file->Destroy();
       }
 
-      fclose(file);
-    }
+      if (packContext.hasError) {
+        return X_STATUS_UNSUCCESSFUL;
+      }
+      return X_STATUS_SUCCESS;
+    };
 
-    if (packContext.hasError) {
-      return cleanup_and_fail("Write error", X_STATUS_UNSUCCESSFUL);
+    X_STATUS result = pack_entry(root);
+    if (result == X_ERROR_CANCELLED) {
+      return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+    }
+    if (result != X_STATUS_SUCCESS) {
+      return cleanup_and_fail("Failed to pack STFS content",
+                              X_STATUS_UNSUCCESSFUL);
+    }
+  } else {
+    // Pack from raw filesystem directory
+    for (auto const& dirEntry :
+         std::filesystem::recursive_directory_iterator(inputDirectory)) {
+      if (entry.cancelled_.load()) {
+        return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+      }
+
+      std::filesystem::path pathEntry =
+          std::filesystem::relative(dirEntry.path(), inputDirectory, ec);
+
+      if (ec) {
+        XELOGI("Failed to get relative path {}\n", pathEntry.string());
+        return cleanup_and_fail("Failed to get relative path",
+                                X_STATUS_UNSUCCESSFUL);
+      }
+
+      if (dirEntry.is_directory()) {
+        if (!zWriter.MakeDir(pathEntry.generic_string().c_str(), false)) {
+          XELOGI("Failed to create directory {}\n", pathEntry.string());
+          return cleanup_and_fail("Failed to create directory in archive",
+                                  X_STATUS_UNSUCCESSFUL);
+        }
+      } else if (dirEntry.is_regular_file()) {
+        // Don't pack itself to prevent infinite packing.
+        if (dirEntry == outputFile) {
+          continue;
+        }
+
+        XELOGI("Adding file: {}\n", pathEntry.string());
+
+        if (!zWriter.StartNewFile(pathEntry.generic_string().c_str())) {
+          XELOGI("Failed to create archive file {}\n", pathEntry.string());
+          return cleanup_and_fail("Failed to create file in archive",
+                                  X_STATUS_UNSUCCESSFUL);
+        }
+
+        std::filesystem::path file_to_pack_path = inputDirectory / pathEntry;
+        FILE* file = xe::filesystem::OpenFile(file_to_pack_path, "rb");
+
+        if (!file) {
+          XELOGI("Failed to open input file {}\n", pathEntry.string());
+          return cleanup_and_fail("Failed to open input file",
+                                  X_STATUS_UNSUCCESSFUL);
+        }
+
+        const uint64_t file_size =
+            std::filesystem::file_size(file_to_pack_path);
+        uint64_t total_bytes_read = 0;
+
+        while (total_bytes_read < file_size) {
+          if (entry.cancelled_.load()) {
+            fclose(file);
+            return cleanup_and_fail("Cancelled", X_ERROR_CANCELLED);
+          }
+
+          uint64_t bytes_read = fread(buffer.data(), 1, buffer.size(), file);
+
+          total_bytes_read += bytes_read;
+          entry.currently_installed_size_ += bytes_read;
+
+          zWriter.AppendData(buffer.data(), bytes_read);
+        }
+
+        fclose(file);
+      }
+
+      if (packContext.hasError) {
+        return cleanup_and_fail("Write error", X_STATUS_UNSUCCESSFUL);
+      }
     }
   }
 

@@ -1521,11 +1521,53 @@ void EmulatorWindow::CreateZarchive() {
     return;
   }
 
+  // Scan for STFS content to get game name/icon before showing save dialog.
+  struct SourceInfo {
+    std::filesystem::path stfs_path;
+    std::string title_name;
+    std::vector<uint8_t> icon_data;
+  };
+  std::vector<SourceInfo> source_infos(content_dirs.size());
+
+  for (size_t i = 0; i < content_dirs.size(); i++) {
+    auto abs_dir = std::filesystem::absolute(content_dirs[i]);
+    std::error_code ec;
+    // Top-level only to avoid false-positives on embedded STFS (DLC, etc.)
+    for (auto const& dirEntry :
+         std::filesystem::directory_iterator(abs_dir, ec)) {
+      if (!source_infos[i].icon_data.empty()) break;
+      if (dirEntry.is_regular_file()) {
+        const auto header =
+            vfs::XContentContainerDevice::ReadContainerHeader(dirEntry.path());
+        if (header && header->content_header.is_magic_valid()) {
+          source_infos[i].stfs_path = dirEntry.path();
+
+          source_infos[i].title_name = xe::to_utf8(
+              header->content_metadata.display_name(XLanguage::kEnglish));
+
+          if (header->content_metadata.title_thumbnail_size > 0 &&
+              header->content_metadata.title_thumbnail_size <=
+                  vfs::XContentMetadata::kThumbLengthV1) {
+            source_infos[i].icon_data.assign(
+                header->content_metadata.title_thumbnail,
+                header->content_metadata.title_thumbnail +
+                    header->content_metadata.title_thumbnail_size);
+          }
+        }
+      }
+    }
+  }
+
+  std::string default_name = content_dirs.front().stem().string();
+  if (content_dirs.size() == 1 && !source_infos[0].title_name.empty()) {
+    default_name = source_infos[0].title_name;
+  }
+
   if (content_dirs.size() == 1) {
     file_picker->set_mode(ui::FilePicker::Mode::kSave);
     file_picker->set_type(ui::FilePicker::Type::kFile);
     file_picker->set_multi_selection(false);
-    file_picker->set_file_name(content_dirs.front().stem().string());
+    file_picker->set_file_name(default_name);
     file_picker->set_default_extension("zar");
     file_picker->set_title("Zarchive File");
     file_picker->set_extensions({
@@ -1546,13 +1588,16 @@ void EmulatorWindow::CreateZarchive() {
   auto zarchive_entries =
       std::make_shared<std::vector<Emulator::ZarchiveEntry>>();
 
-  for (auto& content_path : content_dirs) {
-    auto abs_content_dir = std::filesystem::absolute(content_path);
+  for (size_t i = 0; i < content_dirs.size(); i++) {
+    auto abs_content_dir = std::filesystem::absolute(content_dirs[i]);
     std::filesystem::path abs_zarchive_file;
 
     if (content_dirs.size() > 1) {
+      std::string stem = !source_infos[i].title_name.empty()
+                             ? source_infos[i].title_name
+                             : abs_content_dir.stem().string();
       abs_zarchive_file = std::filesystem::absolute(
-          (zarchive_dir / abs_content_dir.stem()).replace_extension("zar"));
+          (zarchive_dir / stem).replace_extension("zar"));
     } else {
       abs_zarchive_file = std::filesystem::absolute(zarchive_dir);
     }
@@ -1561,36 +1606,8 @@ void EmulatorWindow::CreateZarchive() {
                                    Emulator::ZarchiveOperation::Create);
     auto& entry = zarchive_entries->back();
     entry.name_ = xe::path_to_utf8(abs_zarchive_file.filename());
-
-    // Extract icon/title from STFS content, use title for output filename
-    std::error_code ec;
-    for (auto const& dirEntry :
-         std::filesystem::recursive_directory_iterator(abs_content_dir, ec)) {
-      if (!entry.icon_data_.empty()) break;
-      if (dirEntry.is_regular_file()) {
-        const auto header =
-            vfs::XContentContainerDevice::ReadContainerHeader(dirEntry.path());
-        if (header && header->content_header.is_magic_valid()) {
-          auto title_name = xe::to_utf8(
-              header->content_metadata.display_name(XLanguage::kEnglish));
-          if (!title_name.empty()) {
-            auto new_zarchive_file =
-                abs_zarchive_file.parent_path() / (title_name + ".zar");
-            entry.data_installation_path_ = new_zarchive_file;
-            entry.name_ = title_name + ".zar";
-          }
-
-          if (header->content_metadata.title_thumbnail_size > 0 &&
-              header->content_metadata.title_thumbnail_size <=
-                  vfs::XContentMetadata::kThumbLengthV1) {
-            entry.icon_data_.assign(
-                header->content_metadata.title_thumbnail,
-                header->content_metadata.title_thumbnail +
-                    header->content_metadata.title_thumbnail_size);
-          }
-        }
-      }
-    }
+    entry.stfs_path_ = source_infos[i].stfs_path;
+    entry.icon_data_ = std::move(source_infos[i].icon_data);
   }
 
   // Show dialog first, then start creation
