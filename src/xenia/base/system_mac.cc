@@ -35,9 +35,9 @@ bool LaunchWithOpen(const std::string_view target) {
   }
   constexpr char kOpenPath[] = "/usr/bin/open";
   std::string target_string(target);
-  std::array<char*, 3> argv = {const_cast<char*>(kOpenPath),
-                               const_cast<char*>(target_string.c_str()),
-                               nullptr};
+  std::array<char*, 4> argv = {
+      const_cast<char*>(kOpenPath), const_cast<char*>("--"),
+      const_cast<char*>(target_string.c_str()), nullptr};
   char** envp = *_NSGetEnviron();
   pid_t pid = 0;
   int spawn_result =
