@@ -1335,11 +1335,12 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     write_descriptor_set_dest.pTexelBufferView = nullptr;
   }
   // TODO(Triang3l): Use a single 512 MB shared memory binding if possible.
-  // Aligning because if the data for a vector in a storage buffer is provided
-  // partially, the value read may still be (0, 0, 0, 0), and small (especially
-  // linear) textures won't be loaded correctly.
-  uint32_t source_length_alignment = UINT32_C(1)
-                                     << load_shader_info.source_bpe_log2;
+  // Align to the greater of the source element size and 16 bytes because
+  // shaders may read multiple blocks at once, while still preserving Xenios's
+  // scaled-resolve buffer binding path.
+  uint32_t source_length_alignment =
+      std::max(uint32_t(16),
+               uint32_t(UINT32_C(1) << load_shader_info.source_bpe_log2));
   VkDescriptorSet descriptor_set_source_base = VK_NULL_HANDLE;
   VkDescriptorSet descriptor_set_source_mips = VK_NULL_HANDLE;
   VkDescriptorBufferInfo write_descriptor_set_source_base_buffer_info;
@@ -1440,8 +1441,10 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
         vulkan_shared_memory.buffer();
     write_descriptor_set_source_mips_buffer_info.offset = texture_key.mip_page
                                                           << 12;
+    // Align (primarily the last row of a linear packed mip tail) because
+    // shaders use up to 16-byte loads for multiple blocks at once.
     write_descriptor_set_source_mips_buffer_info.range =
-        xe::align(vulkan_texture.GetGuestMipsSize(), source_length_alignment);
+        xe::align(vulkan_texture.GetGuestMipsSize(), uint32_t(16));
     VkWriteDescriptorSet& write_descriptor_set_source_mips =
         write_descriptor_sets[write_descriptor_set_count++];
     write_descriptor_set_source_mips.sType =
