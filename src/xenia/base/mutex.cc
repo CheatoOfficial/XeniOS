@@ -242,9 +242,9 @@ bool xe_fast_mutex::try_lock() {
 }
 
 #endif
-// chrispy: moved this out of body of function to eliminate the initialization
-// guards
-static global_mutex_type global_mutex;
-global_mutex_type& global_critical_region::mutex() { return global_mutex; }
+global_mutex_type& global_critical_region::mutex() {
+  static global_mutex_type global_mutex;
+  return global_mutex;
+}
 
 }  // namespace xe
