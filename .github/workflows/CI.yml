@@ -773,7 +773,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux-x86_64, build-macos-arm64, build-windows-x86_64]
+    needs: [build-linux-x86_64, build-windows-x86_64]
     runs-on: ubuntu-latest
     if: |
       github.repository == 'has207/xenia-edge' &&
@@ -785,18 +785,6 @@ jobs:
         with:
           name: xenia_edge_linux_x86_64
           path: linux_x86_64_artifacts
-
-      - name: Download macOS ARM64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_macos_arm64
-          path: macos_arm64_artifacts
-
-      - name: Download macOS x86_64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_macos_x86_64
-          path: macos_x86_64_artifacts
 
       - name: Download Windows x86_64 artifacts
         uses: actions/download-artifact@main
@@ -812,10 +800,6 @@ jobs:
           # Prepare release artifacts
           cd linux_x86_64_artifacts
           mv xenia_edge.AppImage ../xenia_edge_linux_x86_64.AppImage
-          cd ../macos_arm64_artifacts
-          mv xenia_edge_macos.dmg ../xenia_edge_macos_arm64.dmg
-          cd ../macos_x86_64_artifacts
-          mv xenia_edge_macos_x86_64.dmg ../
           cd ../windows_x86_64_artifacts
           7z a ../xenia_edge_windows_x86_64.zip * -xr!'*.pdb' -mx9 -bb3
           cd ..
@@ -824,7 +808,5 @@ jobs:
           tag=${GITHUB_SHA::7}
           gh release create $tag \
             xenia_edge_linux_x86_64.AppImage \
-            xenia_edge_macos_arm64.dmg \
-            xenia_edge_macos_x86_64.dmg \
             xenia_edge_windows_x86_64.zip \
             --target $GITHUB_SHA -t "xenia_edge" --generate-notes
