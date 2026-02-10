@@ -89,9 +89,7 @@ void CrashDump() {
 }
 
 xe::memory::PageAccess ToPageAccess(uint32_t protect) {
-  // Write-combine memory is CPU-writable (for GPU uploads)
-  bool is_writable =
-      (protect & kMemoryProtectWrite) || (protect & kMemoryProtectWriteCombine);
+  bool is_writable = IsWritableProtect(protect);
 
   if ((protect & kMemoryProtectRead) && !is_writable) {
     return xe::memory::PageAccess::kReadOnly;
@@ -818,7 +816,7 @@ void BaseHeap::DumpMap() {
       state_name = "RES";
     }
     char access_r = (page.current_protect & kMemoryProtectRead) ? 'R' : ' ';
-    char access_w = (page.current_protect & kMemoryProtectWrite) ? 'W' : ' ';
+    char access_w = IsWritableProtect(page.current_protect) ? 'W' : ' ';
     XELOGE("  {:08X}-{:08X} {:6d}p {:10d}b {} {}{}",
            heap_base_ + i * page_size_,
            heap_base_ + (i + page.region_page_count) * page_size_,
@@ -875,7 +873,7 @@ bool BaseHeap::Restore(ByteStream* stream) {
 
     memory::PageAccess page_access = memory::PageAccess::kNoAccess;
     if ((page.current_protect & kMemoryProtectRead) &&
-        (page.current_protect & kMemoryProtectWrite)) {
+        IsWritableProtect(page.current_protect)) {
       page_access = memory::PageAccess::kReadWrite;
     } else if (page.current_protect & kMemoryProtectRead) {
       page_access = memory::PageAccess::kReadOnly;
@@ -996,7 +994,7 @@ bool BaseHeap::AllocFixed(uint32_t base_address, uint32_t size,
       return false;
     }
 
-    if (cvars::scribble_heap && protect & kMemoryProtectWrite) {
+    if (cvars::scribble_heap && IsWritableProtect(protect)) {
       RandomizeMemory(result, page_count * page_size_);
     }
   }
@@ -1158,7 +1156,7 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
       return false;
     }
 
-    if (cvars::scribble_heap && (protect & kMemoryProtectWrite)) {
+    if (cvars::scribble_heap && IsWritableProtect(protect)) {
       RandomizeMemory(result, page_count << page_size_shift_);
     }
   }
@@ -1725,7 +1723,7 @@ bool PhysicalHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
 
   // Only invalidate if making writable again, for simplicity - not when simply
   // marking some range as immutable, for instance.
-  if (protect & kMemoryProtectWrite) {
+  if (IsWritableProtect(protect)) {
     TriggerCallbacks(std::move(global_lock), address, size, true, true, false);
   }
 

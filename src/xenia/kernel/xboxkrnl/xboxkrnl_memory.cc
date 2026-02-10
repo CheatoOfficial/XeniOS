@@ -215,14 +215,14 @@ dword_result_t NtAllocateVirtualMemory_entry(lpdword_t base_addr_ptr,
       // Use the smaller of adjusted_size and the actual allocated region size
       uint32_t size_to_zero = std::min(adjusted_size, alloc_info.region_size);
 
-      if (!(protect & kMemoryProtectWrite)) {
+      if (!IsWritableProtect(protect)) {
         heap->Protect(address, size_to_zero,
                       kMemoryProtectRead | kMemoryProtectWrite);
       }
       if (!was_commited) {
         kernel_memory()->Zero(address, size_to_zero);
       }
-      if (!(protect & kMemoryProtectWrite)) {
+      if (!IsWritableProtect(protect)) {
         heap->Protect(address, size_to_zero, protect);
       }
     }
