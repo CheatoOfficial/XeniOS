@@ -444,6 +444,18 @@ void QtWindow::ApplyNewFullscreen() {
 
   if (!destruction_receiver.IsWindowDestroyedOrClosed()) {
     HandleSizeUpdate(destruction_receiver);
+
+    // Hide cursor immediately when entering fullscreen.
+    if (IsFullscreen() &&
+        GetCursorVisibility() == CursorVisibility::kAutoHidden) {
+      cursor_currently_auto_hidden_ = true;
+      if (cursor_auto_hide_timer_) {
+        cursor_auto_hide_timer_->stop();
+        delete cursor_auto_hide_timer_;
+        cursor_auto_hide_timer_ = nullptr;
+      }
+      UpdateCursorVisibility();
+    }
   }
 }
 
