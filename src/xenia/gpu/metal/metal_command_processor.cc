@@ -5607,6 +5607,53 @@ bool MetalCommandProcessor::IssueCopy() {
     return false;
   }
 
+  ReadbackResolveMode readback_mode = GetReadbackResolveMode();
+  bool do_readback = (readback_mode != ReadbackResolveMode::kDisabled);
+  bool readback_scaled = false;
+  bool readback_scaled_gpu = false;
+  bool use_gpu_downscale = false;
+  bool readback_scheduled = false;
+  ReadbackBuffer* readback_buffer = nullptr;
+  uint32_t write_index = 0;
+  uint32_t read_index = 0;
+  bool use_delayed_sync = false;
+  bool wait_for_completion = false;
+  bool should_copy = false;
+  bool is_cache_miss = false;
+  uint32_t source_length = 0;
+  uint32_t readback_length = 0;
+  uint32_t tile_count = 0;
+  uint32_t pixel_size_log2 = 0;
+  uint32_t scale_x = 1;
+  uint32_t scale_y = 1;
+  bool half_pixel_offset = false;
+  uint32_t source_offset_bytes = 0;
+  uint64_t scaled_range_offset_bytes = 0;
+  uint64_t readback_base_offset_bytes = 0;
+  uint64_t scaled_copy_length = 0;
+  size_t source_buffer_binding_offset = 0;
+  uint64_t source_offset_bytes_log = 0;
+
+  if (do_readback) {
+    // Early check: if destination memory is not accessible, skip readback.
+    VirtualHeap* physical_heap = memory_->GetPhysicalHeap();
+    bool memory_accessible = false;
+    if (physical_heap) {
+      HeapAllocationInfo alloc_info;
+      if (physical_heap->QueryRegionInfo(written_address, &alloc_info) &&
+          (alloc_info.state & kMemoryAllocationCommit) &&
+          IsWritableProtect(alloc_info.protect)) {
+        uint32_t end_address = written_address + written_length;
+        uint32_t region_end = alloc_info.base_address + alloc_info.region_size;
+        if (end_address <= region_end) {
+          memory_accessible = true;
+        }
+      }
+    }
+    if (!memory_accessible) {
+      do_readback = false;
+    }
+  }
   if (!written_length) {
     // Keep the submission open for no-op copies and let primary-buffer end,
     // swap, or explicit sync points choose the commit boundary.

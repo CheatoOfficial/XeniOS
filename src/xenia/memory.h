@@ -57,6 +57,13 @@ enum MemoryProtectFlag : uint32_t {
   kMemoryProtectNoAccess = 0,
 };
 
+// Write-combine memory is CPU-writable (for GPU uploads), so treat it
+// as writable alongside the regular write flag.
+inline bool IsWritableProtect(uint32_t protect) {
+  return (protect & kMemoryProtectWrite) ||
+         (protect & kMemoryProtectWriteCombine);
+}
+
 // Equivalent to the Win32 MEMORY_BASIC_INFORMATION struct.
 struct HeapAllocationInfo {
   // A pointer to the base address of the region of pages.
