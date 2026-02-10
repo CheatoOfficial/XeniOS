@@ -29,7 +29,7 @@ DEFINE_bool(
     "GPU");
 
 DEFINE_double(
-    depth_bias_decal_clamp, 0.01,
+    depth_bias_decal_clamp, 0.0,
     "Minimum depth bias for projected decals. Set to 0 to disable. UE3 titles "
     "often use very small bias values (~0.00005) that cause Z-fighting on "
     "near-coplanar decal projections with host render target paths.",
