@@ -14,6 +14,7 @@ project("xenia-apu")
   })
   includedirs({
     project_root.."/third_party/FFmpeg",
+    project_root.."/third_party/ffmpeg-xenia",
   })
   filter("platforms:Linux-*")
     links({

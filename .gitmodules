@@ -63,7 +63,7 @@
 [submodule "third_party/FFmpeg"]
 	path = third_party/FFmpeg
 	url = https://github.com/has207/FFmpeg.git
-	branch = macos-unified
+	branch = xmaframes
 [submodule "third_party/premake-androidndk"]
 	path = third_party/premake-androidndk
 	url = https://github.com/Triang3l/premake-androidndk.git

@@ -756,7 +756,7 @@ workspace("xenia")
   include("third_party/discord-rpc.lua")
   include("third_party/cxxopts.lua")
   include("third_party/tomlplusplus.lua")
-  include("third_party/FFmpeg/premake5.lua")
+  include("third_party/ffmpeg-xenia/premake5.lua")
   -- The FFmpeg premake files are auto-generated and only know about
   -- Mac/Linux/Windows/Android platforms. Patch in iOS-ARM64 support here so
   -- the submodule stays unmodified.
