@@ -134,7 +134,8 @@ X64Backend::X64Backend() : Backend(), code_cache_(nullptr) {
   if (!buf_trampoline_code) {
 #if XE_PLATFORM_MAC && XE_ARCH_AMD64
     XELOGW(
-        "Failed to allocate fixed guest trampoline range, trying VM_FLAGS_4GB_CHUNK.");
+        "Failed to allocate fixed guest trampoline range, trying "
+        "VM_FLAGS_4GB_CHUNK.");
     mach_vm_size_t trampoline_size =
         sizeof(guest_trampoline_template) * MAX_GUEST_TRAMPOLINES;
     constexpr mach_vm_address_t kMax32BitAddress = 0x100000000ULL;
@@ -254,8 +255,9 @@ bool X64Backend::Initialize(Processor* processor) {
   Xbyak::util::Cpu cpu;
 #if XE_PLATFORM_MAC
   if (!cpu.has(Xbyak::util::Cpu::tAVX)) {
-    XELOGE("This CPU does not support AVX. The emulator will now crash.");
-    return false;
+    XELOGW(
+        "This CPU does not support AVX. Continuing anyway (performance and "
+        "compatibility may be reduced).");
   }
 #else
   if (!cpu.has(Xbyak::util::Cpu::tAVX)) {
