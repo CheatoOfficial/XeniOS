@@ -98,9 +98,33 @@ class ScopedAutoreleasePool {
 #if XE_PLATFORM_IOS
 constexpr size_t kTransferTileInstanceBufferMaxBytes =
     64ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftBaseBytes =
+    4ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftLowCoverageBytes =
+    8ull * 1024ull * 1024ull;
+constexpr uint64_t kTransferTileInstanceLowCoverageRatioDivisor = 8ull;
+constexpr uint64_t kTransferTileInstanceMediumCoverageRatioDivisor = 3ull;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyCount = 4;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyNumerator = 1;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyDenominator = 2;
+constexpr size_t kTransferTileInstanceNearCapReserveBytes =
+    8ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceNearCapUsagePercent = 84;
 #else
 constexpr size_t kTransferTileInstanceBufferMaxBytes =
     256ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftBaseBytes =
+    32ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftLowCoverageBytes =
+    64ull * 1024ull * 1024ull;
+constexpr uint64_t kTransferTileInstanceLowCoverageRatioDivisor = 3ull;
+constexpr uint64_t kTransferTileInstanceMediumCoverageRatioDivisor = 2ull;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyCount = 2;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyNumerator = 3;
+constexpr size_t kTransferTileInstanceSmallRectPenaltyDenominator = 4;
+constexpr size_t kTransferTileInstanceNearCapReserveBytes =
+    32ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceNearCapUsagePercent = 90;
 #endif
 
 MTL::ComputePipelineState* CreateComputePipelineFromEmbeddedLibrary(
@@ -5164,6 +5188,14 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       uint32_t tile_y_end = 0;
     };
     bool transfer_tile_instance_budget_hit = false;
+    bool transfer_tile_instance_adaptive_cutoff_hit = false;
+    size_t transfer_tile_instance_adaptive_candidate_bytes = 0;
+    size_t transfer_tile_instance_adaptive_limit_bytes = 0;
+    uint32_t transfer_tile_instance_adaptive_rect_count = 0;
+    bool transfer_tile_instance_predictive_cutoff_hit = false;
+    size_t transfer_tile_instance_predictive_used_bytes = 0;
+    size_t transfer_tile_instance_predictive_candidate_bytes = 0;
+    size_t transfer_tile_instance_predictive_threshold_bytes = 0;
 
     auto allocate_instance_buffer = [&](size_t size, MTL::Buffer*& buffer,
                                         size_t& offset) -> bool {
@@ -5260,6 +5292,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       --max_tile_y;
       std::vector<TransferTileBatchBuildInfo> build_infos;
       size_t total_instance_bytes = 0;
+      uint64_t total_covered_pixels = 0;
       constexpr size_t kAlignment = 256;
       for (uint32_t rect_index = 0; rect_index < rectangle_count;
            ++rect_index) {
@@ -5298,6 +5331,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         info.batch.scissor.y = scaled_y;
         info.batch.scissor.width = scaled_width;
         info.batch.scissor.height = scaled_height;
+        total_covered_pixels += uint64_t(scaled_width) * uint64_t(scaled_height);
         total_instance_bytes = xe::align(total_instance_bytes, kAlignment);
         info.batch.buffer_offset = total_instance_bytes;
         total_instance_bytes +=
@@ -5306,6 +5340,74 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       }
 
       if (build_infos.empty() || !total_instance_bytes) {
+        return false;
+      }
+
+      size_t adaptive_soft_limit_bytes = kTransferTileInstanceSoftBaseBytes;
+      if (dest_width && dest_height) {
+        uint64_t dest_pixels = uint64_t(dest_width) * uint64_t(dest_height);
+        if (total_covered_pixels *
+                kTransferTileInstanceLowCoverageRatioDivisor <=
+            dest_pixels) {
+          adaptive_soft_limit_bytes = kTransferTileInstanceSoftLowCoverageBytes;
+        } else if (total_covered_pixels *
+                       kTransferTileInstanceMediumCoverageRatioDivisor <=
+                   dest_pixels) {
+          adaptive_soft_limit_bytes =
+              (kTransferTileInstanceSoftBaseBytes +
+               kTransferTileInstanceSoftLowCoverageBytes) /
+              2;
+        }
+      }
+      if (build_infos.size() <= kTransferTileInstanceSmallRectPenaltyCount &&
+          adaptive_soft_limit_bytes > (kAlignment * 64)) {
+        size_t penalized_soft_limit_bytes =
+            adaptive_soft_limit_bytes *
+            kTransferTileInstanceSmallRectPenaltyNumerator /
+            kTransferTileInstanceSmallRectPenaltyDenominator;
+        adaptive_soft_limit_bytes =
+            std::max(penalized_soft_limit_bytes, kAlignment * 64);
+      }
+      adaptive_soft_limit_bytes =
+          std::min(adaptive_soft_limit_bytes, kTransferTileInstanceBufferMaxBytes);
+      if (total_instance_bytes > adaptive_soft_limit_bytes) {
+        transfer_tile_instance_adaptive_cutoff_hit = true;
+        transfer_tile_instance_adaptive_candidate_bytes = total_instance_bytes;
+        transfer_tile_instance_adaptive_limit_bytes = adaptive_soft_limit_bytes;
+        transfer_tile_instance_adaptive_rect_count =
+            uint32_t(build_infos.size());
+        return false;
+      }
+
+      size_t current_frame_instance_offset = 0;
+      if (transfer_tile_instance_buffer_frame_id_ == frame_id_) {
+        current_frame_instance_offset =
+            xe::align(transfer_tile_instance_buffer_offset_, kAlignment);
+      }
+      size_t near_cap_threshold_by_percent =
+          kTransferTileInstanceBufferMaxBytes *
+          kTransferTileInstanceNearCapUsagePercent / 100;
+      size_t near_cap_threshold_by_reserve = 0;
+      if (kTransferTileInstanceBufferMaxBytes >
+          kTransferTileInstanceNearCapReserveBytes) {
+        near_cap_threshold_by_reserve =
+            kTransferTileInstanceBufferMaxBytes -
+            kTransferTileInstanceNearCapReserveBytes;
+      }
+      size_t near_cap_threshold_bytes =
+          std::min(near_cap_threshold_by_percent, near_cap_threshold_by_reserve);
+      size_t projected_instance_bytes = current_frame_instance_offset;
+      if (projected_instance_bytes >
+              kTransferTileInstanceBufferMaxBytes - total_instance_bytes ||
+          projected_instance_bytes + total_instance_bytes >
+              near_cap_threshold_bytes) {
+        transfer_tile_instance_predictive_cutoff_hit = true;
+        transfer_tile_instance_predictive_used_bytes =
+            current_frame_instance_offset;
+        transfer_tile_instance_predictive_candidate_bytes =
+            total_instance_bytes;
+        transfer_tile_instance_predictive_threshold_bytes =
+            near_cap_threshold_bytes;
         return false;
       }
 
@@ -6062,6 +6164,34 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
                 rectangles, rectangle_count, constants,
                 mode_info.uses_host_depth,
                 shader_key.host_depth_source_is_copy != 0, tile_batches);
+            if (!use_tile_instancing &&
+                transfer_tile_instance_predictive_cutoff_hit) {
+              static uint64_t last_tile_predictive_log_frame = 0;
+              if (last_tile_predictive_log_frame != frame_id_) {
+                XELOGI(
+                    "Metal transfer tile instancing fallback: predicted "
+                    "frame usage {} KiB + {} KiB near cap {} KiB",
+                    transfer_tile_instance_predictive_used_bytes >> 10,
+                    transfer_tile_instance_predictive_candidate_bytes >> 10,
+                    transfer_tile_instance_predictive_threshold_bytes >> 10);
+                last_tile_predictive_log_frame = frame_id_;
+              }
+              transfer_tile_instance_predictive_cutoff_hit = false;
+            }
+            if (!use_tile_instancing &&
+                transfer_tile_instance_adaptive_cutoff_hit) {
+              static uint64_t last_tile_adaptive_log_frame = 0;
+              if (last_tile_adaptive_log_frame != frame_id_) {
+                XELOGI(
+                    "Metal transfer tile instancing fallback: adaptive cutoff "
+                    "{} KiB > {} KiB (rects={})",
+                    transfer_tile_instance_adaptive_candidate_bytes >> 10,
+                    transfer_tile_instance_adaptive_limit_bytes >> 10,
+                    transfer_tile_instance_adaptive_rect_count);
+                last_tile_adaptive_log_frame = frame_id_;
+              }
+              transfer_tile_instance_adaptive_cutoff_hit = false;
+            }
             if (!use_tile_instancing && transfer_tile_instance_budget_hit) {
               static uint64_t last_tile_budget_log_frame = 0;
               if (last_tile_budget_log_frame != frame_id_) {
