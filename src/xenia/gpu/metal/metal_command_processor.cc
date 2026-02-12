@@ -2495,6 +2495,32 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
   }
 }
 
+void MetalCommandProcessor::OnPrimaryBufferEnd() {
+  if (!cvars::submit_on_primary_buffer_end) {
+    return;
+  }
+  if (!current_command_buffer_) {
+    return;
+  }
+  if (!CanEndSubmissionImmediately()) {
+    return;
+  }
+  EndCommandBuffer();
+}
+
+bool MetalCommandProcessor::CanEndSubmissionImmediately() {
+  if (!current_command_buffer_) {
+    return true;
+  }
+  if (!cvars::async_shader_compilation || msl_shader_compile_threads_.empty()) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(msl_shader_compile_mutex_);
+  return msl_shader_compile_busy_ == 0 && msl_shader_compile_queue_.empty() &&
+         msl_pipeline_compile_queue_.empty() &&
+         msl_shader_compile_pending_.empty() &&
+         msl_pipeline_compile_pending_.empty();
+}
 Shader* MetalCommandProcessor::LoadShader(xenos::ShaderType shader_type,
                                           uint32_t guest_address,
                                           const uint32_t* host_address,
