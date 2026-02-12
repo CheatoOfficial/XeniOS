@@ -146,6 +146,9 @@ class MetalTextureCache : public TextureCache {
   bool TryGpuLoadTexture(Texture& texture, bool load_base, bool load_mips);
   MTL::StorageMode GetCacheTextureStorageMode() const;
   bool ShouldUploadViaBlit() const;
+  void BeginUploadCommandBufferBatch();
+  void EndUploadCommandBufferBatch();
+  void AbortUploadCommandBufferBatch();
 
   // Format / load shader mapping for Metal texture loading.
   bool IsDecompressionNeededForKey(TextureKey key) const;
@@ -225,6 +228,9 @@ class MetalTextureCache : public TextureCache {
                              uint32_t length_scaled_alignment_log2,
                              uint64_t& start_scaled_out,
                              uint64_t& length_scaled_out) const;
+  bool IsScaledResolveRangeResident(
+      uint32_t start_unscaled, uint32_t length_unscaled,
+      uint32_t length_scaled_alignment_log2) const;
   bool EnsureScaledResolveBufferRange(uint64_t start_scaled,
                                       uint64_t length_scaled);
   void ClearScaledResolveBuffers();
@@ -253,6 +259,9 @@ class MetalTextureCache : public TextureCache {
   class UploadBufferPool;
   mutable std::mutex upload_buffer_pool_mutex_;
   std::shared_ptr<UploadBufferPool> upload_buffer_pool_;
+  MTL::CommandBuffer* upload_batch_command_buffer_ = nullptr;
+  bool upload_batch_command_buffer_has_work_ = false;
+  uint32_t upload_batch_depth_ = 0;
   std::unique_ptr<MetalHeapPool> texture_heap_pool_;
 
   std::vector<ScaledResolveBuffer> scaled_resolve_buffers_;
