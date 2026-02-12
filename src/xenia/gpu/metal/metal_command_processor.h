@@ -166,7 +166,6 @@ class MetalCommandProcessor : public CommandProcessor {
   // Command buffer management
   void BeginCommandBuffer();
   void EndCommandBuffer();
-  bool CanEndSubmissionImmediately();
   void WaitForPendingCompletionHandlers();
   void ProcessCompletedSubmissions();
   bool EnsureDrawRingCapacity();
