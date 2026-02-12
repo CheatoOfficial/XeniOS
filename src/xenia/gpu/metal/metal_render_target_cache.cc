@@ -3299,7 +3299,7 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
 
 MTL::Texture* MetalRenderTargetCache::CreateColorTexture(
     uint32_t width, uint32_t height, xenos::ColorRenderTargetFormat format,
-    uint32_t samples) {
+    uint32_t samples, bool allow_unpooled_fallback) {
   MTL::PixelFormat resource_format = GetColorResourcePixelFormat(format);
   MTL::PixelFormat draw_format = GetColorDrawPixelFormat(format);
   MTL::PixelFormat transfer_format =
@@ -3326,7 +3326,7 @@ MTL::Texture* MetalRenderTargetCache::CreateColorTexture(
   if (render_target_heap_pool_) {
     texture = render_target_heap_pool_->CreateTexture(desc);
   }
-  if (!texture) {
+  if (!texture && (!render_target_heap_pool_ || allow_unpooled_fallback)) {
     texture = device_->newTexture(desc);
   }
   desc->release();
@@ -3658,30 +3658,66 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
       }
     }
 
-    uint64_t dummy_key = 0;
-    if (current_depth_target_) {
-      dummy_key = 0x100000000ull | uint64_t(current_depth_target_->key().key);
-    } else if (last_real_color_targets_[0]) {
-      dummy_key =
-          0x200000000ull | uint64_t(last_real_color_targets_[0]->key().key);
-    } else if (last_real_depth_target_) {
-      dummy_key = 0x300000000ull | uint64_t(last_real_depth_target_->key().key);
-    } else {
-      dummy_key = uint64_t(width) | (uint64_t(height) << 20) |
-                  (uint64_t(samples) << 40);
-    }
+    uint32_t dummy_sample_count =
+        samples >= 4u ? 4u : (samples == 2u ? 2u : 1u);
+    // Cache dummy color targets by shape/format only so depth-only passes with
+    // changing EDRAM bases can reuse the same transient attachment.
+    uint64_t dummy_key = uint64_t(width & 0xFFFFu) |
+                         (uint64_t(height & 0xFFFFu) << 16) |
+                         (uint64_t(dummy_sample_count & 0xFFu) << 32) |
+                         (uint64_t(uint32_t(fmt) & 0xFFFFu) << 40);
+    auto evict_oldest_dummy_target = [&](uint64_t keep_key) -> bool {
+      uint64_t oldest_key = 0;
+      uint64_t oldest_frame = frame_id_;
+      bool found = false;
+      for (const auto& it : dummy_color_targets_) {
+        if (it.first == keep_key) {
+          continue;
+        }
+        if (!found || it.second.last_used_frame < oldest_frame) {
+          oldest_frame = it.second.last_used_frame;
+          oldest_key = it.first;
+          found = true;
+        }
+      }
+      if (found) {
+        dummy_color_targets_.erase(oldest_key);
+      }
+      return found;
+    };
+
     auto& entry = dummy_color_targets_[dummy_key];
     if (!entry.target || !entry.target->texture()) {
       RenderTargetKey dummy_rt_key;
       dummy_rt_key.key = 0;
       dummy_rt_key.is_depth = 0;
       dummy_rt_key.resource_format = uint32_t(fmt);
-      dummy_rt_key.msaa_samples = (samples >= 4u)   ? xenos::MsaaSamples::k4X
-                                  : (samples == 2u) ? xenos::MsaaSamples::k2X
-                                                    : xenos::MsaaSamples::k1X;
+      dummy_rt_key.msaa_samples =
+          dummy_sample_count >= 4u   ? xenos::MsaaSamples::k4X
+          : dummy_sample_count == 2u ? xenos::MsaaSamples::k2X
+                                     : xenos::MsaaSamples::k1X;
       entry.target = std::make_unique<MetalRenderTarget>(dummy_rt_key);
       entry.last_cleared_frame = frame_id_ - 1;
-      MTL::Texture* tex = CreateColorTexture(width, height, fmt, samples);
+      // Try to keep dummy target allocations in the heap budget first.
+      MTL::Texture* tex =
+          CreateColorTexture(width, height, fmt, dummy_sample_count, false);
+      while (!tex && render_target_heap_pool_ &&
+             dummy_color_targets_.size() > 1 &&
+             evict_oldest_dummy_target(dummy_key)) {
+        tex = CreateColorTexture(width, height, fmt, dummy_sample_count, false);
+      }
+      if (!tex) {
+        static uint64_t last_unpooled_fallback_log_frame = 0;
+        if (render_target_heap_pool_ &&
+            last_unpooled_fallback_log_frame != frame_id_) {
+          XELOGW(
+              "Metal RT dummy target: heap allocation failed for {}x{} {}x; "
+              "falling back to unpooled texture",
+              width, height, dummy_sample_count);
+          last_unpooled_fallback_log_frame = frame_id_;
+        }
+        tex = CreateColorTexture(width, height, fmt, dummy_sample_count, true);
+      }
       entry.target->SetTexture(tex);
       if (tex) {
         MTL::PixelFormat resource_format = GetColorResourcePixelFormat(fmt);
@@ -3703,23 +3739,15 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     entry.last_used_frame = frame_id_;
     dummy_color_target_ = entry.target.get();
 
-    constexpr size_t kMaxDummyColorTargets = 64;
-    if (dummy_color_targets_.size() > kMaxDummyColorTargets) {
-      uint64_t oldest_key = 0;
-      uint64_t oldest_frame = frame_id_;
-      bool found = false;
-      for (const auto& it : dummy_color_targets_) {
-        if (it.first == dummy_key) {
-          continue;
-        }
-        if (!found || it.second.last_used_frame < oldest_frame) {
-          oldest_frame = it.second.last_used_frame;
-          oldest_key = it.first;
-          found = true;
-        }
-      }
-      if (found) {
-        dummy_color_targets_.erase(oldest_key);
+    // Keep this cache small - dummy targets are transient fallback attachments.
+#if XE_PLATFORM_IOS
+    constexpr size_t kMaxDummyColorTargets = 4;
+#else
+    constexpr size_t kMaxDummyColorTargets = 8;
+#endif
+    while (dummy_color_targets_.size() > kMaxDummyColorTargets) {
+      if (!evict_oldest_dummy_target(dummy_key)) {
+        break;
       }
     }
 
@@ -5606,6 +5634,53 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     const std::vector<Transfer>& transfers_for_shaders =
         used_blit ? filtered_transfers : transfers;
 
+    auto is_full_target_rectangle = [&](const Transfer::Rectangle& rect) -> bool {
+      uint32_t scaled_x = 0;
+      uint32_t scaled_y = 0;
+      uint32_t scaled_width = 0;
+      uint32_t scaled_height = 0;
+      if (!get_scaled_rect(rect, scaled_x, scaled_y, scaled_width,
+                           scaled_height)) {
+        return false;
+      }
+      return !scaled_x && !scaled_y && scaled_width == dest_width &&
+             scaled_height == dest_height;
+    };
+
+    auto transfers_fully_overwrite_target = [&]() -> bool {
+      if (transfers_for_shaders.empty()) {
+        return false;
+      }
+      for (const Transfer& transfer : transfers_for_shaders) {
+        Transfer::Rectangle rectangles[Transfer::kMaxRectanglesWithCutout];
+        uint32_t rectangle_count = transfer.GetRectangles(
+            dest_key.base_tiles, dest_key.GetPitchTiles(),
+            dest_key.msaa_samples, IsKey64bpp(dest_key), rectangles,
+            resolve_clear_rectangle);
+        if (rectangle_count != 1 || !is_full_target_rectangle(rectangles[0])) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    bool resolve_clear_fully_overwrites_target = false;
+    if (resolve_clear_needed && resolve_clear_rectangle) {
+      resolve_clear_fully_overwrites_target =
+          is_full_target_rectangle(*resolve_clear_rectangle);
+    }
+
+    // Prefer DontCare on transfer-pass loads only when destination contents are
+    // provably fully overwritten by this pass.
+    bool transfer_pass_load_dontcare =
+        resolve_clear_fully_overwrites_target && transfers_for_shaders.empty();
+    if (!transfer_pass_load_dontcare && !resolve_clear_needed) {
+      transfer_pass_load_dontcare = transfers_fully_overwrite_target();
+    }
+    MTL::LoadAction transfer_load_action = transfer_pass_load_dontcare
+                                               ? MTL::LoadActionDontCare
+                                               : MTL::LoadActionLoad;
+
     MTL::RenderCommandEncoder* transfer_encoder = nullptr;
     auto ensure_transfer_encoder = [&]() -> MTL::RenderCommandEncoder* {
       if (transfer_encoder) {
@@ -5616,19 +5691,19 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       if (dest_is_depth) {
         auto* da = rp->depthAttachment();
         da->setTexture(dest_texture);
-        da->setLoadAction(MTL::LoadActionLoad);
+        da->setLoadAction(transfer_load_action);
         da->setStoreAction(MTL::StoreActionStore);
         if (dest_pixel_format == MTL::PixelFormatDepth32Float_Stencil8 ||
             dest_pixel_format == MTL::PixelFormatDepth24Unorm_Stencil8) {
           auto* sa = rp->stencilAttachment();
           sa->setTexture(dest_texture);
-          sa->setLoadAction(MTL::LoadActionLoad);
+          sa->setLoadAction(transfer_load_action);
           sa->setStoreAction(MTL::StoreActionStore);
         }
       } else {
         auto* ca = rp->colorAttachments()->object(0);
         ca->setTexture(dest_texture);
-        ca->setLoadAction(MTL::LoadActionLoad);
+        ca->setLoadAction(transfer_load_action);
         ca->setStoreAction(MTL::StoreActionStore);
       }
       transfer_encoder = cmd->renderCommandEncoder(rp);
