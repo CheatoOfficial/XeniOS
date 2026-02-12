@@ -98,8 +98,7 @@ class ScopedAutoreleasePool {
 #if XE_PLATFORM_IOS
 constexpr size_t kTransferTileInstanceBufferMaxBytes =
     64ull * 1024ull * 1024ull;
-constexpr size_t kTransferTileInstanceSoftBaseBytes =
-    4ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftBaseBytes = 4ull * 1024ull * 1024ull;
 constexpr size_t kTransferTileInstanceSoftLowCoverageBytes =
     8ull * 1024ull * 1024ull;
 constexpr uint64_t kTransferTileInstanceLowCoverageRatioDivisor = 8ull;
@@ -113,8 +112,7 @@ constexpr size_t kTransferTileInstanceNearCapUsagePercent = 84;
 #else
 constexpr size_t kTransferTileInstanceBufferMaxBytes =
     256ull * 1024ull * 1024ull;
-constexpr size_t kTransferTileInstanceSoftBaseBytes =
-    32ull * 1024ull * 1024ull;
+constexpr size_t kTransferTileInstanceSoftBaseBytes = 32ull * 1024ull * 1024ull;
 constexpr size_t kTransferTileInstanceSoftLowCoverageBytes =
     64ull * 1024ull * 1024ull;
 constexpr uint64_t kTransferTileInstanceLowCoverageRatioDivisor = 3ull;
@@ -3330,7 +3328,8 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
 
 MTL::Texture* MetalRenderTargetCache::CreateColorTexture(
     uint32_t width, uint32_t height, xenos::ColorRenderTargetFormat format,
-    uint32_t samples, bool allow_unpooled_fallback) {
+    uint32_t samples, bool transient_render_target_only,
+    bool allow_unpooled_fallback) {
   MTL::PixelFormat resource_format = GetColorResourcePixelFormat(format);
   MTL::PixelFormat draw_format = GetColorDrawPixelFormat(format);
   MTL::PixelFormat transfer_format =
@@ -3345,20 +3344,34 @@ MTL::Texture* MetalRenderTargetCache::CreateColorTexture(
   desc->setTextureType(samples > 1 ? MTL::TextureType2DMultisample
                                    : MTL::TextureType2D);
   desc->setSampleCount(samples);
-  MTL::TextureUsage usage =
-      MTL::TextureUsageRenderTarget | MTL::TextureUsageShaderRead;
+  MTL::TextureUsage usage = MTL::TextureUsageRenderTarget;
+  if (!transient_render_target_only) {
+    usage |= MTL::TextureUsageShaderRead;
+  }
   if (needs_pixel_format_view) {
     usage |= MTL::TextureUsagePixelFormatView;
   }
   desc->setUsage(usage);
-  desc->setStorageMode(MTL::StorageModePrivate);
 
   MTL::Texture* texture = nullptr;
-  if (render_target_heap_pool_) {
-    texture = render_target_heap_pool_->CreateTexture(desc);
-  }
-  if (!texture && (!render_target_heap_pool_ || allow_unpooled_fallback)) {
+  bool can_use_memoryless = false;
+#if XE_PLATFORM_IOS
+  can_use_memoryless = transient_render_target_only && !needs_pixel_format_view;
+#endif
+  if (can_use_memoryless) {
+    // Dummy fallback color targets are transient (load/store don't care) and
+    // never sampled - memoryless is optimal on iOS TBDR.
+    desc->setStorageMode(MTL::StorageModeMemoryless);
     texture = device_->newTexture(desc);
+  }
+  if (!texture) {
+    desc->setStorageMode(MTL::StorageModePrivate);
+    if (render_target_heap_pool_ && !can_use_memoryless) {
+      texture = render_target_heap_pool_->CreateTexture(desc);
+    }
+    if (!texture && (!render_target_heap_pool_ || allow_unpooled_fallback)) {
+      texture = device_->newTexture(desc);
+    }
   }
   desc->release();
   // Initial clear is handled on first bind via load actions; avoid
@@ -3729,13 +3742,18 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
                                      : xenos::MsaaSamples::k1X;
       entry.target = std::make_unique<MetalRenderTarget>(dummy_rt_key);
       entry.last_cleared_frame = frame_id_ - 1;
-      // Try to keep dummy target allocations in the heap budget first.
+      // Prefer memoryless transient attachments on iOS (inside
+      // CreateColorTexture), otherwise keep dummy allocations in heap budget.
       MTL::Texture* tex =
-          CreateColorTexture(width, height, fmt, dummy_sample_count, false);
+          CreateColorTexture(width, height, fmt, dummy_sample_count,
+                             /*transient_render_target_only=*/true,
+                             /*allow_unpooled_fallback=*/false);
       while (!tex && render_target_heap_pool_ &&
              dummy_color_targets_.size() > 1 &&
              evict_oldest_dummy_target(dummy_key)) {
-        tex = CreateColorTexture(width, height, fmt, dummy_sample_count, false);
+        tex = CreateColorTexture(width, height, fmt, dummy_sample_count,
+                                 /*transient_render_target_only=*/true,
+                                 /*allow_unpooled_fallback=*/false);
       }
       if (!tex) {
         static uint64_t last_unpooled_fallback_log_frame = 0;
@@ -3747,7 +3765,9 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
               width, height, dummy_sample_count);
           last_unpooled_fallback_log_frame = frame_id_;
         }
-        tex = CreateColorTexture(width, height, fmt, dummy_sample_count, true);
+        tex = CreateColorTexture(width, height, fmt, dummy_sample_count,
+                                 /*transient_render_target_only=*/true,
+                                 /*allow_unpooled_fallback=*/true);
       }
       entry.target->SetTexture(tex);
       if (tex) {
@@ -5307,7 +5327,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         info.batch.scissor.y = scaled_y;
         info.batch.scissor.width = scaled_width;
         info.batch.scissor.height = scaled_height;
-        total_covered_pixels += uint64_t(scaled_width) * uint64_t(scaled_height);
+        total_covered_pixels +=
+            uint64_t(scaled_width) * uint64_t(scaled_height);
         total_instance_bytes = xe::align(total_instance_bytes, kAlignment);
         info.batch.buffer_offset = total_instance_bytes;
         total_instance_bytes +=
@@ -5344,8 +5365,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         adaptive_soft_limit_bytes =
             std::max(penalized_soft_limit_bytes, kAlignment * 64);
       }
-      adaptive_soft_limit_bytes =
-          std::min(adaptive_soft_limit_bytes, kTransferTileInstanceBufferMaxBytes);
+      adaptive_soft_limit_bytes = std::min(adaptive_soft_limit_bytes,
+                                           kTransferTileInstanceBufferMaxBytes);
       if (total_instance_bytes > adaptive_soft_limit_bytes) {
         transfer_tile_instance_adaptive_cutoff_hit = true;
         transfer_tile_instance_adaptive_candidate_bytes = total_instance_bytes;
@@ -5370,8 +5391,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
             kTransferTileInstanceBufferMaxBytes -
             kTransferTileInstanceNearCapReserveBytes;
       }
-      size_t near_cap_threshold_bytes =
-          std::min(near_cap_threshold_by_percent, near_cap_threshold_by_reserve);
+      size_t near_cap_threshold_bytes = std::min(near_cap_threshold_by_percent,
+                                                 near_cap_threshold_by_reserve);
       size_t projected_instance_bytes = current_frame_instance_offset;
       if (projected_instance_bytes >
               kTransferTileInstanceBufferMaxBytes - total_instance_bytes ||
@@ -5476,20 +5497,18 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       return true;
     };
 
-    auto build_rect_instance_stream = [&](
-                                          const Transfer::Rectangle* rectangles,
-                                          uint32_t rectangle_count,
-                                          MTL::Buffer*& out_buffer,
-                                          size_t& out_buffer_offset,
-                                          uint32_t& out_instance_count)
-        -> bool {
+    auto build_rect_instance_stream =
+        [&](const Transfer::Rectangle* rectangles, uint32_t rectangle_count,
+            MTL::Buffer*& out_buffer, size_t& out_buffer_offset,
+            uint32_t& out_instance_count) -> bool {
       out_buffer = nullptr;
       out_buffer_offset = 0;
       out_instance_count = 0;
       if (!rectangles || !rectangle_count) {
         return false;
       }
-      size_t buffer_size = size_t(rectangle_count) * sizeof(TransferRectInstance);
+      size_t buffer_size =
+          size_t(rectangle_count) * sizeof(TransferRectInstance);
       if (!buffer_size) {
         return false;
       }
@@ -5771,7 +5790,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     const std::vector<Transfer>& transfers_for_shaders =
         used_blit ? filtered_transfers : transfers;
 
-    auto is_full_target_rectangle = [&](const Transfer::Rectangle& rect) -> bool {
+    auto is_full_target_rectangle =
+        [&](const Transfer::Rectangle& rect) -> bool {
       uint32_t scaled_x = 0;
       uint32_t scaled_y = 0;
       uint32_t scaled_width = 0;
@@ -5808,8 +5828,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     }
 
     bool resolve_clear_via_load_action = false;
-    MTL::ClearColor resolve_clear_color =
-        MTL::ClearColor(0.0, 0.0, 0.0, 0.0);
+    MTL::ClearColor resolve_clear_color = MTL::ClearColor(0.0, 0.0, 0.0, 0.0);
     double resolve_clear_depth = 1.0;
     uint32_t resolve_clear_stencil = 0;
     if (resolve_clear_needed && resolve_clear_fully_overwrites_target) {
@@ -5916,7 +5935,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     // Prefer DontCare on transfer-pass loads only when destination contents are
     // provably fully overwritten by this pass.
     bool transfer_pass_load_dontcare = false;
-    if (resolve_clear_fully_overwrites_target && !resolve_clear_via_load_action) {
+    if (resolve_clear_fully_overwrites_target &&
+        !resolve_clear_via_load_action) {
       transfer_pass_load_dontcare = true;
     }
     if (!transfer_pass_load_dontcare && !resolve_clear_needed) {
@@ -6124,42 +6144,24 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       MTL::RenderCommandEncoder* encoder = ensure_transfer_encoder();
       if (encoder) {
         bool transfer_viewport_full_set = false;
-        bool transfer_scissor_full_set = false;
-        auto set_full_transfer_viewport_scissor = [&]() {
-          if (transfer_viewport_full_set) {
-            if (!transfer_scissor_full_set) {
-              MTL::ScissorRect scissor;
-              scissor.x = 0;
-              scissor.y = 0;
-              scissor.width = dest_width;
-              scissor.height = dest_height;
-              encoder->setScissorRect(scissor);
-              transfer_scissor_full_set = true;
-            }
-            return;
-          }
-          MTL::Viewport vp;
-          vp.originX = 0.0;
-          vp.originY = 0.0;
-          vp.width = double(dest_width);
-          vp.height = double(dest_height);
-          vp.znear = 0.0;
-          vp.zfar = 1.0;
-          encoder->setViewport(vp);
-          MTL::ScissorRect scissor;
-          scissor.x = 0;
-          scissor.y = 0;
-          scissor.width = dest_width;
-          scissor.height = dest_height;
-          encoder->setScissorRect(scissor);
-          transfer_viewport_full_set = true;
-          transfer_scissor_full_set = true;
-        };
+        MTL::ScissorRect last_transfer_scissor = {};
+        bool last_transfer_scissor_valid = false;
         MTL::RenderPipelineState* last_transfer_pipeline = nullptr;
         MTL::DepthStencilState* last_transfer_depth_state = nullptr;
         MTL::Buffer* last_transfer_fragment_buffer_1 = nullptr;
         std::array<MTL::Texture*, 3> last_transfer_fragment_textures = {
             nullptr, nullptr, nullptr};
+        bool last_transfer_stencil_reference_valid = false;
+        uint32_t last_transfer_stencil_reference = 0;
+        bool transfer_constants_valid = false;
+        TransferShaderConstants last_transfer_constants = {};
+        enum class TransferVertexSlot1Binding { kNone, kBuffer, kBytes };
+        TransferVertexSlot1Binding last_transfer_vertex_slot_1_binding =
+            TransferVertexSlot1Binding::kNone;
+        MTL::Buffer* last_transfer_vertex_buffer_1 = nullptr;
+        size_t last_transfer_vertex_buffer_1_offset = 0;
+        bool last_transfer_vertex_bytes_1_valid = false;
+        TransferRectInstance last_transfer_vertex_bytes_1 = {};
         auto bind_transfer_pipeline = [&](MTL::RenderPipelineState* pipeline) {
           if (last_transfer_pipeline != pipeline) {
             encoder->setRenderPipelineState(pipeline);
@@ -6187,6 +6189,102 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
             encoder->setFragmentBuffer(buffer, 0, 1);
             last_transfer_fragment_buffer_1 = buffer;
           }
+        };
+        auto bind_transfer_stencil_reference = [&](uint32_t reference) {
+          if (!last_transfer_stencil_reference_valid ||
+              last_transfer_stencil_reference != reference) {
+            encoder->setStencilReferenceValue(reference);
+            last_transfer_stencil_reference = reference;
+            last_transfer_stencil_reference_valid = true;
+          }
+        };
+        auto bind_transfer_constants =
+            [&](const TransferShaderConstants& constants) {
+              if (!transfer_constants_valid ||
+                  std::memcmp(&last_transfer_constants, &constants,
+                              sizeof(constants)) != 0) {
+                encoder->setVertexBytes(&constants, sizeof(constants), 0);
+                encoder->setFragmentBytes(&constants, sizeof(constants), 0);
+                last_transfer_constants = constants;
+                transfer_constants_valid = true;
+              }
+            };
+        auto bind_transfer_scissor = [&](const MTL::ScissorRect& scissor) {
+          if (!last_transfer_scissor_valid ||
+              last_transfer_scissor.x != scissor.x ||
+              last_transfer_scissor.y != scissor.y ||
+              last_transfer_scissor.width != scissor.width ||
+              last_transfer_scissor.height != scissor.height) {
+            encoder->setScissorRect(scissor);
+            last_transfer_scissor = scissor;
+            last_transfer_scissor_valid = true;
+          }
+        };
+        auto bind_transfer_vertex_buffer_1 = [&](MTL::Buffer* buffer,
+                                                 size_t offset) {
+          if (last_transfer_vertex_slot_1_binding !=
+                  TransferVertexSlot1Binding::kBuffer ||
+              last_transfer_vertex_buffer_1 != buffer ||
+              last_transfer_vertex_buffer_1_offset != offset) {
+            encoder->setVertexBuffer(buffer, offset, 1);
+            last_transfer_vertex_slot_1_binding =
+                TransferVertexSlot1Binding::kBuffer;
+            last_transfer_vertex_buffer_1 = buffer;
+            last_transfer_vertex_buffer_1_offset = offset;
+            last_transfer_vertex_bytes_1_valid = false;
+          }
+        };
+        auto bind_transfer_vertex_bytes_1 =
+            [&](const TransferRectInstance& rect_instance) {
+              if (last_transfer_vertex_slot_1_binding !=
+                      TransferVertexSlot1Binding::kBytes ||
+                  !last_transfer_vertex_bytes_1_valid ||
+                  std::memcmp(&last_transfer_vertex_bytes_1, &rect_instance,
+                              sizeof(rect_instance)) != 0) {
+                encoder->setVertexBytes(&rect_instance, sizeof(rect_instance),
+                                        1);
+                last_transfer_vertex_slot_1_binding =
+                    TransferVertexSlot1Binding::kBytes;
+                last_transfer_vertex_buffer_1 = nullptr;
+                last_transfer_vertex_buffer_1_offset = 0;
+                last_transfer_vertex_bytes_1 = rect_instance;
+                last_transfer_vertex_bytes_1_valid = true;
+              }
+            };
+        auto bind_transfer_vertex_bytes_1_span =
+            [&](const TransferRectInstance* rect_instances,
+                uint32_t rect_instance_count) {
+              if (!rect_instances || !rect_instance_count) {
+                return;
+              }
+              encoder->setVertexBytes(
+                  rect_instances,
+                  size_t(rect_instance_count) * sizeof(TransferRectInstance),
+                  1);
+              last_transfer_vertex_slot_1_binding =
+                  TransferVertexSlot1Binding::kBytes;
+              last_transfer_vertex_buffer_1 = nullptr;
+              last_transfer_vertex_buffer_1_offset = 0;
+              last_transfer_vertex_bytes_1_valid = false;
+            };
+        auto set_full_transfer_viewport_scissor = [&]() {
+          if (!transfer_viewport_full_set) {
+            MTL::Viewport vp;
+            vp.originX = 0.0;
+            vp.originY = 0.0;
+            vp.width = double(dest_width);
+            vp.height = double(dest_height);
+            vp.znear = 0.0;
+            vp.zfar = 1.0;
+            encoder->setViewport(vp);
+            transfer_viewport_full_set = true;
+          }
+          MTL::ScissorRect scissor;
+          scissor.x = 0;
+          scissor.y = 0;
+          scissor.width = dest_width;
+          scissor.height = dest_height;
+          bind_transfer_scissor(scissor);
         };
 
         std::vector<Transfer::Rectangle> merged_transfer_rectangles;
@@ -6226,8 +6324,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
           const TransferShaderKey& shader_key = invocation.shader_key;
           const TransferModeInfo& mode_info =
               kTransferModeInfos[size_t(shader_key.mode)];
-          bool is_stencil_bit =
-              mode_info.output == TransferOutput::kStencilBit;
+          bool is_stencil_bit = mode_info.output == TransferOutput::kStencilBit;
           bool needs_source_stencil =
               !mode_info.source_is_color &&
               (mode_info.output == TransferOutput::kColor ||
@@ -6295,8 +6392,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
                   bind_transfer_fragment_buffer_1(dummy);
                 }
               }
-              MTL::Texture* dummy_host_depth =
-                  GetTransferDummyDepthTexture(1);
+              MTL::Texture* dummy_host_depth = GetTransferDummyDepthTexture(1);
               if (!dummy_host_depth) {
                 continue;
               }
@@ -6406,6 +6502,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
           MTL::Buffer* rect_instance_buffer = nullptr;
           size_t rect_instance_buffer_offset = 0;
           uint32_t rect_instance_count = 0;
+          std::vector<TransferRectInstance> rect_instance_fallback;
           bool use_tile_instancing = false;
           if (::cvars::metal_transfer_tile_instancing) {
             use_tile_instancing = build_tile_batches(
@@ -6452,11 +6549,35 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
               transfer_tile_instance_budget_hit = false;
             }
           }
-          if (!use_tile_instancing && rectangle_count > 1) {
-            build_rect_instance_stream(
-                merged_transfer_rectangles.data(), rectangle_count,
-                rect_instance_buffer, rect_instance_buffer_offset,
-                rect_instance_count);
+          if (!use_tile_instancing) {
+            if (rectangle_count > 1) {
+              build_rect_instance_stream(merged_transfer_rectangles.data(),
+                                         rectangle_count, rect_instance_buffer,
+                                         rect_instance_buffer_offset,
+                                         rect_instance_count);
+            }
+            if (!rect_instance_buffer || !rect_instance_count) {
+              rect_instance_fallback.reserve(rectangle_count);
+              for (uint32_t rect_index = 0; rect_index < rectangle_count;
+                   ++rect_index) {
+                uint32_t scaled_x = 0;
+                uint32_t scaled_y = 0;
+                uint32_t scaled_width = 0;
+                uint32_t scaled_height = 0;
+                if (!get_scaled_rect(merged_transfer_rectangles[rect_index],
+                                     scaled_x, scaled_y, scaled_width,
+                                     scaled_height) ||
+                    !scaled_width || !scaled_height) {
+                  continue;
+                }
+                TransferRectInstance rect_instance = {};
+                rect_instance.origin_x = float(scaled_x);
+                rect_instance.origin_y = float(scaled_y);
+                rect_instance.size_x = float(scaled_width);
+                rect_instance.size_y = float(scaled_height);
+                rect_instance_fallback.push_back(rect_instance);
+              }
+            }
           }
 
           MTL::RenderPipelineState* pipeline = GetOrCreateTransferPipelines(
@@ -6481,51 +6602,46 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
 
           auto draw_transfer = [&](uint32_t sample_id) {
             constants.dest_sample_id = sample_id;
+            bind_transfer_constants(constants);
             if (use_tile_instancing) {
               set_full_transfer_viewport_scissor();
-              encoder->setVertexBytes(&constants, sizeof(constants), 0);
-              encoder->setFragmentBytes(&constants, sizeof(constants), 0);
               for (const auto& batch : tile_batches) {
-                encoder->setScissorRect(batch.scissor);
-                encoder->setVertexBuffer(batch.buffer, batch.buffer_offset, 1);
+                bind_transfer_scissor(batch.scissor);
+                bind_transfer_vertex_buffer_1(batch.buffer,
+                                              batch.buffer_offset);
                 encoder->drawPrimitives(MTL::PrimitiveTypeTriangleStrip,
                                         NS::UInteger(0), NS::UInteger(4),
                                         NS::UInteger(batch.instance_count));
               }
             } else {
-              encoder->setVertexBytes(&constants, sizeof(constants), 0);
-              encoder->setFragmentBytes(&constants, sizeof(constants), 0);
               if (rect_instance_buffer && rect_instance_count) {
                 set_full_transfer_viewport_scissor();
-                encoder->setVertexBuffer(rect_instance_buffer,
-                                         rect_instance_buffer_offset, 1);
+                bind_transfer_vertex_buffer_1(rect_instance_buffer,
+                                              rect_instance_buffer_offset);
                 encoder->drawPrimitives(MTL::PrimitiveTypeTriangleStrip,
                                         NS::UInteger(0), NS::UInteger(4),
                                         NS::UInteger(rect_instance_count));
-              } else {
+              } else if (!rect_instance_fallback.empty()) {
                 set_full_transfer_viewport_scissor();
-                for (uint32_t rect_index = 0; rect_index < rectangle_count;
-                     ++rect_index) {
-                  uint32_t scaled_x = 0;
-                  uint32_t scaled_y = 0;
-                  uint32_t scaled_width = 0;
-                  uint32_t scaled_height = 0;
-                  if (!get_scaled_rect(merged_transfer_rectangles[rect_index],
-                                       scaled_x, scaled_y, scaled_width,
-                                       scaled_height) ||
-                      !scaled_width || !scaled_height) {
-                    continue;
+                constexpr uint32_t kTransferRectInlineBatchMax = 240;
+                const TransferRectInstance* rect_instances =
+                    rect_instance_fallback.data();
+                uint32_t rect_instances_remaining =
+                    uint32_t(rect_instance_fallback.size());
+                while (rect_instances_remaining) {
+                  uint32_t batch_count = std::min(rect_instances_remaining,
+                                                  kTransferRectInlineBatchMax);
+                  if (batch_count == 1) {
+                    bind_transfer_vertex_bytes_1(*rect_instances);
+                  } else {
+                    bind_transfer_vertex_bytes_1_span(rect_instances,
+                                                      batch_count);
                   }
-                  TransferRectInstance rect_instance = {};
-                  rect_instance.origin_x = float(scaled_x);
-                  rect_instance.origin_y = float(scaled_y);
-                  rect_instance.size_x = float(scaled_width);
-                  rect_instance.size_y = float(scaled_height);
-                  encoder->setVertexBytes(&rect_instance, sizeof(rect_instance),
-                                          1);
                   encoder->drawPrimitives(MTL::PrimitiveTypeTriangleStrip,
                                           NS::UInteger(0), NS::UInteger(4),
-                                          NS::UInteger(1));
+                                          NS::UInteger(batch_count));
+                  rect_instances += batch_count;
+                  rect_instances_remaining -= batch_count;
                 }
               }
             }
@@ -6541,7 +6657,7 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
               constants.stencil_mask = uint32_t(1) << bit;
               constants.stencil_clear = 0;
               bind_transfer_depth_state(stencil_state);
-              encoder->setStencilReferenceValue(uint32_t(1) << bit);
+              bind_transfer_stencil_reference(uint32_t(1) << bit);
               draw_transfer_samples(draw_transfer);
             }
           } else {
@@ -6821,8 +6937,7 @@ MTL::RenderPipelineState* MetalRenderTargetCache::GetOrCreateTransferPipelines(
 
   std::string source;
   source.reserve(16384);
-  append_define(source, "XE_TRANSFER_SOURCE_IS_COLOR",
-                source_is_color ? 1 : 0);
+  append_define(source, "XE_TRANSFER_SOURCE_IS_COLOR", source_is_color ? 1 : 0);
   append_define(source, "XE_TRANSFER_SOURCE_IS_DEPTH", source_is_color ? 0 : 1);
   append_define(source, "XE_TRANSFER_SOURCE_NEEDS_STENCIL",
                 source_needs_stencil ? 1 : 0);
@@ -8633,7 +8748,8 @@ fragment TransferDepthOut transfer_ps(
     return nullptr;
   }
 
-  const char* vs_entry = tile_instanced ? "transfer_tile_vs" : "transfer_rect_vs";
+  const char* vs_entry =
+      tile_instanced ? "transfer_tile_vs" : "transfer_rect_vs";
   auto vs_name = NS::String::string(vs_entry, NS::UTF8StringEncoding);
   auto ps_name = NS::String::string("transfer_ps", NS::UTF8StringEncoding);
   MTL::Function* vs = lib->newFunction(vs_name);
