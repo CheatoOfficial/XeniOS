@@ -876,6 +876,21 @@ MTL::RenderPipelineState* MetalCommandProcessor::CreateMslPipelineState(
     }
   }
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  {
+    std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+    if (pipeline_binary_archive_) {
+      NS::Array* archives = NS::Array::array(pipeline_binary_archive_);
+      desc->setBinaryArchives(archives);
+      NS::Error* archive_error = nullptr;
+      if (pipeline_binary_archive_->addRenderPipelineFunctions(desc,
+                                                               &archive_error)) {
+        pipeline_binary_archive_dirty_ = true;
+      }
+    }
+  }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
   NS::Error* error = nullptr;
   MTL::RenderPipelineState* pipeline =
       device_->newRenderPipelineState(desc, &error);
@@ -1996,8 +2011,12 @@ bool MetalCommandProcessor::InitializeShaderStorageInternal(
     InitializePipelineBinaryArchive(pipeline_binary_archive_path_);
   }
 
-  if (blocking && pipeline_binary_archive_ &&
-      !pipeline_disk_cache_entries_.empty()) {
+  bool prewarm_binary_archive = false;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+    prewarm_binary_archive = pipeline_binary_archive_ != nullptr;
+  }
+  if (blocking && prewarm_binary_archive && !pipeline_disk_cache_entries_.empty()) {
     PrewarmPipelineBinaryArchive(pipeline_disk_cache_entries_);
   }
 
@@ -2005,10 +2024,26 @@ bool MetalCommandProcessor::InitializeShaderStorageInternal(
 }
 
 void MetalCommandProcessor::ShutdownShaderStorage() {
-  if (pipeline_binary_archive_) {
-    SerializePipelineBinaryArchive();
-    pipeline_binary_archive_->release();
-    pipeline_binary_archive_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+    if (pipeline_binary_archive_) {
+      if (pipeline_binary_archive_dirty_) {
+        NS::String* path_string =
+            NS::String::string(pipeline_binary_archive_path_.string().c_str(),
+                               NS::UTF8StringEncoding);
+        NS::URL* url = NS::URL::fileURLWithPath(path_string);
+        NS::Error* error = nullptr;
+        if (!pipeline_binary_archive_->serializeToURL(url, &error)) {
+          if (error) {
+            XELOGW("Metal binary archive serialize failed: {}",
+                   error->localizedDescription()->utf8String());
+          }
+        }
+        pipeline_binary_archive_dirty_ = false;
+      }
+      pipeline_binary_archive_->release();
+      pipeline_binary_archive_ = nullptr;
+    }
   }
   if (pipeline_disk_cache_file_) {
     std::fclose(pipeline_disk_cache_file_);
@@ -2197,6 +2232,7 @@ bool MetalCommandProcessor::InitializePipelineBinaryArchive(
   if (!device_) {
     return false;
   }
+  std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
   if (pipeline_binary_archive_) {
     pipeline_binary_archive_->release();
     pipeline_binary_archive_ = nullptr;
@@ -2225,6 +2261,7 @@ bool MetalCommandProcessor::InitializePipelineBinaryArchive(
 }
 
 void MetalCommandProcessor::SerializePipelineBinaryArchive() {
+  std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
   if (!pipeline_binary_archive_ || !pipeline_binary_archive_dirty_) {
     return;
   }
@@ -2243,11 +2280,17 @@ void MetalCommandProcessor::SerializePipelineBinaryArchive() {
 
 void MetalCommandProcessor::PrewarmPipelineBinaryArchive(
     const std::vector<PipelineDiskCacheEntry>& entries) {
-  if (!pipeline_binary_archive_ || entries.empty()) {
+  if (entries.empty()) {
     return;
   }
   if (!g_metal_shader_cache || !g_metal_shader_cache->IsInitialized()) {
     return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+    if (!pipeline_binary_archive_) {
+      return;
+    }
   }
 
   size_t prewarmed = 0;
@@ -2380,11 +2423,16 @@ void MetalCommandProcessor::PrewarmPipelineBinaryArchive(
       vertex_desc->release();
     }
 
-    NS::Array* archives = NS::Array::array(pipeline_binary_archive_);
-    desc->setBinaryArchives(archives);
-    if (pipeline_binary_archive_->addRenderPipelineFunctions(desc, &error)) {
-      pipeline_binary_archive_dirty_ = true;
-      ++prewarmed;
+    {
+      std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+      if (pipeline_binary_archive_) {
+        NS::Array* archives = NS::Array::array(pipeline_binary_archive_);
+        desc->setBinaryArchives(archives);
+        if (pipeline_binary_archive_->addRenderPipelineFunctions(desc, &error)) {
+          pipeline_binary_archive_dirty_ = true;
+          ++prewarmed;
+        }
+      }
     }
     desc->release();
     vs_function->release();
@@ -6157,13 +6205,16 @@ MTL::RenderPipelineState* MetalCommandProcessor::GetOrCreatePipelineState(
     vertex_desc->release();
   }
 
-  if (pipeline_binary_archive_) {
-    NS::Array* archives = NS::Array::array(pipeline_binary_archive_);
-    desc->setBinaryArchives(archives);
-    NS::Error* archive_error = nullptr;
-    if (pipeline_binary_archive_->addRenderPipelineFunctions(desc,
-                                                             &archive_error)) {
-      pipeline_binary_archive_dirty_ = true;
+  {
+    std::lock_guard<std::mutex> lock(pipeline_binary_archive_mutex_);
+    if (pipeline_binary_archive_) {
+      NS::Array* archives = NS::Array::array(pipeline_binary_archive_);
+      desc->setBinaryArchives(archives);
+      NS::Error* archive_error = nullptr;
+      if (pipeline_binary_archive_->addRenderPipelineFunctions(desc,
+                                                               &archive_error)) {
+        pipeline_binary_archive_dirty_ = true;
+      }
     }
   }
 
