@@ -53,6 +53,8 @@ project("xenia-gpu-metal")
       "metal_render_target_cache.h",
       "metal_shared_memory.cc",
       "metal_shared_memory.h",
+      "metal_shader_cache.cc",
+      "metal_shader_cache.h",
       "metal_texture_cache.cc",
       "metal_texture_cache.h",
       "msl_bindings.h",
@@ -61,10 +63,6 @@ project("xenia-gpu-metal")
     }
     includedirs {
       spirvcross_root,
-      path.join(project_root, "third_party/glslang"),
-    }
-    externalincludedirs {
-      path.join(project_root, "third_party/Vulkan-Headers/include"),
     }
     defines {
       -- Exceptions are enabled for SPIRV-Cross (see spirv-cross.lua).
@@ -84,8 +82,6 @@ project("xenia-gpu-metal")
       "metal_geometry_shader.h",
       "metal_shader.cc",
       "metal_shader.h",
-      "metal_shader_cache.cc",
-      "metal_shader_cache.h",
       "metal_shader_converter.cc",
       "metal_shader_converter.h",
     }
