@@ -36,7 +36,6 @@ using xe::cpu::ppc::PPCContext;
 class TestFunction {
  public:
   TestFunction(std::function<void(hir::HIRBuilder& b)> generator) {
-    memory_size = 16 * 1024 * 1024;
     memory.reset(new Memory());
     memory->Initialize();
 
@@ -78,9 +77,12 @@ class TestFunction {
       auto fn = processor->ResolveFunction(0x80000000);
 
       uint32_t stack_size = 64 * 1024;
-      uint32_t stack_address = memory_size - stack_size;
-      uint32_t thread_state_address = stack_address - 0x1000;
+      uint32_t stack_address = 0;
+      uint32_t thread_state_address = 0;
 #if XE_PLATFORM_APPLE
+      constexpr uint32_t kTestMemorySize = 16 * 1024 * 1024;
+      stack_address = kTestMemorySize - stack_size;
+      thread_state_address = stack_address - 0x1000;
       auto* heap = memory->LookupHeap(0);
       if (heap) {
         heap->AllocFixed(thread_state_address, stack_size + 0x1000, 0,
@@ -90,9 +92,11 @@ class TestFunction {
       auto thread_state = std::make_unique<ThreadState>(
           processor.get(), 0x100, stack_address, thread_state_address);
 #else
-      auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100);
+      stack_address = memory->SystemHeapAlloc(stack_size);
+      uint32_t stack_base = stack_address + stack_size;
+      auto thread_state =
+          std::make_unique<ThreadState>(processor.get(), 0x100, stack_base);
 #endif  // XE_PLATFORM_APPLE
-      // assert_always();  // TODO: Allocate a thread stack!!!
       auto ctx = thread_state->context();
       ctx->lr = 0xBCBCBCBC;
 
@@ -101,10 +105,18 @@ class TestFunction {
       fn->Call(thread_state.get(), uint32_t(ctx->lr));
 
       post_call(ctx);
+
+      thread_state.reset();
+#if XE_PLATFORM_APPLE
+      if (auto* heap = memory->LookupHeap(0)) {
+        heap->Release(thread_state_address);
+      }
+#else
+      memory->SystemHeapFree(stack_address);
+#endif  // XE_PLATFORM_APPLE
     }
   }
 
-  uint32_t memory_size;
   std::unique_ptr<Memory> memory;
   std::vector<std::unique_ptr<Processor>> processors;
 };
