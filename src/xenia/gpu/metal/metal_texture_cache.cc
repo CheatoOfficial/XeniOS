@@ -471,6 +471,16 @@ bool MetalTextureCache::ShouldUploadViaBlit() const {
   return ::cvars::metal_texture_upload_via_blit;
 }
 
+bool MetalTextureCache::CanUseCurrentCommandBufferForTextureUploads() const {
+  if (!ShouldUploadViaBlit() || !command_processor_) {
+    return false;
+  }
+  if (!command_processor_->GetCurrentCommandBuffer()) {
+    return false;
+  }
+  return !command_processor_->HasActiveRenderEncoder();
+}
+
 void MetalTextureCache::BeginUploadCommandBufferBatch() {
   ++upload_batch_depth_;
   if (upload_batch_depth_ != 1) {
@@ -1036,10 +1046,8 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
                          : nullptr;
   bool use_upload_batch = use_blit_upload && upload_batch_command_buffer_ &&
                           command_processor_ && !current_command_buffer;
-  // Reuse the CP submission whenever no render pass is active.
-  // Keeping uploads in the same command buffer avoids spawning separate upload
-  // command buffers that would otherwise require conservative cross-CB
-  // synchronization after tile resolves.
+  // Reuse the current command buffer whenever no render pass encoder is active.
+  // This keeps copy/resolve and texture-upload ordering within one submission.
   bool use_current_command_buffer =
       use_blit_upload && command_processor_ && current_command_buffer &&
       !command_processor_->HasActiveRenderEncoder();
@@ -1185,10 +1193,10 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
 
     for (uint32_t slice = 0; slice < array_size; ++slice) {
       MetalLoadConstants constants = {};
-    constants.is_tiled_3d_endian_scale =
-        uint32_t(key.tiled) | (uint32_t(is_3d_tiling) << 1) |
-        (uint32_t(key.endianness) << 2) | (texture_resolution_scale_x << 4) |
-        (texture_resolution_scale_y << 7);
+      constants.is_tiled_3d_endian_scale =
+          uint32_t(key.tiled) | (uint32_t(is_3d_tiling) << 1) |
+          (uint32_t(key.endianness) << 2) | (texture_resolution_scale_x << 4) |
+          (texture_resolution_scale_y << 7);
       constants.guest_offset = level_guest_offset;
       if (!is_3d) {
         uint32_t slice_stride = level_guest_layout.array_slice_stride_bytes;
@@ -3067,7 +3075,8 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
   for (size_t overlap_index : overlap_indices) {
     overlap_total_bytes += scaled_resolve_buffers_[overlap_index].length_scaled;
   }
-  MTL::CommandBuffer* current_cmd = command_processor_->GetCurrentCommandBuffer();
+  MTL::CommandBuffer* current_cmd =
+      command_processor_->GetCurrentCommandBuffer();
   bool retain_overlaps = current_cmd != nullptr;
   if (retain_overlaps) {
     bool exceeds_retired_budget =
@@ -3135,7 +3144,8 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
         retired.submission_id = command_processor_->GetCurrentSubmission();
         retired.length_scaled = scaled_resolve_buffers_[i].length_scaled;
         scaled_resolve_retired_buffers_.push_back(retired);
-        if (std::numeric_limits<uint64_t>::max() - scaled_resolve_retired_bytes_ <
+        if (std::numeric_limits<uint64_t>::max() -
+                scaled_resolve_retired_bytes_ <
             retired.length_scaled) {
           scaled_resolve_retired_bytes_ = std::numeric_limits<uint64_t>::max();
         } else {

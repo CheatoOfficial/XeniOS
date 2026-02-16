@@ -50,8 +50,7 @@ class MetalTextureCache : public TextureCache {
   bool Initialize();
   void Shutdown();
   void ClearCache();
-  void CompletedSubmissionUpdated(
-      uint64_t completed_submission_index) override;
+  void CompletedSubmissionUpdated(uint64_t completed_submission_index) override;
 
   // Texture management
   bool UploadTexture2D(const TextureInfo& texture_info);
@@ -140,6 +139,9 @@ class MetalTextureCache : public TextureCache {
   std::unique_ptr<Texture> CreateTexture(TextureKey key) override;
   bool LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
                                              bool load_mips) override;
+  // Whether GPU texture uploads can be encoded into the currently open command
+  // buffer (without creating a separate upload command buffer).
+  bool CanUseCurrentCommandBufferForTextureUploads() const;
 
  private:
   // GPU-based texture loading entry point. Returns true on success.
