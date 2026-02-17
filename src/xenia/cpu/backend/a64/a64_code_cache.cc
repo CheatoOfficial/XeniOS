@@ -9,22 +9,21 @@
 
 #include "xenia/cpu/backend/a64/a64_code_cache.h"
 
+#include <dirent.h>
 #include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
 
 #if XE_PLATFORM_APPLE
 #include <mach/mach.h>
 #include <mach/vm_map.h>
-#include <sys/sysctl.h>
 #include <sys/mman.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #endif
 #if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
 #include <pthread.h>
-#include <sys/mman.h>
 #endif
 
 #include "third_party/fmt/include/fmt/format.h"
@@ -49,11 +48,12 @@ DEFINE_bool(a64_indirection_table_log, false,
             "Log A64 indirection table mapping and updates.", "CPU");
 DEFINE_int32(a64_indirection_table_log_limit, 32,
              "Maximum number of A64 indirection table log entries.", "CPU");
-DEFINE_bool(ios_jit_brk_prepare_fallback, true,
-            "On iOS ARM64, if protection transitions fail, issue external JIT "
-            "prepare breakpoint (brk #0xf00d/x16=1 by default; optional legacy "
-            "brk #0x69) so external brokers can prepare the region, then retry.",
-            "CPU");
+DEFINE_bool(
+    ios_jit_brk_prepare_fallback, true,
+    "On iOS ARM64, if protection transitions fail, issue external JIT "
+    "prepare breakpoint (brk #0xf00d/x16=1 by default; optional legacy "
+    "brk #0x69) so external brokers can prepare the region, then retry.",
+    "CPU");
 DEFINE_bool(ios_jit_brk_use_universal_0xf00d, true,
             "On iOS ARM64, use universal JIT broker breakpoint brk #0xf00d "
             "(x16=1) instead of legacy brk #0x69 for external prepare. "
@@ -130,7 +130,8 @@ bool IOSHasTXM() {
           FindChildWithNameLength(preboot_uuid + "/boot", 96);
       if (!txm_root.empty()) {
         const std::string txm_path =
-            txm_root + "/usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4";
+            txm_root +
+            "/usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4";
         if (access(txm_path.c_str(), F_OK) == 0) {
           return true;
         }
@@ -177,8 +178,7 @@ int IOSProductMajorVersion() {
 
     int parsed_major = 0;
     size_t index = 0;
-    while (index < version.size() &&
-           version[index] >= '0' &&
+    while (index < version.size() && version[index] >= '0' &&
            version[index] <= '9') {
       parsed_major = parsed_major * 10 + (version[index] - '0');
       ++index;
@@ -414,21 +414,24 @@ bool SetPageAlignedAccessWithExternalPrepareFallback(
   if (!use_txm_broker_path) {
     const int ios_major_version = IOSProductMajorVersion();
     if (ios_major_version > 0) {
-      XELOGW("iOS JIT mprotect flip: {} denied on iOS {} without RWX retry or "
-             "external brk fallback (non-broker path)",
-             transition_name, ios_major_version);
+      XELOGW(
+          "iOS JIT mprotect flip: {} denied on iOS {} without RWX retry or "
+          "external brk fallback (non-broker path)",
+          transition_name, ios_major_version);
     } else {
-      XELOGW("iOS JIT mprotect flip: {} denied without RWX retry or external "
-             "brk fallback (non-broker path)",
-             transition_name);
+      XELOGW(
+          "iOS JIT mprotect flip: {} denied without RWX retry or external "
+          "brk fallback (non-broker path)",
+          transition_name);
     }
     return false;
   }
 
   if (!cvars::ios_jit_brk_prepare_fallback) {
-    XELOGW("iOS JIT mprotect flip: {} denied with external brk fallback "
-           "disabled on TXM path",
-           transition_name);
+    XELOGW(
+        "iOS JIT mprotect flip: {} denied with external brk fallback "
+        "disabled on TXM path",
+        transition_name);
     return false;
   }
 
@@ -475,7 +478,8 @@ bool RegionLockRead(void* address, size_t length) {
     return SetPageAlignedAccessWithMaxProtRetry(
         address, length, xe::memory::PageAccess::kReadOnly);
   }
-  return SetPageAlignedAccess(address, length, xe::memory::PageAccess::kReadOnly);
+  return SetPageAlignedAccess(address, length,
+                              xe::memory::PageAccess::kReadOnly);
 }
 
 bool RegionUnlockWrite(void* address, size_t length) {
@@ -484,8 +488,6 @@ bool RegionUnlockWrite(void* address, size_t length) {
 }
 
 bool RegionSetExec(void* address, size_t length) {
-    
-    
   return SetPageAlignedAccessWithExternalPrepareFallback(
       address, length, xe::memory::PageAccess::kExecuteReadOnly,
       "RX transition");
@@ -570,9 +572,17 @@ bool A64CodeCache::Initialize() {
   indirection_table_actual_base_ =
       reinterpret_cast<uintptr_t>(indirection_table_base_);
 #if XE_A64_INDIRECTION_64BIT
-  indirection_table_base_bias_ =
-      indirection_table_actual_base_ -
-      (static_cast<uintptr_t>(kIndirectionTableBase) * 2);
+  // With rel32 entries, slot address is table_base + (guest - guest_base).
+  indirection_table_base_bias_ = indirection_table_actual_base_ -
+                                 static_cast<uintptr_t>(kIndirectionTableBase);
+  external_indirection_targets_ = std::make_unique<uint64_t[]>(
+      static_cast<size_t>(kIndirectionExternalCapacity));
+  if (!external_indirection_targets_) {
+    XELOGE("Unable to allocate external indirection table (entries={})",
+           static_cast<uint32_t>(kIndirectionExternalCapacity));
+    return false;
+  }
+  external_indirection_target_count_.store(0, std::memory_order_relaxed);
 #endif
 #else
   // Other platforms: try to allocate at the preferred address first.
@@ -596,9 +606,8 @@ bool A64CodeCache::Initialize() {
   indirection_table_actual_base_ =
       reinterpret_cast<uintptr_t>(indirection_table_base_);
 #if XE_A64_INDIRECTION_64BIT
-  indirection_table_base_bias_ =
-      indirection_table_actual_base_ -
-      (static_cast<uintptr_t>(kIndirectionTableBase) * 2);
+  indirection_table_base_bias_ = indirection_table_actual_base_ -
+                                 static_cast<uintptr_t>(kIndirectionTableBase);
 #endif
 #endif
 
@@ -677,8 +686,7 @@ bool A64CodeCache::Initialize() {
     const bool should_try_dual_map = use_txm_broker_path;
     const bool force_mprotect_flip_requested =
         cvars::ios_jit_non_txm_force_mprotect_flip;
-    const bool force_mprotect_flip =
-        force_mprotect_flip_requested && !has_txm;
+    const bool force_mprotect_flip = force_mprotect_flip_requested && !has_txm;
 
     if (use_txm_broker_path) {
       if (ios_major_version > 0) {
@@ -689,18 +697,17 @@ bool A64CodeCache::Initialize() {
       }
     } else if (has_txm) {
       if (ios_major_version > 0) {
-        XELOGI(
-            "iOS JIT: TXM detected on iOS {}; using non-broker W^X defaults",
-            ios_major_version);
+        XELOGI("iOS JIT: TXM detected on iOS {}; using non-broker W^X defaults",
+               ios_major_version);
       } else {
-        XELOGI("iOS JIT: TXM detected with unknown OS version; using "
-               "non-broker W^X defaults");
+        XELOGI(
+            "iOS JIT: TXM detected with unknown OS version; using "
+            "non-broker W^X defaults");
       }
     } else {
       if (ios_major_version > 0) {
-        XELOGI(
-            "iOS JIT: non-TXM path on iOS {}; using non-broker W^X defaults",
-            ios_major_version);
+        XELOGI("iOS JIT: non-TXM path on iOS {}; using non-broker W^X defaults",
+               ios_major_version);
       } else {
         XELOGI("iOS JIT: non-TXM path; using non-broker W^X defaults");
       }
@@ -743,20 +750,21 @@ bool A64CodeCache::Initialize() {
             XELOGW("iOS JIT TXM: initial external prepare request failed");
           }
         } else if (use_txm_broker_path) {
-          XELOGI("iOS JIT TXM: external BRK prepare fallback disabled by "
-                 "config");
+          XELOGI(
+              "iOS JIT TXM: external BRK prepare fallback disabled by "
+              "config");
         }
 
         vm_address_t remap_addr = 0;
         vm_prot_t cur_prot = 0;
         vm_prot_t max_prot = 0;
-        const kern_return_t remap_kr =
-            vm_remap(mach_task_self(), &remap_addr, kGeneratedCodeSize,
-                     0,  // mask
-                     VM_FLAGS_ANYWHERE, mach_task_self(),
-                     reinterpret_cast<vm_address_t>(generated_code_execute_base_),
-                     FALSE,  // copy = false (share the same physical pages)
-                     &cur_prot, &max_prot, VM_INHERIT_NONE);
+        const kern_return_t remap_kr = vm_remap(
+            mach_task_self(), &remap_addr, kGeneratedCodeSize,
+            0,  // mask
+            VM_FLAGS_ANYWHERE, mach_task_self(),
+            reinterpret_cast<vm_address_t>(generated_code_execute_base_),
+            FALSE,  // copy = false (share the same physical pages)
+            &cur_prot, &max_prot, VM_INHERIT_NONE);
         if (remap_kr == KERN_SUCCESS) {
           auto* remap_write_base = reinterpret_cast<uint8_t*>(remap_addr);
           if (mprotect(remap_write_base, kGeneratedCodeSize,
@@ -808,7 +816,7 @@ bool A64CodeCache::Initialize() {
           mmap(nullptr, kGeneratedCodeSize, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
       if (generated_code_write_base_ == MAP_FAILED) {
-          generated_code_write_base_ = nullptr;
+        generated_code_write_base_ = nullptr;
         XELOGE("Unable to allocate iOS JIT code cache (RX mapping)");
         return false;
       }
@@ -817,8 +825,7 @@ bool A64CodeCache::Initialize() {
       if (use_txm_broker_path) {
         XELOGI("iOS JIT mprotect-flip fallback active (TXM/broker path)");
       } else if (has_txm) {
-        XELOGI(
-            "iOS JIT mprotect-flip fallback active (TXM, non-broker path)");
+        XELOGI("iOS JIT mprotect-flip fallback active (TXM, non-broker path)");
       } else {
         XELOGI(
             "iOS JIT mprotect-flip fallback active (non-TXM, no external BRK)");
@@ -1018,9 +1025,34 @@ bool A64CodeCache::Initialize() {
   return true;
 }
 
+#if XE_A64_INDIRECTION_64BIT
+uint32_t A64CodeCache::EncodeIndirectionTarget(uint64_t host_address) {
+  const uintptr_t code_base = execute_base_address();
+  const uintptr_t code_end = code_base + kGeneratedCodeSize;
+  if (host_address >= code_base && host_address < code_end) {
+    return static_cast<uint32_t>(host_address - code_base);
+  }
+
+  std::lock_guard<std::mutex> lock(external_indirection_mutex_);
+  const uint32_t current_count =
+      external_indirection_target_count_.load(std::memory_order_relaxed);
+  if (current_count >= kIndirectionExternalCapacity) {
+    XELOGE(
+        "A64 indirection external table overflow (count={} capacity={}); "
+        "falling back to default target",
+        current_count, static_cast<uint32_t>(kIndirectionExternalCapacity));
+    return indirection_default_value_;
+  }
+
+  external_indirection_targets_[current_count] = host_address;
+  external_indirection_target_count_.store(current_count + 1,
+                                           std::memory_order_release);
+  return kIndirectionExternalTag | current_count;
+}
+#endif
+
 void A64CodeCache::set_indirection_default(uint32_t default_value) {
 #if XE_A64_INDIRECTION_64BIT
-  // On ARM64 platforms, we extend 32-bit values to 64-bit
   indirection_default_value_ = default_value;
 #else
   indirection_default_value_ = default_value;
@@ -1029,15 +1061,14 @@ void A64CodeCache::set_indirection_default(uint32_t default_value) {
 
 #if XE_A64_INDIRECTION_64BIT
 void A64CodeCache::set_indirection_default_64(uint64_t default_value) {
-  indirection_default_value_ = default_value;
+  indirection_default_value_ = EncodeIndirectionTarget(default_value);
 }
 #endif
 
 void A64CodeCache::AddIndirection(uint32_t guest_address,
                                   uint32_t host_address) {
 #if XE_A64_INDIRECTION_64BIT
-  // On ARM64 platforms, delegate to the 64-bit version
-  AddIndirection64(guest_address, host_address);
+  AddIndirection64(guest_address, static_cast<uint64_t>(host_address));
 #else
   if (!indirection_table_base_) {
     return;
@@ -1084,16 +1115,18 @@ void A64CodeCache::AddIndirection64(uint32_t guest_address,
     return;
   }
 
-  uint64_t* indirection_slot =
-      reinterpret_cast<uint64_t*>(indirection_table_base_ + guest_offset);
-  *indirection_slot = host_address;
+  uint32_t* indirection_slot =
+      reinterpret_cast<uint32_t*>(indirection_table_base_ + guest_offset);
+  const uint32_t encoded_target = EncodeIndirectionTarget(host_address);
+  *indirection_slot = encoded_target;
 
   if (ShouldLogIndirectionTable()) {
     XELOGI(
         "A64 indirection add: guest=0x{:08X} delta=0x{:X} offset=0x{:X} "
-        "slot=0x{:016X} host=0x{:016X}",
+        "slot=0x{:016X} encoded=0x{:08X} host=0x{:016X}",
         guest_address, guest_delta, guest_offset,
-        reinterpret_cast<uint64_t>(indirection_slot), host_address);
+        reinterpret_cast<uint64_t>(indirection_slot), encoded_target,
+        host_address);
   }
 }
 #endif
@@ -1119,9 +1152,11 @@ void A64CodeCache::CommitExecutableRange(uint32_t guest_low,
     return;
   }
 
-  uint32_t start_offset =
-      ((guest_low - kGuestAddressBase) >> 2) * kIndirectionEntrySize;
-  uint32_t size = ((guest_high - guest_low) >> 2) * kIndirectionEntrySize;
+  const size_t start_offset =
+      (static_cast<size_t>(guest_low - kGuestAddressBase) >> 2) *
+      kIndirectionEntrySize;
+  const size_t size = (static_cast<size_t>(guest_high - guest_low) >> 2) *
+                      kIndirectionEntrySize;
 
   // Sanity check bounds; the table should fully cover the XEX guest range now.
   if (start_offset + size > kIndirectionTableSize) {
@@ -1140,12 +1175,13 @@ void A64CodeCache::CommitExecutableRange(uint32_t guest_low,
     XELOGE(
         "CommitExecutableRange: failed to commit indirection table pages "
         "offset=0x{:X} size=0x{:X}",
-        start_offset, size);
+        static_cast<uint32_t>(start_offset), static_cast<uint32_t>(size));
     return;
   }
-  uint64_t* p = reinterpret_cast<uint64_t*>(target_memory);
-  uint32_t entry_count = size / kIndirectionEntrySize;
-  for (uint32_t i = 0; i < entry_count; i++) {
+  indirection_entry_t* p =
+      reinterpret_cast<indirection_entry_t*>(target_memory);
+  const size_t entry_count = size / kIndirectionEntrySize;
+  for (size_t i = 0; i < entry_count; i++) {
     p[i] = indirection_default_value_;
   }
 #else
@@ -1276,8 +1312,9 @@ void A64CodeCache::PlaceGuestCode(uint32_t guest_address, void* machine_code,
         assert_always();
       }
       if (!RegionUnlockWrite(code_write_address, write_span_length)) {
-        XELOGE("iOS JIT mprotect flip: failed to enable writes before code "
-               "publish");
+        XELOGE(
+            "iOS JIT mprotect flip: failed to enable writes before code "
+            "publish");
         assert_always();
       }
     }
@@ -1336,11 +1373,10 @@ void A64CodeCache::PlaceGuestCode(uint32_t guest_address, void* machine_code,
     }
 
     uintptr_t guest_diff = guest_address - kIndirectionTableBase;
-    uintptr_t guest_offset =
-        (guest_diff >> 2) * kIndirectionEntrySize;  // 8-byte entries
+    uintptr_t guest_offset = (guest_diff >> 2) * kIndirectionEntrySize;
     uintptr_t slot_address =
         reinterpret_cast<uintptr_t>(indirection_table_base_) + guest_offset;
-    uint64_t* indirection_slot = reinterpret_cast<uint64_t*>(slot_address);
+    uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(slot_address);
 
     // Check if the slot address is within bounds
     uintptr_t table_end = reinterpret_cast<uintptr_t>(indirection_table_base_) +
@@ -1349,7 +1385,8 @@ void A64CodeCache::PlaceGuestCode(uint32_t guest_address, void* machine_code,
       return;
     }
 
-    *indirection_slot = reinterpret_cast<uint64_t>(code_execute_address);
+    *indirection_slot = EncodeIndirectionTarget(
+        reinterpret_cast<uint64_t>(code_execute_address));
 #else
     uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
         indirection_table_base_ + (guest_address - kIndirectionTableBase));
@@ -1419,8 +1456,9 @@ uint32_t A64CodeCache::PlaceData(const void* data, size_t length) {
       assert_always();
     }
     if (!RegionUnlockWrite(data_address, reserved_length)) {
-      XELOGE("iOS JIT mprotect flip: failed to enable writes before data "
-             "publish");
+      XELOGE(
+          "iOS JIT mprotect flip: failed to enable writes before data "
+          "publish");
       assert_always();
     }
   }
