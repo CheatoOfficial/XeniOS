@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -195,6 +196,94 @@ static void xe_request_portrait_orientation(UIViewController* view_controller) {
 }
 
 @end
+
+// ---------------------------------------------------------------------------
+// XeniaTheme – Design tokens aligned with the xenios-website globals.css
+// @theme block.  Dark-mode only (the iOS app has no light mode).
+// Uses an ObjC class so ARC properly retains the cached UIColor objects.
+// ---------------------------------------------------------------------------
+@interface XeniaTheme : NSObject
+// Backgrounds.
++ (UIColor*)bgPrimary;    // #09090b
++ (UIColor*)bgSurface;    // #18181b
++ (UIColor*)bgSurface2;   // #27272a
++ (UIColor*)bgSurface3;   // #3f3f46
+// Text.
++ (UIColor*)textPrimary;  // #fafafa
++ (UIColor*)textSecondary; // #a1a1aa
++ (UIColor*)textMuted;    // #71717a
+// Accent.
++ (UIColor*)accent;       // #34d399
++ (UIColor*)accentHover;  // #6ee7b7
++ (UIColor*)accentFg;     // #09090b (same as bgPrimary)
+// Status.
++ (UIColor*)statusError;  // #f87171
++ (UIColor*)statusWarning; // #fbbf24
+// Borders & overlays.
++ (UIColor*)border;       // white 6%
++ (UIColor*)borderHover;  // white 10%
++ (UIColor*)overlay;      // black 85%
++ (UIColor*)overlayLight; // black 58%
+@end
+
+@implementation XeniaTheme
+// No static caching — this file is compiled under MRC (manual reference
+// counting), so static locals would hold dangling pointers after the
+// autorelease pool drains.  UIColor creation is cheap; callers retain.
++ (UIColor*)bgPrimary {
+  return [UIColor colorWithRed:0x09/255.0 green:0x09/255.0 blue:0x0b/255.0 alpha:1.0];
+}
++ (UIColor*)bgSurface {
+  return [UIColor colorWithRed:0x18/255.0 green:0x18/255.0 blue:0x1b/255.0 alpha:1.0];
+}
++ (UIColor*)bgSurface2 {
+  return [UIColor colorWithRed:0x27/255.0 green:0x27/255.0 blue:0x2a/255.0 alpha:1.0];
+}
++ (UIColor*)bgSurface3 {
+  return [UIColor colorWithRed:0x3f/255.0 green:0x3f/255.0 blue:0x46/255.0 alpha:1.0];
+}
++ (UIColor*)textPrimary {
+  return [UIColor colorWithRed:0xfa/255.0 green:0xfa/255.0 blue:0xfa/255.0 alpha:1.0];
+}
++ (UIColor*)textSecondary {
+  return [UIColor colorWithRed:0xa1/255.0 green:0xa1/255.0 blue:0xaa/255.0 alpha:1.0];
+}
++ (UIColor*)textMuted {
+  return [UIColor colorWithRed:0x71/255.0 green:0x71/255.0 blue:0x7a/255.0 alpha:1.0];
+}
++ (UIColor*)accent {
+  return [UIColor colorWithRed:0x34/255.0 green:0xd3/255.0 blue:0x99/255.0 alpha:1.0];
+}
++ (UIColor*)accentHover {
+  return [UIColor colorWithRed:0x6e/255.0 green:0xe7/255.0 blue:0xb7/255.0 alpha:1.0];
+}
++ (UIColor*)accentFg {
+  return [UIColor colorWithRed:0x09/255.0 green:0x09/255.0 blue:0x0b/255.0 alpha:1.0];
+}
++ (UIColor*)statusError {
+  return [UIColor colorWithRed:0xf8/255.0 green:0x71/255.0 blue:0x71/255.0 alpha:1.0];
+}
++ (UIColor*)statusWarning {
+  return [UIColor colorWithRed:0xfb/255.0 green:0xbf/255.0 blue:0x24/255.0 alpha:1.0];
+}
++ (UIColor*)border {
+  return [UIColor colorWithWhite:1.0 alpha:0.06];
+}
++ (UIColor*)borderHover {
+  return [UIColor colorWithWhite:1.0 alpha:0.10];
+}
++ (UIColor*)overlay {
+  return [UIColor colorWithWhite:0.0 alpha:0.85];
+}
++ (UIColor*)overlayLight {
+  return [UIColor colorWithWhite:0.0 alpha:0.58];
+}
+@end
+
+// Border radii matching website's Tailwind scale.
+static constexpr CGFloat XeniaRadiusMd = 8.0;
+static constexpr CGFloat XeniaRadiusLg = 12.0;
+static constexpr CGFloat XeniaRadiusXl = 16.0;
 
 namespace {
 
@@ -513,17 +602,136 @@ std::string FormatTitleID(uint32_t title_id) {
   return std::string(buffer);
 }
 
+// ---------------------------------------------------------------------------
+// Game art cache — downloads tile art from Element18592/360-Game-Art by
+// title ID, caches to Library/Caches/game-art/{title_id_hex_lower}.png.
+// ---------------------------------------------------------------------------
+static NSString* xe_game_art_cache_dir(void) {
+  static NSString* dir;
+  if (!dir) {
+    NSString* caches = NSSearchPathForDirectoriesInDomains(
+        NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+    dir = [[caches stringByAppendingPathComponent:@"game-art"] retain];  // MRC
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+  }
+  return dir;
+}
+
+static NSString* xe_game_art_hex(uint32_t title_id) {
+  return [NSString stringWithFormat:@"%08x", title_id];
+}
+
+static NSMutableSet* xe_game_art_inflight_ids(void) {
+  static NSMutableSet* inflight;
+  if (!inflight) {
+    inflight = [[NSMutableSet alloc] init];
+  }
+  return inflight;
+}
+
+static NSMutableDictionary* xe_game_art_retry_after(void) {
+  static NSMutableDictionary* retry_after;
+  if (!retry_after) {
+    retry_after = [[NSMutableDictionary alloc] init];
+  }
+  return retry_after;
+}
+
+static bool xe_begin_game_art_fetch(NSString* hex) {
+  if (!hex.length) {
+    return false;
+  }
+  NSMutableSet* inflight = xe_game_art_inflight_ids();
+  if ([inflight containsObject:hex]) {
+    return false;
+  }
+  NSDate* retry_after = [xe_game_art_retry_after() objectForKey:hex];
+  if (retry_after && [retry_after timeIntervalSinceNow] > 0) {
+    return false;
+  }
+  [inflight addObject:hex];
+  return true;
+}
+
+static void xe_complete_game_art_fetch(NSString* hex, bool success) {
+  if (!hex.length) {
+    return;
+  }
+  [xe_game_art_inflight_ids() removeObject:hex];
+  NSMutableDictionary* retry_after = xe_game_art_retry_after();
+  if (success) {
+    [retry_after removeObjectForKey:hex];
+  } else {
+    // Throttle repeated failed downloads while still allowing periodic retries.
+    [retry_after setObject:[NSDate dateWithTimeIntervalSinceNow:300.0]
+                    forKey:hex];
+  }
+}
+
+// Returns cached tile image synchronously, or nil if not yet cached.
+static UIImage* xe_cached_game_art(uint32_t title_id) {
+  if (!title_id) return nil;
+  NSString* path = [xe_game_art_cache_dir()
+      stringByAppendingPathComponent:
+          [xe_game_art_hex(title_id) stringByAppendingString:@".jpg"]];
+  return [UIImage imageWithContentsOfFile:path];
+}
+
+// Starts an async download of the tile art.  Calls `completion` on the main
+// queue with the downloaded image (or nil on failure).
+static void xe_fetch_game_art(uint32_t title_id,
+                              void (^completion)(UIImage* _Nullable image)) {
+  if (!title_id) {
+    if (completion) completion(nil);
+    return;
+  }
+  NSString* hex = xe_game_art_hex(title_id);
+  if (!xe_begin_game_art_fetch(hex)) {
+    return;
+  }
+  NSString* url_str = [NSString
+      stringWithFormat:
+          @"https://raw.githubusercontent.com/Element18592/360-Game-Art/main/Games/%@/cover.jpg",
+          hex];
+  NSURL* url = [NSURL URLWithString:url_str];
+  if (!url) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      xe_complete_game_art_fetch(hex, false);
+      if (completion) completion(nil);
+    });
+    return;
+  }
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+      dataTaskWithURL:url
+    completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+      UIImage* image = nil;
+      if (!error && data.length > 0) {
+        NSHTTPURLResponse* http = (NSHTTPURLResponse*)response;
+        if ([http isKindOfClass:[NSHTTPURLResponse class]] && http.statusCode == 200) {
+          image = [UIImage imageWithData:data];
+          if (image) {
+            NSString* path = [xe_game_art_cache_dir()
+                stringByAppendingPathComponent:[hex stringByAppendingString:@".jpg"]];
+            [data writeToFile:path atomically:YES];
+          }
+        }
+      }
+      const bool success = image != nil;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        xe_complete_game_art_fetch(hex, success);
+        if (completion) completion(image);
+      });
+    }];
+  [task resume];
+}
+
 std::string DisplayNameFromXexMetadata(const std::filesystem::path& path,
                                        const std::optional<xe::vfs::XexMetadata>& metadata) {
-  if (!metadata.has_value()) {
-    return path.stem().string();
-  }
-  if (!metadata->module_name.empty()) {
-    return metadata->module_name;
-  }
-  std::string title_id = FormatTitleID(metadata->title_id);
-  if (!title_id.empty()) {
-    return "Title " + title_id;
+  if (metadata.has_value() && metadata->title_id) {
+    return "Title " + FormatTitleID(metadata->title_id);
   }
   return path.stem().string();
 }
@@ -729,41 +937,38 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     return nil;
   }
 
-  self.contentView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
-  self.contentView.layer.cornerRadius = 14;
-  self.contentView.layer.borderWidth = 1.0;
-  self.contentView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
+  // No card background — artwork IS the tile. Clean, modern, content-forward.
+  self.contentView.backgroundColor = [UIColor clearColor];
 
   self.iconView = [[UIImageView alloc] init];
   self.iconView.translatesAutoresizingMaskIntoConstraints = NO;
-  self.iconView.contentMode = UIViewContentModeScaleAspectFit;
-  self.iconView.layer.cornerRadius = 12;
+  self.iconView.contentMode = UIViewContentModeScaleAspectFill;
   self.iconView.clipsToBounds = YES;
-  self.iconView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12];
+  self.iconView.layer.cornerRadius = 10;
+  self.iconView.backgroundColor = [XeniaTheme bgSurface];
   [self.contentView addSubview:self.iconView];
 
   self.titleLabel = [[UILabel alloc] init];
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
-  self.titleLabel.textColor = [UIColor whiteColor];
-  self.titleLabel.textAlignment = NSTextAlignmentCenter;
-  self.titleLabel.numberOfLines = 2;
+  self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  self.titleLabel.textColor = [XeniaTheme textSecondary];
+  self.titleLabel.textAlignment = NSTextAlignmentLeft;
+  self.titleLabel.numberOfLines = 1;
+  self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [self.contentView addSubview:self.titleLabel];
 
   [NSLayoutConstraint activateConstraints:@[
-    [self.iconView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:10],
-    [self.iconView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor
-                                                constant:10],
-    [self.iconView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
-                                                 constant:-10],
-    [self.iconView.heightAnchor constraintEqualToAnchor:self.iconView.widthAnchor],
+    [self.iconView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+    [self.iconView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
+    [self.iconView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+    // Cover art aspect ratio ~219:300.
+    [self.iconView.heightAnchor constraintEqualToAnchor:self.iconView.widthAnchor
+                                             multiplier:300.0 / 219.0],
     [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:6],
     [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor
-                                                  constant:6],
+                                                  constant:2],
     [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
-                                                   constant:-6],
-    [self.titleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor
-                                                           constant:-8],
+                                                   constant:-2],
   ]];
 
   return self;
@@ -802,7 +1007,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   if (subtitle_.length > 0) {
     UILabel* header_label = [[UILabel alloc] initWithFrame:CGRectZero];
     header_label.text = subtitle_;
-    header_label.textColor = [UIColor secondaryLabelColor];
+    header_label.textColor = [XeniaTheme textSecondary];
     header_label.font = [UIFont systemFontOfSize:13];
     header_label.numberOfLines = 0;
     header_label.textAlignment = NSTextAlignmentLeft;
@@ -902,7 +1107,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
   footerLabel_ = [[UILabel alloc] init];
   footerLabel_.translatesAutoresizingMaskIntoConstraints = NO;
-  footerLabel_.textColor = [UIColor secondaryLabelColor];
+  footerLabel_.textColor = [XeniaTheme textSecondary];
   footerLabel_.font = [UIFont systemFontOfSize:12];
   footerLabel_.numberOfLines = 2;
   [self.view addSubview:footerLabel_];
@@ -1180,12 +1385,12 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   }
 
   cell.textLabel.text = ToNSString(item->title);
-  cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
+  cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
   cell.detailTextLabel.numberOfLines = 2;
   cell.textLabel.numberOfLines = 1;
 
   if (item->control_type == IOSConfigControlType::kToggle) {
-    cell.textLabel.textColor = [UIColor labelColor];
+    cell.textLabel.textColor = [XeniaTheme textPrimary];
     cell.detailTextLabel.text = ToNSString(item->subtitle);
     UISwitch* toggle = [[UISwitch alloc] init];
     toggle.on = item->bool_value;
@@ -1202,7 +1407,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
   } else {
-    cell.textLabel.textColor = [UIColor labelColor];
+    cell.textLabel.textColor = [XeniaTheme textPrimary];
     std::string value_title = ChoiceTitleForItem(*item);
     std::string subtitle = item->subtitle;
     if (!value_title.empty()) {
@@ -1439,288 +1644,245 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 }
 
 // ---------------------------------------------------------------------------
-// Launcher overlay with Open Game button.
+// Launcher overlay — content-first design matching xenios-website aesthetic.
 // ---------------------------------------------------------------------------
 - (void)setupLauncherOverlay {
   self.launcherOverlay = [[UIView alloc] initWithFrame:self.view.bounds];
   self.launcherOverlay.autoresizingMask =
       UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-  self.launcherOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.85];
+  self.launcherOverlay.backgroundColor = [XeniaTheme bgPrimary];
   [self.view addSubview:self.launcherOverlay];
-  UILayoutGuide* safe_guide = self.launcherOverlay.safeAreaLayoutGuide;
+  UILayoutGuide* safe = self.launcherOverlay.safeAreaLayoutGuide;
+  CGFloat hPad = 16.0;
 
-  // JIT status indicator (green/red dot + label) at the top.
-  UIView* statusContainer = [[UIView alloc] init];
-  statusContainer.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.launcherOverlay addSubview:statusContainer];
+  // ── Nav bar: XeniOS (left) · gear + profile (right) ────────────────────
 
-  self.jitStatusDot = [[UIView alloc] init];
-  self.jitStatusDot.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitStatusDot.backgroundColor = [UIColor systemRedColor];
-  self.jitStatusDot.layer.cornerRadius = 5;
-  [statusContainer addSubview:self.jitStatusDot];
-
-  self.jitStatusLabel = [[UILabel alloc] init];
-  self.jitStatusLabel.text = @"JIT Not Detected";
-  self.jitStatusLabel.textColor = [UIColor systemRedColor];
-  self.jitStatusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-  self.jitStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  [statusContainer addSubview:self.jitStatusLabel];
-
-  // Title label.
   self.titleLabel = [[UILabel alloc] init];
-  self.titleLabel.text = @"Xenia-Edge";
-  self.titleLabel.textColor = [UIColor whiteColor];
-  self.titleLabel.font = [UIFont systemFontOfSize:42 weight:UIFontWeightBold];
-  self.titleLabel.textAlignment = NSTextAlignmentCenter;
+  self.titleLabel.text = @"XeniOS";
+  self.titleLabel.textColor = [XeniaTheme textPrimary];
+  self.titleLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
   [self.launcherOverlay addSubview:self.titleLabel];
 
-  // Subtitle label.
-  UILabel* subtitleLabel = [[UILabel alloc] init];
-  subtitleLabel.text = @"Xbox 360 Emulator";
-  subtitleLabel.textColor = [UIColor lightGrayColor];
-  subtitleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
-  subtitleLabel.textAlignment = NSTextAlignmentCenter;
-  subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.launcherOverlay addSubview:subtitleLabel];
-
-  // Non-blocking JIT warning card shown until JIT becomes available.
-  self.jitWarningCard = [[UIView alloc] init];
-  self.jitWarningCard.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitWarningCard.backgroundColor = [UIColor colorWithRed:0.34 green:0.08 blue:0.03 alpha:0.92];
-  self.jitWarningCard.layer.cornerRadius = 12;
-  [self.launcherOverlay addSubview:self.jitWarningCard];
-
-  UIImageView* jitWarningIcon = [[UIImageView alloc]
-      initWithImage:[UIImage systemImageNamed:@"exclamationmark.triangle.fill"]];
-  jitWarningIcon.translatesAutoresizingMaskIntoConstraints = NO;
-  jitWarningIcon.tintColor = [UIColor systemOrangeColor];
-  [self.jitWarningCard addSubview:jitWarningIcon];
-
-  UILabel* jitWarningTitle = [[UILabel alloc] init];
-  jitWarningTitle.translatesAutoresizingMaskIntoConstraints = NO;
-  jitWarningTitle.text = @"JIT Not Detected";
-  jitWarningTitle.textColor = [UIColor colorWithRed:1.0 green:0.88 blue:0.72 alpha:1.0];
-  jitWarningTitle.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-  [self.jitWarningCard addSubview:jitWarningTitle];
-
-  UILabel* jitWarningBody = [[UILabel alloc] init];
-  jitWarningBody.translatesAutoresizingMaskIntoConstraints = NO;
-  jitWarningBody.numberOfLines = 0;
-  jitWarningBody.text = xe_jit_not_detected_guidance_message();
-  jitWarningBody.textColor = [UIColor colorWithRed:0.95 green:0.83 blue:0.76 alpha:1.0];
-  jitWarningBody.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
-  [self.jitWarningCard addSubview:jitWarningBody];
-
-  // Import button.
-  UIButtonConfiguration* config = [UIButtonConfiguration filledButtonConfiguration];
-  config.title = @"Import Game";
-  config.image = [UIImage systemImageNamed:@"folder"];
-  config.imagePadding = 8;
-  config.baseBackgroundColor = [UIColor systemGreenColor];
-  config.baseForegroundColor = [UIColor whiteColor];
-  config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
-  config.contentInsets = NSDirectionalEdgeInsetsMake(14, 32, 14, 32);
-
-  self.openGameButton = [UIButton buttonWithConfiguration:config
-                                            primaryAction:nil];
-  self.openGameButton.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.openGameButton addTarget:self
-                          action:@selector(openGameTapped:)
-                forControlEvents:UIControlEventTouchUpInside];
-  [self.launcherOverlay addSubview:self.openGameButton];
-
-  UIButtonConfiguration* settings_config = [UIButtonConfiguration tintedButtonConfiguration];
-  settings_config.title = @"Settings";
-  settings_config.image = [UIImage systemImageNamed:@"slider.horizontal.3"];
-  settings_config.imagePadding = 6;
-  settings_config.baseForegroundColor = [UIColor whiteColor];
-  settings_config.baseBackgroundColor = [UIColor colorWithWhite:1.0 alpha:0.14];
-  settings_config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-  settings_config.contentInsets = NSDirectionalEdgeInsetsMake(8, 12, 8, 12);
-
-  self.settingsButton = [UIButton buttonWithConfiguration:settings_config primaryAction:nil];
+  UIButtonConfiguration* settingsCfg = [UIButtonConfiguration plainButtonConfiguration];
+  settingsCfg.image =
+      [UIImage systemImageNamed:@"gearshape"
+              withConfiguration:[UIImageSymbolConfiguration
+                                    configurationWithPointSize:20
+                                                       weight:UIImageSymbolWeightRegular]];
+  settingsCfg.baseForegroundColor = [XeniaTheme textMuted];
+  settingsCfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 8, 8, 8);
+  self.settingsButton = [UIButton buttonWithConfiguration:settingsCfg primaryAction:nil];
   self.settingsButton.translatesAutoresizingMaskIntoConstraints = NO;
   [self.settingsButton addTarget:self
                           action:@selector(openSettingsTapped:)
                 forControlEvents:UIControlEventTouchUpInside];
   [self.launcherOverlay addSubview:self.settingsButton];
 
-  UIButtonConfiguration* profile_config = [UIButtonConfiguration tintedButtonConfiguration];
-  profile_config.title = @"Profile";
-  profile_config.image = [UIImage systemImageNamed:@"person.circle"];
-  profile_config.imagePadding = 6;
-  profile_config.baseForegroundColor = [UIColor whiteColor];
-  profile_config.baseBackgroundColor = [UIColor colorWithWhite:1.0 alpha:0.14];
-  profile_config.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-  profile_config.contentInsets = NSDirectionalEdgeInsetsMake(8, 12, 8, 12);
-
-  self.profileButton = [UIButton buttonWithConfiguration:profile_config primaryAction:nil];
+  UIButtonConfiguration* profileCfg = [UIButtonConfiguration plainButtonConfiguration];
+  profileCfg.image =
+      [UIImage systemImageNamed:@"person.circle"
+              withConfiguration:[UIImageSymbolConfiguration
+                                    configurationWithPointSize:20
+                                                       weight:UIImageSymbolWeightRegular]];
+  profileCfg.baseForegroundColor = [XeniaTheme textMuted];
+  profileCfg.contentInsets = NSDirectionalEdgeInsetsMake(8, 8, 8, 8);
+  self.profileButton = [UIButton buttonWithConfiguration:profileCfg primaryAction:nil];
   self.profileButton.translatesAutoresizingMaskIntoConstraints = NO;
   [self.profileButton addTarget:self
                          action:@selector(openProfileTapped:)
                forControlEvents:UIControlEventTouchUpInside];
   [self.launcherOverlay addSubview:self.profileButton];
 
-  // Status label (for showing loading state).
-  self.statusLabel = [[UILabel alloc] init];
-  self.statusLabel.text = @"";
-  self.statusLabel.textColor = [UIColor lightGrayColor];
-  self.statusLabel.font =
-      [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
-  self.statusLabel.textAlignment = NSTextAlignmentCenter;
-  self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.launcherOverlay addSubview:self.statusLabel];
+  // Thin separator below the nav bar.
+  UIView* navSep = [[UIView alloc] init];
+  navSep.translatesAutoresizingMaskIntoConstraints = NO;
+  navSep.backgroundColor = [XeniaTheme border];
+  [self.launcherOverlay addSubview:navSep];
 
-  self.signedInProfileLabel = [[UILabel alloc] init];
-  self.signedInProfileLabel.text = @"";
-  self.signedInProfileLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.88];
-  self.signedInProfileLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-  self.signedInProfileLabel.textAlignment = NSTextAlignmentCenter;
-  self.signedInProfileLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.launcherOverlay addSubview:self.signedInProfileLabel];
+  // ── JIT warning banner (single source of JIT info; collapses via stack) ─
+  //
+  // Contains the status dot + label + guidance text in one compact row.
+  // When JIT is acquired, updateJITAvailabilityUI sets .hidden = YES
+  // and the UIStackView collapses it automatically.
 
-  UILabel* importedGamesTitleLabel = [[UILabel alloc] init];
-  importedGamesTitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  importedGamesTitleLabel.text = @"Imported Games";
-  importedGamesTitleLabel.textColor = [UIColor whiteColor];
-  importedGamesTitleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-  [self.launcherOverlay addSubview:importedGamesTitleLabel];
+  self.jitWarningCard = [[UIView alloc] init];
+  self.jitWarningCard.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitWarningCard.backgroundColor = [XeniaTheme bgSurface];
+  self.jitWarningCard.layer.cornerRadius = XeniaRadiusMd;
+  self.jitWarningCard.layer.borderWidth = 0.5;
+  self.jitWarningCard.layer.borderColor = [XeniaTheme border].CGColor;
 
-  UICollectionViewFlowLayout* layout = [[UICollectionViewFlowLayout alloc] init];
-  layout.minimumInteritemSpacing = 12;
-  layout.minimumLineSpacing = 12;
-  layout.sectionInset = UIEdgeInsetsMake(0, 0, 0, 0);
-  self.importedGamesCollectionView = [[UICollectionView alloc] initWithFrame:CGRectZero
-                                                        collectionViewLayout:layout];
+  self.jitStatusDot = [[UIView alloc] init];
+  self.jitStatusDot.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitStatusDot.backgroundColor = [XeniaTheme statusWarning];
+  self.jitStatusDot.layer.cornerRadius = 4;
+  [self.jitWarningCard addSubview:self.jitStatusDot];
+
+  self.jitStatusLabel = [[UILabel alloc] init];
+  self.jitStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitStatusLabel.text = @"JIT Not Detected";
+  self.jitStatusLabel.textColor = [XeniaTheme textPrimary];
+  self.jitStatusLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+  [self.jitWarningCard addSubview:self.jitStatusLabel];
+
+  UILabel* jitGuide = [[UILabel alloc] init];
+  jitGuide.translatesAutoresizingMaskIntoConstraints = NO;
+  jitGuide.text = xe_jit_not_detected_guidance_message();
+  jitGuide.textColor = [XeniaTheme textSecondary];
+  jitGuide.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
+  jitGuide.numberOfLines = 0;
+  [self.jitWarningCard addSubview:jitGuide];
+
+  // ── Library header: "Library" (left) + "+" (right) ─────────────────────
+
+  UIView* libraryRow = [[UIView alloc] init];
+  libraryRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+  UILabel* libraryLabel = [[UILabel alloc] init];
+  libraryLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  libraryLabel.text = @"Library";
+  libraryLabel.textColor = [XeniaTheme textPrimary];
+  libraryLabel.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+  [libraryRow addSubview:libraryLabel];
+
+  UIButtonConfiguration* importCfg = [UIButtonConfiguration plainButtonConfiguration];
+  importCfg.image =
+      [UIImage systemImageNamed:@"plus"
+              withConfiguration:[UIImageSymbolConfiguration
+                                    configurationWithPointSize:20
+                                                       weight:UIImageSymbolWeightMedium]];
+  importCfg.baseForegroundColor = [XeniaTheme accent];
+  importCfg.contentInsets = NSDirectionalEdgeInsetsMake(6, 6, 6, 6);
+  self.openGameButton = [UIButton buttonWithConfiguration:importCfg primaryAction:nil];
+  self.openGameButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.openGameButton addTarget:self
+                          action:@selector(openGameTapped:)
+                forControlEvents:UIControlEventTouchUpInside];
+  [libraryRow addSubview:self.openGameButton];
+
+  // ── Collapsible stack: JIT banner → library header ─────────────────────
+
+  UIStackView* headerStack = [[UIStackView alloc]
+      initWithArrangedSubviews:@[ self.jitWarningCard, libraryRow ]];
+  headerStack.axis = UILayoutConstraintAxisVertical;
+  headerStack.spacing = 12;
+  headerStack.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.launcherOverlay addSubview:headerStack];
+
+  // ── Games grid ─────────────────────────────────────────────────────────
+
+  UICollectionViewFlowLayout* gridLayout = [[UICollectionViewFlowLayout alloc] init];
+  gridLayout.minimumInteritemSpacing = 14;
+  gridLayout.minimumLineSpacing = 16;
+  self.importedGamesCollectionView =
+      [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:gridLayout];
   self.importedGamesCollectionView.translatesAutoresizingMaskIntoConstraints = NO;
   self.importedGamesCollectionView.dataSource = self;
   self.importedGamesCollectionView.delegate = self;
   self.importedGamesCollectionView.backgroundColor = [UIColor clearColor];
   self.importedGamesCollectionView.alwaysBounceVertical = YES;
-  self.importedGamesCollectionView.showsHorizontalScrollIndicator = NO;
-  self.importedGamesCollectionView.layer.cornerRadius = 12;
   [self.importedGamesCollectionView registerClass:[XeniaGameTileCell class]
                        forCellWithReuseIdentifier:@"ImportedGameCell"];
   [self.launcherOverlay addSubview:self.importedGamesCollectionView];
 
-  UIView* emptyBackgroundView = [[UIView alloc] initWithFrame:CGRectZero];
+  // Empty-state label.
+  UIView* emptyBg = [[UIView alloc] initWithFrame:CGRectZero];
   self.importedGamesEmptyLabel = [[UILabel alloc] init];
   self.importedGamesEmptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.importedGamesEmptyLabel.text = @"No imported games found in Documents.";
-  self.importedGamesEmptyLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.65];
-  self.importedGamesEmptyLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  self.importedGamesEmptyLabel.text =
+      @"No games yet.\nTransfer ISO or GOD files to the\nDocuments folder, or tap +.";
+  self.importedGamesEmptyLabel.textColor = [XeniaTheme textMuted];
+  self.importedGamesEmptyLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
   self.importedGamesEmptyLabel.textAlignment = NSTextAlignmentCenter;
   self.importedGamesEmptyLabel.numberOfLines = 0;
-  [emptyBackgroundView addSubview:self.importedGamesEmptyLabel];
+  [emptyBg addSubview:self.importedGamesEmptyLabel];
   [NSLayoutConstraint activateConstraints:@[
-    [self.importedGamesEmptyLabel.centerXAnchor
-        constraintEqualToAnchor:emptyBackgroundView.centerXAnchor],
-    [self.importedGamesEmptyLabel.centerYAnchor
-        constraintEqualToAnchor:emptyBackgroundView.centerYAnchor],
+    [self.importedGamesEmptyLabel.centerXAnchor constraintEqualToAnchor:emptyBg.centerXAnchor],
+    [self.importedGamesEmptyLabel.centerYAnchor constraintEqualToAnchor:emptyBg.centerYAnchor],
     [self.importedGamesEmptyLabel.leadingAnchor
-        constraintGreaterThanOrEqualToAnchor:emptyBackgroundView.leadingAnchor
-                                    constant:20],
+        constraintGreaterThanOrEqualToAnchor:emptyBg.leadingAnchor
+                                    constant:32],
     [self.importedGamesEmptyLabel.trailingAnchor
-        constraintLessThanOrEqualToAnchor:emptyBackgroundView.trailingAnchor
-                                 constant:-20],
+        constraintLessThanOrEqualToAnchor:emptyBg.trailingAnchor
+                                 constant:-32],
   ]];
-  self.importedGamesCollectionView.backgroundView = emptyBackgroundView;
+  self.importedGamesCollectionView.backgroundView = emptyBg;
 
-  // Layout constraints.
+  // ── Status label (tiny, at bottom — invisible when text is empty) ──────
+
+  self.statusLabel = [[UILabel alloc] init];
+  self.statusLabel.text = @"";
+  self.statusLabel.textColor = [XeniaTheme textMuted];
+  self.statusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  self.statusLabel.textAlignment = NSTextAlignmentCenter;
+  self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.launcherOverlay addSubview:self.statusLabel];
+
+  // Allocated but off-screen — existing code can set .text without crashing.
+  self.signedInProfileLabel = [[UILabel alloc] init];
+
+  // ── Layout ─────────────────────────────────────────────────────────────
+
   [NSLayoutConstraint activateConstraints:@[
-    // JIT status indicator at top center.
-    [statusContainer.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [statusContainer.topAnchor constraintEqualToAnchor:safe_guide.topAnchor constant:16],
+    // Nav bar.
+    [self.titleLabel.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:hPad],
+    [self.titleLabel.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+    [self.profileButton.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-8],
+    [self.profileButton.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    [self.settingsButton.trailingAnchor
+        constraintEqualToAnchor:self.profileButton.leadingAnchor],
+    [self.settingsButton.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
 
-    [self.jitStatusDot.leadingAnchor constraintEqualToAnchor:statusContainer.leadingAnchor],
-    [self.jitStatusDot.centerYAnchor constraintEqualToAnchor:statusContainer.centerYAnchor],
-    [self.jitStatusDot.widthAnchor constraintEqualToConstant:10],
-    [self.jitStatusDot.heightAnchor constraintEqualToConstant:10],
+    // Nav separator.
+    [navSep.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:8],
+    [navSep.leadingAnchor constraintEqualToAnchor:self.launcherOverlay.leadingAnchor],
+    [navSep.trailingAnchor constraintEqualToAnchor:self.launcherOverlay.trailingAnchor],
+    [navSep.heightAnchor constraintEqualToConstant:0.5],
 
+    // Header stack (JIT banner + library row) below separator.
+    [headerStack.topAnchor constraintEqualToAnchor:navSep.bottomAnchor constant:12],
+    [headerStack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:hPad],
+    [headerStack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-hPad],
+
+    // JIT banner internals.
+    [self.jitStatusDot.leadingAnchor constraintEqualToAnchor:self.jitWarningCard.leadingAnchor
+                                                    constant:14],
+    [self.jitStatusDot.topAnchor constraintEqualToAnchor:self.jitWarningCard.topAnchor
+                                                constant:16],
+    [self.jitStatusDot.widthAnchor constraintEqualToConstant:8],
+    [self.jitStatusDot.heightAnchor constraintEqualToConstant:8],
     [self.jitStatusLabel.leadingAnchor constraintEqualToAnchor:self.jitStatusDot.trailingAnchor
-                                                      constant:6],
-    [self.jitStatusLabel.trailingAnchor constraintEqualToAnchor:statusContainer.trailingAnchor],
-    [self.jitStatusLabel.centerYAnchor constraintEqualToAnchor:statusContainer.centerYAnchor],
-
-    [self.settingsButton.trailingAnchor constraintEqualToAnchor:safe_guide.trailingAnchor
-                                                       constant:-16],
-    [self.settingsButton.topAnchor constraintEqualToAnchor:safe_guide.topAnchor constant:12],
-    [self.profileButton.leadingAnchor constraintEqualToAnchor:safe_guide.leadingAnchor constant:16],
-    [self.profileButton.topAnchor constraintEqualToAnchor:safe_guide.topAnchor constant:12],
-
-    // Title, subtitle, and warning card.
-    [self.titleLabel.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [self.titleLabel.topAnchor constraintEqualToAnchor:safe_guide.topAnchor constant:56],
-    [subtitleLabel.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [subtitleLabel.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:6],
-
-    [self.jitWarningCard.topAnchor constraintEqualToAnchor:subtitleLabel.bottomAnchor constant:18],
-    [self.jitWarningCard.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [self.jitWarningCard.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe_guide.leadingAnchor
-                                                                   constant:20],
-    [self.jitWarningCard.trailingAnchor constraintLessThanOrEqualToAnchor:safe_guide.trailingAnchor
-                                                                 constant:-20],
-    [self.jitWarningCard.widthAnchor constraintLessThanOrEqualToConstant:640],
-
-    [jitWarningIcon.leadingAnchor constraintEqualToAnchor:self.jitWarningCard.leadingAnchor
-                                                 constant:14],
-    [jitWarningIcon.topAnchor constraintEqualToAnchor:self.jitWarningCard.topAnchor constant:14],
-    [jitWarningIcon.widthAnchor constraintEqualToConstant:18],
-    [jitWarningIcon.heightAnchor constraintEqualToConstant:18],
-
-    [jitWarningTitle.leadingAnchor constraintEqualToAnchor:jitWarningIcon.trailingAnchor
-                                                  constant:10],
-    [jitWarningTitle.trailingAnchor constraintEqualToAnchor:self.jitWarningCard.trailingAnchor
-                                                   constant:-14],
-    [jitWarningTitle.topAnchor constraintEqualToAnchor:self.jitWarningCard.topAnchor constant:12],
-
-    [jitWarningBody.leadingAnchor constraintEqualToAnchor:jitWarningTitle.leadingAnchor],
-    [jitWarningBody.trailingAnchor constraintEqualToAnchor:jitWarningTitle.trailingAnchor],
-    [jitWarningBody.topAnchor constraintEqualToAnchor:jitWarningTitle.bottomAnchor constant:6],
-    [jitWarningBody.bottomAnchor constraintEqualToAnchor:self.jitWarningCard.bottomAnchor
-                                                constant:-12],
-
-    [self.openGameButton.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [self.openGameButton.topAnchor constraintEqualToAnchor:self.jitWarningCard.bottomAnchor
-                                                  constant:20],
-
-    [self.statusLabel.centerXAnchor constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [self.statusLabel.topAnchor constraintEqualToAnchor:self.openGameButton.bottomAnchor
-                                               constant:12],
-    [self.statusLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe_guide.leadingAnchor
-                                                                constant:20],
-    [self.statusLabel.trailingAnchor constraintLessThanOrEqualToAnchor:safe_guide.trailingAnchor
-                                                              constant:-20],
-
-    [self.signedInProfileLabel.centerXAnchor
-        constraintEqualToAnchor:self.launcherOverlay.centerXAnchor],
-    [self.signedInProfileLabel.topAnchor constraintEqualToAnchor:self.statusLabel.bottomAnchor
-                                                        constant:8],
-    [self.signedInProfileLabel.leadingAnchor
-        constraintGreaterThanOrEqualToAnchor:safe_guide.leadingAnchor
-                                    constant:20],
-    [self.signedInProfileLabel.trailingAnchor
-        constraintLessThanOrEqualToAnchor:safe_guide.trailingAnchor
-                                 constant:-20],
-
-    [importedGamesTitleLabel.leadingAnchor constraintEqualToAnchor:safe_guide.leadingAnchor
-                                                          constant:18],
-    [importedGamesTitleLabel.topAnchor
-        constraintEqualToAnchor:self.signedInProfileLabel.bottomAnchor
-                       constant:14],
-
-    [self.importedGamesCollectionView.leadingAnchor constraintEqualToAnchor:safe_guide.leadingAnchor
-                                                                   constant:14],
-    [self.importedGamesCollectionView.trailingAnchor
-        constraintEqualToAnchor:safe_guide.trailingAnchor
+                                                      constant:8],
+    [self.jitStatusLabel.trailingAnchor
+        constraintEqualToAnchor:self.jitWarningCard.trailingAnchor
                        constant:-14],
-    [self.importedGamesCollectionView.topAnchor
-        constraintEqualToAnchor:importedGamesTitleLabel.bottomAnchor
-                       constant:8],
-    [self.importedGamesCollectionView.bottomAnchor constraintEqualToAnchor:safe_guide.bottomAnchor
-                                                                  constant:-12],
+    [self.jitStatusLabel.centerYAnchor constraintEqualToAnchor:self.jitStatusDot.centerYAnchor],
+    [jitGuide.leadingAnchor constraintEqualToAnchor:self.jitStatusLabel.leadingAnchor],
+    [jitGuide.trailingAnchor constraintEqualToAnchor:self.jitStatusLabel.trailingAnchor],
+    [jitGuide.topAnchor constraintEqualToAnchor:self.jitStatusLabel.bottomAnchor constant:2],
+    [jitGuide.bottomAnchor constraintEqualToAnchor:self.jitWarningCard.bottomAnchor
+                                           constant:-14],
+
+    // Library row internals.
+    [libraryLabel.leadingAnchor constraintEqualToAnchor:libraryRow.leadingAnchor],
+    [libraryLabel.centerYAnchor constraintEqualToAnchor:libraryRow.centerYAnchor],
+    [self.openGameButton.trailingAnchor constraintEqualToAnchor:libraryRow.trailingAnchor],
+    [self.openGameButton.centerYAnchor constraintEqualToAnchor:libraryRow.centerYAnchor],
+    [libraryRow.heightAnchor constraintEqualToConstant:34],
+
+    // Games grid.
+    [self.importedGamesCollectionView.topAnchor constraintEqualToAnchor:headerStack.bottomAnchor
+                                                               constant:8],
+    [self.importedGamesCollectionView.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor
+                                                                   constant:hPad],
+    [self.importedGamesCollectionView.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor
+                                                                    constant:-hPad],
+    [self.importedGamesCollectionView.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+
+    // Status label.
+    [self.statusLabel.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+    [self.statusLabel.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-6],
   ]];
 }
 
@@ -1728,38 +1890,38 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   self.inGameMenuOverlay = [[UIView alloc] initWithFrame:self.view.bounds];
   self.inGameMenuOverlay.autoresizingMask =
       UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-  self.inGameMenuOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.58];
+  self.inGameMenuOverlay.backgroundColor = [XeniaTheme overlayLight];
   self.inGameMenuOverlay.hidden = YES;
   [self.view addSubview:self.inGameMenuOverlay];
 
   UIView* panel = [[UIView alloc] init];
   panel.translatesAutoresizingMaskIntoConstraints = NO;
-  panel.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.94];
-  panel.layer.cornerRadius = 16.0;
+  panel.backgroundColor = [XeniaTheme bgSurface];
+  panel.layer.cornerRadius = XeniaRadiusXl;
   panel.layer.borderWidth = 1.0;
-  panel.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.08].CGColor;
+  panel.layer.borderColor = [XeniaTheme border].CGColor;
   [self.inGameMenuOverlay addSubview:panel];
 
   UILabel* title = [[UILabel alloc] init];
   title.translatesAutoresizingMaskIntoConstraints = NO;
   title.text = @"In-Game Menu";
-  title.textColor = [UIColor whiteColor];
-  title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+  title.textColor = [XeniaTheme textPrimary];
+  title.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
   title.textAlignment = NSTextAlignmentCenter;
   [panel addSubview:title];
 
   UILabel* subtitle = [[UILabel alloc] init];
   subtitle.translatesAutoresizingMaskIntoConstraints = NO;
   subtitle.text = @"Tap anywhere to close";
-  subtitle.textColor = [UIColor colorWithWhite:1.0 alpha:0.68];
-  subtitle.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  subtitle.textColor = [XeniaTheme textMuted];
+  subtitle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
   subtitle.textAlignment = NSTextAlignmentCenter;
   [panel addSubview:subtitle];
 
   UIButtonConfiguration* resume_config = [UIButtonConfiguration filledButtonConfiguration];
   resume_config.title = @"Resume";
-  resume_config.baseBackgroundColor = [UIColor systemGreenColor];
-  resume_config.baseForegroundColor = [UIColor whiteColor];
+  resume_config.baseBackgroundColor = [XeniaTheme accent];
+  resume_config.baseForegroundColor = [XeniaTheme accentFg];
   resume_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   resume_config.contentInsets = NSDirectionalEdgeInsetsMake(12, 18, 12, 18);
   UIButton* resume = [UIButton buttonWithConfiguration:resume_config primaryAction:nil];
@@ -1771,8 +1933,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   settings_config.title = @"Settings";
   settings_config.image = [UIImage systemImageNamed:@"slider.horizontal.3"];
   settings_config.imagePadding = 6;
-  settings_config.baseForegroundColor = [UIColor whiteColor];
-  settings_config.baseBackgroundColor = [UIColor colorWithWhite:1.0 alpha:0.16];
+  settings_config.baseForegroundColor = [XeniaTheme textPrimary];
+  settings_config.baseBackgroundColor = [XeniaTheme bgSurface2];
   settings_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   settings_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
   UIButton* settings = [UIButton buttonWithConfiguration:settings_config primaryAction:nil];
@@ -1786,8 +1948,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   live_log_config.title = @"Live Log";
   live_log_config.image = [UIImage systemImageNamed:@"doc.text"];
   live_log_config.imagePadding = 6;
-  live_log_config.baseForegroundColor = [UIColor whiteColor];
-  live_log_config.baseBackgroundColor = [UIColor colorWithWhite:1.0 alpha:0.16];
+  live_log_config.baseForegroundColor = [XeniaTheme textPrimary];
+  live_log_config.baseBackgroundColor = [XeniaTheme bgSurface2];
   live_log_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   live_log_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
   UIButton* live_log = [UIButton buttonWithConfiguration:live_log_config primaryAction:nil];
@@ -1801,8 +1963,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   exit_config.title = @"Exit To Library";
   exit_config.image = [UIImage systemImageNamed:@"rectangle.portrait.and.arrow.right"];
   exit_config.imagePadding = 6;
-  exit_config.baseForegroundColor = [UIColor whiteColor];
-  exit_config.baseBackgroundColor = [UIColor colorWithRed:0.63 green:0.18 blue:0.18 alpha:0.92];
+  exit_config.baseForegroundColor = [XeniaTheme textPrimary];
+  exit_config.baseBackgroundColor = [[XeniaTheme statusError] colorWithAlphaComponent:0.25];
   exit_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   exit_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
   UIButton* exit_button = [UIButton buttonWithConfiguration:exit_config primaryAction:nil];
@@ -2267,14 +2429,14 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 }
 
 - (void)updateJITStatusIndicator {
+  // The banner is the single JIT indicator — dot color updates but the
+  // banner itself hides entirely when JIT is acquired.
   if (self.jitAcquired) {
-    self.jitStatusDot.backgroundColor = [UIColor systemGreenColor];
+    self.jitStatusDot.backgroundColor = [XeniaTheme accent];
     self.jitStatusLabel.text = @"JIT Enabled";
-    self.jitStatusLabel.textColor = [UIColor systemGreenColor];
   } else {
-    self.jitStatusDot.backgroundColor = [UIColor systemRedColor];
+    self.jitStatusDot.backgroundColor = [XeniaTheme statusWarning];
     self.jitStatusLabel.text = @"JIT Not Detected";
-    self.jitStatusLabel.textColor = [UIColor systemRedColor];
   }
 }
 
@@ -2283,11 +2445,6 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   self.jitWarningCard.hidden = jit_ready;
   self.openGameButton.enabled = YES;
   self.openGameButton.alpha = 1.0;
-  if (!jit_ready && self.statusLabel.text.length == 0) {
-    self.statusLabel.text = @"JIT not detected yet. Import games or open Settings while waiting.";
-  } else if (jit_ready && [self.statusLabel.text hasPrefix:@"JIT not detected yet."]) {
-    self.statusLabel.text = @"";
-  }
 }
 
 - (std::filesystem::path)importedGamesDirectory {
@@ -2341,6 +2498,13 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 - (void)refreshImportedGames {
   discovered_games_.clear();
 
+  // Load cached title names populated by previous game launches.
+  NSString* caches_dir = NSSearchPathForDirectoriesInDomains(
+      NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+  NSString* names_path = [caches_dir stringByAppendingPathComponent:@"title-names.plist"];
+  NSDictionary* title_name_cache =
+      [[NSDictionary dictionaryWithContentsOfFile:names_path] retain];
+
   std::vector<std::filesystem::path> scan_roots;
   const std::filesystem::path documents_root = xe_get_ios_documents_path();
   const std::filesystem::path library_root = [self importedGamesDirectory];
@@ -2349,8 +2513,16 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     scan_roots.push_back(documents_root);
   }
 
+  // Format priority for dedup: GOD (full metadata + content) > ISO (full
+  // disc filesystem) > standalone XEX (single executable, missing disc files).
+  auto format_priority = [](const std::filesystem::path& p) -> int {
+    if (IsLikelyGodPath(p)) return 0;
+    if (IsISOPath(p)) return 1;
+    return 2;
+  };
+
   std::set<std::filesystem::path> seen_paths;
-  std::set<uint32_t> seen_god_title_ids;
+  std::map<uint32_t, size_t> title_id_to_index;
   for (const auto& root : scan_roots) {
     std::error_code ec;
     if (!std::filesystem::exists(root, ec)) {
@@ -2383,10 +2555,26 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
             ++it;
             continue;
           }
-          if (IsLikelyGodPath(unique_path) && game.title_id &&
-              !seen_god_title_ids.insert(game.title_id).second) {
-            ++it;
-            continue;
+          if (game.title_id && title_name_cache) {
+            NSString* key = [NSString stringWithFormat:@"%08x", game.title_id];
+            NSString* cached = [title_name_cache objectForKey:key];
+            if (cached.length > 0) {
+              game.title = std::string([cached UTF8String]);
+            }
+          }
+          if (game.title_id) {
+            auto existing = title_id_to_index.find(game.title_id);
+            if (existing != title_id_to_index.end()) {
+              int old_pri = format_priority(
+                  discovered_games_[existing->second].path);
+              int new_pri = format_priority(unique_path);
+              if (new_pri < old_pri) {
+                discovered_games_[existing->second] = std::move(game);
+              }
+              ++it;
+              continue;
+            }
+            title_id_to_index[game.title_id] = discovered_games_.size();
           }
           discovered_games_.push_back(std::move(game));
         }
@@ -2395,6 +2583,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
       ++it;
     }
   }
+
+  [title_name_cache release];
 
   std::sort(discovered_games_.begin(), discovered_games_.end(),
             [](const IOSDiscoveredGame& a, const IOSDiscoveredGame& b) {
@@ -2482,18 +2672,41 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
       game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
   cell.titleLabel.text = title;
 
-  UIImage* icon = nil;
-  if (!game.icon_data.empty()) {
-    NSData* data = [NSData dataWithBytes:game.icon_data.data() length:game.icon_data.size()];
-    icon = [UIImage imageWithData:data];
+  // Priority: cached remote art → async fetch → embedded icon → placeholder.
+  // Remote tile.png is much higher resolution than embedded 64x64 icons.
+  UIImage* icon = xe_cached_game_art(game.title_id);
+  if (icon) {
+    cell.iconView.image = icon;
+  } else {
+    // Show embedded icon (or placeholder) while fetching high-res art.
+    UIImage* fallback = nil;
+    if (!game.icon_data.empty()) {
+      NSData* data = [NSData dataWithBytes:game.icon_data.data() length:game.icon_data.size()];
+      fallback = [UIImage imageWithData:data];
+    }
+    if (!fallback) fallback = [UIImage imageNamed:@"128"];
+    if (!fallback) fallback = [UIImage systemImageNamed:@"gamecontroller.fill"];
+    cell.iconView.image = fallback;
+    if (game.title_id) {
+      uint32_t fetch_title_id = game.title_id;
+      // No __weak under MRC — collectionView is owned by self and won't
+      // be deallocated while the launcher overlay is visible.
+      UICollectionView* cv = collectionView;
+      xe_fetch_game_art(fetch_title_id, ^(UIImage* fetched) {
+        if (!fetched || !cv) return;
+        NSMutableArray* reload_paths = [NSMutableArray array];
+        for (size_t i = 0; i < self->discovered_games_.size(); ++i) {
+          if (self->discovered_games_[i].title_id == fetch_title_id) {
+            [reload_paths addObject:[NSIndexPath indexPathForItem:static_cast<NSInteger>(i)
+                                                         inSection:0]];
+          }
+        }
+        if (reload_paths.count > 0) {
+          [cv reloadItemsAtIndexPaths:reload_paths];
+        }
+      });
+    }
   }
-  if (!icon) {
-    icon = [UIImage imageNamed:@"128"];
-  }
-  if (!icon) {
-    icon = [UIImage systemImageNamed:@"gamecontroller.fill"];
-  }
-  cell.iconView.image = icon;
   return cell;
 }
 
@@ -2515,19 +2728,21 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
                     layout:(UICollectionViewLayout* __unused)collectionViewLayout
     sizeForItemAtIndexPath:(NSIndexPath* __unused)indexPath {
   CGFloat content_width = collectionView.bounds.size.width;
-  NSInteger columns = 3;
+  NSInteger columns = 2;
   if (content_width >= 1100) {
-    columns = 6;
-  } else if (content_width >= 900) {
     columns = 5;
-  } else if (content_width >= 680) {
+  } else if (content_width >= 900) {
     columns = 4;
+  } else if (content_width >= 680) {
+    columns = 3;
   }
-  CGFloat spacing = 12.0;
+  CGFloat spacing = 16.0;
   CGFloat total_spacing = spacing * (columns - 1);
   CGFloat tile_width = floor((content_width - total_spacing) / columns);
-  tile_width = MAX(tile_width, 96.0);
-  return CGSizeMake(tile_width, tile_width + 40.0);
+  tile_width = MAX(tile_width, 100.0);
+  // Cover art is ~219x300 (~1:1.37).  Image height + 24pt for title label.
+  CGFloat image_height = floor(tile_width * 300.0 / 219.0);
+  return CGSizeMake(tile_width, image_height + 24.0);
 }
 
 - (void)viewDidLayoutSubviews {
