@@ -12,18 +12,16 @@
 DEFINE_bool(
     ui_theme_tokens, false,
     "Enable Apple-native shared UI theme tokens for launcher and overlay UI.",
-    "UI")
-DEFINE_bool(
-    ios_async_import_ui, false,
-    "Enable asynchronous iOS game import flow with progress-driven UI state.",
-    "UI")
-DEFINE_bool(
-    ui_controller_navigation, false,
-    "Enable Apple-native controller-first UI navigation model and focus "
-    "handling.",
-    "UI")
-DEFINE_string(
-    macos_ui_backend, "qt",
-    "Select macOS UI backend. Use: [qt, native] (default keeps current Qt "
-    "behavior).",
-    "UI")
+    "UI") DEFINE_bool(ios_async_import_ui, false,
+                      "Enable asynchronous iOS game import flow with "
+                      "progress-driven UI state.",
+                      "UI")
+    DEFINE_bool(
+        ui_controller_navigation, true,
+        "Enable Apple-native controller-first UI navigation model and focus "
+        "handling.",
+        "UI") DEFINE_string(macos_ui_backend, "qt",
+                            "Select macOS UI backend. Use: [qt, native] "
+                            "(default keeps current Qt "
+                            "behavior).",
+                            "UI")
