@@ -43,9 +43,9 @@ ControllerNavigationMapper::ControllerNavigationMapper(
     ControllerNavigationConfig config)
     : config_(config) {}
 
-ControllerActionSet ControllerNavigationMapper::Update(const X_INPUT_STATE& state,
-                                                       uint64_t now_ms) {
-  const X_INPUT_GAMEPAD& gamepad = state.gamepad;
+ControllerActionSet ControllerNavigationMapper::Update(
+    const hid::X_INPUT_STATE& state, uint64_t now_ms) {
+  const hid::X_INPUT_GAMEPAD& gamepad = state.gamepad;
   ControllerActionSet actions = BuildEdgeActions(gamepad);
 
   const ActiveDirection direction =
@@ -53,8 +53,10 @@ ControllerActionSet ControllerNavigationMapper::Update(const X_INPUT_STATE& stat
   UpdateDirectionalRepeat(direction, now_ms, actions);
 
   prev_buttons_ = gamepad.buttons;
-  prev_left_trigger_pressed_ = gamepad.left_trigger >= config_.trigger_threshold;
-  prev_right_trigger_pressed_ = gamepad.right_trigger >= config_.trigger_threshold;
+  prev_left_trigger_pressed_ =
+      gamepad.left_trigger >= config_.trigger_threshold;
+  prev_right_trigger_pressed_ =
+      gamepad.right_trigger >= config_.trigger_threshold;
 
   return actions;
 }
@@ -70,14 +72,18 @@ void ControllerNavigationMapper::Reset() {
 }
 
 ControllerNavigationMapper::ActiveDirection
-ControllerNavigationMapper::ResolveDirection(const X_INPUT_GAMEPAD& gamepad,
-                                             int16_t stick_deadzone) {
-  const bool dpad_up = (gamepad.buttons & X_INPUT_GAMEPAD_DPAD_UP) != 0;
-  const bool dpad_down = (gamepad.buttons & X_INPUT_GAMEPAD_DPAD_DOWN) != 0;
-  const bool dpad_left = (gamepad.buttons & X_INPUT_GAMEPAD_DPAD_LEFT) != 0;
-  const bool dpad_right = (gamepad.buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) != 0;
+ControllerNavigationMapper::ResolveDirection(
+    const hid::X_INPUT_GAMEPAD& gamepad, int16_t stick_deadzone) {
+  const bool dpad_up = (gamepad.buttons & hid::X_INPUT_GAMEPAD_DPAD_UP) != 0;
+  const bool dpad_down =
+      (gamepad.buttons & hid::X_INPUT_GAMEPAD_DPAD_DOWN) != 0;
+  const bool dpad_left =
+      (gamepad.buttons & hid::X_INPUT_GAMEPAD_DPAD_LEFT) != 0;
+  const bool dpad_right =
+      (gamepad.buttons & hid::X_INPUT_GAMEPAD_DPAD_RIGHT) != 0;
 
-  if (dpad_up) return {true, NavigationDirection::kUp, DirectionalSource::kDpad};
+  if (dpad_up)
+    return {true, NavigationDirection::kUp, DirectionalSource::kDpad};
   if (dpad_down)
     return {true, NavigationDirection::kDown, DirectionalSource::kDpad};
   if (dpad_left)
@@ -107,19 +113,19 @@ ControllerNavigationMapper::ResolveDirection(const X_INPUT_GAMEPAD& gamepad,
 }
 
 ControllerActionSet ControllerNavigationMapper::BuildEdgeActions(
-    const X_INPUT_GAMEPAD& gamepad) const {
+    const hid::X_INPUT_GAMEPAD& gamepad) const {
   ControllerActionSet actions;
 
   const uint16_t buttons = gamepad.buttons;
   const uint16_t pressed = buttons & ~prev_buttons_;
 
-  actions.accept = (pressed & X_INPUT_GAMEPAD_A) != 0;
-  actions.back = (pressed & X_INPUT_GAMEPAD_B) != 0;
-  actions.context = (pressed & X_INPUT_GAMEPAD_X) != 0;
-  actions.quick_action = (pressed & X_INPUT_GAMEPAD_Y) != 0;
-  actions.guide = (pressed & X_INPUT_GAMEPAD_GUIDE) != 0;
-  actions.section_prev = (pressed & X_INPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-  actions.section_next = (pressed & X_INPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+  actions.accept = (pressed & hid::X_INPUT_GAMEPAD_A) != 0;
+  actions.back = (pressed & hid::X_INPUT_GAMEPAD_B) != 0;
+  actions.context = (pressed & hid::X_INPUT_GAMEPAD_X) != 0;
+  actions.quick_action = (pressed & hid::X_INPUT_GAMEPAD_Y) != 0;
+  actions.guide = (pressed & hid::X_INPUT_GAMEPAD_GUIDE) != 0;
+  actions.section_prev = (pressed & hid::X_INPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+  actions.section_next = (pressed & hid::X_INPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
 
   const bool left_trigger_pressed =
       gamepad.left_trigger >= config_.trigger_threshold;
@@ -140,9 +146,9 @@ void ControllerNavigationMapper::UpdateDirectionalRepeat(
     return;
   }
 
-  const bool direction_changed =
-      !repeat_active_ || repeat_direction_ != direction.direction ||
-      repeat_source_ != direction.source;
+  const bool direction_changed = !repeat_active_ ||
+                                 repeat_direction_ != direction.direction ||
+                                 repeat_source_ != direction.source;
 
   if (direction_changed) {
     out_actions.SetDirection(direction.direction);

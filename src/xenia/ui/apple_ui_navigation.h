@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include "xenia/xbox.h"
+#include "xenia/hid/input.h"
 
 namespace xe {
 namespace ui {
@@ -60,7 +60,7 @@ class ControllerNavigationMapper {
       ControllerNavigationConfig config = ControllerNavigationConfig());
 
   // `now_ms` should be monotonic time in milliseconds.
-  ControllerActionSet Update(const X_INPUT_STATE& state, uint64_t now_ms);
+  ControllerActionSet Update(const hid::X_INPUT_STATE& state, uint64_t now_ms);
   void Reset();
 
  private:
@@ -76,11 +76,13 @@ class ControllerNavigationMapper {
     DirectionalSource source = DirectionalSource::kNone;
   };
 
-  static ActiveDirection ResolveDirection(const X_INPUT_GAMEPAD& gamepad,
+  static ActiveDirection ResolveDirection(const hid::X_INPUT_GAMEPAD& gamepad,
                                           int16_t stick_deadzone);
 
-  ControllerActionSet BuildEdgeActions(const X_INPUT_GAMEPAD& gamepad) const;
-  void UpdateDirectionalRepeat(const ActiveDirection& direction, uint64_t now_ms,
+  ControllerActionSet BuildEdgeActions(
+      const hid::X_INPUT_GAMEPAD& gamepad) const;
+  void UpdateDirectionalRepeat(const ActiveDirection& direction,
+                               uint64_t now_ms,
                                ControllerActionSet& out_actions);
 
   ControllerNavigationConfig config_;
@@ -123,7 +125,8 @@ class FocusGraph {
 
  private:
   FocusNodeId FirstEnabledNode() const;
-  FocusNodeId ResolveEdge(const FocusNode& node, NavigationDirection direction) const;
+  FocusNodeId ResolveEdge(const FocusNode& node,
+                          NavigationDirection direction) const;
 
   std::unordered_map<FocusNodeId, FocusNode> nodes_;
   FocusNodeId current_ = kInvalidFocusNodeId;
