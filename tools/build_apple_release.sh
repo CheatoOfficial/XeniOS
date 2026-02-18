@@ -83,6 +83,96 @@ resolve_macdeployqt() {
   return 1
 }
 
+normalize_version() {
+  local v="${1:-0}"
+  awk -v v="$v" '
+    BEGIN {
+      n = split(v, a, ".")
+      for (i = 1; i <= 3; ++i) {
+        printf("%d", (i <= n ? a[i] + 0 : 0))
+        if (i < 3) printf(".")
+      }
+    }'
+}
+
+version_eq() {
+  [ "$(normalize_version "$1")" = "$(normalize_version "$2")" ]
+}
+
+version_le() {
+  local a b
+  a="$(normalize_version "$1")"
+  b="$(normalize_version "$2")"
+  awk -v a="$a" -v b="$b" '
+    BEGIN {
+      split(a, av, ".")
+      split(b, bv, ".")
+      for (i = 1; i <= 3; ++i) {
+        ai = av[i] + 0
+        bi = bv[i] + 0
+        if (ai < bi) { exit 0 }
+        if (ai > bi) { exit 1 }
+      }
+      exit 0
+    }'
+}
+
+dylib_macos_deployment_target() {
+  local dylib="$1"
+  otool -l "$dylib" | awk '
+    $1 == "cmd" && $2 == "LC_BUILD_VERSION" { mode = "build"; next }
+    $1 == "cmd" && $2 == "LC_VERSION_MIN_MACOSX" { mode = "legacy"; next }
+    $1 == "cmd" { mode = "" }
+    mode == "build" && $1 == "minos" { print $2; exit }
+    mode == "legacy" && $1 == "version" { print $2; exit }
+  '
+}
+
+deploy_qt_if_missing() {
+  local app_bundle="$1"
+  local qt_core="$app_bundle/Contents/Frameworks/QtCore.framework/Versions/A/QtCore"
+  local qcocoa="$app_bundle/Contents/PlugIns/platforms/libqcocoa.dylib"
+
+  if [ -f "$qt_core" ] && [ -f "$qcocoa" ]; then
+    echo "Qt already bundled by post-build step; skipping extra macdeployqt pass."
+    return 0
+  fi
+
+  local macdeployqt=""
+  if macdeployqt="$(resolve_macdeployqt)"; then
+    "$macdeployqt" "$app_bundle" -always-overwrite \
+      -libpath=third_party/metal-shader-converter/lib \
+      -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos/lib \
+      -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib \
+      -libpath=/opt/homebrew/opt/sdl2/lib \
+      -libpath=/usr/local/opt/sdl2/lib
+  else
+    echo "warning: macdeployqt not found; app may be missing Qt frameworks"
+  fi
+}
+
+require_sdl2_deployment_target() {
+  local app_bundle="$1"
+  local required_target="$2"
+  local app_frameworks="$app_bundle/Contents/Frameworks"
+  local sdl_dylib="$app_frameworks/libSDL2-2.0.0.dylib"
+  [ -f "$sdl_dylib" ] || die "bundled SDL2 not found: $sdl_dylib"
+
+  local actual_target
+  actual_target="$(dylib_macos_deployment_target "$sdl_dylib")"
+  [ -n "$actual_target" ] || die "unable to read deployment target from $sdl_dylib"
+
+  if ! version_le "$actual_target" "$required_target"; then
+    die "SDL2 deployment target too new: got $actual_target, app target is $required_target ($sdl_dylib)"
+  fi
+
+  if version_eq "$actual_target" "$required_target"; then
+    echo "SDL2 deployment target OK: $actual_target ($sdl_dylib)"
+  else
+    echo "SDL2 deployment target compatible: $actual_target (app target: $required_target) ($sdl_dylib)"
+  fi
+}
+
 sign_macos_app() {
   local app_bundle="$1"
   local entitlements="$2"
@@ -122,7 +212,15 @@ sign_macos_app() {
 
   codesign --force --deep --timestamp=none --sign "$identity" \
     --entitlements "$entitlements" "$app_bundle"
-  xattr -cr "$app_bundle"
+
+  # Some Homebrew dylibs can be copied with read-only mode and carry provenance
+  # xattrs, making recursive xattr clearing fail with EPERM.
+  if ! xattr -cr "$app_bundle" >/dev/null 2>&1; then
+    chmod -R u+w "$app_bundle" >/dev/null 2>&1 || true
+    if ! xattr -cr "$app_bundle" >/dev/null 2>&1; then
+      echo "warning: failed to clear one or more extended attributes in $app_bundle"
+    fi
+  fi
 }
 
 package_macos_dmg() {
@@ -198,6 +296,9 @@ done
 root="$(repo_root)"
 cd "$root"
 
+# Avoid stale iOS sentinel state leaking into normal macOS premake runs.
+rm -f .ios_target
+
 if [ "$(uname -s)" != "Darwin" ]; then
   die "this script must be run on macOS"
 fi
@@ -207,6 +308,7 @@ need_bin codesign
 need_bin hdiutil
 need_bin ditto
 need_bin xattr
+need_bin otool
 
 mkdir -p "$out_dir"
 
@@ -233,15 +335,7 @@ if [ "$build_macos_arm64" -eq 1 ]; then
     cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
   fi
 
-  if macdeployqt="$(resolve_macdeployqt)"; then
-    "$macdeployqt" "$app_bundle" -always-overwrite -verbose=2 \
-      -libpath=third_party/metal-shader-converter/lib \
-      -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos/lib \
-      -libpath=/opt/homebrew/opt/sdl2/lib \
-      -libpath=/usr/local/opt/sdl2/lib || true
-  else
-    echo "warning: macdeployqt not found; app may be missing Qt frameworks"
-  fi
+  deploy_qt_if_missing "$app_bundle"
 
   if [ -f third_party/metal-shader-converter/lib/libmetalirconverter.dylib ]; then
     mkdir -p "$app_bundle/Contents/Frameworks"
@@ -253,6 +347,8 @@ if [ "$build_macos_arm64" -eq 1 ]; then
     cp -f third_party/DirectXShaderCompiler/build_dxilconv_macos/lib/libdxilconv.dylib \
       "$app_bundle/Contents/Frameworks/" || true
   fi
+
+  require_sdl2_deployment_target "$app_bundle" "$macos_min"
 
   sign_macos_app "$app_bundle" "xenia.entitlements" "$mac_sign_identity"
   package_macos_dmg "$app_bundle" "$out_dir/xenia_edge_macos_arm64.dmg" "LICENSE"
@@ -273,15 +369,7 @@ if [ "$build_macos_x86_64" -eq 1 ]; then
     cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
   fi
 
-  if macdeployqt="$(resolve_macdeployqt)"; then
-    "$macdeployqt" "$app_bundle" -always-overwrite -verbose=2 \
-      -libpath=third_party/metal-shader-converter/lib \
-      -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib \
-      -libpath=/opt/homebrew/opt/sdl2/lib \
-      -libpath=/usr/local/opt/sdl2/lib || true
-  else
-    echo "warning: macdeployqt not found; app may be missing Qt frameworks"
-  fi
+  deploy_qt_if_missing "$app_bundle"
 
   if [ -f third_party/metal-shader-converter/lib/libmetalirconverter.dylib ]; then
     mkdir -p "$app_bundle/Contents/Frameworks"
@@ -294,6 +382,8 @@ if [ "$build_macos_x86_64" -eq 1 ]; then
       "$app_bundle/Contents/Frameworks/" || true
   fi
 
+  require_sdl2_deployment_target "$app_bundle" "$macos_min"
+
   sign_macos_app "$app_bundle" "xenia.entitlements" "$mac_sign_identity"
   package_macos_dmg "$app_bundle" "$out_dir/xenia_edge_macos_x86_64.dmg" "LICENSE"
 fi
@@ -301,8 +391,6 @@ fi
 if [ "$build_ios" -eq 1 ]; then
   echo ""
   echo "== iOS arm64 (ad-hoc-signed ipa) =="
-  # Extra signal for Lua scripts (also used by CI).
-  touch .ios_target
 
   ./xb premake --target_os=ios
   ./xb build --config="$buildcfg" --target_os=ios --no_premake --target=xenia-app -- \
