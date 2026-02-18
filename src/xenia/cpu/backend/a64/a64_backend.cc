@@ -11,9 +11,10 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <new>
-#if XE_PLATFORM_MAC || XE_PLATFORM_LINUX
+#if XE_PLATFORM_MAC || XE_PLATFORM_LINUX || XE_PLATFORM_IOS
 #include <dlfcn.h>
 #endif
 #if XE_PLATFORM_MAC
@@ -66,6 +67,11 @@ DEFINE_bool(a64_enable_host_guest_stack_synchronization,
             "Enable host/guest stack synchronization for A64.", "a64");
 DEFINE_int64(max_stackpoints, kA64MaxStackpointsDefault,
              "Maximum number of stackpoints in host/guest stack sync.", "a64");
+DEFINE_bool(
+    a64_fail_fast_on_access_violation, true,
+    "Exit immediately on A64 access violations to avoid exception-loop hangs "
+    "and excessive log spam.",
+    "a64");
 
 namespace xe {
 namespace cpu {
@@ -763,6 +769,21 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
     }
     auto function = in_trampoline_stub ? nullptr
                                        : code_cache_->LookupFunction(host_pc);
+    if (cvars::a64_fail_fast_on_access_violation &&
+        (in_trampoline_stub || function)) {
+      static std::atomic<bool> exiting_on_av{false};
+      if (!exiting_on_av.exchange(true, std::memory_order_relaxed)) {
+        XELOGE(
+            "A64 AV fail-fast: host_pc=0x{:016X} fault=0x{:016X} op={} - "
+            "terminating immediately",
+            host_pc, fault_address,
+            static_cast<int>(ex->access_violation_operation()));
+        FatalError(
+            "A64 access violation detected in A64 JIT code. Exiting "
+            "immediately to prevent emulator freeze and log spam.");
+      }
+      std::_Exit(EXIT_FAILURE);
+    }
     if (function && function->machine_code()) {
       const uint64_t function_pc =
           reinterpret_cast<uint64_t>(function->machine_code());
@@ -899,7 +920,7 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
         }
       }
     }
-#if XE_PLATFORM_MAC || XE_PLATFORM_LINUX
+#if XE_PLATFORM_MAC || XE_PLATFORM_LINUX || XE_PLATFORM_IOS
     if (!function) {
       const uint64_t code_base = code_cache_->execute_base_address();
       const uint64_t code_end = code_base + code_cache_->total_size();

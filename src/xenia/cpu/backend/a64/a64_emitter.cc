@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 
 #include <cctype>
 #include <climits>
@@ -61,11 +62,14 @@ DEFINE_bool(a64_resolve_function_log, false,
 DEFINE_int32(a64_resolve_function_log_limit, 8,
              "Maximum ResolveFunction failure logs.", "CPU");
 DEFINE_bool(a64_stack_sync_log, false, "Log A64 stack sync events.", "CPU");
-DEFINE_int32(a64_stack_sync_log_limit, 16,
-             "Maximum A64 stack sync logs.", "CPU");
+DEFINE_int32(a64_stack_sync_log_limit, 16, "Maximum A64 stack sync logs.",
+             "CPU");
 DEFINE_bool(a64_stack_sync_check, false,
             "Emit runtime checks for guest/host stack mismatches after calls.",
             "CPU");
+DEFINE_bool(a64_fail_fast_on_trap, true,
+            "Exit immediately on forced A64 traps to avoid infinite log spam.",
+            "a64");
 
 namespace xe {
 namespace cpu {
@@ -762,10 +766,21 @@ uint64_t TrapLogRegs(void* raw_context, uint64_t address) {
 uint64_t TrapDebugBreak(void* raw_context, uint64_t address) {
   [[maybe_unused]] auto thread_state =
       *reinterpret_cast<ThreadState**>(raw_context);
-  XELOGE("tw/td forced trap hit! This should be a crash!");
   if (cvars::break_on_debugbreak) {
     xe::debugging::Break();
   }
+  if (cvars::a64_fail_fast_on_trap) {
+    static std::atomic<bool> exiting_on_trap{false};
+    if (!exiting_on_trap.exchange(true, std::memory_order_relaxed)) {
+      XELOGE("A64 forced trap hit at guest address 0x{:08X} - terminating",
+             static_cast<uint32_t>(address));
+      FatalError(
+          "A64 forced trap hit. Exiting immediately to prevent repeated trap "
+          "log spam.");
+    }
+    std::_Exit(EXIT_FAILURE);
+  }
+  XELOGE("tw/td forced trap hit! This should be a crash!");
   return 0;
 }
 
@@ -824,6 +839,11 @@ void A64Emitter::Trap(uint16_t trap_type) {
       // ?
       break;
     default:
+      if (cvars::a64_fail_fast_on_trap) {
+        FatalError(fmt::format(
+            "Unknown A64 trap type {}. Exiting to avoid repeated failures.",
+            trap_type));
+      }
       XELOGW("Unknown trap type {}", trap_type);
       BRK(0xF000);
       break;
@@ -907,8 +927,7 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
             }
 
             if (candidate && host_address) {
-              auto* backend =
-                  static_cast<A64Backend*>(processor->backend());
+              auto* backend = static_cast<A64Backend*>(processor->backend());
               auto* backend_context =
                   backend->BackendContextForGuestContext(guest_context);
               if (backend_context->stackpoints &&
@@ -934,8 +953,7 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
                     current_stackpoint_index != 0xFFFFFFFF) {
                   // Try to match the guest LR to disambiguate same-guest-sp
                   // frames.
-                  uint32_t guest_lr =
-                      static_cast<uint32_t>(guest_context->lr);
+                  uint32_t guest_lr = static_cast<uint32_t>(guest_context->lr);
                   uint32_t scan_index = current_stackpoint_index;
                   while (scan_index != 0xFFFFFFFF) {
                     const auto& sp_entry =
@@ -962,8 +980,8 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
                       XELOGI(
                           "A64 stack sync: guest=0x{:08X} host=0x{:016X} "
                           "guest_sp=0x{:08X} depth={} index={}",
-                          static_cast<uint32_t>(target_address),
-                          host_address, current_guest_stackpointer,
+                          static_cast<uint32_t>(target_address), host_address,
+                          current_guest_stackpointer,
                           backend_context->current_stackpoint_depth,
                           current_stackpoint_index);
                     }
