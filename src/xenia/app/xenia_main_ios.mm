@@ -196,6 +196,36 @@ bool EmulatorAppIOS::OnInitialize() {
   // Create the emulator instance.
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
+  emulator_->on_launch.AddListener(
+      [](uint32_t title_id, const std::string_view title_name) {
+        if (title_id == 0 || title_name.empty()) {
+          return;
+        }
+        @autoreleasepool {
+          NSString* caches = NSSearchPathForDirectoriesInDomains(
+              NSCachesDirectory, NSUserDomainMask, YES)
+                                 .firstObject;
+          if (!caches) {
+            return;
+          }
+          NSString* path =
+              [caches stringByAppendingPathComponent:@"title-names.plist"];
+          NSMutableDictionary* dict =
+              [NSMutableDictionary dictionaryWithContentsOfFile:path];
+          if (!dict) {
+            dict = [NSMutableDictionary dictionary];
+          }
+          NSString* key = [NSString stringWithFormat:@"%08x", title_id];
+          NSString* value = [[NSString alloc] initWithBytes:title_name.data()
+                                                     length:title_name.size()
+                                                   encoding:NSUTF8StringEncoding];
+          if (value && key) {
+            [dict setObject:value forKey:key];
+            [dict writeToFile:path atomically:YES];
+          }
+          [value release];
+        }
+      });
 
   // Create the display window from the Metal view in the app context.
   window_ = ui::Window::Create(app_context(), "Xenia", 1280, 720, true);
