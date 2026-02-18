@@ -1890,6 +1890,7 @@ titleForFooterInSection:(NSInteger)section {
   BOOL launcher_library_focus_active_;
   BOOL controller_navigation_was_enabled_;
   uint32_t native_controller_packet_number_;
+  CGSize last_collection_layout_size_;
 }
 
 - (void)viewDidLoad {
@@ -1903,6 +1904,7 @@ titleForFooterInSection:(NSInteger)section {
   launcher_library_focus_active_ = NO;
   controller_navigation_was_enabled_ = NO;
   native_controller_packet_number_ = 0;
+  last_collection_layout_size_ = CGSizeZero;
   controller_navigation_mapper_.Reset();
 
   // Create the Metal-backed rendering view (full screen, behind everything).
@@ -2130,18 +2132,51 @@ titleForFooterInSection:(NSInteger)section {
   [self setButton:self.inGameExitButton controllerFocused:current_focus == kInGameFocusExit];
 }
 
+- (NSInteger)launcherGridColumnCountForContentSize:(CGSize)content_size {
+  CGFloat content_width = content_size.width;
+  CGFloat content_height = content_size.height;
+
+  NSInteger columns = 2;
+  if (content_width >= 1100.0f) {
+    columns = 5;
+  } else if (content_width >= 900.0f) {
+    columns = 4;
+  } else if (content_width >= 680.0f) {
+    columns = 3;
+  }
+
+  const CGFloat interitem_spacing = 14.0f;
+  const CGFloat line_spacing = 16.0f;
+  const CGFloat max_tile_width = 255.0f;
+  while (columns < 7) {
+    CGFloat total_spacing = interitem_spacing * (columns - 1);
+    CGFloat tile_width = floor((content_width - total_spacing) / columns);
+    if (tile_width <= max_tile_width) {
+      break;
+    }
+    ++columns;
+  }
+
+  if (content_height > 0.0f) {
+    while (columns < 7) {
+      CGFloat total_spacing = interitem_spacing * (columns - 1);
+      CGFloat tile_width = floor((content_width - total_spacing) / columns);
+      CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
+      CGFloat tile_height = image_height + 24.0f;
+      if (tile_height * 2.0f + line_spacing <= content_height) {
+        break;
+      }
+      if (tile_width <= 120.0f) {
+        break;
+      }
+      ++columns;
+    }
+  }
+  return columns;
+}
+
 - (NSInteger)launcherGridColumnCount {
-  CGFloat content_width = self.importedGamesCollectionView.bounds.size.width;
-  if (content_width >= 1100) {
-    return 5;
-  }
-  if (content_width >= 900) {
-    return 4;
-  }
-  if (content_width >= 680) {
-    return 3;
-  }
-  return 2;
+  return [self launcherGridColumnCountForContentSize:self.importedGamesCollectionView.bounds.size];
 }
 
 - (NSInteger)launcherPageStep {
@@ -3509,8 +3544,12 @@ titleForFooterInSection:(NSInteger)section {
 }
 
 - (void)updateJITAvailabilityUI {
+  BOOL previous_hidden = self.jitWarningCard.hidden;
   BOOL jit_ready = self.jitAcquired;
   self.jitWarningCard.hidden = jit_ready;
+  if (previous_hidden != self.jitWarningCard.hidden) {
+    [self.importedGamesCollectionView.collectionViewLayout invalidateLayout];
+  }
   self.openGameButton.enabled = YES;
   self.openGameButton.alpha = 1.0;
 }
@@ -3810,25 +3849,27 @@ titleForFooterInSection:(NSInteger)section {
                     layout:(UICollectionViewLayout* __unused)collectionViewLayout
     sizeForItemAtIndexPath:(NSIndexPath* __unused)indexPath {
   CGFloat content_width = collectionView.bounds.size.width;
-  NSInteger columns = 2;
-  if (content_width >= 1100) {
-    columns = 5;
-  } else if (content_width >= 900) {
-    columns = 4;
-  } else if (content_width >= 680) {
-    columns = 3;
+  NSInteger columns = [self launcherGridColumnCountForContentSize:collectionView.bounds.size];
+  CGFloat spacing = 14.0f;
+  if ([collectionView.collectionViewLayout isKindOfClass:[UICollectionViewFlowLayout class]]) {
+    spacing = [(UICollectionViewFlowLayout*)collectionView.collectionViewLayout
+        minimumInteritemSpacing];
   }
-  CGFloat spacing = 16.0;
   CGFloat total_spacing = spacing * (columns - 1);
   CGFloat tile_width = floor((content_width - total_spacing) / columns);
-  tile_width = MAX(tile_width, 100.0);
+  tile_width = MAX(tile_width, 100.0f);
   // Cover art is ~219x300 (~1:1.37).  Image height + 24pt for title label.
-  CGFloat image_height = floor(tile_width * 300.0 / 219.0);
-  return CGSizeMake(tile_width, image_height + 24.0);
+  CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
+  return CGSizeMake(tile_width, image_height + 24.0f);
 }
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
+  CGSize collection_size = self.importedGamesCollectionView.bounds.size;
+  if (!CGSizeEqualToSize(collection_size, last_collection_layout_size_)) {
+    last_collection_layout_size_ = collection_size;
+    [self.importedGamesCollectionView.collectionViewLayout invalidateLayout];
+  }
   // Notify the app context that the layout changed, so the window and
   // presenter can update for rotation, split-view, or safe-area changes.
   if (self.appContext) {
