@@ -16,6 +16,7 @@
 // Defaults intentionally preserve current behavior.
 DECLARE_bool(ui_theme_tokens);
 DECLARE_bool(ios_async_import_ui);
+DECLARE_bool(ui_controller_navigation);
 DECLARE_string(macos_ui_backend);
 
 #endif  // XENIA_UI_APPLE_UI_FLAGS_H_

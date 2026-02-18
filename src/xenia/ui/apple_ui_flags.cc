@@ -17,6 +17,11 @@ DEFINE_bool(
     ios_async_import_ui, false,
     "Enable asynchronous iOS game import flow with progress-driven UI state.",
     "UI")
+DEFINE_bool(
+    ui_controller_navigation, false,
+    "Enable Apple-native controller-first UI navigation model and focus "
+    "handling.",
+    "UI")
 DEFINE_string(
     macos_ui_backend, "qt",
     "Select macOS UI backend. Use: [qt, native] (default keeps current Qt "
