@@ -3148,16 +3148,28 @@ titleForFooterInSection:(NSInteger)section {
     self.statusLabel.text = @"Stopping game... Please wait.";
     return;
   }
-  BOOL requested_stop = self.appContext ? self.appContext->TerminateCurrentGame() : NO;
-  if (requested_stop) {
-    self.gameStopInProgress = YES;
-    self.launcherOverlay.hidden = NO;
-    self.launcherOverlay.alpha = 1.0;
-    xe_request_portrait_orientation(self);
-    self.statusLabel.text = @"Stopping game...";
-  } else {
+  if (!self.appContext) {
     self.statusLabel.text = @"No active game to stop.";
+    return;
   }
+
+  self.gameStopInProgress = YES;
+  self.launcherOverlay.hidden = NO;
+  self.launcherOverlay.alpha = 1.0;
+  xe_request_portrait_orientation(self);
+  self.statusLabel.text = @"Stopping game...";
+
+  xe::ui::IOSWindowedAppContext* app_context = self.appContext;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    BOOL requested_stop = app_context->TerminateCurrentGame() ? YES : NO;
+    if (requested_stop) {
+      return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      self.gameStopInProgress = NO;
+      self.statusLabel.text = @"No active game to stop.";
+    });
+  });
 }
 
 - (void)refreshSignedInProfileUI {
