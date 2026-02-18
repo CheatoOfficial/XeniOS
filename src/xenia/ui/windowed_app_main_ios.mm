@@ -17,6 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -34,6 +35,8 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
 #include "xenia/config.h"
+#include "xenia/ui/apple_ui_flags.h"
+#include "xenia/ui/apple_ui_navigation.h"
 #include "xenia/ui/surface_ios.h"
 #include "xenia/ui/windowed_app.h"
 #include "xenia/ui/windowed_app_context_ios.h"
@@ -320,6 +323,23 @@ struct IOSConfigSection {
   std::string footer;
   std::vector<IOSConfigItem> items;
 };
+
+using IOSFocusNodeId = xe::ui::apple::FocusNodeId;
+static constexpr IOSFocusNodeId kLauncherFocusSettings = 1;
+static constexpr IOSFocusNodeId kLauncherFocusProfile = 2;
+static constexpr IOSFocusNodeId kLauncherFocusImport = 3;
+static constexpr IOSFocusNodeId kLauncherFocusLibrary = 4;
+static constexpr IOSFocusNodeId kInGameFocusResume = 101;
+static constexpr IOSFocusNodeId kInGameFocusSettings = 102;
+static constexpr IOSFocusNodeId kInGameFocusLog = 103;
+static constexpr IOSFocusNodeId kInGameFocusExit = 104;
+
+uint64_t GetNowMs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 std::string TrimAscii(std::string value) {
   size_t start = 0;
@@ -909,6 +929,7 @@ bool ApplyIOSConfigSections(const std::vector<IOSConfigSection>& sections) {
 @end
 
 typedef void (^IOSChoiceSelectionHandler)(int64_t value);
+typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
 @interface XeniaChoiceListViewController : UITableViewController
 - (instancetype)initWithTitle:(NSString*)title
@@ -919,14 +940,21 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 @end
 
 @interface XeniaLogViewController : UIViewController
+- (BOOL)handleControllerActions:(const xe::ui::apple::ControllerActionSet&)actions;
 @end
 
 @interface XeniaLandscapeNavigationController : UINavigationController
 @end
 
+@interface XeniaProfileViewController : UITableViewController
+- (instancetype)initWithAppContext:(xe::ui::IOSWindowedAppContext*)app_context
+                            onStatus:(IOSProfileStatusHandler)on_status;
+@end
+
 @interface XeniaGameTileCell : UICollectionViewCell
 @property(nonatomic, strong) UIImageView* iconView;
 @property(nonatomic, strong) UILabel* titleLabel;
+@property(nonatomic, assign) BOOL controllerFocused;
 @end
 
 @implementation XeniaGameTileCell
@@ -945,6 +973,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   self.iconView.contentMode = UIViewContentModeScaleAspectFill;
   self.iconView.clipsToBounds = YES;
   self.iconView.layer.cornerRadius = 10;
+  self.iconView.layer.borderWidth = 0.0;
+  self.iconView.layer.borderColor = [UIColor clearColor].CGColor;
   self.iconView.backgroundColor = [XeniaTheme bgSurface];
   [self.contentView addSubview:self.iconView];
 
@@ -972,6 +1002,33 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   ]];
 
   return self;
+}
+
+- (void)prepareForReuse {
+  [super prepareForReuse];
+  self.controllerFocused = NO;
+}
+
+- (void)setControllerFocused:(BOOL)controllerFocused {
+  if (_controllerFocused == controllerFocused) {
+    return;
+  }
+  _controllerFocused = controllerFocused;
+  [self updateControllerFocusAppearance];
+}
+
+- (void)updateControllerFocusAppearance {
+  if (self.controllerFocused) {
+    self.iconView.layer.borderWidth = 2.0;
+    self.iconView.layer.borderColor = [XeniaTheme accent].CGColor;
+    self.titleLabel.textColor = [XeniaTheme textPrimary];
+    self.transform = CGAffineTransformMakeScale(1.02, 1.02);
+  } else {
+    self.iconView.layer.borderWidth = 0.0;
+    self.iconView.layer.borderColor = [UIColor clearColor].CGColor;
+    self.titleLabel.textColor = [XeniaTheme textSecondary];
+    self.transform = CGAffineTransformIdentity;
+  }
 }
 
 @end
@@ -1069,6 +1126,214 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
   return UIInterfaceOrientationPortrait;
+}
+
+@end
+
+@implementation XeniaProfileViewController {
+  xe::ui::IOSWindowedAppContext* app_context_;
+  IOSProfileStatusHandler on_status_;
+  std::vector<xe::ui::IOSProfileSummary> profiles_;
+}
+
+- (instancetype)initWithAppContext:(xe::ui::IOSWindowedAppContext*)app_context
+                          onStatus:(IOSProfileStatusHandler)on_status {
+  self = [super initWithStyle:UITableViewStyleInsetGrouped];
+  if (self) {
+    app_context_ = app_context;
+    on_status_ = [on_status copy];
+    self.title = @"Profiles";
+  }
+  return self;
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16);
+  self.navigationItem.leftBarButtonItem =
+      [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                    target:self
+                                                    action:@selector(doneTapped:)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self reloadProfiles];
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationPortrait;
+}
+
+- (void)doneTapped:(id)sender {
+  [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)reloadProfiles {
+  profiles_.clear();
+  if (app_context_) {
+    profiles_ = app_context_->ListProfiles();
+  }
+  [self.tableView reloadData];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
+  return 2;
+}
+
+- (NSInteger)tableView:(UITableView* __unused)tableView
+ numberOfRowsInSection:(NSInteger)section {
+  if (section == 0) {
+    return 1;
+  }
+  return static_cast<NSInteger>(profiles_.size());
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView
+titleForHeaderInSection:(NSInteger)section {
+  if (section == 0) {
+    return @"Actions";
+  }
+  return @"Local Profiles";
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView
+titleForFooterInSection:(NSInteger)section {
+  if (section == 0) {
+    return @"Create and sign in profiles used by Xbox Live emulation.";
+  }
+  if (profiles_.empty()) {
+    return @"No profiles created yet.";
+  }
+  return nil;
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  static NSString* const kCellIdentifier = @"XeniaProfileCell";
+  UITableViewCell* cell = [tableView dequeueReusableCellWithIdentifier:kCellIdentifier];
+  if (!cell) {
+    cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                  reuseIdentifier:kCellIdentifier];
+  }
+
+  cell.textLabel.numberOfLines = 1;
+  cell.detailTextLabel.numberOfLines = 1;
+  cell.accessoryType = UITableViewCellAccessoryNone;
+  cell.accessoryView = nil;
+  cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+
+  if (indexPath.section == 0) {
+    cell.textLabel.text = @"Create Profile";
+    cell.textLabel.textColor = self.view.tintColor;
+    cell.detailTextLabel.text = @"Create a new profile and sign in.";
+    cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+  }
+
+  if (indexPath.row < 0 || indexPath.row >= static_cast<NSInteger>(profiles_.size())) {
+    cell.textLabel.text = @"";
+    cell.detailTextLabel.text = @"";
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    return cell;
+  }
+
+  const auto& profile = profiles_[indexPath.row];
+  NSString* gamertag = ToNSString(profile.gamertag);
+  cell.textLabel.text = gamertag;
+  cell.textLabel.textColor = [XeniaTheme textPrimary];
+  if (profile.signed_in) {
+    cell.detailTextLabel.text =
+        [NSString stringWithFormat:@"Signed in on slot %u", profile.signed_in_slot];
+    cell.accessoryType = UITableViewCellAccessoryCheckmark;
+  } else {
+    cell.detailTextLabel.text = @"Not signed in";
+  }
+  cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+  return cell;
+}
+
+- (void)presentCreateProfileAlert {
+  if (!app_context_) {
+    return;
+  }
+
+  __block UIAlertController* create_alert =
+      [UIAlertController alertControllerWithTitle:@"Create Profile"
+                                          message:@"Enter a gamertag (1-15 characters)."
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [create_alert addTextFieldWithConfigurationHandler:^(UITextField* text_field) {
+    text_field.placeholder = @"Gamertag";
+    text_field.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    text_field.autocorrectionType = UITextAutocorrectionTypeNo;
+    text_field.clearButtonMode = UITextFieldViewModeWhileEditing;
+  }];
+  [create_alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                   style:UIAlertActionStyleCancel
+                                                 handler:nil]];
+  [create_alert addAction:[UIAlertAction
+                              actionWithTitle:@"Create"
+                                        style:UIAlertActionStyleDefault
+                                      handler:^(__unused UIAlertAction* action) {
+                                        UITextField* text_field =
+                                            create_alert.textFields.firstObject;
+                                        NSString* raw_text = text_field.text ?: @"";
+                                        NSString* trimmed = [raw_text
+                                            stringByTrimmingCharactersInSet:
+                                                [NSCharacterSet
+                                                    whitespaceAndNewlineCharacterSet]];
+                                        if (trimmed.length == 0 || !app_context_) {
+                                          return;
+                                        }
+                                        NSString* gamertag = [[trimmed copy] autorelease];
+                                        create_alert = nil;
+                                        uint64_t xuid = app_context_->CreateProfile(
+                                            std::string([gamertag UTF8String]));
+                                        if (!xuid || !app_context_->SignInProfile(xuid)) {
+                                          if (on_status_) {
+                                            on_status_(@"Failed to create profile.");
+                                          }
+                                          return;
+                                        }
+                                        if (on_status_) {
+                                          on_status_([NSString
+                                              stringWithFormat:@"Signed in as %@.", gamertag]);
+                                        }
+                                        [self reloadProfiles];
+                                      }]];
+  [self presentViewController:create_alert animated:YES completion:nil];
+}
+
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
+  if (!app_context_) {
+    return;
+  }
+
+  if (indexPath.section == 0) {
+    [self presentCreateProfileAlert];
+    return;
+  }
+
+  if (indexPath.row < 0 || indexPath.row >= static_cast<NSInteger>(profiles_.size())) {
+    return;
+  }
+
+  const auto& profile = profiles_[indexPath.row];
+  if (app_context_->SignInProfile(profile.xuid)) {
+    if (on_status_) {
+      on_status_([NSString stringWithFormat:@"Signed in as %@.", ToNSString(profile.gamertag)]);
+    }
+    [self reloadProfiles];
+  } else if (on_status_) {
+    on_status_(@"Failed to sign in profile.");
+  }
 }
 
 @end
@@ -1201,6 +1466,40 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
 - (void)autoRefreshTick:(NSTimer* __unused)timer {
   [self reloadLog];
+}
+
+- (BOOL)handleControllerActions:(const xe::ui::apple::ControllerActionSet&)actions {
+  if (actions.context) {
+    [self shareLogTapped:nil];
+    return YES;
+  }
+  if (actions.quick_action) {
+    [self reloadLogTapped:nil];
+    return YES;
+  }
+  if (!(actions.navigate_up || actions.navigate_down || actions.page_prev ||
+        actions.page_next)) {
+    return NO;
+  }
+
+  CGFloat step = MAX(40.0, CGRectGetHeight(textView_.bounds) * 0.45);
+  CGFloat offset = textView_.contentOffset.y;
+  if (actions.navigate_up) {
+    offset -= step;
+  }
+  if (actions.navigate_down) {
+    offset += step;
+  }
+  if (actions.page_prev) {
+    offset -= CGRectGetHeight(textView_.bounds);
+  }
+  if (actions.page_next) {
+    offset += CGRectGetHeight(textView_.bounds);
+  }
+  CGFloat max_offset = MAX(0.0, textView_.contentSize.height - CGRectGetHeight(textView_.bounds));
+  offset = MIN(MAX(0.0, offset), max_offset);
+  [textView_ setContentOffset:CGPointMake(0.0, offset) animated:YES];
+  return YES;
 }
 
 - (BOOL)isNearBottom {
@@ -1534,6 +1833,10 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 @property(nonatomic, strong) UICollectionView* importedGamesCollectionView;
 @property(nonatomic, strong) UILabel* importedGamesEmptyLabel;
 @property(nonatomic, strong) UIView* inGameMenuOverlay;
+@property(nonatomic, strong) UIButton* inGameResumeButton;
+@property(nonatomic, strong) UIButton* inGameSettingsButton;
+@property(nonatomic, strong) UIButton* inGameLiveLogButton;
+@property(nonatomic, strong) UIButton* inGameExitButton;
 @property(nonatomic, assign) BOOL gameRunning;
 @property(nonatomic, assign) BOOL gameStopInProgress;
 @property(nonatomic, assign) xe::ui::IOSWindowedAppContext* appContext;
@@ -1543,6 +1846,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 @property(nonatomic, strong) UIView* jitStatusDot;
 @property(nonatomic, strong) UILabel* jitStatusLabel;
 @property(nonatomic, strong) NSTimer* jitPollTimer;
+@property(nonatomic, strong) NSTimer* controllerNavTimer;
 @property(nonatomic, assign) BOOL jitAcquired;
 @property(nonatomic, assign) BOOL launcherLandscapeUnlocked;
 - (void)refreshSignedInProfileUI;
@@ -1561,10 +1865,17 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 - (void)inGameLiveLogTapped:(UIButton*)sender;
 - (void)exitGameTapped:(UIButton*)sender;
 - (void)hideInGameMenuOverlay;
+- (void)pollControllerNavigation:(NSTimer*)timer;
 @end
 
 @implementation XeniaViewController {
   std::vector<IOSDiscoveredGame> discovered_games_;
+  xe::ui::apple::ControllerNavigationMapper controller_navigation_mapper_;
+  xe::ui::apple::FocusGraph launcher_focus_graph_;
+  xe::ui::apple::FocusGraph in_game_focus_graph_;
+  NSInteger focused_game_index_;
+  BOOL launcher_library_focus_active_;
+  BOOL controller_navigation_was_enabled_;
 }
 
 - (void)viewDidLoad {
@@ -1574,6 +1885,10 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   self.launcherLandscapeUnlocked = NO;
   self.gameRunning = NO;
   self.gameStopInProgress = NO;
+  focused_game_index_ = -1;
+  launcher_library_focus_active_ = NO;
+  controller_navigation_was_enabled_ = NO;
+  controller_navigation_mapper_.Reset();
 
   // Create the Metal-backed rendering view (full screen, behind everything).
   self.metalView = [[XeniaMetalView alloc] initWithFrame:self.view.bounds];
@@ -1599,6 +1914,13 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
   // Start polling for JIT.
   [self startJITPoll];
+  self.controllerNavTimer = [NSTimer scheduledTimerWithTimeInterval:(1.0 / 60.0)
+                                                              target:self
+                                                            selector:@selector(
+                                                                         pollControllerNavigation:)
+                                                            userInfo:nil
+                                                             repeats:YES];
+  self.controllerNavTimer.tolerance = 0.01;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -1608,6 +1930,671 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     self.launcherLandscapeUnlocked = YES;
     [self setNeedsUpdateOfSupportedInterfaceOrientations];
   }
+}
+
+- (void)setButton:(UIButton*)button controllerFocused:(BOOL)focused {
+  if (!button) {
+    return;
+  }
+  button.layer.cornerRadius = XeniaRadiusMd;
+  button.layer.borderWidth = focused ? 1.5 : 0.0;
+  button.layer.borderColor = focused ? [XeniaTheme accent].CGColor : [UIColor clearColor].CGColor;
+  button.layer.shadowColor = [XeniaTheme accent].CGColor;
+  button.layer.shadowOpacity = focused ? 0.35f : 0.0f;
+  button.layer.shadowRadius = focused ? 6.0f : 0.0f;
+  button.layer.shadowOffset = CGSizeZero;
+}
+
+- (void)setFocusedGameIndex:(NSInteger)index scroll:(BOOL)scroll {
+  if (discovered_games_.empty()) {
+    index = -1;
+  } else {
+    if (index < 0) {
+      index = 0;
+    }
+    NSInteger max_index = static_cast<NSInteger>(discovered_games_.size() - 1);
+    if (index > max_index) {
+      index = max_index;
+    }
+  }
+  NSInteger previous = focused_game_index_;
+  focused_game_index_ = index;
+
+  NSMutableArray<NSIndexPath*>* reload_paths = [NSMutableArray array];
+  if (previous >= 0 && previous < static_cast<NSInteger>(discovered_games_.size())) {
+    [reload_paths addObject:[NSIndexPath indexPathForItem:previous inSection:0]];
+  }
+  if (focused_game_index_ >= 0 &&
+      focused_game_index_ < static_cast<NSInteger>(discovered_games_.size()) &&
+      focused_game_index_ != previous) {
+    [reload_paths addObject:[NSIndexPath indexPathForItem:focused_game_index_ inSection:0]];
+  }
+  if (reload_paths.count > 0) {
+    [self.importedGamesCollectionView reloadItemsAtIndexPaths:reload_paths];
+  }
+
+  if (scroll && focused_game_index_ >= 0 &&
+      focused_game_index_ < static_cast<NSInteger>(discovered_games_.size())) {
+    NSIndexPath* path = [NSIndexPath indexPathForItem:focused_game_index_ inSection:0];
+    [self.importedGamesCollectionView scrollToItemAtIndexPath:path
+                                             atScrollPosition:UICollectionViewScrollPositionCenteredVertically
+                                                     animated:YES];
+  }
+}
+
+- (void)rebuildLauncherFocusGraph {
+  IOSFocusNodeId previous_focus = launcher_focus_graph_.current();
+  launcher_focus_graph_.Clear();
+
+  xe::ui::apple::FocusNode settings;
+  settings.id = kLauncherFocusSettings;
+  settings.right = kLauncherFocusProfile;
+  settings.down = kLauncherFocusImport;
+  settings.enabled = self.settingsButton.enabled && !self.settingsButton.hidden;
+
+  xe::ui::apple::FocusNode profile;
+  profile.id = kLauncherFocusProfile;
+  profile.left = kLauncherFocusSettings;
+  profile.down = kLauncherFocusImport;
+  profile.enabled = self.profileButton.enabled && !self.profileButton.hidden;
+
+  xe::ui::apple::FocusNode import_button;
+  import_button.id = kLauncherFocusImport;
+  import_button.left = kLauncherFocusProfile;
+  import_button.right = kLauncherFocusLibrary;
+  import_button.up = kLauncherFocusSettings;
+  import_button.down = kLauncherFocusLibrary;
+  import_button.enabled = self.openGameButton.enabled && !self.openGameButton.hidden;
+
+  xe::ui::apple::FocusNode library;
+  library.id = kLauncherFocusLibrary;
+  library.left = kLauncherFocusImport;
+  library.up = kLauncherFocusImport;
+  library.enabled = !discovered_games_.empty();
+
+  launcher_focus_graph_.AddOrUpdateNode(settings);
+  launcher_focus_graph_.AddOrUpdateNode(profile);
+  launcher_focus_graph_.AddOrUpdateNode(import_button);
+  launcher_focus_graph_.AddOrUpdateNode(library);
+
+  if (previous_focus != xe::ui::apple::kInvalidFocusNodeId) {
+    launcher_focus_graph_.SetCurrent(previous_focus);
+  }
+}
+
+- (void)rebuildInGameFocusGraph {
+  IOSFocusNodeId previous_focus = in_game_focus_graph_.current();
+  in_game_focus_graph_.Clear();
+
+  xe::ui::apple::FocusNode resume;
+  resume.id = kInGameFocusResume;
+  resume.down = kInGameFocusSettings;
+  resume.enabled = self.inGameResumeButton && self.inGameResumeButton.enabled &&
+                   !self.inGameResumeButton.hidden;
+
+  xe::ui::apple::FocusNode settings;
+  settings.id = kInGameFocusSettings;
+  settings.up = kInGameFocusResume;
+  settings.down = kInGameFocusLog;
+  settings.enabled = self.inGameSettingsButton && self.inGameSettingsButton.enabled &&
+                     !self.inGameSettingsButton.hidden;
+
+  xe::ui::apple::FocusNode log;
+  log.id = kInGameFocusLog;
+  log.up = kInGameFocusSettings;
+  log.down = kInGameFocusExit;
+  log.enabled = self.inGameLiveLogButton && self.inGameLiveLogButton.enabled &&
+                !self.inGameLiveLogButton.hidden;
+
+  xe::ui::apple::FocusNode exit;
+  exit.id = kInGameFocusExit;
+  exit.up = kInGameFocusLog;
+  exit.enabled = self.inGameExitButton && self.inGameExitButton.enabled &&
+                 !self.inGameExitButton.hidden;
+
+  in_game_focus_graph_.AddOrUpdateNode(resume);
+  in_game_focus_graph_.AddOrUpdateNode(settings);
+  in_game_focus_graph_.AddOrUpdateNode(log);
+  in_game_focus_graph_.AddOrUpdateNode(exit);
+
+  if (previous_focus != xe::ui::apple::kInvalidFocusNodeId) {
+    in_game_focus_graph_.SetCurrent(previous_focus);
+  }
+}
+
+- (void)applyLauncherFocusVisuals {
+  if (!controller_navigation_was_enabled_) {
+    launcher_library_focus_active_ = NO;
+    [self setButton:self.settingsButton controllerFocused:NO];
+    [self setButton:self.profileButton controllerFocused:NO];
+    [self setButton:self.openGameButton controllerFocused:NO];
+    if (focused_game_index_ >= 0 && focused_game_index_ < static_cast<NSInteger>(discovered_games_.size())) {
+      NSIndexPath* focused_path = [NSIndexPath indexPathForItem:focused_game_index_ inSection:0];
+      [self.importedGamesCollectionView reloadItemsAtIndexPaths:@[ focused_path ]];
+    }
+    return;
+  }
+
+  IOSFocusNodeId current_focus = launcher_focus_graph_.current();
+  BOOL settings_focused = current_focus == kLauncherFocusSettings;
+  BOOL profile_focused = current_focus == kLauncherFocusProfile;
+  BOOL import_focused = current_focus == kLauncherFocusImport;
+  BOOL library_focused = current_focus == kLauncherFocusLibrary;
+
+  [self setButton:self.settingsButton controllerFocused:settings_focused];
+  [self setButton:self.profileButton controllerFocused:profile_focused];
+  [self setButton:self.openGameButton controllerFocused:import_focused];
+
+  if (library_focused && focused_game_index_ < 0 && !discovered_games_.empty()) {
+    [self setFocusedGameIndex:0 scroll:NO];
+  }
+
+  if (launcher_library_focus_active_ != library_focused &&
+      focused_game_index_ >= 0 &&
+      focused_game_index_ < static_cast<NSInteger>(discovered_games_.size())) {
+    NSIndexPath* focused_path = [NSIndexPath indexPathForItem:focused_game_index_ inSection:0];
+    [self.importedGamesCollectionView reloadItemsAtIndexPaths:@[ focused_path ]];
+  }
+  launcher_library_focus_active_ = library_focused;
+}
+
+- (void)applyInGameMenuFocusVisuals {
+  if (!self.inGameMenuOverlay || self.inGameMenuOverlay.hidden || !controller_navigation_was_enabled_) {
+    [self setButton:self.inGameResumeButton controllerFocused:NO];
+    [self setButton:self.inGameSettingsButton controllerFocused:NO];
+    [self setButton:self.inGameLiveLogButton controllerFocused:NO];
+    [self setButton:self.inGameExitButton controllerFocused:NO];
+    return;
+  }
+
+  IOSFocusNodeId current_focus = in_game_focus_graph_.current();
+  [self setButton:self.inGameResumeButton controllerFocused:current_focus == kInGameFocusResume];
+  [self setButton:self.inGameSettingsButton
+  controllerFocused:current_focus == kInGameFocusSettings];
+  [self setButton:self.inGameLiveLogButton controllerFocused:current_focus == kInGameFocusLog];
+  [self setButton:self.inGameExitButton controllerFocused:current_focus == kInGameFocusExit];
+}
+
+- (NSInteger)launcherGridColumnCount {
+  CGFloat content_width = self.importedGamesCollectionView.bounds.size.width;
+  if (content_width >= 1100) {
+    return 5;
+  }
+  if (content_width >= 900) {
+    return 4;
+  }
+  if (content_width >= 680) {
+    return 3;
+  }
+  return 2;
+}
+
+- (NSInteger)launcherPageStep {
+  NSArray<NSIndexPath*>* visible = self.importedGamesCollectionView.indexPathsForVisibleItems;
+  if (visible.count > 0) {
+    return visible.count;
+  }
+  return 6;
+}
+
+- (BOOL)handleControllerActionsForTableController:(UITableViewController*)table_controller
+                                          actions:(const xe::ui::apple::ControllerActionSet&)actions {
+  UITableView* table_view = table_controller.tableView;
+  if (!table_view) {
+    return NO;
+  }
+
+  NSMutableArray<NSIndexPath*>* all_paths = [NSMutableArray array];
+  NSInteger sections = [table_view numberOfSections];
+  for (NSInteger section = 0; section < sections; ++section) {
+    NSInteger rows = [table_view numberOfRowsInSection:section];
+    for (NSInteger row = 0; row < rows; ++row) {
+      [all_paths addObject:[NSIndexPath indexPathForRow:row inSection:section]];
+    }
+  }
+  if (all_paths.count == 0) {
+    return NO;
+  }
+
+  NSIndexPath* selected = table_view.indexPathForSelectedRow;
+  NSInteger selected_index = 0;
+  if (selected) {
+    NSUInteger found = [all_paths indexOfObject:selected];
+    if (found != NSNotFound) {
+      selected_index = static_cast<NSInteger>(found);
+    }
+  } else {
+    selected = all_paths.firstObject;
+    [table_view selectRowAtIndexPath:selected
+                            animated:NO
+                      scrollPosition:UITableViewScrollPositionMiddle];
+  }
+
+  BOOL handled = NO;
+  if (actions.navigate_up && selected_index > 0) {
+    selected_index--;
+    handled = YES;
+  }
+  if (actions.navigate_down && selected_index + 1 < static_cast<NSInteger>(all_paths.count)) {
+    selected_index++;
+    handled = YES;
+  }
+  if (actions.page_prev && selected_index > 0) {
+    NSInteger step = std::max<NSInteger>(1, table_view.indexPathsForVisibleRows.count - 1);
+    selected_index = std::max<NSInteger>(0, selected_index - step);
+    handled = YES;
+  }
+  if (actions.page_next && selected_index + 1 < static_cast<NSInteger>(all_paths.count)) {
+    NSInteger step = std::max<NSInteger>(1, table_view.indexPathsForVisibleRows.count - 1);
+    selected_index = std::min<NSInteger>(static_cast<NSInteger>(all_paths.count - 1),
+                                         selected_index + step);
+    handled = YES;
+  }
+  if (actions.section_prev && selected.section > 0) {
+    for (NSInteger target_section = selected.section - 1; target_section >= 0; --target_section) {
+      NSInteger rows = [table_view numberOfRowsInSection:target_section];
+      if (rows > 0) {
+        selected = [NSIndexPath indexPathForRow:0 inSection:target_section];
+        handled = YES;
+        break;
+      }
+    }
+  } else if (actions.section_next && selected.section + 1 < sections) {
+    for (NSInteger target_section = selected.section + 1; target_section < sections;
+         ++target_section) {
+      NSInteger rows = [table_view numberOfRowsInSection:target_section];
+      if (rows > 0) {
+        selected = [NSIndexPath indexPathForRow:0 inSection:target_section];
+        handled = YES;
+        break;
+      }
+    }
+  } else {
+    selected = all_paths[selected_index];
+  }
+
+  if (handled && selected) {
+    [table_view selectRowAtIndexPath:selected
+                            animated:YES
+                      scrollPosition:UITableViewScrollPositionMiddle];
+  }
+
+  if (actions.accept && selected) {
+    UITableViewCell* cell = [table_view cellForRowAtIndexPath:selected];
+    if ([cell.accessoryView isKindOfClass:[UISwitch class]]) {
+      UISwitch* toggle = (UISwitch*)cell.accessoryView;
+      [toggle setOn:!toggle.isOn animated:YES];
+      [toggle sendActionsForControlEvents:UIControlEventValueChanged];
+    } else {
+      id<UITableViewDelegate> delegate = table_view.delegate;
+      if ([delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
+        [delegate tableView:table_view didSelectRowAtIndexPath:selected];
+      }
+    }
+    handled = YES;
+  }
+
+  if (actions.back) {
+    UINavigationController* nav = table_controller.navigationController;
+    if (nav && nav.viewControllers.count > 1) {
+      [nav popViewControllerAnimated:YES];
+    } else {
+      [table_controller dismissViewControllerAnimated:YES completion:nil];
+    }
+    handled = YES;
+  }
+
+  return handled;
+}
+
+- (BOOL)handlePresentedControllerActions:(const xe::ui::apple::ControllerActionSet&)actions {
+  UIViewController* presented = self.presentedViewController;
+  if (!presented) {
+    return NO;
+  }
+
+  if ([presented isKindOfClass:[UIAlertController class]]) {
+    if (actions.back) {
+      [presented dismissViewControllerAnimated:YES completion:nil];
+      return YES;
+    }
+    return NO;
+  }
+
+  if ([presented isKindOfClass:[UINavigationController class]]) {
+    UINavigationController* nav = (UINavigationController*)presented;
+    UIViewController* top = nav.topViewController;
+    if ([top isKindOfClass:[XeniaLogViewController class]] &&
+        [(XeniaLogViewController*)top handleControllerActions:actions]) {
+      return YES;
+    }
+    if ([top isKindOfClass:[UITableViewController class]] &&
+        [self handleControllerActionsForTableController:(UITableViewController*)top
+                                                actions:actions]) {
+      return YES;
+    }
+    if (actions.back) {
+      if (nav.viewControllers.count > 1) {
+        [nav popViewControllerAnimated:YES];
+      } else {
+        [nav dismissViewControllerAnimated:YES completion:nil];
+      }
+      return YES;
+    }
+    return NO;
+  }
+
+  if (actions.back) {
+    [presented dismissViewControllerAnimated:YES completion:nil];
+    return YES;
+  }
+  return NO;
+}
+
+- (BOOL)handleLauncherControllerActions:(const xe::ui::apple::ControllerActionSet&)actions {
+  if (self.launcherOverlay.hidden) {
+    return NO;
+  }
+
+  [self rebuildLauncherFocusGraph];
+  IOSFocusNodeId current_focus = launcher_focus_graph_.current();
+  NSInteger game_count = static_cast<NSInteger>(discovered_games_.size());
+  BOOL handled = NO;
+  BOOL focus_changed = NO;
+
+  auto move_focus = [&](xe::ui::apple::NavigationDirection direction) {
+    IOSFocusNodeId previous = launcher_focus_graph_.current();
+    IOSFocusNodeId next = launcher_focus_graph_.Move(direction);
+    if (next != previous) {
+      focus_changed = YES;
+    }
+  };
+
+  if (actions.section_prev) {
+    IOSFocusNodeId target = current_focus == kLauncherFocusLibrary ? kLauncherFocusImport
+                                                                   : kLauncherFocusSettings;
+    if (launcher_focus_graph_.SetCurrent(target)) {
+      focus_changed = YES;
+    }
+    handled = YES;
+  }
+  if (actions.section_next && game_count > 0) {
+    if (launcher_focus_graph_.SetCurrent(kLauncherFocusLibrary)) {
+      focus_changed = YES;
+    }
+    handled = YES;
+  }
+
+  current_focus = launcher_focus_graph_.current();
+  if (current_focus == kLauncherFocusLibrary && game_count > 0) {
+    NSInteger columns = [self launcherGridColumnCount];
+    NSInteger next_index = focused_game_index_ < 0 ? 0 : focused_game_index_;
+
+    if (actions.navigate_left) {
+      if (next_index % columns == 0) {
+        move_focus(xe::ui::apple::NavigationDirection::kLeft);
+      } else if (next_index > 0) {
+        next_index--;
+      }
+      handled = YES;
+    }
+    if (actions.navigate_right) {
+      if (next_index + 1 < game_count) {
+        next_index++;
+      }
+      handled = YES;
+    }
+    if (actions.navigate_up) {
+      if (next_index - columns >= 0) {
+        next_index -= columns;
+      } else {
+        move_focus(xe::ui::apple::NavigationDirection::kUp);
+      }
+      handled = YES;
+    }
+    if (actions.navigate_down) {
+      if (next_index + columns < game_count) {
+        next_index += columns;
+      }
+      handled = YES;
+    }
+    if (actions.page_prev) {
+      NSInteger page_step = [self launcherPageStep];
+      next_index = std::max<NSInteger>(0, next_index - page_step);
+      handled = YES;
+    }
+    if (actions.page_next) {
+      NSInteger page_step = [self launcherPageStep];
+      next_index = std::min<NSInteger>(game_count - 1, next_index + page_step);
+      handled = YES;
+    }
+
+    if (launcher_focus_graph_.current() == kLauncherFocusLibrary &&
+        next_index != focused_game_index_) {
+      [self setFocusedGameIndex:next_index scroll:YES];
+      handled = YES;
+    }
+  } else {
+    if (actions.navigate_up) {
+      move_focus(xe::ui::apple::NavigationDirection::kUp);
+      handled = YES;
+    }
+    if (actions.navigate_down) {
+      move_focus(xe::ui::apple::NavigationDirection::kDown);
+      handled = YES;
+    }
+    if (actions.navigate_left) {
+      move_focus(xe::ui::apple::NavigationDirection::kLeft);
+      handled = YES;
+    }
+    if (actions.navigate_right) {
+      move_focus(xe::ui::apple::NavigationDirection::kRight);
+      handled = YES;
+    }
+  }
+
+  if (actions.context) {
+    [self openProfileTapped:self.profileButton];
+    handled = YES;
+  }
+  if (actions.quick_action) {
+    [self openGameTapped:self.openGameButton];
+    handled = YES;
+  }
+  if (actions.guide) {
+    [self openSettingsTapped:self.settingsButton];
+    handled = YES;
+  }
+
+  if (actions.accept) {
+    switch (launcher_focus_graph_.current()) {
+      case kLauncherFocusSettings:
+        [self openSettingsTapped:self.settingsButton];
+        handled = YES;
+        break;
+      case kLauncherFocusProfile:
+        [self openProfileTapped:self.profileButton];
+        handled = YES;
+        break;
+      case kLauncherFocusImport:
+        [self openGameTapped:self.openGameButton];
+        handled = YES;
+        break;
+      case kLauncherFocusLibrary:
+        if (focused_game_index_ >= 0 && focused_game_index_ < game_count) {
+          const IOSDiscoveredGame& game = discovered_games_[focused_game_index_];
+          [self launchGameAtPath:game.path displayName:ToNSString(game.title)];
+          handled = YES;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (focus_changed || handled) {
+    [self applyLauncherFocusVisuals];
+  }
+  return handled;
+}
+
+- (BOOL)handleInGameControllerActions:(const xe::ui::apple::ControllerActionSet&)actions {
+  if (self.launcherOverlay.hidden == NO || !self.gameRunning) {
+    return NO;
+  }
+
+  if (actions.guide) {
+    if (self.inGameMenuOverlay.hidden) {
+      self.inGameMenuOverlay.alpha = 0.0;
+      self.inGameMenuOverlay.hidden = NO;
+      [self rebuildInGameFocusGraph];
+      in_game_focus_graph_.SetCurrent(kInGameFocusResume);
+      [self applyInGameMenuFocusVisuals];
+      [UIView animateWithDuration:0.18
+                       animations:^{
+                         self.inGameMenuOverlay.alpha = 1.0;
+                       }];
+    } else {
+      [self hideInGameMenuOverlay];
+    }
+    return YES;
+  }
+
+  if (self.inGameMenuOverlay.hidden) {
+    return NO;
+  }
+
+  if (actions.back) {
+    [self hideInGameMenuOverlay];
+    return YES;
+  }
+
+  [self rebuildInGameFocusGraph];
+  if (in_game_focus_graph_.current() == xe::ui::apple::kInvalidFocusNodeId) {
+    in_game_focus_graph_.SetCurrent(kInGameFocusResume);
+  }
+
+  BOOL handled = NO;
+  BOOL focus_changed = NO;
+  auto move_focus = [&](xe::ui::apple::NavigationDirection direction) {
+    IOSFocusNodeId previous = in_game_focus_graph_.current();
+    IOSFocusNodeId next = in_game_focus_graph_.Move(direction);
+    if (next != previous) {
+      focus_changed = YES;
+    }
+  };
+
+  if (actions.navigate_up) {
+    move_focus(xe::ui::apple::NavigationDirection::kUp);
+    handled = YES;
+  }
+  if (actions.navigate_down) {
+    move_focus(xe::ui::apple::NavigationDirection::kDown);
+    handled = YES;
+  }
+  if (actions.navigate_left) {
+    move_focus(xe::ui::apple::NavigationDirection::kUp);
+    handled = YES;
+  }
+  if (actions.navigate_right) {
+    move_focus(xe::ui::apple::NavigationDirection::kDown);
+    handled = YES;
+  }
+
+  if (actions.section_prev && in_game_focus_graph_.SetCurrent(kInGameFocusResume)) {
+    focus_changed = YES;
+    handled = YES;
+  }
+  if (actions.section_next && in_game_focus_graph_.SetCurrent(kInGameFocusExit)) {
+    focus_changed = YES;
+    handled = YES;
+  }
+
+  if (actions.context) {
+    [self inGameSettingsTapped:self.inGameSettingsButton];
+    handled = YES;
+  }
+  if (actions.quick_action) {
+    [self inGameLiveLogTapped:self.inGameLiveLogButton];
+    handled = YES;
+  }
+
+  if (actions.accept) {
+    switch (in_game_focus_graph_.current()) {
+      case kInGameFocusResume:
+        [self.inGameResumeButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        break;
+      case kInGameFocusSettings:
+        [self.inGameSettingsButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        break;
+      case kInGameFocusLog:
+        [self.inGameLiveLogButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        break;
+      case kInGameFocusExit:
+        [self.inGameExitButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        break;
+      default:
+        break;
+    }
+    handled = YES;
+  }
+
+  if (focus_changed || handled) {
+    [self applyInGameMenuFocusVisuals];
+  }
+  return handled;
+}
+
+- (void)pollControllerNavigation:(NSTimer* __unused)timer {
+  const bool navigation_enabled = cvars::ui_controller_navigation;
+  if (!navigation_enabled) {
+    if (controller_navigation_was_enabled_) {
+      controller_navigation_was_enabled_ = NO;
+      controller_navigation_mapper_.Reset();
+      launcher_focus_graph_.Clear();
+      in_game_focus_graph_.Clear();
+      [self applyLauncherFocusVisuals];
+      [self applyInGameMenuFocusVisuals];
+    }
+    return;
+  }
+
+  if (!controller_navigation_was_enabled_) {
+    controller_navigation_was_enabled_ = YES;
+    [self rebuildLauncherFocusGraph];
+    [self applyLauncherFocusVisuals];
+  }
+
+  if (!self.appContext) {
+    return;
+  }
+
+  xe::hid::X_INPUT_STATE state = {};
+  bool has_state = false;
+  for (uint32_t user_index = 0; user_index < xe::XUserMaxUserCount; ++user_index) {
+    if (self.appContext->GetControllerState(user_index, &state)) {
+      has_state = true;
+      break;
+    }
+  }
+  if (!has_state) {
+    controller_navigation_mapper_.Reset();
+    return;
+  }
+
+  xe::ui::apple::ControllerActionSet actions =
+      controller_navigation_mapper_.Update(state, GetNowMs());
+  if (!actions.Any()) {
+    return;
+  }
+
+  if ([self handlePresentedControllerActions:actions]) {
+    return;
+  }
+  if ([self handleLauncherControllerActions:actions]) {
+    return;
+  }
+  [self handleInGameControllerActions:actions];
 }
 
 // ---------------------------------------------------------------------------
@@ -1924,10 +2911,12 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   resume_config.baseForegroundColor = [XeniaTheme accentFg];
   resume_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   resume_config.contentInsets = NSDirectionalEdgeInsetsMake(12, 18, 12, 18);
-  UIButton* resume = [UIButton buttonWithConfiguration:resume_config primaryAction:nil];
-  resume.translatesAutoresizingMaskIntoConstraints = NO;
-  [resume addTarget:self action:@selector(resumeGameTapped:) forControlEvents:UIControlEventTouchUpInside];
-  [panel addSubview:resume];
+  self.inGameResumeButton = [UIButton buttonWithConfiguration:resume_config primaryAction:nil];
+  self.inGameResumeButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.inGameResumeButton addTarget:self
+                              action:@selector(resumeGameTapped:)
+                    forControlEvents:UIControlEventTouchUpInside];
+  [panel addSubview:self.inGameResumeButton];
 
   UIButtonConfiguration* settings_config = [UIButtonConfiguration tintedButtonConfiguration];
   settings_config.title = @"Settings";
@@ -1937,12 +2926,12 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   settings_config.baseBackgroundColor = [XeniaTheme bgSurface2];
   settings_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   settings_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
-  UIButton* settings = [UIButton buttonWithConfiguration:settings_config primaryAction:nil];
-  settings.translatesAutoresizingMaskIntoConstraints = NO;
-  [settings addTarget:self
-               action:@selector(inGameSettingsTapped:)
-     forControlEvents:UIControlEventTouchUpInside];
-  [panel addSubview:settings];
+  self.inGameSettingsButton = [UIButton buttonWithConfiguration:settings_config primaryAction:nil];
+  self.inGameSettingsButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.inGameSettingsButton addTarget:self
+                                action:@selector(inGameSettingsTapped:)
+                      forControlEvents:UIControlEventTouchUpInside];
+  [panel addSubview:self.inGameSettingsButton];
 
   UIButtonConfiguration* live_log_config = [UIButtonConfiguration tintedButtonConfiguration];
   live_log_config.title = @"Live Log";
@@ -1952,12 +2941,12 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   live_log_config.baseBackgroundColor = [XeniaTheme bgSurface2];
   live_log_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   live_log_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
-  UIButton* live_log = [UIButton buttonWithConfiguration:live_log_config primaryAction:nil];
-  live_log.translatesAutoresizingMaskIntoConstraints = NO;
-  [live_log addTarget:self
-               action:@selector(inGameLiveLogTapped:)
-     forControlEvents:UIControlEventTouchUpInside];
-  [panel addSubview:live_log];
+  self.inGameLiveLogButton = [UIButton buttonWithConfiguration:live_log_config primaryAction:nil];
+  self.inGameLiveLogButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.inGameLiveLogButton addTarget:self
+                               action:@selector(inGameLiveLogTapped:)
+                     forControlEvents:UIControlEventTouchUpInside];
+  [panel addSubview:self.inGameLiveLogButton];
 
   UIButtonConfiguration* exit_config = [UIButtonConfiguration tintedButtonConfiguration];
   exit_config.title = @"Exit To Library";
@@ -1967,10 +2956,12 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   exit_config.baseBackgroundColor = [[XeniaTheme statusError] colorWithAlphaComponent:0.25];
   exit_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
   exit_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
-  UIButton* exit_button = [UIButton buttonWithConfiguration:exit_config primaryAction:nil];
-  exit_button.translatesAutoresizingMaskIntoConstraints = NO;
-  [exit_button addTarget:self action:@selector(exitGameTapped:) forControlEvents:UIControlEventTouchUpInside];
-  [panel addSubview:exit_button];
+  self.inGameExitButton = [UIButton buttonWithConfiguration:exit_config primaryAction:nil];
+  self.inGameExitButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.inGameExitButton addTarget:self
+                            action:@selector(exitGameTapped:)
+                  forControlEvents:UIControlEventTouchUpInside];
+  [panel addSubview:self.inGameExitButton];
 
   [NSLayoutConstraint activateConstraints:@[
     [panel.centerXAnchor constraintEqualToAnchor:self.inGameMenuOverlay.centerXAnchor],
@@ -1989,22 +2980,28 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
     [subtitle.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
 
-    [resume.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
-    [resume.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
-    [resume.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
+    [self.inGameResumeButton.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
+    [self.inGameResumeButton.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
+    [self.inGameResumeButton.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
 
-    [settings.topAnchor constraintEqualToAnchor:resume.bottomAnchor constant:10],
-    [settings.leadingAnchor constraintEqualToAnchor:resume.leadingAnchor],
-    [settings.trailingAnchor constraintEqualToAnchor:resume.trailingAnchor],
+    [self.inGameSettingsButton.topAnchor constraintEqualToAnchor:self.inGameResumeButton.bottomAnchor
+                                                        constant:10],
+    [self.inGameSettingsButton.leadingAnchor constraintEqualToAnchor:self.inGameResumeButton.leadingAnchor],
+    [self.inGameSettingsButton.trailingAnchor
+        constraintEqualToAnchor:self.inGameResumeButton.trailingAnchor],
 
-    [live_log.topAnchor constraintEqualToAnchor:settings.bottomAnchor constant:10],
-    [live_log.leadingAnchor constraintEqualToAnchor:resume.leadingAnchor],
-    [live_log.trailingAnchor constraintEqualToAnchor:resume.trailingAnchor],
+    [self.inGameLiveLogButton.topAnchor constraintEqualToAnchor:self.inGameSettingsButton.bottomAnchor
+                                                       constant:10],
+    [self.inGameLiveLogButton.leadingAnchor constraintEqualToAnchor:self.inGameResumeButton.leadingAnchor],
+    [self.inGameLiveLogButton.trailingAnchor
+        constraintEqualToAnchor:self.inGameResumeButton.trailingAnchor],
 
-    [exit_button.topAnchor constraintEqualToAnchor:live_log.bottomAnchor constant:10],
-    [exit_button.leadingAnchor constraintEqualToAnchor:resume.leadingAnchor],
-    [exit_button.trailingAnchor constraintEqualToAnchor:resume.trailingAnchor],
-    [exit_button.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor constant:-14],
+    [self.inGameExitButton.topAnchor constraintEqualToAnchor:self.inGameLiveLogButton.bottomAnchor
+                                                    constant:10],
+    [self.inGameExitButton.leadingAnchor constraintEqualToAnchor:self.inGameResumeButton.leadingAnchor],
+    [self.inGameExitButton.trailingAnchor
+        constraintEqualToAnchor:self.inGameResumeButton.trailingAnchor],
+    [self.inGameExitButton.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor constant:-14],
   ]];
 }
 
@@ -2018,8 +3015,11 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
   BOOL should_show = self.inGameMenuOverlay.hidden;
   if (should_show) {
+    [self rebuildInGameFocusGraph];
+    in_game_focus_graph_.SetCurrent(kInGameFocusResume);
     self.inGameMenuOverlay.alpha = 0.0;
     self.inGameMenuOverlay.hidden = NO;
+    [self applyInGameMenuFocusVisuals];
     [UIView animateWithDuration:0.18
                      animations:^{
                        self.inGameMenuOverlay.alpha = 1.0;
@@ -2040,6 +3040,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
       completion:^(__unused BOOL finished) {
         self.inGameMenuOverlay.hidden = YES;
         self.inGameMenuOverlay.alpha = 1.0;
+        [self applyInGameMenuFocusVisuals];
       }];
 }
 
@@ -2191,50 +3192,35 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
     return;
   }
 
-  auto profiles = self.appContext->ListProfiles();
-  UIAlertController* sheet =
-      [UIAlertController alertControllerWithTitle:@"Profiles"
-                                          message:@"Create a profile or sign in."
-                                   preferredStyle:UIAlertControllerStyleActionSheet];
-
-  [sheet addAction:[UIAlertAction actionWithTitle:@"Create Profile"
-                                            style:UIAlertActionStyleDefault
-                                          handler:^(__unused UIAlertAction* action) {
-                                            [self presentProfileCreateAlert];
-                                          }]];
-
-  for (const auto& profile : profiles) {
-    NSString* gamertag = ToNSString(profile.gamertag);
-    NSString* title = gamertag;
-    if (profile.signed_in) {
-      title = [title stringByAppendingString:@" (Signed In)"];
+  XeniaProfileViewController* profile_vc =
+      [[XeniaProfileViewController alloc] initWithAppContext:self.appContext
+                                                    onStatus:^(NSString* status_message) {
+                                                      [self refreshSignedInProfileUI];
+                                                      if (status_message.length > 0) {
+                                                        self.statusLabel.text = status_message;
+                                                      }
+                                                    }];
+  XeniaLandscapeNavigationController* nav =
+      [[XeniaLandscapeNavigationController alloc] initWithRootViewController:profile_vc];
+  if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    if (@available(iOS 15.0, *)) {
+      UISheetPresentationController* sheet = nav.sheetPresentationController;
+      sheet.detents = @[
+        [UISheetPresentationControllerDetent mediumDetent],
+        [UISheetPresentationControllerDetent largeDetent]
+      ];
+      sheet.prefersGrabberVisible = YES;
     }
-    uint64_t xuid = profile.xuid;
-    [sheet addAction:[UIAlertAction actionWithTitle:title
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction* action) {
-                                              if (!self.appContext) {
-                                                return;
-                                              }
-                                              if (self.appContext->SignInProfile(xuid)) {
-                                                [self refreshSignedInProfileUI];
-                                                self.statusLabel.text = [NSString
-                                                    stringWithFormat:@"Signed in as %@.", gamertag];
-                                              }
-                                            }]];
+    UIPopoverPresentationController* popover = nav.popoverPresentationController;
+    if (popover) {
+      popover.sourceView = sender ?: self.profileButton;
+      popover.sourceRect = (sender ?: self.profileButton).bounds;
+    }
+  } else {
+    nav.modalPresentationStyle = UIModalPresentationFullScreen;
   }
-
-  [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                            style:UIAlertActionStyleCancel
-                                          handler:nil]];
-
-  UIPopoverPresentationController* popover = sheet.popoverPresentationController;
-  if (popover) {
-    popover.sourceView = sender ?: self.profileButton;
-    popover.sourceRect = (sender ?: self.profileButton).bounds;
-  }
-
-  [self presentViewController:sheet animated:YES completion:nil];
+  [self presentViewController:nav animated:YES completion:nil];
 }
 
 - (void)presentSystemSigninPromptForUserIndex:(uint32_t)user_index
@@ -2596,6 +3582,15 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
   [self.importedGamesCollectionView reloadData];
   self.importedGamesEmptyLabel.hidden = !discovered_games_.empty();
+
+  if (discovered_games_.empty()) {
+    focused_game_index_ = -1;
+  } else if (focused_game_index_ < 0 ||
+             focused_game_index_ >= static_cast<NSInteger>(discovered_games_.size())) {
+    focused_game_index_ = 0;
+  }
+  [self rebuildLauncherFocusGraph];
+  [self applyLauncherFocusVisuals];
 }
 
 - (void)presentJITRequiredAlert {
@@ -2664,6 +3659,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   if (indexPath.item < 0 || static_cast<size_t>(indexPath.item) >= discovered_games_.size()) {
     cell.titleLabel.text = @"";
     cell.iconView.image = nil;
+    cell.controllerFocused = NO;
     return cell;
   }
 
@@ -2671,6 +3667,9 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   NSString* title =
       game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
   cell.titleLabel.text = title;
+  cell.controllerFocused = controller_navigation_was_enabled_ &&
+                           launcher_library_focus_active_ &&
+                           focused_game_index_ == indexPath.item;
 
   // Priority: cached remote art → async fetch → embedded icon → placeholder.
   // Remote tile.png is much higher resolution than embedded 64x64 icons.
@@ -2718,6 +3717,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   if (indexPath.item < 0 || static_cast<size_t>(indexPath.item) >= discovered_games_.size()) {
     return;
   }
+  [self setFocusedGameIndex:indexPath.item scroll:NO];
   const IOSDiscoveredGame& game = discovered_games_[static_cast<size_t>(indexPath.item)];
   [self launchGameAtPath:game.path displayName:ToNSString(game.title)];
 }
@@ -2883,6 +3883,8 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
   [self refreshSignedInProfileUI];
   [self updateJITStatusIndicator];
   [self updateJITAvailabilityUI];
+  [self rebuildLauncherFocusGraph];
+  [self applyLauncherFocusVisuals];
   xe_request_portrait_orientation(self);
   [UIView animateWithDuration:0.3
                    animations:^{
@@ -2892,6 +3894,7 @@ typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 
 - (void)dealloc {
   [self.jitPollTimer invalidate];
+  [self.controllerNavTimer invalidate];
 }
 
 @end

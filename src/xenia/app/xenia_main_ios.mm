@@ -39,6 +39,7 @@
 #include "xenia/apu/sdl/sdl_audio_system.h"
 
 // Input drivers.
+#include "xenia/hid/input_system.h"
 #include "xenia/hid/nop/nop_hid.h"
 #include "xenia/hid/sdl/sdl_hid.h"
 #include "xenia/kernel/xam/xam.h"
@@ -281,6 +282,15 @@ bool EmulatorAppIOS::OnInitialize() {
   ios_context.set_game_terminate_callback([this]() {
     return RequestGameStop("TerminateCurrentGame");
   });
+
+  ios_context.set_controller_state_callback(
+      [this](uint32_t user_index, hid::X_INPUT_STATE* out_state) {
+        if (!out_state || !emulator_ || !emulator_->input_system()) {
+          return false;
+        }
+        return emulator_->input_system()->GetStateForUI(user_index, 1, out_state) ==
+               X_ERROR_SUCCESS;
+      });
 
   ios_context.set_profiles_list_callback([this]() {
     std::vector<ui::IOSProfileSummary> profiles;

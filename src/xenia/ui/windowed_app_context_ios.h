@@ -26,6 +26,9 @@ typedef struct objc_object UIViewController;
 #endif
 
 namespace xe {
+namespace hid {
+struct X_INPUT_STATE;
+}
 namespace ui {
 
 struct IOSProfileSummary {
@@ -69,6 +72,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   using GameExitedCallback = std::function<void()>;
   using ProfileServicesReadyCallback = std::function<void()>;
   using SignInUIPromptCallback = std::function<bool(uint32_t, uint32_t)>;
+  using ControllerStateCallback = std::function<bool(uint32_t, hid::X_INPUT_STATE*)>;
   using MessageBoxPromptCallback =
       std::function<bool(const std::string&, const std::string&, const std::vector<std::string>&,
                          uint32_t, uint32_t*)>;
@@ -143,6 +147,16 @@ class IOSWindowedAppContext final : public WindowedAppContext {
     return signin_ui_prompt_callback_(user_index, users_needed);
   }
 
+  void set_controller_state_callback(ControllerStateCallback callback) {
+    controller_state_callback_ = std::move(callback);
+  }
+  bool GetControllerState(uint32_t user_index, hid::X_INPUT_STATE* out_state) const {
+    if (!controller_state_callback_) {
+      return false;
+    }
+    return controller_state_callback_(user_index, out_state);
+  }
+
   void set_message_box_prompt_callback(MessageBoxPromptCallback callback) {
     message_box_prompt_callback_ = std::move(callback);
   }
@@ -183,6 +197,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   GameTerminateCallback game_terminate_callback_;
   GameExitedCallback game_exited_callback_;
   SignInUIPromptCallback signin_ui_prompt_callback_;
+  ControllerStateCallback controller_state_callback_;
   ProfileServicesReadyCallback profile_services_ready_callback_;
   MessageBoxPromptCallback message_box_prompt_callback_;
   KeyboardPromptCallback keyboard_prompt_callback_;
