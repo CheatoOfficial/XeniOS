@@ -477,7 +477,7 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
                          nullptr,  // No ImGui drawer on iOS for now.
                          require_cpu_backend, require_cpu_backend ? CreateAudioSystem : nullptr,
                          require_cpu_backend ? CreateGraphicsSystem : nullptr,
-                         CreateInputDrivers);
+                         require_cpu_backend ? CreateInputDrivers : nullptr);
 
     if (XFAILED(setup_result)) {
       XELOGE("iOS: Emulator::Setup failed with status {:08X}", setup_result);

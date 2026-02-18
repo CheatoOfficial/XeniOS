@@ -8,6 +8,7 @@
  */
 
 #import <MetalKit/MetalKit.h>
+#import <GameController/GameController.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -35,6 +36,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
 #include "xenia/config.h"
+#include "xenia/hid/input.h"
 #include "xenia/ui/apple_ui_flags.h"
 #include "xenia/ui/apple_ui_navigation.h"
 #include "xenia/ui/surface_ios.h"
@@ -339,6 +341,16 @@ uint64_t GetNowMs() {
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now().time_since_epoch())
           .count());
+}
+
+int16_t ToThumbAxis(float value) {
+  const float clamped = std::clamp(value, -1.0f, 1.0f);
+  return static_cast<int16_t>(clamped * 32767.0f);
+}
+
+uint8_t ToTriggerAxis(float value) {
+  const float clamped = std::clamp(value, 0.0f, 1.0f);
+  return static_cast<uint8_t>(clamped * 255.0f);
 }
 
 std::string TrimAscii(std::string value) {
@@ -1866,6 +1878,7 @@ titleForFooterInSection:(NSInteger)section {
 - (void)exitGameTapped:(UIButton*)sender;
 - (void)hideInGameMenuOverlay;
 - (void)pollControllerNavigation:(NSTimer*)timer;
+- (BOOL)readNativeControllerState:(xe::hid::X_INPUT_STATE*)out_state;
 @end
 
 @implementation XeniaViewController {
@@ -1876,6 +1889,7 @@ titleForFooterInSection:(NSInteger)section {
   NSInteger focused_game_index_;
   BOOL launcher_library_focus_active_;
   BOOL controller_navigation_was_enabled_;
+  uint32_t native_controller_packet_number_;
 }
 
 - (void)viewDidLoad {
@@ -1888,6 +1902,7 @@ titleForFooterInSection:(NSInteger)section {
   focused_game_index_ = -1;
   launcher_library_focus_active_ = NO;
   controller_navigation_was_enabled_ = NO;
+  native_controller_packet_number_ = 0;
   controller_navigation_mapper_.Reset();
 
   // Create the Metal-backed rendering view (full screen, behind everything).
@@ -2565,17 +2580,18 @@ titleForFooterInSection:(NSInteger)section {
     [self applyLauncherFocusVisuals];
   }
 
-  if (!self.appContext) {
-    return;
-  }
-
   xe::hid::X_INPUT_STATE state = {};
   bool has_state = false;
-  for (uint32_t user_index = 0; user_index < xe::XUserMaxUserCount; ++user_index) {
-    if (self.appContext->GetControllerState(user_index, &state)) {
-      has_state = true;
-      break;
+  if (self.appContext) {
+    for (uint32_t user_index = 0; user_index < xe::XUserMaxUserCount; ++user_index) {
+      if (self.appContext->GetControllerState(user_index, &state)) {
+        has_state = true;
+        break;
+      }
     }
+  }
+  if (!has_state) {
+    has_state = [self readNativeControllerState:&state];
   }
   if (!has_state) {
     controller_navigation_mapper_.Reset();
@@ -2595,6 +2611,60 @@ titleForFooterInSection:(NSInteger)section {
     return;
   }
   [self handleInGameControllerActions:actions];
+}
+
+- (BOOL)readNativeControllerState:(xe::hid::X_INPUT_STATE*)out_state {
+  if (!out_state) {
+    return NO;
+  }
+
+  NSArray<GCController*>* controllers = [GCController controllers];
+  for (GCController* controller in controllers) {
+    GCExtendedGamepad* gamepad = controller.extendedGamepad;
+    if (!gamepad) {
+      continue;
+    }
+
+    uint16_t buttons = 0;
+    auto set_button = [&buttons](BOOL pressed, uint16_t mask) {
+      if (pressed) {
+        buttons |= mask;
+      }
+    };
+
+    set_button(gamepad.dpad.up.pressed, xe::hid::X_INPUT_GAMEPAD_DPAD_UP);
+    set_button(gamepad.dpad.down.pressed, xe::hid::X_INPUT_GAMEPAD_DPAD_DOWN);
+    set_button(gamepad.dpad.left.pressed, xe::hid::X_INPUT_GAMEPAD_DPAD_LEFT);
+    set_button(gamepad.dpad.right.pressed, xe::hid::X_INPUT_GAMEPAD_DPAD_RIGHT);
+    set_button(gamepad.buttonA.pressed, xe::hid::X_INPUT_GAMEPAD_A);
+    set_button(gamepad.buttonB.pressed, xe::hid::X_INPUT_GAMEPAD_B);
+    set_button(gamepad.buttonX.pressed, xe::hid::X_INPUT_GAMEPAD_X);
+    set_button(gamepad.buttonY.pressed, xe::hid::X_INPUT_GAMEPAD_Y);
+    set_button(gamepad.leftShoulder.pressed, xe::hid::X_INPUT_GAMEPAD_LEFT_SHOULDER);
+    set_button(gamepad.rightShoulder.pressed, xe::hid::X_INPUT_GAMEPAD_RIGHT_SHOULDER);
+
+    if (@available(iOS 13.0, tvOS 13.0, macCatalyst 13.0, *)) {
+      set_button(gamepad.buttonMenu.pressed, xe::hid::X_INPUT_GAMEPAD_START);
+    }
+    if (@available(iOS 14.0, tvOS 14.0, macCatalyst 14.0, *)) {
+      set_button(gamepad.buttonOptions.pressed, xe::hid::X_INPUT_GAMEPAD_BACK);
+    }
+    if (@available(iOS 12.1, tvOS 12.1, macCatalyst 13.1, *)) {
+      set_button(gamepad.leftThumbstickButton.pressed, xe::hid::X_INPUT_GAMEPAD_LEFT_THUMB);
+      set_button(gamepad.rightThumbstickButton.pressed, xe::hid::X_INPUT_GAMEPAD_RIGHT_THUMB);
+    }
+
+    out_state->packet_number = ++native_controller_packet_number_;
+    out_state->gamepad.buttons = buttons;
+    out_state->gamepad.left_trigger = ToTriggerAxis(gamepad.leftTrigger.value);
+    out_state->gamepad.right_trigger = ToTriggerAxis(gamepad.rightTrigger.value);
+    out_state->gamepad.thumb_lx = ToThumbAxis(gamepad.leftThumbstick.xAxis.value);
+    out_state->gamepad.thumb_ly = ToThumbAxis(gamepad.leftThumbstick.yAxis.value);
+    out_state->gamepad.thumb_rx = ToThumbAxis(gamepad.rightThumbstick.xAxis.value);
+    out_state->gamepad.thumb_ry = ToThumbAxis(gamepad.rightThumbstick.yAxis.value);
+    return YES;
+  }
+  return NO;
 }
 
 // ---------------------------------------------------------------------------
