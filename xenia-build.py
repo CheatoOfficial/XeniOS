@@ -1900,8 +1900,13 @@ def build_shaders(targets=None, config="release"):
                 metallib_path = f"{base_path}.metallib"
 
                 # Common compile args.
+                # Target MSL 2.1 (macOS 10.14+) explicitly so that the
+                # embedded metallib bytecode is forward-compatible and does
+                # not silently depend on SDK-default MSL version.
+                # MSL 2.1 is the minimum: texture_buffer<> requires it.
                 compile_args = [
                     "-x", "metal",
+                    "-std=macos-metal2.1",
                     "-D", "SHADING_LANGUAGE_MSL_XE=1",
                     "-I", src_dir,
                     f"-fmodules-cache-path={module_cache}",
