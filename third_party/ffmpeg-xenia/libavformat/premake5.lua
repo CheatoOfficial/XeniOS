@@ -46,6 +46,13 @@ project("libavformat")
     "../../FFmpeg/libavformat/mp3dec.c",
     "../../FFmpeg/libavformat/replaygain.c",
     "../../FFmpeg/libavformat/file.c",
+    "../../FFmpeg/libavformat/demux.c",
+    "../../FFmpeg/libavformat/avformat.c",
+    "../../FFmpeg/libavformat/seek.c",
+    "../../FFmpeg/libavformat/demux_utils.c",
+    "../../FFmpeg/libavformat/urldecode.c",
+    "../../FFmpeg/libavformat/asf_tags.c",
+    "../../FFmpeg/libavformat/to_upper4.c",
   })
   filter({"platforms:Windows"})
   files({

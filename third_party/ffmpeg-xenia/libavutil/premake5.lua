@@ -123,7 +123,7 @@ project("libavutil")
     "../../FFmpeg/libavutil/cast5.c",
     "../../FFmpeg/libavutil/camellia.c",
     "../../FFmpeg/libavutil/channel_layout.c",
-    "../../FFmpeg/libavutil/color_utils.c",
+    "../../FFmpeg/libavutil/csp.c",
     "../../FFmpeg/libavutil/cpu.c",
     "../../FFmpeg/libavutil/crc.c",
     "../../FFmpeg/libavutil/des.c",
@@ -186,6 +186,13 @@ project("libavutil")
     "../../FFmpeg/libavutil/tx_int32.c",
     "../../FFmpeg/libavutil/video_enc_params.c",
     "../../FFmpeg/libavutil/film_grain_params.c",
+    "../../FFmpeg/libavutil/side_data.c",
+    "../../FFmpeg/libavutil/refstruct.c",
+    "../../FFmpeg/libavutil/container_fifo.c",
+    "../../FFmpeg/libavutil/float_scalarproduct.c",
+    "../../FFmpeg/libavutil/timecode_internal.c",
+    "../../FFmpeg/libavutil/iamf.c",
+    "../../FFmpeg/libavutil/timestamp.c",
   })
 
   -- libavutil/aarch64/Makefile:
@@ -194,6 +201,7 @@ project("libavutil")
   files({
     "../../FFmpeg/libavutil/aarch64/cpu.c",
     "../../FFmpeg/libavutil/aarch64/float_dsp_init.c",
+    "../../FFmpeg/libavutil/aarch64/tx_float_init.c",
   })
   filter({})
   --   NEON-OBJS:
@@ -212,5 +220,6 @@ project("libavutil")
     "../../FFmpeg/libavutil/x86/float_dsp_init.c",
     "../../FFmpeg/libavutil/x86/imgutils_init.c",
     "../../FFmpeg/libavutil/x86/lls_init.c",
+    "../../FFmpeg/libavutil/x86/tx_float_init.c",
   })
   filter({})

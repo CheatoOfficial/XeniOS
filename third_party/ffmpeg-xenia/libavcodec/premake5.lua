@@ -12,6 +12,12 @@ project("libavcodec")
     "libavutil",
   })
 
+  -- Needed for files in subdirectories (e.g. bsf/null.c) that include
+  -- headers relative to libavcodec/.
+  includedirs({
+    "../../FFmpeg/libavcodec",
+  })
+
   -- libavcodec/Makefile:
   --   HEADERS:
   files({
@@ -19,7 +25,6 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/adts_parser.h",
     "../../FFmpeg/libavcodec/avcodec.h",
     "../../FFmpeg/libavcodec/avdct.h",
-    "../../FFmpeg/libavcodec/avfft.h",
     "../../FFmpeg/libavcodec/bsf.h",
     "../../FFmpeg/libavcodec/codec.h",
     "../../FFmpeg/libavcodec/codec_desc.h",
@@ -33,12 +38,10 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/mediacodec.h",
     "../../FFmpeg/libavcodec/packet.h",
     "../../FFmpeg/libavcodec/qsv.h",
-    "../../FFmpeg/libavcodec/vaapi.h",
     "../../FFmpeg/libavcodec/vdpau.h",
     "../../FFmpeg/libavcodec/version.h",
     "../../FFmpeg/libavcodec/videotoolbox.h",
     "../../FFmpeg/libavcodec/vorbis_parser.h",
-    "../../FFmpeg/libavcodec/xvmc.h",
   })
   --   OBJS:
   files({
@@ -47,10 +50,8 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/allcodecs.c",
     "../../FFmpeg/libavcodec/avcodec.c",
     "../../FFmpeg/libavcodec/avdct.c",
-    "../../FFmpeg/libavcodec/avpacket.c",
-    "../../FFmpeg/libavcodec/avpicture.c",
+    "../../FFmpeg/libavcodec/packet.c",
     "../../FFmpeg/libavcodec/bitstream.c",
-    "../../FFmpeg/libavcodec/bitstream_filter.c",
     "../../FFmpeg/libavcodec/bitstream_filters.c",
     "../../FFmpeg/libavcodec/bsf.c",
     "../../FFmpeg/libavcodec/codec_desc.c",
@@ -74,7 +75,6 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/utils.c",
     "../../FFmpeg/libavcodec/vorbis_parser.c",
     "../../FFmpeg/libavcodec/xiph.c",
-    "../../FFmpeg/libavcodec/dct.c",
     "../../FFmpeg/libavcodec/dct32_fixed.c",
     "../../FFmpeg/libavcodec/dct32_float.c",
     "../../FFmpeg/libavcodec/faandct.c",
@@ -85,8 +85,6 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/idctdsp.c",
     "../../FFmpeg/libavcodec/simple_idct.c",
     "../../FFmpeg/libavcodec/jrevdct.c",
-    "../../FFmpeg/libavcodec/mdct_float.c",
-    "../../FFmpeg/libavcodec/mdct_fixed_32.c",
     "../../FFmpeg/libavcodec/mpegaudio.c",
     "../../FFmpeg/libavcodec/mpegaudiodec_common.c",
     "../../FFmpeg/libavcodec/mpegaudiodsp.c",
@@ -95,7 +93,6 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/mpegaudiodsp_float.c",
     "../../FFmpeg/libavcodec/mpegaudiodecheader.c",
     "../../FFmpeg/libavcodec/mpegaudiodata.c",
-    "../../FFmpeg/libavcodec/rdft.c",
     "../../FFmpeg/libavcodec/sinewin.c",
     "../../FFmpeg/libavcodec/wma_freqs.c",
     "../../FFmpeg/libavcodec/mpegaudiodec_fixed.c",
@@ -106,14 +103,16 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/wmadec.c",
     "../../FFmpeg/libavcodec/aactab.c",
     "../../FFmpeg/libavcodec/mpegaudio_parser.c",
-    "../../FFmpeg/libavcodec/null_bsf.c",
     "../../FFmpeg/libavcodec/pthread.c",
     "../../FFmpeg/libavcodec/pthread_slice.c",
     "../../FFmpeg/libavcodec/pthread_frame.c",
-    "../../FFmpeg/libavcodec/avfft.c",
-    "../../FFmpeg/libavcodec/fft_float.c",
-    "../../FFmpeg/libavcodec/fft_fixed_32.c",
-    "../../FFmpeg/libavcodec/fft_init_table.c",
+    "../../FFmpeg/libavcodec/get_buffer.c",
+    "../../FFmpeg/libavcodec/vlc.c",
+    "../../FFmpeg/libavcodec/threadprogress.c",
+    "../../FFmpeg/libavcodec/bsf/null.c",
+    "../../FFmpeg/libavcodec/exif.c",
+    "../../FFmpeg/libavcodec/mpegaudiotabs.c",
+    "../../FFmpeg/libavcodec/tiff_common.c",
   })
   filter({"platforms:Windows"})
   files({
@@ -125,7 +124,6 @@ project("libavcodec")
   --   OBJS:
   filter({"platforms:Android-ARM64"})
   files({
-    "../../FFmpeg/libavcodec/aarch64/fft_init_aarch64.c",
     "../../FFmpeg/libavcodec/aarch64/idctdsp_init_aarch64.c",
     "../../FFmpeg/libavcodec/aarch64/mpegaudiodsp_init.c",
   })
@@ -145,9 +143,7 @@ project("libavcodec")
   filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
   files({
     "../../FFmpeg/libavcodec/x86/constants.c",
-    "../../FFmpeg/libavcodec/x86/dct_init.c",
     "../../FFmpeg/libavcodec/x86/fdctdsp_init.c",
-    "../../FFmpeg/libavcodec/x86/fft_init.c",
     "../../FFmpeg/libavcodec/x86/idctdsp_init.c",
     "../../FFmpeg/libavcodec/x86/mpegaudiodsp.c",
   })
