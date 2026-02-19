@@ -745,14 +745,18 @@ def git_submodule_update():
 def fetch_data_repos():
     """Fetches data repositories (game-patches, optimized-settings) into .data_repos/.
 
-    These repos are cloned fresh or updated to their latest versions. They are not
-    submodules to avoid constant submodule updates in the main repo.
+    Removes and re-clones all data repos fresh each time. They are not submodules
+    to avoid constant submodule updates in the main repo.
     """
     print("- fetching data repositories...")
 
     data_dir = ".data_repos"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
+    if os.path.exists(data_dir):
+        def remove_readonly(func, path, _):
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        rmtree(data_dir, onerror=remove_readonly)
+    os.makedirs(data_dir)
 
     # Define data repos
     data_repos = [
@@ -768,42 +772,18 @@ def fetch_data_repos():
         }
     ]
 
-    # Clone or update each repo
+    # Clone each repo fresh
     for repo in data_repos:
         repo_path = os.path.join(data_dir, repo["name"])
-
-        if os.path.exists(repo_path):
-            print(f"  - updating {repo['name']}...")
-            try:
-                shell_call([
-                    "git",
-                    "-C", repo_path,
-                    "pull",
-                    "--depth=1",
-                    "origin", repo["branch"]
-                ])
-            except Exception as e:
-                print(f"    Warning: Failed to update {repo['name']}: {e}")
-                print(f"    Removing and re-cloning...")
-                rmtree(repo_path)
-                shell_call([
-                    "git",
-                    "clone",
-                    "--depth=1",
-                    "--branch", repo["branch"],
-                    repo["url"],
-                    repo_path
-                ])
-        else:
-            print(f"  - cloning {repo['name']}...")
-            shell_call([
-                "git",
-                "clone",
-                "--depth=1",
-                "--branch", repo["branch"],
-                repo["url"],
-                repo_path
-            ])
+        print(f"  - cloning {repo['name']}...")
+        shell_call([
+            "git",
+            "clone",
+            "--depth=1",
+            "--branch", repo["branch"],
+            repo["url"],
+            repo_path
+        ])
 
 
 def get_cc(cc=None):
