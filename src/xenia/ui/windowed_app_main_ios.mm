@@ -3189,6 +3189,7 @@ titleForFooterInSection:(NSInteger)section {
   }
 
   self.gameStopInProgress = YES;
+  self.gameRunning = NO;
   self.launcherOverlay.hidden = NO;
   self.launcherOverlay.alpha = 1.0;
   xe_request_portrait_orientation(self);
@@ -3732,18 +3733,26 @@ titleForFooterInSection:(NSInteger)section {
 
 - (void)launchGameAtPath:(const std::filesystem::path&)game_path
              displayName:(NSString*)display_name {
-  if (self.gameStopInProgress || self.gameRunning) {
-    self.statusLabel.text = @"Please wait for the current game to stop.";
-    return;
-  }
+  NSString* path_ns = ToNSString(game_path.string());
+  NSString* fallback_name = ToNSString(game_path.filename().string());
+  NSString* game_label = display_name.length ? display_name : fallback_name;
+
   if (!self.jitAcquired) {
     [self presentJITRequiredAlert];
     return;
   }
 
-  NSString* path_ns = ToNSString(game_path.string());
-  NSString* fallback_name = ToNSString(game_path.filename().string());
-  NSString* game_label = display_name.length ? display_name : fallback_name;
+  if (self.gameStopInProgress || self.gameRunning) {
+    if (self.appContext) {
+      self.statusLabel.text = [NSString stringWithFormat:@"Stopping current game; queued %@.",
+                                                         game_label];
+      self.appContext->LaunchGame(std::string([path_ns UTF8String]));
+    } else {
+      self.statusLabel.text = @"Unable to queue launch (app context unavailable).";
+    }
+    return;
+  }
+
   self.statusLabel.text = [NSString stringWithFormat:@"Loading: %@", game_label];
   self.gameRunning = YES;
 
