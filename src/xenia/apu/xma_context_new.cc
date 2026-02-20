@@ -555,18 +555,27 @@ void XmaContextNew::UpdateLoopStatus(XMA_CONTEXT_DATA* data) {
   const uint32_t loop_start = std::max(kBitsPerPacketHeader, data->loop_start);
   const uint32_t loop_end = std::max(kBitsPerPacketHeader, data->loop_end);
 
-  if (loop_end <= loop_start) {
+  if (loop_end < loop_start) {
+    XELOGW(
+        "XmaContext {}: Degenerate loop region (end {} < start {}), ignoring",
+        id(), loop_end, loop_start);
     return;
   }
 
-  XELOGAPU("XmaContext {}: Looped Data: {} < {} (Start: {}) Remaining: {}",
+  XELOGAPU("XmaContext {}: Looped Data: {} > {} (Start: {}) Remaining: {}",
            id(), data->input_buffer_read_offset, data->loop_end,
            data->loop_start, data->loop_count);
 
-  if (data->input_buffer_read_offset < loop_end) {
+  if (data->input_buffer_read_offset <= loop_end) {
     return;
   }
 
+  // Read offset has advanced past the loop end frame — loop back.
+  XELOGAPU(
+      "XmaContext {}: Loop triggered - offset {} past end {}, "
+      "jumping to start {} (remaining: {} -> {})",
+      id(), data->input_buffer_read_offset, loop_end, loop_start,
+      data->loop_count, data->loop_count == 255 ? 255 : data->loop_count - 1);
   data->input_buffer_read_offset = loop_start;
 
   if (data->loop_count != 255) {
