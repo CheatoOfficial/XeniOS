@@ -891,7 +891,9 @@ void KernelState::TerminateTitle() {
         }
 
         global_lock.unlock();
-        processor_->StepToGuestSafePoint(thread->thread_id());
+        // On iOS ARM64, stepping to a guest safe point during forced title
+        // termination can fault while the thread is in host/JIT transition
+        // code. Terminate directly after suspension for shutdown stability.
         thread->Terminate(0);
         global_lock.lock();
       }
