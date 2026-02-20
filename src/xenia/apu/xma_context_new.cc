@@ -174,6 +174,8 @@ bool XmaContextNew::Work() {
         data.output_buffer_valid, data.subframe_decode_count,
         data.output_buffer_padding);
 
+    const uint32_t pre_decode_offset = data.input_buffer_read_offset;
+
     Decode(&data);
     Consume(&output_rb, &data);
 
@@ -181,6 +183,18 @@ bool XmaContextNew::Work() {
       XELOGAPU(
           "XmaContext {}: Work loop exit - buffers_valid={} error_status={}",
           id(), data.IsAnyInputBufferValid(), data.error_status);
+      break;
+    }
+
+    // If Decode didn't advance the read offset and produced no frame, we can't
+    // make progress (e.g. split frame waiting for next buffer).
+    // Break to avoid spinning.
+    if (data.input_buffer_read_offset == pre_decode_offset &&
+        current_frame_remaining_subframes_ == 0) {
+      XELOGAPU(
+          "XmaContext {}: Decode stalled at offset {} (no progress), "
+          "waiting for next buffer",
+          id(), pre_decode_offset);
       break;
     }
   }
@@ -461,8 +475,15 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
     const uint8_t* next_packet =
         GetNextPacket(data, next_packet_index, current_input_packet_count);
     if (!next_packet) {
-      // Matching split-body error handling below; correct error code unknown.
-      data->error_status = 4;
+      // Next buffer not available yet.  We can't resolve the split header
+      // without it, so consume (swap) the current buffer and move on.
+      // This loses one frame but avoids a deadlock where the game waits
+      // for us to finish this buffer before providing the next one.
+      XELOGAPU(
+          "XmaContext {}: Split frame header at packet {}, next buffer "
+          "unavailable — swapping input buffer",
+          id(), packet_index);
+      SwapInputBuffer(data);
       return;
     }
     std::memcpy(input_buffer_.data(), packet + kBytesPerPacketHeader,
@@ -507,10 +528,13 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
           GetNextPacket(data, next_packet_index, current_input_packet_count);
 
       if (!next_packet) {
-        // Error path
-        // Decoder probably should return error here
-        // Not sure what error code should be returned
-        data->error_status = 4;
+        // Next buffer not available yet.  We can't decode the split frame
+        // without it, so consume (swap) the current buffer and move on.
+        XELOGAPU(
+            "XmaContext {}: Split frame body at packet {}, next buffer "
+            "unavailable — swapping input buffer (need packet {}/{})",
+            id(), packet_index, next_packet_index, current_input_packet_count);
+        SwapInputBuffer(data);
         return;
       }
       // Copy next packet to buffer
