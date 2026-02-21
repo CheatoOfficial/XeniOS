@@ -174,8 +174,6 @@ bool XmaContextNew::Work() {
         data.output_buffer_valid, data.subframe_decode_count,
         data.output_buffer_padding);
 
-    const uint32_t pre_decode_offset = data.input_buffer_read_offset;
-
     Decode(&data);
     Consume(&output_rb, &data);
 
@@ -183,18 +181,6 @@ bool XmaContextNew::Work() {
       XELOGAPU(
           "XmaContext {}: Work loop exit - buffers_valid={} error_status={}",
           id(), data.IsAnyInputBufferValid(), data.error_status);
-      break;
-    }
-
-    // If Decode didn't advance the read offset and produced no frame, we can't
-    // make progress (e.g. split frame waiting for next buffer).
-    // Break to avoid spinning.
-    if (data.input_buffer_read_offset == pre_decode_offset &&
-        current_frame_remaining_subframes_ == 0) {
-      XELOGAPU(
-          "XmaContext {}: Decode stalled at offset {} (no progress), "
-          "waiting for next buffer",
-          id(), pre_decode_offset);
       break;
     }
   }
