@@ -649,15 +649,11 @@ void XmaContextNew::UpdateLoopStatus(XMA_CONTEXT_DATA* data) {
   const uint32_t loop_start = std::max(kBitsPerPacketHeader, data->loop_start);
   const uint32_t loop_end = std::max(kBitsPerPacketHeader, data->loop_end);
 
-  if (loop_end <= loop_start) {
-    return;
-  }
-
   XELOGAPU("XmaContext {}: Looped Data: {} < {} (Start: {}) Remaining: {}",
            id(), data->input_buffer_read_offset, data->loop_end,
            data->loop_start, data->loop_count);
 
-  if (data->input_buffer_read_offset < loop_end) {
+  if (data->input_buffer_read_offset != loop_end) {
     return;
   }
 
