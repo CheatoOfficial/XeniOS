@@ -22,9 +22,9 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/spirv_compatibility.h"
 #include "xenia/gpu/spirv_shader.h"
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
 #include "xenia/ui/vulkan/spirv_tools_context.h"
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
 DEFINE_string(spirv_version_override, "1.0",
               "Override the SPIR-V version used in shader translation.\n"
@@ -56,7 +56,7 @@ namespace xe {
 namespace gpu {
 
 namespace {
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
 // Cache for auto-detected SPIR-V version to avoid re-testing on every
 // Features construction.
 static std::optional<spv::SpvVersion> g_cached_spirv_version;
@@ -115,7 +115,7 @@ bool TestSpirvVersionSupport(const ui::vulkan::VulkanDevice* vulkan_device,
 
   return false;
 }
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
 }  // namespace
 
@@ -135,7 +135,7 @@ SpirvShaderTranslator::Features::Features(bool all)
       demote_to_helper_invocation(all),
       fragment_shader_barycentric(all) {}
 
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
 SpirvShaderTranslator::Features::Features(
     const ui::vulkan::VulkanDevice* const vulkan_device)
     : max_storage_buffer_range(
@@ -200,7 +200,7 @@ SpirvShaderTranslator::Features::Features(
     }
   }
 }
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
 uint64_t SpirvShaderTranslator::GetDefaultVertexShaderModification(
     uint32_t dynamic_addressable_register_count,
@@ -404,6 +404,8 @@ void SpirvShaderTranslator::StartTranslation() {
       {"flags", offsetof(SystemConstants, flags), type_uint_},
       {"vertex_index_load_address",
        offsetof(SystemConstants, vertex_index_load_address), type_uint_},
+      {"vertex_index_count", offsetof(SystemConstants, vertex_index_count),
+       type_uint_},
       {"vertex_index_endian", offsetof(SystemConstants, vertex_index_endian),
        type_uint_},
       {"vertex_base_index", offsetof(SystemConstants, vertex_base_index),
@@ -1090,7 +1092,7 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
   builder_->dump(module_uints);
 
   // Optimize the SPIR-V if optimization is enabled and tools are available.
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
   if (spirv_optimize_ && spirv_tools_context_) {
     size_t original_size = module_uints.size();
     std::vector<uint32_t> optimized_module;
@@ -1107,7 +1109,7 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
              static_cast<int>(result));
     }
   }
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
   std::vector<uint8_t> module_bytes;
   module_bytes.reserve(sizeof(unsigned int) * module_uints.size());
@@ -1902,6 +1904,13 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
         spv::NoPrecision);
     id_vector_temp_.clear();
     id_vector_temp_.push_back(
+        builder_->makeIntConstant(kSystemConstantVertexIndexCount));
+    spv::Id vertex_index_count = builder_->createLoad(
+        builder_->createAccessChain(spv::StorageClassUniform,
+                                    uniform_system_constants_, id_vector_temp_),
+        spv::NoPrecision);
+    id_vector_temp_.clear();
+    id_vector_temp_.push_back(
         builder_->makeIntConstant(kSystemConstantVertexIndexEndian));
     spv::Id vertex_index_endian = builder_->createLoad(
         builder_->createAccessChain(spv::StorageClassUniform,
@@ -1919,9 +1928,15 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
       spv::Id vertex_index =
           builder_->createBinOp(spv::OpIAdd, type_uint_, rect_vertex_base,
                                 builder_->makeUintConstant(i));
+      spv::Id vertex_index_in_bounds = builder_->createBinOp(
+          spv::OpULessThan, type_bool_, vertex_index, vertex_index_count);
+      spv::Id load_vertex_index_safe =
+          builder_->createBinOp(spv::OpLogicalAnd, type_bool_,
+                                load_vertex_index, vertex_index_in_bounds);
 
       SpirvBuilder::IfBuilder load_vertex_index_if(
-          load_vertex_index, spv::SelectionControlDontFlattenMask, *builder_);
+          load_vertex_index_safe, spv::SelectionControlDontFlattenMask,
+          *builder_);
       spv::Id loaded_vertex_index = spv::NoResult;
       {
         spv::Id vertex_index_address = builder_->createBinOp(
@@ -1953,6 +1968,9 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
       load_vertex_index_if.makeEndIf();
       vertex_index = load_vertex_index_if.createMergePhi(loaded_vertex_index,
                                                          vertex_index);
+      vertex_index = builder_->createTriOp(spv::OpSelect, type_uint_,
+                                           vertex_index_in_bounds, vertex_index,
+                                           const_uint_0_);
 
       spv::Id guest_vertex_index = builder_->createBinOp(
           spv::OpIAdd, type_int_,
@@ -2133,6 +2151,14 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
       spv::Id vertex_index = builder_->createUnaryOp(
           spv::OpBitcast, type_uint_,
           builder_->createLoad(input_vertex_index_, spv::NoPrecision));
+      id_vector_temp_.clear();
+      id_vector_temp_.push_back(
+          builder_->makeIntConstant(kSystemConstantVertexIndexCount));
+      spv::Id vertex_index_count =
+          builder_->createLoad(builder_->createAccessChain(
+                                   spv::StorageClassUniform,
+                                   uniform_system_constants_, id_vector_temp_),
+                               spv::NoPrecision);
       if (main_vertex_rect_list_as_triangle_strip_) {
         // For rectangle list VS expansion, the translated guest shader is
         // executed 3 times in an outer loop, and r0.x is written there.
@@ -2144,6 +2170,8 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
         spv::Id const_uint_2 = builder_->makeUintConstant(2);
         vertex_index = builder_->createBinOp(
             spv::OpShiftRightLogical, type_uint_, vertex_index, const_uint_2);
+        spv::Id vertex_index_in_bounds = builder_->createBinOp(
+            spv::OpULessThan, type_bool_, vertex_index, vertex_index_count);
         // Check if the index needs to be loaded from the index buffer.
         spv::Id load_vertex_index = builder_->createBinOp(
             spv::OpINotEqual, type_bool_,
@@ -2152,8 +2180,12 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
                 builder_->makeUintConstant(static_cast<unsigned int>(
                     kSysFlag_ComputeOrPrimitiveVertexIndexLoad))),
             const_uint_0_);
+        spv::Id load_vertex_index_safe =
+            builder_->createBinOp(spv::OpLogicalAnd, type_bool_,
+                                  load_vertex_index, vertex_index_in_bounds);
         SpirvBuilder::IfBuilder load_vertex_index_if(
-            load_vertex_index, spv::SelectionControlDontFlattenMask, *builder_);
+            load_vertex_index_safe, spv::SelectionControlDontFlattenMask,
+            *builder_);
         spv::Id loaded_vertex_index;
         {
           // Check if the index is 32-bit.
@@ -2216,11 +2248,16 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
         // Select between the loaded index and the original index from Vulkan.
         vertex_index = load_vertex_index_if.createMergePhi(loaded_vertex_index,
                                                            vertex_index);
+        vertex_index = builder_->createTriOp(spv::OpSelect, type_uint_,
+                                             vertex_index_in_bounds,
+                                             vertex_index, const_uint_0_);
       } else {
         // TODO(Triang3l): Close line loop primitive.
         // Load the unswapped index as uint for swapping, or for indirect
         // loading if needed.
         if (!features_.full_draw_index_uint32) {
+          spv::Id vertex_index_in_bounds = builder_->createBinOp(
+              spv::OpULessThan, type_bool_, vertex_index, vertex_index_count);
           // Check if the full 32-bit index needs to be loaded indirectly.
           spv::Id load_vertex_index = builder_->createBinOp(
               spv::OpINotEqual, type_bool_,
@@ -2229,8 +2266,11 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
                   builder_->makeUintConstant(
                       static_cast<unsigned int>(kSysFlag_VertexIndexLoad))),
               const_uint_0_);
+          spv::Id load_vertex_index_safe =
+              builder_->createBinOp(spv::OpLogicalAnd, type_bool_,
+                                    load_vertex_index, vertex_index_in_bounds);
           SpirvBuilder::IfBuilder load_vertex_index_if(
-              load_vertex_index, spv::SelectionControlDontFlattenMask,
+              load_vertex_index_safe, spv::SelectionControlDontFlattenMask,
               *builder_);
           spv::Id loaded_vertex_index;
           {
@@ -2258,6 +2298,15 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
           // Select between the loaded index and the original index from Vulkan.
           vertex_index = load_vertex_index_if.createMergePhi(
               loaded_vertex_index, vertex_index);
+          // Clamp only the indirection index position used for shared-memory
+          // loads. For regular indexed draws, input_vertex_index is already the
+          // fetched vertex index value and must not be bounded by index count.
+          spv::Id vertex_index_clamped = builder_->createTriOp(
+              spv::OpSelect, type_uint_, vertex_index_in_bounds, vertex_index,
+              const_uint_0_);
+          vertex_index = builder_->createTriOp(
+              spv::OpSelect, type_uint_, load_vertex_index,
+              vertex_index_clamped, vertex_index);
         }
         // Endian-swap the index.
         id_vector_temp_.clear();

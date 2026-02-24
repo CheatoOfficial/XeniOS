@@ -21,9 +21,9 @@
 #include "xenia/gpu/shader_translator.h"
 #include "xenia/gpu/spirv_builder.h"
 #include "xenia/gpu/xenos.h"
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
 #include "xenia/ui/vulkan/vulkan_device.h"
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
 namespace xe {
 namespace ui {
@@ -203,6 +203,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
   struct SystemConstants {
     uint32_t flags;
     uint32_t vertex_index_load_address;
+    uint32_t vertex_index_count;
     xenos::Endian vertex_index_endian;
     int32_t vertex_base_index;
 
@@ -374,7 +375,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
   static constexpr uint32_t kSpirvMagicToolId = 26;
 
   struct Features {
+#if !XE_PLATFORM_APPLE
     explicit Features(const ui::vulkan::VulkanDevice* vulkan_device);
+#endif  // !XE_PLATFORM_APPLE
     explicit Features(bool all = false);
 
     unsigned int spirv_version;
@@ -407,7 +410,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
       bool native_2x_msaa_no_attachments, bool edram_fragment_shader_interlock,
       uint32_t draw_resolution_scale_x = 1,
       uint32_t draw_resolution_scale_y = 1,
+#if !XE_PLATFORM_APPLE
       ui::vulkan::SpirvToolsContext* spirv_tools_context = nullptr,
+#endif  // !XE_PLATFORM_APPLE
       bool spirv_optimize = true)
       : features_(features),
         native_2x_msaa_with_attachments_(native_2x_msaa_with_attachments),
@@ -415,8 +420,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
         edram_fragment_shader_interlock_(edram_fragment_shader_interlock),
         draw_resolution_scale_x_(draw_resolution_scale_x),
         draw_resolution_scale_y_(draw_resolution_scale_y),
+#if !XE_PLATFORM_APPLE
         spirv_tools_context_(spirv_tools_context),
-        spirv_optimize_(spirv_optimize) {}
+#endif  // !XE_PLATFORM_APPLE
+        spirv_optimize_(spirv_optimize) {
+  }
 
   uint64_t GetDefaultVertexShaderModification(
       uint32_t dynamic_addressable_register_count,
@@ -799,7 +807,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
   bool native_2x_msaa_no_attachments_;
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
+#if !XE_PLATFORM_APPLE
   ui::vulkan::SpirvToolsContext* spirv_tools_context_;
+#endif  // !XE_PLATFORM_APPLE
   bool spirv_optimize_;
 
   // For safety with different drivers (even though fragment shader interlock in
@@ -895,6 +905,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
   enum SystemConstantIndex : unsigned int {
     kSystemConstantFlags,
     kSystemConstantVertexIndexLoadAddress,
+    kSystemConstantVertexIndexCount,
     kSystemConstantVertexIndexEndian,
     kSystemConstantVertexBaseIndex,
     kSystemConstantNdcScale,
