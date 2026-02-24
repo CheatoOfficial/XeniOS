@@ -1036,12 +1036,12 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
                          : nullptr;
   bool use_upload_batch = use_blit_upload && upload_batch_command_buffer_ &&
                           command_processor_ && !current_command_buffer;
-  // Reuse the CP submission only before any draws in that submission and only
-  // when no render pass is active, so we don't perturb attachment load/store
-  // behavior by tearing down an encoder mid-pass.
+  // Reuse the CP submission whenever no render pass is active.
+  // Keeping uploads in the same command buffer avoids spawning separate upload
+  // command buffers that would otherwise require conservative cross-CB
+  // synchronization after tile resolves.
   bool use_current_command_buffer =
       use_blit_upload && command_processor_ && current_command_buffer &&
-      command_processor_->current_draw_index() == 0 &&
       !command_processor_->HasActiveRenderEncoder();
   if (use_upload_batch && texture_resolution_scaled) {
     bool needs_base_scaled_range = false;
