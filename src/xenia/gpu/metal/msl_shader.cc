@@ -32,6 +32,14 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/metal/msl_bindings.h"
 
+DEFINE_bool(
+    metal_spirvcross_strip_nocontract_optnone, true,
+    "When using the Metal SPIRV-Cross path, strip [[clang::optnone]] from "
+    "NoContraction float helper wrappers (spvFAdd/spvFSub/spvFMul and matrix "
+    "variants). This avoids severe strict-math performance regressions on some "
+    "Apple GPUs while keeping NoContraction semantics enabled.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 namespace metal {
@@ -129,6 +137,48 @@ bool StoreCachedMslSource(uint64_t cache_key, std::string_view source) {
     return false;
   }
   return true;
+}
+
+size_t ReplaceAllInPlace(std::string& text, std::string_view from,
+                         std::string_view to) {
+  if (from.empty()) {
+    return 0;
+  }
+  size_t replacement_count = 0;
+  size_t position = 0;
+  while ((position = text.find(from, position)) != std::string::npos) {
+    text.replace(position, from.size(), to);
+    position += to.size();
+    ++replacement_count;
+  }
+  return replacement_count;
+}
+
+size_t StripNoContractionOptnoneWrappers(std::string& msl_source) {
+  // Keep this narrowly scoped to the NoContraction helper wrappers that are
+  // known to cause significant slowdowns with strict math.
+  static constexpr std::pair<std::string_view, std::string_view> kPatterns[] = {
+      {"[[clang::optnone]] T spvFAdd(T l, T r)", "T spvFAdd(T l, T r)"},
+      {"[[clang::optnone]] T spvFSub(T l, T r)", "T spvFSub(T l, T r)"},
+      {"[[clang::optnone]] T spvFMul(T l, T r)", "T spvFMul(T l, T r)"},
+      {"[[clang::optnone]] vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, "
+       "matrix<T, Cols, Rows> m)",
+       "vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> "
+       "m)"},
+      {"[[clang::optnone]] vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, "
+       "Rows> m, vec<T, Cols> v)",
+       "vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> "
+       "v)"},
+      {"[[clang::optnone]] matrix<T, RCols, LRows> spvFMulMatrixMatrix("
+       "matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)",
+       "matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, "
+       "matrix<T, RCols, RRows> r)"},
+  };
+  size_t replacements = 0;
+  for (const auto& pattern : kPatterns) {
+    replacements += ReplaceAllInPlace(msl_source, pattern.first, pattern.second);
+  }
+  return replacements;
 }
 
 uint64_t GetMslSourceCacheKey(const MslShader::MslTranslation& translation,
@@ -1054,6 +1104,14 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   if (msl_source_.empty()) {
     XELOGE("MslShader: SPIRV-Cross compilation produced empty output");
     return false;
+  }
+  if (cvars::metal_spirvcross_strip_nocontract_optnone) {
+    size_t stripped = StripNoContractionOptnoneWrappers(msl_source_);
+    if (stripped != 0) {
+      XELOGD("MslShader: Stripped {} NoContraction optnone wrapper signature(s) "
+             "for shader {:016X}",
+             stripped, shader().ucode_data_hash());
+    }
   }
 
   // Get the entry point name that SPIRV-Cross chose.
