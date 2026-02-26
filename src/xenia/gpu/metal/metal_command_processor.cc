@@ -1046,6 +1046,13 @@ MetalCommandProcessor::DrawRingBuffers::~DrawRingBuffers() {
 }
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
+MetalCommandProcessor::SpirvArgumentBufferPage::~SpirvArgumentBufferPage() {
+  if (buffer) {
+    buffer->release();
+    buffer = nullptr;
+  }
+}
+
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
                                                      uint32_t length) {
   if (shared_memory_) {
@@ -1674,6 +1681,8 @@ void MetalCommandProcessor::PrepareForWait() {
       ScheduleSpirvUniformBufferRelease(current_command_buffer_);
     }
 #endif
+    ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
+    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     if (wait_shared_event_) {
       wait_shared_event_->waitUntilSignaledValue(
@@ -1759,6 +1768,8 @@ void MetalCommandProcessor::ShutdownContext() {
       ScheduleSpirvUniformBufferRelease(current_command_buffer_);
     }
 #endif
+    ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
+    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     if (wait_shared_event_) {
       wait_shared_event_->waitUntilSignaledValue(
@@ -1825,6 +1836,13 @@ void MetalCommandProcessor::ShutdownContext() {
   }
   draw_ring_pool_cv_.notify_all();
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
+  {
+    std::lock_guard<std::mutex> lock(spirv_argbuf_mutex_);
+    command_buffer_spirv_argbuf_pages_.clear();
+    pending_spirv_argbuf_releases_.clear();
+    spirv_argbuf_pool_.clear();
+  }
 
   if (texture_cache_) {
     texture_cache_->Shutdown();
@@ -2468,6 +2486,8 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
       ScheduleSpirvUniformBufferRelease(current_command_buffer_);
     }
 #endif
+    ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
+    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;
@@ -3027,7 +3047,25 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         metal_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
   if (texture_cache_ && used_texture_mask) {
+    bool restart_render_encoder_after_texture_request = false;
+    if (shared_memory_write_status_ ==
+        SharedMemoryWriteStatus::kWrittenByTileResolve) {
+      // RequestTextures may encode uploads into command buffers. Keep tile
+      // resolve writes and uploads in the same command buffer by ending only the
+      // render encoder before requesting textures.
+      EndRenderEncoder();
+      restart_render_encoder_after_texture_request = true;
+      shared_memory_write_status_ = SharedMemoryWriteStatus::kClean;
+    }
     texture_cache_->RequestTextures(used_texture_mask);
+    if (restart_render_encoder_after_texture_request) {
+      BeginCommandBuffer();
+      if (!current_command_buffer_ || !current_render_encoder_) {
+        XELOGE(
+            "IssueDraw: failed to restart render encoder after tile resolve");
+        return false;
+      }
+    }
   }
 
   struct VertexBindingRange {
@@ -4192,7 +4230,25 @@ bool MetalCommandProcessor::IssueDrawMsl(
     used_texture_mask |= msl_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
   if (texture_cache_ && used_texture_mask) {
+    bool restart_render_encoder_after_texture_request = false;
+    if (shared_memory_write_status_ ==
+        SharedMemoryWriteStatus::kWrittenByTileResolve) {
+      // RequestTextures may encode uploads into command buffers. Keep tile
+      // resolve writes and uploads in the same command buffer by ending only the
+      // render encoder before requesting textures.
+      EndRenderEncoder();
+      restart_render_encoder_after_texture_request = true;
+      shared_memory_write_status_ = SharedMemoryWriteStatus::kClean;
+    }
     texture_cache_->RequestTextures(used_texture_mask);
+    if (restart_render_encoder_after_texture_request) {
+      BeginCommandBuffer();
+      if (!current_command_buffer_ || !current_render_encoder_) {
+        XELOGE(
+            "SPIRV-Cross: failed to restart render encoder after tile resolve");
+        return false;
+      }
+    }
   }
 
   // Ensure shared-memory ranges used by translated shaders are synchronized.
@@ -4439,16 +4495,24 @@ bool MetalCommandProcessor::IssueDrawMsl(
               &spirv_tessellation_constants_,
               sizeof(SpirvShaderTranslator::TessellationConstants));
 
+  // Rebind all resources on pipeline change and dedupe binds otherwise.
+  const bool msl_bind_dedupe = !msl_pipeline_changed;
+
   // Bind shared memory buffer at msl_buffer 0.
   MTL::Buffer* shared_mem_buffer =
       shared_memory_ ? shared_memory_->GetBuffer() : nullptr;
-  MTL::ResourceUsage shared_memory_usage =
-      MTL::ResourceUsageRead | MTL::ResourceUsageWrite;
-  if (shared_mem_buffer) {
+  MTL::ResourceUsage shared_memory_usage = MTL::ResourceUsageRead;
+  if (memexport_used) {
+    shared_memory_usage |= MTL::ResourceUsageWrite;
+  }
+  if (!msl_bind_dedupe || msl_bound_shared_memory_buffer_ != shared_mem_buffer) {
     current_render_encoder_->setVertexBuffer(shared_mem_buffer, 0,
                                              MslBufferIndex::kSharedMemory);
     current_render_encoder_->setFragmentBuffer(shared_mem_buffer, 0,
                                                MslBufferIndex::kSharedMemory);
+    msl_bound_shared_memory_buffer_ = shared_mem_buffer;
+  }
+  if (shared_mem_buffer) {
     UseRenderEncoderResource(shared_mem_buffer, shared_memory_usage);
   }
 
@@ -4456,8 +4520,9 @@ bool MetalCommandProcessor::IssueDrawMsl(
   // FSI/EDRAM is disabled on this path (fragment_shader_sample_interlock =
   // false), so no shader should reference it, but binding a dummy prevents
   // GPU faults if any code path unexpectedly accesses buffer(30).
-  if (null_buffer_) {
+  if (!msl_bind_dedupe || msl_bound_null_buffer_ != null_buffer_) {
     current_render_encoder_->setFragmentBuffer(null_buffer_, 0, 30);
+    msl_bound_null_buffer_ = null_buffer_;
   }
 
   // Bind uniforms buffer at the appropriate indices.
@@ -4512,6 +4577,138 @@ bool MetalCommandProcessor::IssueDrawMsl(
       MslBufferIndex::kTessellationConstants);
 
   UseRenderEncoderResource(uniforms_buffer_, MTL::ResourceUsageRead);
+
+  const bool vertex_uses_argbuf =
+      vertex_translation && vertex_translation->uses_argument_buffers();
+  const bool pixel_uses_argbuf =
+      pixel_translation && pixel_translation->uses_argument_buffers();
+
+  auto bind_msl_argument_buffer = [&](MslShader* shader,
+                                      MslShader::MslTranslation* translation,
+                                      bool is_pixel_stage) -> bool {
+    if (!shader || !translation || !translation->uses_argument_buffers() ||
+        !texture_cache_) {
+      return true;
+    }
+
+    MTL::ArgumentEncoder* arg_encoder = translation->argument_encoder();
+    uint32_t encoded_length = translation->argument_encoder_encoded_length();
+    if (!arg_encoder || encoded_length == 0) {
+      return true;
+    }
+
+    const auto& texture_bindings = shader->GetTextureBindingsAfterTranslation();
+    const auto& texture_binding_indices =
+        translation->texture_binding_indices_for_msl_slots();
+    uint32_t texture_count = std::min(uint32_t(texture_binding_indices.size()),
+                                      MslTextureIndex::kMaxPerStage);
+    std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage> textures = {};
+
+    MetalTextureCache* metal_texture_cache = texture_cache_.get();
+    for (uint32_t slot = 0; slot < texture_count; ++slot) {
+      MTL::Texture* texture = nullptr;
+      int32_t texture_binding_index = texture_binding_indices[slot];
+      if (texture_binding_index >= 0 &&
+          size_t(texture_binding_index) < texture_bindings.size()) {
+        const auto& binding = texture_bindings[size_t(texture_binding_index)];
+        texture = texture_cache_->GetTextureForBinding(
+            binding.fetch_constant, binding.dimension, binding.is_signed);
+        if (!texture) {
+          switch (binding.dimension) {
+            case xenos::FetchOpDimension::k3DOrStacked:
+              texture = metal_texture_cache->GetNullTexture3D();
+              break;
+            case xenos::FetchOpDimension::kCube:
+              texture = metal_texture_cache->GetNullTextureCube();
+              break;
+            default:
+              texture = metal_texture_cache->GetNullTexture2D();
+              break;
+          }
+        }
+      } else {
+        texture = metal_texture_cache->GetNullTexture2D();
+      }
+      textures[slot] = texture;
+      if (texture) {
+        UseRenderEncoderResource(texture, MTL::ResourceUsageRead);
+      }
+    }
+
+    const auto& sampler_bindings = shader->GetSamplerBindingsAfterTranslation();
+    const auto& sampler_binding_indices =
+        translation->sampler_binding_indices_for_msl_slots();
+    uint32_t sampler_count = std::min(uint32_t(sampler_binding_indices.size()),
+                                      MslSamplerIndex::kMaxPerStage);
+    std::array<const MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
+        samplers = {};
+    for (uint32_t smp_index = 0; smp_index < sampler_count; ++smp_index) {
+      MTL::SamplerState* sampler_state = null_sampler_;
+      uint32_t sampler_binding_index = sampler_binding_indices[smp_index];
+      if (sampler_binding_index < sampler_bindings.size()) {
+        auto parameters = texture_cache_->GetSamplerParameters(
+            sampler_bindings[sampler_binding_index]);
+        sampler_state = texture_cache_->GetOrCreateSampler(parameters);
+        if (!sampler_state) {
+          sampler_state = null_sampler_;
+        }
+      }
+      samplers[smp_index] = sampler_state;
+    }
+
+    MTL::Buffer* argbuf_buffer = nullptr;
+    NS::UInteger argbuf_offset = 0;
+    if (!AcquireSpirvArgumentBufferSlice(
+            encoded_length, translation->argument_encoder_alignment(),
+            &argbuf_buffer, &argbuf_offset)) {
+      XELOGE("SPIRV-Cross: Failed to allocate argument buffer slice ({} bytes)",
+             encoded_length);
+      return false;
+    }
+
+    arg_encoder->setArgumentBuffer(argbuf_buffer, argbuf_offset);
+    if (texture_count) {
+      arg_encoder->setTextures(textures.data(),
+                               NS::Range::Make(MslTextureIndex::kBase,
+                                               texture_count));
+    }
+    if (sampler_count) {
+      arg_encoder->setSamplerStates(
+          samplers.data(),
+          NS::Range::Make(MslArgumentBufferId::kSamplerBase, sampler_count));
+    }
+
+    if (is_pixel_stage) {
+      if (argbuf_buffer != msl_bound_pixel_argument_buffer_) {
+        current_render_encoder_->setFragmentBuffer(
+            argbuf_buffer, 0,
+            MslBufferIndex::kArgumentBufferTexturesSamplers);
+        msl_bound_pixel_argument_buffer_ = argbuf_buffer;
+      }
+      current_render_encoder_->setFragmentBufferOffset(
+          argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+    } else {
+      if (argbuf_buffer != msl_bound_vertex_argument_buffer_) {
+        current_render_encoder_->setVertexBuffer(
+            argbuf_buffer, 0,
+            MslBufferIndex::kArgumentBufferTexturesSamplers);
+        msl_bound_vertex_argument_buffer_ = argbuf_buffer;
+      }
+      current_render_encoder_->setVertexBufferOffset(
+          argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+    }
+
+    UseRenderEncoderResource(argbuf_buffer, MTL::ResourceUsageRead);
+    return true;
+  };
+  if (vertex_uses_argbuf &&
+      !bind_msl_argument_buffer(msl_vertex_shader, vertex_translation, false)) {
+    return false;
+  }
+  if (pixel_uses_argbuf &&
+      !bind_msl_argument_buffer(msl_pixel_shader, pixel_translation, true)) {
+    return false;
+  }
 
   // Bind textures and samplers directly.
   auto bind_msl_textures = [&](MslShader* shader,
@@ -4636,10 +4833,14 @@ bool MetalCommandProcessor::IssueDrawMsl(
     }
   };
 
-  bind_msl_textures(msl_vertex_shader, vertex_translation, false);
-  bind_msl_textures(msl_pixel_shader, pixel_translation, true);
-  bind_msl_samplers(msl_vertex_shader, vertex_translation, false);
-  bind_msl_samplers(msl_pixel_shader, pixel_translation, true);
+  if (!vertex_uses_argbuf) {
+    bind_msl_textures(msl_vertex_shader, vertex_translation, false);
+    bind_msl_samplers(msl_vertex_shader, vertex_translation, false);
+  }
+  if (!pixel_uses_argbuf) {
+    bind_msl_textures(msl_pixel_shader, pixel_translation, true);
+    bind_msl_samplers(msl_pixel_shader, pixel_translation, true);
+  }
 
   // =====================================================================
   // Draw dispatch — native Metal encoder calls (no IRRuntime).
@@ -5214,6 +5415,21 @@ void MetalCommandProcessor::EndRenderEncoder() {
   msl_bound_pixel_texture_count_ = 0;
   msl_bound_vertex_sampler_count_ = 0;
   msl_bound_pixel_sampler_count_ = 0;
+  msl_bound_vertex_textures_.fill(nullptr);
+  msl_bound_pixel_textures_.fill(nullptr);
+  msl_bound_vertex_samplers_.fill(nullptr);
+  msl_bound_pixel_samplers_.fill(nullptr);
+  msl_bound_vertex_argument_buffer_ = nullptr;
+  msl_bound_pixel_argument_buffer_ = nullptr;
+  msl_bound_shared_memory_buffer_ = nullptr;
+  msl_bound_null_buffer_ = nullptr;
+  msl_bound_pipeline_state_ = nullptr;
+  msl_viewport_valid_ = false;
+  msl_scissor_valid_ = false;
+  msl_rasterizer_state_valid_ = false;
+  msl_depth_stencil_state_ = nullptr;
+  msl_stencil_reference_valid_ = false;
+  msl_stencil_reference_ = 0;
   ResetRenderEncoderResourceUsage();
 }
 
@@ -5632,6 +5848,115 @@ void MetalCommandProcessor::ScheduleSpirvUniformBufferRelease(
 }
 #endif  // !METAL_SHADER_CONVERTER_AVAILABLE
 
+bool MetalCommandProcessor::AcquireSpirvArgumentBufferSlice(
+    uint32_t bytes, uint32_t alignment, MTL::Buffer** buffer_out,
+    NS::UInteger* offset_out) {
+  if (!buffer_out || !offset_out) {
+    return false;
+  }
+  *buffer_out = nullptr;
+  *offset_out = 0;
+  if (!device_ || !current_command_buffer_ || bytes == 0) {
+    return false;
+  }
+
+  const size_t align = std::max<size_t>(1, size_t(alignment));
+  auto align_up = [](size_t value, size_t alignment) -> size_t {
+    return ((value + alignment - 1) / alignment) * alignment;
+  };
+
+  if (!command_buffer_spirv_argbuf_pages_.empty()) {
+    auto& page = command_buffer_spirv_argbuf_pages_.back();
+    const size_t aligned_offset = align_up(page->offset, align);
+    if (aligned_offset + bytes <= page->bytes) {
+      page->offset = aligned_offset + bytes;
+      *buffer_out = page->buffer;
+      *offset_out = NS::UInteger(aligned_offset);
+      return *buffer_out != nullptr;
+    }
+  }
+
+  constexpr size_t kDefaultSpirvArgumentBufferPageBytes = 1024 * 1024;
+  const size_t required_page_bytes = align_up(bytes, align);
+  const size_t page_bytes =
+      std::max(kDefaultSpirvArgumentBufferPageBytes, required_page_bytes);
+
+  std::shared_ptr<SpirvArgumentBufferPage> page;
+  {
+    std::lock_guard<std::mutex> lock(spirv_argbuf_mutex_);
+    for (auto it = spirv_argbuf_pool_.begin(); it != spirv_argbuf_pool_.end();
+         ++it) {
+      if ((*it) && (*it)->bytes >= page_bytes) {
+        page = *it;
+        spirv_argbuf_pool_.erase(it);
+        break;
+      }
+    }
+  }
+  if (!page) {
+    page = std::make_shared<SpirvArgumentBufferPage>();
+    page->bytes = page_bytes;
+    page->buffer =
+        device_->newBuffer(page_bytes, MTL::ResourceStorageModeShared);
+    if (!page->buffer) {
+      return false;
+    }
+  }
+  page->offset = 0;
+  command_buffer_spirv_argbuf_pages_.push_back(page);
+
+  const size_t aligned_offset = align_up(page->offset, align);
+  if (aligned_offset + bytes > page->bytes) {
+    return false;
+  }
+  page->offset = aligned_offset + bytes;
+  *buffer_out = page->buffer;
+  *offset_out = NS::UInteger(aligned_offset);
+  return *buffer_out != nullptr;
+}
+
+void MetalCommandProcessor::ScheduleSpirvArgumentBufferRelease(
+    MTL::CommandBuffer* command_buffer) {
+  if (!command_buffer || command_buffer_spirv_argbuf_pages_.empty()) {
+    return;
+  }
+
+  std::vector<std::shared_ptr<SpirvArgumentBufferPage>> pages;
+  pages.swap(command_buffer_spirv_argbuf_pages_);
+
+  bool add_handler = false;
+  {
+    std::lock_guard<std::mutex> lock(spirv_argbuf_mutex_);
+    auto& pending = pending_spirv_argbuf_releases_[command_buffer];
+    add_handler = pending.empty();
+    pending.reserve(pending.size() + pages.size());
+    for (auto& page : pages) {
+      pending.push_back(std::move(page));
+    }
+  }
+
+  if (add_handler) {
+    pending_completion_handlers_.fetch_add(1, std::memory_order_relaxed);
+    command_buffer->addCompletedHandler(
+        [this](MTL::CommandBuffer* completed_cmd) {
+          {
+            std::lock_guard<std::mutex> lock(spirv_argbuf_mutex_);
+            auto it = pending_spirv_argbuf_releases_.find(completed_cmd);
+            if (it != pending_spirv_argbuf_releases_.end()) {
+              for (auto& page : it->second) {
+                if (page) {
+                  page->offset = 0;
+                  spirv_argbuf_pool_.push_back(std::move(page));
+                }
+              }
+              pending_spirv_argbuf_releases_.erase(it);
+            }
+          }
+          pending_completion_handlers_.fetch_sub(1, std::memory_order_relaxed);
+        });
+  }
+}
+
 void MetalCommandProcessor::EndCommandBuffer() {
   EndRenderEncoder();
 
@@ -5643,6 +5968,8 @@ void MetalCommandProcessor::EndCommandBuffer() {
       ScheduleSpirvUniformBufferRelease(current_command_buffer_);
     }
 #endif
+    ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
+    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;

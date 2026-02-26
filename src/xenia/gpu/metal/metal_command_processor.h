@@ -181,6 +181,10 @@ class MetalCommandProcessor : public CommandProcessor {
   bool EnsureSpirvUniformBufferCapacity();
   void ScheduleSpirvUniformBufferRelease(MTL::CommandBuffer* command_buffer);
 #endif  // !METAL_SHADER_CONVERTER_AVAILABLE
+  bool AcquireSpirvArgumentBufferSlice(uint32_t bytes, uint32_t alignment,
+                                       MTL::Buffer** buffer_out,
+                                       NS::UInteger* offset_out);
+  void ScheduleSpirvArgumentBufferRelease(MTL::CommandBuffer* command_buffer);
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
   // Pipeline state management (MSC path)
@@ -268,6 +272,14 @@ class MetalCommandProcessor : public CommandProcessor {
   static constexpr size_t kNullBufferSize = 4096;
   static constexpr size_t kCbvSizeBytes = 4096;
   static constexpr size_t kUniformsBytesPerTable = 6 * kCbvSizeBytes;
+
+  struct SpirvArgumentBufferPage {
+    MTL::Buffer* buffer = nullptr;
+    size_t bytes = 0;
+    size_t offset = 0;
+
+    ~SpirvArgumentBufferPage();
+  };
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
   bool EnsureDepthOnlyPixelShader();
@@ -609,6 +621,13 @@ class MetalCommandProcessor : public CommandProcessor {
   dispatch_semaphore_t spirv_uniforms_available_semaphore_ = nullptr;
   bool spirv_uniforms_pool_initialized_ = false;
 #endif  // !METAL_SHADER_CONVERTER_AVAILABLE
+  std::vector<std::shared_ptr<SpirvArgumentBufferPage>> spirv_argbuf_pool_;
+  std::vector<std::shared_ptr<SpirvArgumentBufferPage>>
+      command_buffer_spirv_argbuf_pages_;
+  std::unordered_map<MTL::CommandBuffer*,
+                     std::vector<std::shared_ptr<SpirvArgumentBufferPage>>>
+      pending_spirv_argbuf_releases_;
+  std::mutex spirv_argbuf_mutex_;
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
   // IR Converter runtime buffers for shader resource binding (MSC path)
@@ -650,6 +669,34 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_bound_pixel_texture_count_ = 0;
   uint32_t msl_bound_vertex_sampler_count_ = 0;
   uint32_t msl_bound_pixel_sampler_count_ = 0;
+  std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
+      msl_bound_vertex_textures_{};
+  std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
+      msl_bound_pixel_textures_{};
+  std::array<MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
+      msl_bound_vertex_samplers_{};
+  std::array<MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
+      msl_bound_pixel_samplers_{};
+  MTL::Buffer* msl_bound_vertex_argument_buffer_ = nullptr;
+  MTL::Buffer* msl_bound_pixel_argument_buffer_ = nullptr;
+  MTL::Buffer* msl_bound_shared_memory_buffer_ = nullptr;
+  MTL::Buffer* msl_bound_null_buffer_ = nullptr;
+  MTL::RenderPipelineState* msl_bound_pipeline_state_ = nullptr;
+  bool msl_viewport_valid_ = false;
+  MTL::Viewport msl_viewport_ = {};
+  bool msl_scissor_valid_ = false;
+  MTL::ScissorRect msl_scissor_ = {};
+  bool msl_rasterizer_state_valid_ = false;
+  MTL::CullMode msl_cull_mode_ = MTL::CullModeNone;
+  MTL::Winding msl_winding_ = MTL::WindingClockwise;
+  MTL::TriangleFillMode msl_fill_mode_ = MTL::TriangleFillModeFill;
+  float msl_depth_bias_constant_ = 0.0f;
+  float msl_depth_bias_slope_ = 0.0f;
+  float msl_depth_bias_clamp_ = 0.0f;
+  MTL::DepthClipMode msl_depth_clip_mode_ = MTL::DepthClipModeClip;
+  MTL::DepthStencilState* msl_depth_stencil_state_ = nullptr;
+  bool msl_stencil_reference_valid_ = false;
+  uint32_t msl_stencil_reference_ = 0;
 
   // Fixed-function dynamic state cached per render encoder.
   float ff_blend_factor_[4] = {0.0f, 0.0f, 0.0f, 0.0f};

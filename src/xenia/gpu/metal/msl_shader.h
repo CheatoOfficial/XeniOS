@@ -46,6 +46,14 @@ class MslShader : public SpirvShader {
     const std::string& msl_source() const { return msl_source_; }
     const std::string& entry_point_name() const { return entry_point_name_; }
     bool is_valid() const { return metal_function_ != nullptr; }
+    bool uses_argument_buffers() const { return uses_argument_buffers_; }
+    MTL::ArgumentEncoder* argument_encoder() const { return argument_encoder_; }
+    uint32_t argument_encoder_alignment() const {
+      return argument_encoder_alignment_;
+    }
+    uint32_t argument_encoder_encoded_length() const {
+      return argument_encoder_encoded_length_;
+    }
     const std::vector<int32_t>& texture_binding_indices_for_msl_slots() const {
       return texture_binding_indices_for_msl_slots_;
     }
@@ -56,6 +64,10 @@ class MslShader : public SpirvShader {
    private:
     MTL::Library* metal_library_ = nullptr;
     MTL::Function* metal_function_ = nullptr;
+    bool uses_argument_buffers_ = false;
+    MTL::ArgumentEncoder* argument_encoder_ = nullptr;
+    uint32_t argument_encoder_alignment_ = 0;
+    uint32_t argument_encoder_encoded_length_ = 0;
     std::string msl_source_;
     std::string entry_point_name_;
     std::vector<int32_t> texture_binding_indices_for_msl_slots_;

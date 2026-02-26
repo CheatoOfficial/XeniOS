@@ -39,6 +39,9 @@ constexpr uint32_t kBoolLoopConstants = 4;
 constexpr uint32_t kFetchConstants = 5;
 constexpr uint32_t kClipPlaneConstants = 6;
 constexpr uint32_t kTessellationConstants = 7;
+// Buffer index for the shared argument buffer (textures + samplers) when
+// SPIRV-Cross argument buffers are enabled.
+constexpr uint32_t kArgumentBufferTexturesSamplers = 8;
 
 // Total constant buffer slots used, for computing uniform buffer offsets.
 constexpr uint32_t kConstantBufferCount = 8;
@@ -68,6 +71,13 @@ constexpr uint32_t kBase = 0;
 // Maximum samplers per stage.
 constexpr uint32_t kMaxPerStage = 16;
 }  // namespace MslSamplerIndex
+
+// Resource IDs used within the argument buffer `[[id(N)]]` namespace when
+// SPIRV-Cross argument buffers are enabled.
+namespace MslArgumentBufferId {
+// Reserve [0, kSamplerBase) for textures, and place samplers after.
+constexpr uint32_t kSamplerBase = MslTextureIndex::kMaxPerStage;
+}  // namespace MslArgumentBufferId
 
 }  // namespace metal
 }  // namespace gpu

@@ -41,6 +41,8 @@ namespace {
 constexpr uint32_t kMslSourceCacheMagic = 0x5843534D;  // 'MSCX'
 constexpr uint32_t kMslSourceCacheVersion = 1;
 constexpr uint32_t kMslSourceCacheMaxBytes = 16 * 1024 * 1024;
+// Bump when cache-key semantics change to force invalidation of stale entries.
+constexpr uint32_t kMslSourceCacheSchemaVersion = 4;
 
 std::mutex g_msl_source_cache_mutex;
 std::filesystem::path g_msl_source_cache_directory;
@@ -135,9 +137,19 @@ uint64_t GetMslSourceCacheKey(const MslShader::MslTranslation& translation,
                               bool ios_support_base_vertex_instance,
                               bool emulate_cube_array,
                               bool ios_use_simdgroup_functions) {
+                              bool ios_use_simdgroup_functions,
+                              bool use_argument_buffers,
+                              uint8_t argument_buffers_tier) {
+  uint64_t translated_spirv_hash = 0;
+  const auto& translated_spirv = translation.translated_binary();
+  if (!translated_spirv.empty()) {
+    translated_spirv_hash =
+        XXH3_64bits(translated_spirv.data(), translated_spirv.size());
+  }
   struct KeyData {
     uint64_t shader_hash;
     uint64_t modification;
+    uint64_t translated_spirv_hash;
     uint32_t stage;
     uint8_t is_ios;
     uint8_t msl_major;
@@ -145,10 +157,14 @@ uint64_t GetMslSourceCacheKey(const MslShader::MslTranslation& translation,
     uint8_t ios_support_base_vertex_instance;
     uint8_t emulate_cube_array;
     uint8_t ios_use_simdgroup_functions;
-    uint16_t reserved;
+    uint8_t use_argument_buffers;
+    uint8_t argument_buffers_tier;
+    uint16_t reserved0;
+    uint32_t cache_schema_version;
   } key_data = {};
   key_data.shader_hash = translation.shader().ucode_data_hash();
   key_data.modification = translation.modification();
+  key_data.translated_spirv_hash = translated_spirv_hash;
   key_data.stage = static_cast<uint32_t>(translation.shader().type());
   key_data.is_ios = is_ios ? 1 : 0;
   key_data.msl_major = static_cast<uint8_t>(msl_major);
@@ -157,6 +173,9 @@ uint64_t GetMslSourceCacheKey(const MslShader::MslTranslation& translation,
       ios_support_base_vertex_instance ? 1 : 0;
   key_data.emulate_cube_array = emulate_cube_array ? 1 : 0;
   key_data.ios_use_simdgroup_functions = ios_use_simdgroup_functions ? 1 : 0;
+  key_data.use_argument_buffers = use_argument_buffers ? 1 : 0;
+  key_data.argument_buffers_tier = argument_buffers_tier;
+  key_data.cache_schema_version = kMslSourceCacheSchemaVersion;
   return XXH3_64bits(&key_data, sizeof(key_data));
 }
 
@@ -215,6 +234,10 @@ Shader::Translation* MslShader::CreateTranslationInstance(
 }
 
 MslShader::MslTranslation::~MslTranslation() {
+  if (argument_encoder_) {
+    argument_encoder_->release();
+    argument_encoder_ = nullptr;
+  }
   if (metal_function_) {
     metal_function_->release();
     metal_function_ = nullptr;
@@ -372,7 +395,7 @@ static void DumpMslResolveFailureSource(const std::string& msl_source,
 
 static void AddResourceBindings(
     spirv_cross::CompilerMSL& compiler, spv::ExecutionModel stage,
-    uint64_t shader_hash,
+    uint64_t shader_hash, bool use_argument_buffers,
     std::vector<uint32_t>* sampler_spv_bindings_msl_order) {
   using MSLBinding = spirv_cross::MSLResourceBinding;
 
@@ -442,6 +465,18 @@ static void AddResourceBindings(
   //         samplers in step 2).
   for (uint32_t set = SpirvSets::kTexturesVertex;
        set <= SpirvSets::kTexturesPixel; ++set) {
+    if (use_argument_buffers) {
+      // Map the argument buffer pointer itself to a Metal buffer slot.
+      MSLBinding argbuf_binding;
+      argbuf_binding.stage = stage;
+      argbuf_binding.desc_set = set;
+      argbuf_binding.binding = spirv_cross::kArgumentBufferBinding;
+      argbuf_binding.msl_buffer =
+          MslBufferIndex::kArgumentBufferTexturesSamplers;
+      argbuf_binding.msl_texture = 0;
+      argbuf_binding.msl_sampler = 0;
+      compiler.add_msl_resource_binding(argbuf_binding);
+    }
     for (uint32_t i = 0; i < MslTextureIndex::kMaxPerStage; ++i) {
       MSLBinding binding;
       binding.stage = stage;
@@ -526,7 +561,9 @@ static void AddResourceBindings(
     binding.binding = spv_binding;
     binding.msl_buffer = 0;
     binding.msl_texture = MslTextureIndex::kBase;
-    binding.msl_sampler = MslBindings::kSamplerBase + sampler_msl_index;
+    binding.msl_sampler = (use_argument_buffers ? MslArgumentBufferId::kSamplerBase
+                                                : MslBindings::kSamplerBase) +
+                          sampler_msl_index;
     compiler.add_msl_resource_binding(binding);
     if (sampler_spv_bindings_msl_order) {
       sampler_spv_bindings_msl_order->push_back(spv_binding);
@@ -551,6 +588,13 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
     XELOGE("MslShader: No Metal device provided");
     return false;
   }
+  if (argument_encoder_) {
+    argument_encoder_->release();
+    argument_encoder_ = nullptr;
+  }
+  uses_argument_buffers_ = false;
+  argument_encoder_alignment_ = 0;
+  argument_encoder_encoded_length_ = 0;
 
   const std::vector<uint8_t>& spirv_data = translated_binary();
   if (spirv_data.empty()) {
@@ -634,11 +678,25 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   }
   opts.msl_version =
       spirv_cross::CompilerMSL::Options::make_msl_version(msl_major, msl_minor);
-  // Use direct buffer/texture/sampler bindings (no argument buffers).
-  // This is simpler and avoids the indirection overhead of the old
-  // IRDescriptorTable model. Can be switched to argument buffers later
-  // if CPU binding overhead becomes a bottleneck.
-  opts.argument_buffers = false;
+  // Use argument buffers for SPIRV-Cross texture/sampler bindings to reduce
+  // per-draw CPU binding overhead.
+  uses_argument_buffers_ = true;
+  opts.argument_buffers = uses_argument_buffers_;
+  uint8_t argument_buffers_tier_key = 0;
+  if (uses_argument_buffers_) {
+    if (device->argumentBuffersSupport() >= MTL::ArgumentBuffersTier2) {
+      opts.argument_buffers_tier =
+          spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
+      argument_buffers_tier_key = 1;
+    } else {
+      opts.argument_buffers_tier =
+          spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier1;
+      argument_buffers_tier_key = 0;
+    }
+    // Keep argument-buffer layouts stable even if SPIRV-Cross marks specific
+    // resources inactive in some variants.
+    opts.force_active_argument_buffer_resources = true;
+  }
   // Match iOS feature toggles to documented GPU-family availability.
   opts.ios_support_base_vertex_instance = ios_supports_base_vertex_instance;
   const bool emulate_cube_array = is_ios && !ios_supports_cube_array;
@@ -656,8 +714,15 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   opts.pad_fragment_output_components = false;
   const uint64_t msl_source_cache_key = GetMslSourceCacheKey(
       *this, is_ios, msl_major, msl_minor, ios_supports_base_vertex_instance,
-      emulate_cube_array, ios_use_simdgroup_functions);
+      emulate_cube_array, ios_use_simdgroup_functions, uses_argument_buffers_,
+      argument_buffers_tier_key);
   compiler.set_msl_options(opts);
+  if (uses_argument_buffers_) {
+    // Keep shared memory/storage buffers and constant buffers as discrete
+    // bindings; put textures + samplers in argument buffers.
+    compiler.add_discrete_descriptor_set(SpirvSets::kSharedMemoryAndEdram);
+    compiler.add_discrete_descriptor_set(SpirvSets::kConstants);
+  }
 
   // Remap SPIR-V descriptor sets/bindings to Metal buffer/texture/sampler
   // indices.
@@ -718,6 +783,7 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   texture_binding_indices_for_msl_slots_.clear();
   std::vector<uint32_t> sampler_spv_bindings_msl_order;
   AddResourceBindings(compiler, execution_model, shader().ucode_data_hash(),
+                      uses_argument_buffers_,
                       &sampler_spv_bindings_msl_order);
   auto resources = compiler.get_shader_resources();
   // Domain shaders use tessellation-evaluation execution model, but still use
@@ -915,6 +981,7 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   }
 
   // Validate resource counts against Metal limits before compilation.
+  bool has_argument_buffer_resources = false;
   {
     bool expects_tessellation_constants = false;
     for (const auto& uniform_buffer : resources.uniform_buffers) {
@@ -930,6 +997,7 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
     size_t texture_count =
         resources.sampled_images.size() + resources.separate_images.size();
     size_t sampler_count = resources.separate_samplers.size();
+    has_argument_buffer_resources = (texture_count + sampler_count) != 0;
     XELOGD(
         "MslShader: Resource summary shader={:016X} stage={} textures={} "
         "samplers={} uniform_buffers={} tessellation_cbv_expected={}",
@@ -1197,6 +1265,29 @@ bool MslShader::MslTranslation::CompileToMsl(MTL::Device* device, bool is_ios) {
   }
   function_resolve_ms =
       to_ms(std::chrono::steady_clock::now() - function_resolve_begin);
+
+  if (uses_argument_buffers_ && has_argument_buffer_resources) {
+    argument_encoder_ = metal_function_->newArgumentEncoder(
+        MslBufferIndex::kArgumentBufferTexturesSamplers);
+    if (argument_encoder_) {
+      argument_encoder_alignment_ =
+          static_cast<uint32_t>(argument_encoder_->alignment());
+      argument_encoder_encoded_length_ =
+          static_cast<uint32_t>(argument_encoder_->encodedLength());
+    } else {
+      XELOGE("MslShader: Failed to create argument encoder for shader {:016X}",
+             shader().ucode_data_hash());
+      metal_function_->release();
+      metal_function_ = nullptr;
+      metal_library_->release();
+      metal_library_ = nullptr;
+      pool->release();
+      return false;
+    }
+  } else {
+    argument_encoder_alignment_ = 0;
+    argument_encoder_encoded_length_ = 0;
+  }
 
   pool->release();
 
