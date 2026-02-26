@@ -168,6 +168,11 @@ class MetalCommandProcessor : public CommandProcessor {
   // Command buffer management
   void BeginCommandBuffer();
   void EndCommandBuffer();
+  // Reset per-render-encoder cached bindings/state for the SPIRV-Cross (MSL)
+  // path. Safe to call when no render encoder is active.
+  void ResetMslRenderEncoderStateCache();
+  // Reset cross-encoder SPIRV-Cross reuse caches at command-buffer boundaries.
+  void ResetMslCrossEncoderReuseCaches();
   bool CanEndSubmissionImmediately();
   void WaitForPendingCompletionHandlers();
   void ProcessCompletedSubmissions();

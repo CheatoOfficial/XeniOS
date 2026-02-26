@@ -5485,18 +5485,6 @@ void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
   msl_bound_vertex_argument_buffer_generation_ = 0;
   msl_bound_pixel_argument_buffer_generation_ = 0;
   msl_bound_null_buffer_ = nullptr;
-  msl_last_argbuf_vertex_textures_.fill(nullptr);
-  msl_last_argbuf_vertex_texture_count_ = 0;
-  msl_last_argbuf_vertex_samplers_.fill(nullptr);
-  msl_last_argbuf_vertex_sampler_count_ = 0;
-  msl_last_argbuf_vertex_buffer_ = nullptr;
-  msl_last_argbuf_vertex_offset_ = 0;
-  msl_last_argbuf_pixel_textures_.fill(nullptr);
-  msl_last_argbuf_pixel_texture_count_ = 0;
-  msl_last_argbuf_pixel_samplers_.fill(nullptr);
-  msl_last_argbuf_pixel_sampler_count_ = 0;
-  msl_last_argbuf_pixel_buffer_ = nullptr;
-  msl_last_argbuf_pixel_offset_ = 0;
   msl_bound_pipeline_state_ = nullptr;
   msl_viewport_valid_ = false;
   msl_scissor_valid_ = false;
@@ -5508,26 +5496,7 @@ void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
   ResetRenderEncoderResourceUsage();
 }
 
-void MetalCommandProcessor::EndRenderEncoder() {
-  if (!current_render_encoder_) {
-    return;
-  }
-  current_render_encoder_->endEncoding();
-  current_render_encoder_->release();
-  current_render_encoder_ = nullptr;
-  current_render_pass_descriptor_ = nullptr;
-  msl_bound_vertex_texture_count_ = 0;
-  msl_bound_pixel_texture_count_ = 0;
-  msl_bound_vertex_sampler_count_ = 0;
-  msl_bound_pixel_sampler_count_ = 0;
-  msl_bound_vertex_textures_.fill(nullptr);
-  msl_bound_pixel_textures_.fill(nullptr);
-  msl_bound_vertex_samplers_.fill(nullptr);
-  msl_bound_pixel_samplers_.fill(nullptr);
-  msl_bound_vertex_argument_buffer_ = nullptr;
-  msl_bound_pixel_argument_buffer_ = nullptr;
-  msl_bound_shared_memory_buffer_ = nullptr;
-  msl_bound_null_buffer_ = nullptr;
+void MetalCommandProcessor::ResetMslCrossEncoderReuseCaches() {
   msl_last_argbuf_vertex_textures_.fill(nullptr);
   msl_last_argbuf_vertex_texture_count_ = 0;
   msl_last_argbuf_vertex_samplers_.fill(nullptr);
@@ -5540,14 +5509,17 @@ void MetalCommandProcessor::EndRenderEncoder() {
   msl_last_argbuf_pixel_sampler_count_ = 0;
   msl_last_argbuf_pixel_buffer_ = nullptr;
   msl_last_argbuf_pixel_offset_ = 0;
-  msl_bound_pipeline_state_ = nullptr;
-  msl_viewport_valid_ = false;
-  msl_scissor_valid_ = false;
-  msl_rasterizer_state_valid_ = false;
-  msl_depth_stencil_state_ = nullptr;
-  msl_stencil_reference_valid_ = false;
-  msl_stencil_reference_ = 0;
-  ResetRenderEncoderResourceUsage();
+}
+
+void MetalCommandProcessor::EndRenderEncoder() {
+  if (!current_render_encoder_) {
+    return;
+  }
+  current_render_encoder_->endEncoding();
+  current_render_encoder_->release();
+  current_render_encoder_ = nullptr;
+  current_render_pass_descriptor_ = nullptr;
+  ResetMslRenderEncoderStateCache();
 }
 
 void MetalCommandProcessor::ResetRenderEncoderResourceUsage() {
@@ -6076,6 +6048,7 @@ void MetalCommandProcessor::ScheduleSpirvArgumentBufferRelease(
 
 void MetalCommandProcessor::EndCommandBuffer() {
   EndRenderEncoder();
+  ResetMslCrossEncoderReuseCaches();
 
   if (current_command_buffer_) {
 #if METAL_SHADER_CONVERTER_AVAILABLE
