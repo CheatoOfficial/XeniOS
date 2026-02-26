@@ -1682,7 +1682,6 @@ void MetalCommandProcessor::PrepareForWait() {
     }
 #endif
     ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
-    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     if (wait_shared_event_) {
       wait_shared_event_->waitUntilSignaledValue(
@@ -1769,7 +1768,6 @@ void MetalCommandProcessor::ShutdownContext() {
     }
 #endif
     ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
-    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     if (wait_shared_event_) {
       wait_shared_event_->waitUntilSignaledValue(
@@ -2487,7 +2485,6 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
     }
 #endif
     ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
-    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;
@@ -3047,25 +3044,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         metal_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
   if (texture_cache_ && used_texture_mask) {
-    bool restart_render_encoder_after_texture_request = false;
-    if (shared_memory_write_status_ ==
-        SharedMemoryWriteStatus::kWrittenByTileResolve) {
-      // RequestTextures may encode uploads into command buffers. Keep tile
-      // resolve writes and uploads in the same command buffer by ending only the
-      // render encoder before requesting textures.
-      EndRenderEncoder();
-      restart_render_encoder_after_texture_request = true;
-      shared_memory_write_status_ = SharedMemoryWriteStatus::kClean;
-    }
     texture_cache_->RequestTextures(used_texture_mask);
-    if (restart_render_encoder_after_texture_request) {
-      BeginCommandBuffer();
-      if (!current_command_buffer_ || !current_render_encoder_) {
-        XELOGE(
-            "IssueDraw: failed to restart render encoder after tile resolve");
-        return false;
-      }
-    }
   }
 
   struct VertexBindingRange {
@@ -4230,25 +4209,7 @@ bool MetalCommandProcessor::IssueDrawMsl(
     used_texture_mask |= msl_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
   if (texture_cache_ && used_texture_mask) {
-    bool restart_render_encoder_after_texture_request = false;
-    if (shared_memory_write_status_ ==
-        SharedMemoryWriteStatus::kWrittenByTileResolve) {
-      // RequestTextures may encode uploads into command buffers. Keep tile
-      // resolve writes and uploads in the same command buffer by ending only the
-      // render encoder before requesting textures.
-      EndRenderEncoder();
-      restart_render_encoder_after_texture_request = true;
-      shared_memory_write_status_ = SharedMemoryWriteStatus::kClean;
-    }
     texture_cache_->RequestTextures(used_texture_mask);
-    if (restart_render_encoder_after_texture_request) {
-      BeginCommandBuffer();
-      if (!current_command_buffer_ || !current_render_encoder_) {
-        XELOGE(
-            "SPIRV-Cross: failed to restart render encoder after tile resolve");
-        return false;
-      }
-    }
   }
 
   // Ensure shared-memory ranges used by translated shaders are synchronized.
@@ -4495,8 +4456,9 @@ bool MetalCommandProcessor::IssueDrawMsl(
               &spirv_tessellation_constants_,
               sizeof(SpirvShaderTranslator::TessellationConstants));
 
-  // Rebind all resources on pipeline change and dedupe binds otherwise.
-  const bool msl_bind_dedupe = !msl_pipeline_changed;
+  // This branch doesn't track pipeline-change state here, so keep binding
+  // behavior conservative while still using cached slot contents.
+  const bool msl_bind_dedupe = false;
 
   // Bind shared memory buffer at msl_buffer 0.
   MTL::Buffer* shared_mem_buffer =
@@ -5479,11 +5441,8 @@ void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
   msl_bound_vertex_samplers_.fill(nullptr);
   msl_bound_pixel_samplers_.fill(nullptr);
   msl_bound_shared_memory_buffer_ = nullptr;
-  msl_bound_uniforms_buffer_ = nullptr;
   msl_bound_vertex_argument_buffer_ = nullptr;
   msl_bound_pixel_argument_buffer_ = nullptr;
-  msl_bound_vertex_argument_buffer_generation_ = 0;
-  msl_bound_pixel_argument_buffer_generation_ = 0;
   msl_bound_null_buffer_ = nullptr;
   msl_bound_pipeline_state_ = nullptr;
   msl_viewport_valid_ = false;
@@ -6059,7 +6018,6 @@ void MetalCommandProcessor::EndCommandBuffer() {
     }
 #endif
     ScheduleSpirvArgumentBufferRelease(current_command_buffer_);
-    LogSubmissionWorkloadAtCommit(submission_current_);
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;
