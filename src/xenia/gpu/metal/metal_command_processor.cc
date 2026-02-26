@@ -43,6 +43,7 @@
 #include "xenia/gpu/draw_util.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/graphics_system.h"
+#include "xenia/gpu/texture_util.h"
 #include "xenia/gpu/metal/metal_graphics_system.h"
 #include "xenia/gpu/metal/metal_shader_cache.h"
 #include "xenia/gpu/packet_disassembler.h"
@@ -2627,10 +2628,21 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 }
 
 void MetalCommandProcessor::OnPrimaryBufferEnd() {
-  if (!cvars::submit_on_primary_buffer_end || !current_command_buffer_) {
+  if (!current_command_buffer_) {
     return;
   }
-  if (!CanEndSubmissionImmediately()) {
+
+  // In the SPIRV-Cross path, keep command buffers open across primary-buffer
+  // boundaries unless a copy->draw visibility boundary is pending.
+  if (UseSpirvCrossPath() && !copy_resolve_writes_pending_) {
+    return;
+  }
+
+  if (!cvars::submit_on_primary_buffer_end) {
+    return;
+  }
+
+  if (!copy_resolve_writes_pending_ && !CanEndSubmissionImmediately()) {
     return;
   }
   EndCommandBuffer();
@@ -2707,6 +2719,15 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
 
   // Check for copy mode
   xenos::EdramMode edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+  if (edram_mode != xenos::EdramMode::kCopy && copy_resolve_writes_pending_) {
+    // Preserve resolve write visibility when transitioning from copy-only
+    // bursts to regular draw work.
+    // MSC keeps the conservative split behavior; SPIRV-Cross decides in
+    // IssueDrawMsl based on actual texture overlap with pending resolve writes.
+    if (!UseSpirvCrossPath()) {
+      EndCommandBuffer();
+    }
+  }
   if (edram_mode == xenos::EdramMode::kCopy) {
     return IssueCopy();
   }
@@ -4208,6 +4229,54 @@ bool MetalCommandProcessor::IssueDrawMsl(
   if (msl_pixel_shader) {
     used_texture_mask |= msl_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
+
+  if (copy_resolve_writes_pending_ && used_texture_mask) {
+    auto overlaps_resolved_texture_ranges = [&](uint32_t texture_fetch_mask) {
+      uint32_t remaining_fetch_bits = texture_fetch_mask;
+      uint32_t fetch_index = 0;
+      while (xe::bit_scan_forward(remaining_fetch_bits, &fetch_index)) {
+        remaining_fetch_bits &= ~(uint32_t(1) << fetch_index);
+        xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(fetch_index);
+        uint32_t width_minus_1 = 0;
+        uint32_t height_minus_1 = 0;
+        uint32_t depth_or_array_size_minus_1 = 0;
+        uint32_t base_page = 0;
+        uint32_t mip_page = 0;
+        uint32_t mip_max_level = 0;
+        texture_util::GetSubresourcesFromFetchConstant(
+            fetch, &width_minus_1, &height_minus_1,
+            &depth_or_array_size_minus_1, &base_page, &mip_page, nullptr,
+            &mip_max_level);
+        if (!base_page && !mip_page) {
+          continue;
+        }
+        uint32_t base_size = 0;
+        uint32_t mip_size = 0;
+        texture_util::GetTextureTotalSize(
+            fetch.dimension, fetch.pitch, width_minus_1 + 1, height_minus_1 + 1,
+            depth_or_array_size_minus_1 + 1, fetch.tiled, fetch.format,
+            mip_max_level, fetch.packed_mips, &base_size, &mip_size);
+        if (base_page && base_size && IsResolvedMemory(base_page << 12, base_size)) {
+          return true;
+        }
+        if (mip_page && mip_size && IsResolvedMemory(mip_page << 12, mip_size)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    if (overlaps_resolved_texture_ranges(used_texture_mask)) {
+      EndCommandBuffer();
+      BeginCommandBuffer();
+      if (!current_command_buffer_ || !current_render_encoder_) {
+        XELOGE(
+            "SPIRV-Cross: failed to re-begin command buffer for copy->draw "
+            "sync split");
+        return true;
+      }
+    }
+  }
+
   if (texture_cache_ && used_texture_mask) {
     texture_cache_->RequestTextures(used_texture_mask);
   }
