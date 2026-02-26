@@ -4250,12 +4250,12 @@ bool MetalCommandProcessor::IssueDrawMsl(
         if (!base_page && !mip_page) {
           continue;
         }
-        uint32_t base_size = 0;
-        uint32_t mip_size = 0;
-        texture_util::GetTextureTotalSize(
+        auto layout = texture_util::GetGuestTextureLayout(
             fetch.dimension, fetch.pitch, width_minus_1 + 1, height_minus_1 + 1,
             depth_or_array_size_minus_1 + 1, fetch.tiled, fetch.format,
-            mip_max_level, fetch.packed_mips, &base_size, &mip_size);
+            fetch.packed_mips, true, mip_max_level);
+        const uint32_t base_size = layout.base.level_data_extent_bytes;
+        const uint32_t mip_size = layout.mips_total_extent_bytes;
         if (base_page && base_size && IsResolvedMemory(base_page << 12, base_size)) {
           return true;
         }
