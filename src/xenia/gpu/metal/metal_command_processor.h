@@ -681,6 +681,28 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::Buffer* msl_bound_pixel_argument_buffer_ = nullptr;
   MTL::Buffer* msl_bound_shared_memory_buffer_ = nullptr;
   MTL::Buffer* msl_bound_null_buffer_ = nullptr;
+  // Cached argument buffer content for change detection — skip re-encoding
+  // when textures/samplers haven't changed between draws.
+  std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
+      msl_last_argbuf_vertex_textures_{};
+  uint32_t msl_last_argbuf_vertex_texture_count_ = 0;
+  std::array<const MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
+      msl_last_argbuf_vertex_samplers_{};
+  uint32_t msl_last_argbuf_vertex_sampler_count_ = 0;
+  MTL::Buffer* msl_last_argbuf_vertex_buffer_ = nullptr;
+  NS::UInteger msl_last_argbuf_vertex_offset_ = 0;
+  std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
+      msl_last_argbuf_pixel_textures_{};
+  uint32_t msl_last_argbuf_pixel_texture_count_ = 0;
+  std::array<const MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
+      msl_last_argbuf_pixel_samplers_{};
+  uint32_t msl_last_argbuf_pixel_sampler_count_ = 0;
+  MTL::Buffer* msl_last_argbuf_pixel_buffer_ = nullptr;
+  NS::UInteger msl_last_argbuf_pixel_offset_ = 0;
+  // Reusable scratch buffers for packed float constants (avoid per-draw stack
+  // allocation of 4KB arrays).
+  std::array<uint8_t, kCbvSizeBytes> msl_float_constants_scratch_vertex_{};
+  std::array<uint8_t, kCbvSizeBytes> msl_float_constants_scratch_pixel_{};
   MTL::RenderPipelineState* msl_bound_pipeline_state_ = nullptr;
   bool msl_viewport_valid_ = false;
   MTL::Viewport msl_viewport_ = {};

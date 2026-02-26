@@ -4630,6 +4630,9 @@ bool MetalCommandProcessor::IssueDrawMsl(
         texture = metal_texture_cache->GetNullTexture2D();
       }
       textures[slot] = texture;
+      // UseRenderEncoderResource must always be called for hazard tracking,
+      // even when we skip re-encoding. The dedup map handles per-encoder
+      // deduplication.
       if (texture) {
         UseRenderEncoderResource(texture, MTL::ResourceUsageRead);
       }
@@ -4656,26 +4659,89 @@ bool MetalCommandProcessor::IssueDrawMsl(
       samplers[smp_index] = sampler_state;
     }
 
-    MTL::Buffer* argbuf_buffer = nullptr;
-    NS::UInteger argbuf_offset = 0;
-    if (!AcquireSpirvArgumentBufferSlice(
-            encoded_length, translation->argument_encoder_alignment(),
-            &argbuf_buffer, &argbuf_offset)) {
-      XELOGE("SPIRV-Cross: Failed to allocate argument buffer slice ({} bytes)",
-             encoded_length);
-      return false;
+    // Check if textures and samplers match the cached content from the last
+    // encoding. If so, skip the expensive acquire+encode and reuse the previous
+    // argument buffer slice.
+    auto& cached_textures = is_pixel_stage ? msl_last_argbuf_pixel_textures_
+                                           : msl_last_argbuf_vertex_textures_;
+    auto& cached_texture_count = is_pixel_stage
+                                     ? msl_last_argbuf_pixel_texture_count_
+                                     : msl_last_argbuf_vertex_texture_count_;
+    auto& cached_samplers = is_pixel_stage ? msl_last_argbuf_pixel_samplers_
+                                           : msl_last_argbuf_vertex_samplers_;
+    auto& cached_sampler_count = is_pixel_stage
+                                     ? msl_last_argbuf_pixel_sampler_count_
+                                     : msl_last_argbuf_vertex_sampler_count_;
+    auto& cached_argbuf_buffer = is_pixel_stage
+                                     ? msl_last_argbuf_pixel_buffer_
+                                     : msl_last_argbuf_vertex_buffer_;
+    auto& cached_argbuf_offset = is_pixel_stage
+                                     ? msl_last_argbuf_pixel_offset_
+                                     : msl_last_argbuf_vertex_offset_;
+
+    bool content_changed = texture_count != cached_texture_count ||
+                           sampler_count != cached_sampler_count ||
+                           !cached_argbuf_buffer;
+    if (!content_changed && texture_count > 0) {
+      content_changed = std::memcmp(textures.data(), cached_textures.data(),
+                                    texture_count * sizeof(textures[0])) != 0;
+    }
+    if (!content_changed && sampler_count > 0) {
+      content_changed = std::memcmp(samplers.data(), cached_samplers.data(),
+                                    sampler_count * sizeof(samplers[0])) != 0;
     }
 
-    arg_encoder->setArgumentBuffer(argbuf_buffer, argbuf_offset);
-    if (texture_count) {
-      arg_encoder->setTextures(textures.data(),
-                               NS::Range::Make(MslTextureIndex::kBase,
-                                               texture_count));
-    }
-    if (sampler_count) {
-      arg_encoder->setSamplerStates(
-          samplers.data(),
-          NS::Range::Make(MslArgumentBufferId::kSamplerBase, sampler_count));
+    MTL::Buffer* argbuf_buffer;
+    NS::UInteger argbuf_offset;
+
+    if (content_changed) {
+      // Content changed — acquire a new slice and re-encode.
+      argbuf_buffer = nullptr;
+      argbuf_offset = 0;
+      if (!AcquireSpirvArgumentBufferSlice(
+              encoded_length, translation->argument_encoder_alignment(),
+              &argbuf_buffer, &argbuf_offset)) {
+        XELOGE(
+            "SPIRV-Cross: Failed to allocate argument buffer slice ({} bytes)",
+            encoded_length);
+        return false;
+      }
+
+      arg_encoder->setArgumentBuffer(argbuf_buffer, argbuf_offset);
+      if (texture_count) {
+        arg_encoder->setTextures(
+            textures.data(),
+            NS::Range::Make(MslTextureIndex::kBase, texture_count));
+      }
+      if (sampler_count) {
+        arg_encoder->setSamplerStates(
+            samplers.data(),
+            NS::Range::Make(MslArgumentBufferId::kSamplerBase, sampler_count));
+      }
+
+      // Update the cache.
+      std::memcpy(cached_textures.data(), textures.data(),
+                  texture_count * sizeof(textures[0]));
+      if (texture_count < cached_texture_count) {
+        std::memset(&cached_textures[texture_count], 0,
+                    (cached_texture_count - texture_count) *
+                        sizeof(cached_textures[0]));
+      }
+      cached_texture_count = texture_count;
+      std::memcpy(cached_samplers.data(), samplers.data(),
+                  sampler_count * sizeof(samplers[0]));
+      if (sampler_count < cached_sampler_count) {
+        std::memset(&cached_samplers[sampler_count], 0,
+                    (cached_sampler_count - sampler_count) *
+                        sizeof(cached_samplers[0]));
+      }
+      cached_sampler_count = sampler_count;
+      cached_argbuf_buffer = argbuf_buffer;
+      cached_argbuf_offset = argbuf_offset;
+    } else {
+      // Content unchanged — reuse the previous argument buffer slice.
+      argbuf_buffer = cached_argbuf_buffer;
+      argbuf_offset = cached_argbuf_offset;
     }
 
     if (is_pixel_stage) {
@@ -5403,6 +5469,45 @@ void MetalCommandProcessor::DrainCommandBufferAutoreleasePool() {
   command_buffer_autorelease_pool_ = nullptr;
 }
 
+void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
+  msl_bound_vertex_texture_count_ = 0;
+  msl_bound_pixel_texture_count_ = 0;
+  msl_bound_vertex_sampler_count_ = 0;
+  msl_bound_pixel_sampler_count_ = 0;
+  msl_bound_vertex_textures_.fill(nullptr);
+  msl_bound_pixel_textures_.fill(nullptr);
+  msl_bound_vertex_samplers_.fill(nullptr);
+  msl_bound_pixel_samplers_.fill(nullptr);
+  msl_bound_shared_memory_buffer_ = nullptr;
+  msl_bound_uniforms_buffer_ = nullptr;
+  msl_bound_vertex_argument_buffer_ = nullptr;
+  msl_bound_pixel_argument_buffer_ = nullptr;
+  msl_bound_vertex_argument_buffer_generation_ = 0;
+  msl_bound_pixel_argument_buffer_generation_ = 0;
+  msl_bound_null_buffer_ = nullptr;
+  msl_last_argbuf_vertex_textures_.fill(nullptr);
+  msl_last_argbuf_vertex_texture_count_ = 0;
+  msl_last_argbuf_vertex_samplers_.fill(nullptr);
+  msl_last_argbuf_vertex_sampler_count_ = 0;
+  msl_last_argbuf_vertex_buffer_ = nullptr;
+  msl_last_argbuf_vertex_offset_ = 0;
+  msl_last_argbuf_pixel_textures_.fill(nullptr);
+  msl_last_argbuf_pixel_texture_count_ = 0;
+  msl_last_argbuf_pixel_samplers_.fill(nullptr);
+  msl_last_argbuf_pixel_sampler_count_ = 0;
+  msl_last_argbuf_pixel_buffer_ = nullptr;
+  msl_last_argbuf_pixel_offset_ = 0;
+  msl_bound_pipeline_state_ = nullptr;
+  msl_viewport_valid_ = false;
+  msl_scissor_valid_ = false;
+  msl_rasterizer_state_valid_ = false;
+  msl_depth_stencil_state_ = nullptr;
+  msl_stencil_reference_valid_ = false;
+  msl_stencil_reference_ = 0;
+  ff_blend_factor_valid_ = false;
+  ResetRenderEncoderResourceUsage();
+}
+
 void MetalCommandProcessor::EndRenderEncoder() {
   if (!current_render_encoder_) {
     return;
@@ -5423,6 +5528,18 @@ void MetalCommandProcessor::EndRenderEncoder() {
   msl_bound_pixel_argument_buffer_ = nullptr;
   msl_bound_shared_memory_buffer_ = nullptr;
   msl_bound_null_buffer_ = nullptr;
+  msl_last_argbuf_vertex_textures_.fill(nullptr);
+  msl_last_argbuf_vertex_texture_count_ = 0;
+  msl_last_argbuf_vertex_samplers_.fill(nullptr);
+  msl_last_argbuf_vertex_sampler_count_ = 0;
+  msl_last_argbuf_vertex_buffer_ = nullptr;
+  msl_last_argbuf_vertex_offset_ = 0;
+  msl_last_argbuf_pixel_textures_.fill(nullptr);
+  msl_last_argbuf_pixel_texture_count_ = 0;
+  msl_last_argbuf_pixel_samplers_.fill(nullptr);
+  msl_last_argbuf_pixel_sampler_count_ = 0;
+  msl_last_argbuf_pixel_buffer_ = nullptr;
+  msl_last_argbuf_pixel_offset_ = 0;
   msl_bound_pipeline_state_ = nullptr;
   msl_viewport_valid_ = false;
   msl_scissor_valid_ = false;
