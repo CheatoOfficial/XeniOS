@@ -614,6 +614,10 @@ class MetalCommandProcessor : public CommandProcessor {
 
   // Uniforms buffer and draw ring count (shared between MSC and SPIRV-Cross)
   MTL::Buffer* uniforms_buffer_ = nullptr;
+  // SPIRV path may rotate through multiple uniforms buffers within a single
+  // Metal command buffer (at ring wrap boundaries). Track all of them so
+  // completion handlers can return every buffer to the available pool.
+  std::vector<MTL::Buffer*> command_buffer_spirv_uniform_buffers_;
   size_t draw_ring_count_ = 0;
 #if !METAL_SHADER_CONVERTER_AVAILABLE
   // Owning storage for all SPIRV-Cross uniforms buffers allocated for the

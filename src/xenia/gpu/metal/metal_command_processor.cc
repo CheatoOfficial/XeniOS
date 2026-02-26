@@ -607,6 +607,7 @@ MetalCommandProcessor::~MetalCommandProcessor() {
   ShutdownShaderStorage();
 #else
   uniforms_buffer_ = nullptr;
+  command_buffer_spirv_uniform_buffers_.clear();
   {
     std::lock_guard<std::mutex> lock(spirv_uniforms_mutex_);
     spirv_uniforms_available_.clear();
@@ -1884,6 +1885,7 @@ void MetalCommandProcessor::ShutdownContext() {
 
 #if !METAL_SHADER_CONVERTER_AVAILABLE
   uniforms_buffer_ = nullptr;
+  command_buffer_spirv_uniform_buffers_.clear();
   {
     std::lock_guard<std::mutex> lock(spirv_uniforms_mutex_);
     spirv_uniforms_available_.clear();
@@ -5365,8 +5367,26 @@ bool MetalCommandProcessor::IssueCopy() {
   //     written_length, true);
   //   }
 
-  // Resolve touched guest memory; commit immediately so following packets don't
-  // observe stale resolve results.
+  const bool defer_copy_commit_spirv = UseSpirvCrossPath();
+
+  // SPIRV-Cross path keeps copy-resolve writes deferred in the active
+  // submission and relies on draw-time overlap checks to split only when
+  // required for correctness. This avoids per-copy command-buffer churn.
+  //
+  // MSC path keeps the previous conservative behavior and only defers truly
+  // copy-only bursts.
+  if (defer_copy_commit_spirv ||
+      (current_draw_index_ == 0
+#if METAL_SHADER_CONVERTER_AVAILABLE
+       && command_buffer_draw_rings_.empty()
+#endif
+       )) {
+    copy_resolve_writes_pending_ = true;
+    return true;
+  }
+
+  // Resolve touched guest memory in a draw-containing submission; commit now
+  // so following packets don't observe stale resolve results.
 #if METAL_SHADER_CONVERTER_AVAILABLE
   ScheduleDrawRingRelease(copy_command_buffer);
 #else
@@ -5893,16 +5913,44 @@ bool MetalCommandProcessor::EnsureSpirvUniformBuffer() {
     uniforms_buffer_ = spirv_uniforms_available_.back();
     spirv_uniforms_available_.pop_back();
   }
+  if (uniforms_buffer_) {
+    command_buffer_spirv_uniform_buffers_.push_back(uniforms_buffer_);
+  }
 
   return uniforms_buffer_ != nullptr;
 }
 
 bool MetalCommandProcessor::EnsureSpirvUniformBufferCapacity() {
-  if (current_draw_index_ < draw_ring_count_) {
-    return true;
+  if (!draw_ring_count_) {
+    draw_ring_count_ = 1;
   }
   if (!uniforms_buffer_) {
     return EnsureSpirvUniformBuffer();
+  }
+  if (current_draw_index_ == 0) {
+    return true;
+  }
+  const uint32_t ring_index =
+      current_draw_index_ % uint32_t(std::max<size_t>(1, draw_ring_count_));
+  if (ring_index != 0) {
+    return true;
+  }
+
+  // Try to rotate to another uniforms buffer in the current command buffer to
+  // avoid forcing a split at every ring wrap.
+  uniforms_buffer_ = nullptr;
+  if (spirv_uniforms_available_semaphore_ &&
+      dispatch_semaphore_wait(spirv_uniforms_available_semaphore_,
+                              DISPATCH_TIME_NOW) == 0) {
+    std::lock_guard<std::mutex> lock(spirv_uniforms_mutex_);
+    if (!spirv_uniforms_available_.empty()) {
+      uniforms_buffer_ = spirv_uniforms_available_.back();
+      spirv_uniforms_available_.pop_back();
+      command_buffer_spirv_uniform_buffers_.push_back(uniforms_buffer_);
+      return true;
+    }
+    // Keep semaphore state consistent if availability changed concurrently.
+    dispatch_semaphore_signal(spirv_uniforms_available_semaphore_);
   }
 
   static bool rollover_logged = false;
@@ -5927,13 +5975,14 @@ void MetalCommandProcessor::ScheduleSpirvUniformBufferRelease(
   if (!command_buffer) {
     return;
   }
-  if (!uniforms_buffer_) {
-    return;
-  }
 
   std::vector<MTL::Buffer*> submitted_uniforms;
-  submitted_uniforms.reserve(1);
-  submitted_uniforms.push_back(uniforms_buffer_);
+  if (!command_buffer_spirv_uniform_buffers_.empty()) {
+    submitted_uniforms.swap(command_buffer_spirv_uniform_buffers_);
+  } else if (uniforms_buffer_) {
+    submitted_uniforms.reserve(1);
+    submitted_uniforms.push_back(uniforms_buffer_);
+  }
   uniforms_buffer_ = nullptr;
 
   if (submitted_uniforms.empty()) {
