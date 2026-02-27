@@ -94,8 +94,11 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
   asio::error_code ec;
 
   if (type == Type::X_SOCK_STREAM) {
-    tcp_socket_.emplace(GetIoContext());
-    tcp_socket_->open(asio::ip::tcp::v4(), ec);
+    // Use an acceptor for TCP — it supports bind, listen, and accept natively.
+    // If Connect() is called later, we transition to a tcp_socket at that
+    // point.
+    acceptor_.emplace(GetIoContext());
+    acceptor_->open(asio::ip::tcp::v4(), ec);
   } else if (type == Type::X_SOCK_DGRAM) {
     udp_socket_.emplace(GetIoContext());
     udp_socket_->open(asio::ip::udp::v4(), ec);
@@ -147,7 +150,7 @@ X_STATUS XSocket::Close() {
 
 X_STATUS XSocket::GetOption(uint32_t level, uint32_t optname, void* optval_ptr,
                             uint32_t* optlen) {
-  if (!tcp_socket_ && !udp_socket_) {
+  if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -193,7 +196,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     return X_STATUS_SUCCESS;
   }
 
-  if (!tcp_socket_ && !udp_socket_) {
+  if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -234,7 +237,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
 }
 
 X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
-  if (!tcp_socket_ && !udp_socket_) {
+  if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -245,7 +248,9 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
     uint32_t value = *reinterpret_cast<uint32_t*>(arg_ptr);
     bool non_blocking = (value != 0);
 
-    if (tcp_socket_) {
+    if (acceptor_) {
+      acceptor_->non_blocking(non_blocking, ec);
+    } else if (tcp_socket_) {
       tcp_socket_->non_blocking(non_blocking, ec);
     } else if (udp_socket_) {
       udp_socket_->non_blocking(non_blocking, ec);
@@ -281,7 +286,7 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 }
 
 X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
-  if (!tcp_socket_ && !udp_socket_) {
+  if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -291,7 +296,23 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 
   asio::error_code ec;
 
-  if (tcp_socket_) {
+  if (acceptor_) {
+    // Transition from acceptor to tcp_socket for client connection.
+    // The acceptor was created in Initialize() before we knew whether this
+    // socket would listen or connect.
+    acceptor_->close(ec);
+    acceptor_.reset();
+
+    tcp_socket_.emplace(GetIoContext());
+    tcp_socket_->open(asio::ip::tcp::v4(), ec);
+    if (ec) {
+      last_error_ = AsioErrorToWSAError(ec);
+      return X_STATUS_UNSUCCESSFUL;
+    }
+
+    asio::ip::tcp::endpoint endpoint(addr, port);
+    tcp_socket_->connect(endpoint, ec);
+  } else if (tcp_socket_) {
     asio::ip::tcp::endpoint endpoint(addr, port);
     tcp_socket_->connect(endpoint, ec);
   } else if (udp_socket_) {
@@ -308,7 +329,7 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 }
 
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
-  if (!tcp_socket_ && !udp_socket_) {
+  if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
@@ -328,7 +349,10 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
 
   asio::error_code ec;
 
-  if (tcp_socket_) {
+  if (acceptor_) {
+    asio::ip::tcp::endpoint endpoint(addr, port);
+    acceptor_->bind(endpoint, ec);
+  } else if (tcp_socket_) {
     asio::ip::tcp::endpoint endpoint(addr, port);
     tcp_socket_->bind(endpoint, ec);
   } else if (udp_socket_) {
@@ -344,7 +368,9 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
   bound_ = true;
 
   // Get the actual bound port (important when binding to port 0)
-  if (tcp_socket_) {
+  if (acceptor_) {
+    bound_port_ = acceptor_->local_endpoint(ec).port();
+  } else if (tcp_socket_) {
     bound_port_ = tcp_socket_->local_endpoint(ec).port();
   } else if (udp_socket_) {
     bound_port_ = udp_socket_->local_endpoint(ec).port();
@@ -358,26 +384,12 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
 }
 
 X_STATUS XSocket::Listen(int backlog) {
-  if (!tcp_socket_) {
+  if (!acceptor_) {
     return X_STATUS_INVALID_HANDLE;
   }
 
   asio::error_code ec;
 
-  // Create an acceptor and transfer the bound socket's native handle to it
-  acceptor_.emplace(GetIoContext());
-  acceptor_->assign(asio::ip::tcp::v4(), tcp_socket_->native_handle(), ec);
-  if (ec) {
-    last_error_ = AsioErrorToWSAError(ec);
-    acceptor_.reset();
-    return X_STATUS_UNSUCCESSFUL;
-  }
-
-  // Release the socket's handle since the acceptor now owns it
-  tcp_socket_->release();
-  tcp_socket_.reset();
-
-  // Start listening
   acceptor_->listen(backlog, ec);
   if (ec) {
     last_error_ = AsioErrorToWSAError(ec);
