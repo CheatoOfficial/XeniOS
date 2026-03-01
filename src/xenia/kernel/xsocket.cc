@@ -112,7 +112,8 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
   }
 
   // Allow port reuse so that in-process relaunches can rebind ports
-  // immediately without waiting for TIME_WAIT to expire.
+  // immediately without waiting for TIME_WAIT to expire.  Duplicate active
+  // binds are caught by the object-table check in Bind() instead.
   int reuse = 1;
   setsockopt(static_cast<int>(native_handle()), SOL_SOCKET, SO_REUSEADDR,
              reinterpret_cast<const char*>(&reuse), sizeof(reuse));
@@ -346,6 +347,23 @@ X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
 
   asio::ip::address_v4 addr(name->sin_addr);
   uint16_t port = name->sin_port;
+
+  // Reject duplicate active binds (Xbox 360 behaviour).  SO_REUSEADDR is set
+  // on the OS socket for TIME_WAIT reclaiming, but games expect a second bind
+  // to the same port to fail with WSAEADDRINUSE.  Query the kernel's live
+  // object table so the check is naturally correct across in-process relaunches
+  // (Shutdown destroys the old object table).
+  if (port != 0) {
+    auto sockets =
+        kernel_state()->object_table()->GetObjectsByType<XSocket>(kObjectType);
+    for (auto& s : sockets) {
+      if (s.get() != this && s->bound_ && s->bound_port_ == port &&
+          s->type_ == type_) {
+        last_error_ = 10048;  // WSAEADDRINUSE
+        return X_STATUS_UNSUCCESSFUL;
+      }
+    }
+  }
 
   asio::error_code ec;
 
