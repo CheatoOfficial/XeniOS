@@ -3482,6 +3482,75 @@ D3D12RenderTargetCache::GetOrCreateTransferPipelines(TransferShaderKey key) {
       if (dest_color_format == xenos::ColorRenderTargetFormat::k_32_32_FLOAT) {
         a.OpMov(dxbc::Dest::O(0, 0b0001), dxbc::Src::R(0, dxbc::Src::kXXXX));
         a.OpMov(dxbc::Dest::O(0, 0b0010), dxbc::Src::R(1, dxbc::Src::kXXXX));
+      } else if (dest_is_gamma_unorm16) {
+        // For gamma_unorm16, only r1.x has a valid packed 32-bit EDRAM
+        // dword (one pixel, since gamma_unorm16 is 32bpp Xenos / 64bpp
+        // host). Reinterpret as k_8_8_8_8_GAMMA (4 gamma-encoded bytes)
+        // and convert to linear float for R16G16B16A16_UNORM output.
+        //
+        // Use midpoint encoding to survive the UNORM16 quantization
+        // round-trip through PreSaturatedLinearToPWLGamma (which uses
+        // trunc()). Storing the exact PWLGammaToLinear result puts values
+        // at the lower boundary of the valid range, where UNORM16
+        // quantization can push them below threshold causing +/-1 byte
+        // errors that corrupt cross-format EDRAM reinterpretation.
+        //
+        // For gamma byte B, the midpoint linear value is:
+        //   Piece 0 (B < 64):    F = (B + 0.5) / 1023.0
+        //   Piece 1 (64<=B<96):  F = (B - 31.5) / 511.5
+        //   Piece 2 (96<=B<192): F = (B - 63.5) / 255.75
+        //   Piece 3 (B >= 192):  F = (B - 127.5) / 127.875
+        // Using MAd form: F = B * recip + offset.
+
+        // Extract 4 bytes: r1.xyzw = [R, G, B, A] as uint.
+        a.OpUBFE(dxbc::Dest::R(1), dxbc::Src::LU(8, 8, 8, 8),
+                 dxbc::Src::LU(0, 8, 16, 24),
+                 dxbc::Src::R(1, dxbc::Src::kXXXX));
+
+        // Alpha: o0.w = float(A) / 255.0 (no gamma conversion).
+        a.OpUToF(dxbc::Dest::R(0, 0b1000), dxbc::Src::R(1, dxbc::Src::kWWWW));
+        a.OpMul(dxbc::Dest::O(0, 0b1000), dxbc::Src::R(0, dxbc::Src::kWWWW),
+                dxbc::Src::LF(1.0f / 255.0f));
+
+        // RGB: per-channel midpoint encoding using r0.xy as (recip,
+        // offset) and r2.x as comparison temp.
+        for (uint32_t j = 0; j < 3; ++j) {
+          // Default to piece 0.
+          a.OpMov(dxbc::Dest::R(0, 0b0001), dxbc::Src::LF(1.0f / 1023.0f));
+          a.OpMov(dxbc::Dest::R(0, 0b0010), dxbc::Src::LF(0.5f / 1023.0f));
+          // Piece 1: byte >= 64.
+          a.OpUGE(dxbc::Dest::R(2, 0b0001), dxbc::Src::R(1).Select(j),
+                  dxbc::Src::LU(64));
+          a.OpMovC(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(1.0f / 511.5f),
+                   dxbc::Src::R(0, dxbc::Src::kXXXX));
+          a.OpMovC(dxbc::Dest::R(0, 0b0010), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(-31.5f / 511.5f),
+                   dxbc::Src::R(0, dxbc::Src::kYYYY));
+          // Piece 2: byte >= 96.
+          a.OpUGE(dxbc::Dest::R(2, 0b0001), dxbc::Src::R(1).Select(j),
+                  dxbc::Src::LU(96));
+          a.OpMovC(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(1.0f / 255.75f),
+                   dxbc::Src::R(0, dxbc::Src::kXXXX));
+          a.OpMovC(dxbc::Dest::R(0, 0b0010), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(-63.5f / 255.75f),
+                   dxbc::Src::R(0, dxbc::Src::kYYYY));
+          // Piece 3: byte >= 192.
+          a.OpUGE(dxbc::Dest::R(2, 0b0001), dxbc::Src::R(1).Select(j),
+                  dxbc::Src::LU(192));
+          a.OpMovC(dxbc::Dest::R(0, 0b0001), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(1.0f / 127.875f),
+                   dxbc::Src::R(0, dxbc::Src::kXXXX));
+          a.OpMovC(dxbc::Dest::R(0, 0b0010), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                   dxbc::Src::LF(-127.5f / 127.875f),
+                   dxbc::Src::R(0, dxbc::Src::kYYYY));
+          // F = float(byte) * recip + offset.
+          a.OpUToF(dxbc::Dest::R(2, 0b0001), dxbc::Src::R(1).Select(j));
+          a.OpMAd(dxbc::Dest::O(0, 1 << j), dxbc::Src::R(2, dxbc::Src::kXXXX),
+                  dxbc::Src::R(0, dxbc::Src::kXXXX),
+                  dxbc::Src::R(0, dxbc::Src::kYYYY));
+        }
       } else {
         for (uint32_t i = 0; i < 2; ++i) {
           a.OpUBFE(dxbc::Dest::O(0, 0b11 << (i * 2)), dxbc::Src::LU(16),
