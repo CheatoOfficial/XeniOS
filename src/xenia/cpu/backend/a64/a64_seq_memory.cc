@@ -17,6 +17,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
+#include "xenia/cpu/backend/a64/a64_backend.h"
 #include "xenia/cpu/backend/a64/a64_op.h"
 #include "xenia/cpu/backend/a64/a64_tracers.h"
 #include "xenia/cpu/ppc/ppc_context.h"
@@ -27,20 +28,17 @@
 
 DECLARE_bool(emit_mmio_aware_stores_for_recorded_exception_addresses);
 DEFINE_bool(a64_force_mmio_aware_byteswap_loads, false,
-            "Force MMIO-aware helper loads for byte-swapped I32 loads.",
-            "CPU");
+            "Force MMIO-aware helper loads for byte-swapped I32 loads.", "CPU");
 DEFINE_bool(a64_log_reservation_failures, false,
             "Log failed A64 reservation stores (ldarx/stdcx).", "CPU");
 DEFINE_uint32(a64_reservation_log_rate, 4096,
-              "Log 1 in N failed A64 reservation stores (0 = log all).",
-              "CPU");
+              "Log 1 in N failed A64 reservation stores (0 = log all).", "CPU");
 DEFINE_uint32(a64_reservation_watch_address, 0,
               "If non-zero, only log failed A64 reservation stores for this "
               "guest address.",
               "CPU");
 DEFINE_uint32(a64_watch_store_address, 0,
-              "If non-zero, log 32-bit guest stores to this address.",
-              "CPU");
+              "If non-zero, log 32-bit guest stores to this address.", "CPU");
 
 namespace xe {
 namespace cpu {
@@ -403,8 +401,7 @@ static void EmitAtomicExchangeFallbackI64(A64Emitter& e, XReg dest,
 
 template <typename SEQ, typename REG, typename ARGS, typename FN_LSE,
           typename FN_FALLBACK>
-void EmitAtomicExchangeXX(A64Emitter& e, const ARGS& i,
-                          const FN_LSE& lse_fn,
+void EmitAtomicExchangeXX(A64Emitter& e, const ARGS& i, const FN_LSE& lse_fn,
                           const FN_FALLBACK& fallback_fn) {
   auto emit_exchange = [&](const XReg& address_reg) {
     if (e.IsFeatureEnabled(kA64EmitLSE)) {
@@ -724,15 +721,34 @@ EMITTER_OPCODE_TABLE(OPCODE_ATOMIC_COMPARE_EXCHANGE,
 struct RESERVED_LOAD_INT32
     : Sequence<RESERVED_LOAD_INT32, I<OPCODE_RESERVED_LOAD, I32Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const XReg address = ComputeMemoryAddress(e, i.src1, W3);
-    e.LDAXR(i.dest, address);
+    const XReg address = ComputeMemoryAddress(e, i.src1, W4);
+    const auto guest_addr_reg = e.GetNativeParam(0).toW();
+    if (i.src1.is_constant) {
+      e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+    } else {
+      e.MOV(guest_addr_reg, i.src1.reg().toW());
+    }
+    e.CallNativeSafe(e.backend()->try_acquire_reservation_helper_);
+    e.LDR(i.dest, address);
+    e.SUB(X9, e.GetContextReg(), sizeof(A64BackendContext));
+    e.MOV(W10, i.dest);
+    e.STR(X10, X9, offsetof(A64BackendContext, cached_reserve_value));
   }
 };
 struct RESERVED_LOAD_INT64
     : Sequence<RESERVED_LOAD_INT64, I<OPCODE_RESERVED_LOAD, I64Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const XReg address = ComputeMemoryAddress(e, i.src1, W3);
-    e.LDAXR(i.dest, address);
+    const XReg address = ComputeMemoryAddress(e, i.src1, W4);
+    const auto guest_addr_reg = e.GetNativeParam(0).toW();
+    if (i.src1.is_constant) {
+      e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+    } else {
+      e.MOV(guest_addr_reg, i.src1.reg().toW());
+    }
+    e.CallNativeSafe(e.backend()->try_acquire_reservation_helper_);
+    e.LDR(i.dest, address);
+    e.SUB(X9, e.GetContextReg(), sizeof(A64BackendContext));
+    e.STR(i.dest, X9, offsetof(A64BackendContext, cached_reserve_value));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_RESERVED_LOAD, RESERVED_LOAD_INT32,
@@ -742,36 +758,50 @@ struct RESERVED_STORE_INT32
     : Sequence<RESERVED_STORE_INT32,
                I<OPCODE_RESERVED_STORE, I8Op, I64Op, I32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const XReg address = ComputeMemoryAddress(e, i.src1, W3);
-    const WReg value = i.src2.is_constant ? W4 : i.src2;
-    if (i.src2.is_constant) {
-      e.MOV(value, static_cast<uint32_t>(i.src2.constant()));
+    const XReg address = ComputeMemoryAddress(e, i.src1, W4);
+    const auto guest_addr_reg = e.GetNativeParam(0).toW();
+    const auto host_addr_reg = e.GetNativeParam(1);
+    const auto value_reg = e.GetNativeParam(2).toW();
+    if (i.src1.is_constant) {
+      e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+    } else {
+      e.MOV(guest_addr_reg, i.src1.reg().toW());
     }
-    e.STLXR(W0, value, address);
+    e.MOV(host_addr_reg, address);
+    if (i.src2.is_constant) {
+      e.MOV(value_reg, static_cast<uint32_t>(i.src2.constant()));
+    } else {
+      e.MOV(value_reg, i.src2.reg().toW());
+    }
+    e.CallNativeSafe(e.backend()->reserved_store_32_helper);
+
     const bool emit_log = cvars::a64_log_reservation_failures;
     if (emit_log) {
       const WReg status = W5;
-      e.MOV(status, W0);
-      const auto guest_addr_reg = e.GetNativeParam(0).toW();
-      const auto value_reg = e.GetNativeParam(1).toW();
+      // Log helpers treat status != 0 as failure, but the backend helper
+      // returns 1 on success.
+      e.EOR(status, W0, 1);
+      const auto log_guest_addr_reg = e.GetNativeParam(0).toW();
+      const auto log_value_reg = e.GetNativeParam(1).toW();
       const auto status_reg = e.GetNativeParam(2).toW();
       if (i.src1.is_constant) {
-        e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+        e.MOV(log_guest_addr_reg, uint32_t(i.src1.constant()));
       } else {
-        e.MOV(guest_addr_reg, i.src1.reg().toW());
+        e.MOV(log_guest_addr_reg, i.src1.reg().toW());
       }
       if (i.src2.is_constant) {
-        e.MOV(value_reg, uint32_t(i.src2.constant()));
+        e.MOV(log_value_reg, uint32_t(i.src2.constant()));
       } else {
-        e.MOV(value_reg, value);
+        e.MOV(log_value_reg, i.src2.reg().toW());
       }
       e.MOV(status_reg, status);
       e.CallNativeSafe(reinterpret_cast<void*>(LogReservationStore32));
       e.CMP(status, 0);
+      e.CSET(i.dest, Cond::EQ);
     } else {
       e.CMP(W0, 0);
+      e.CSET(i.dest, Cond::NE);
     }
-    e.CSET(i.dest, Cond::EQ);
   }
 };
 
@@ -779,36 +809,50 @@ struct RESERVED_STORE_INT64
     : Sequence<RESERVED_STORE_INT64,
                I<OPCODE_RESERVED_STORE, I8Op, I64Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const XReg address = ComputeMemoryAddress(e, i.src1, W3);
-    const XReg value = i.src2.is_constant ? X4 : i.src2;
-    if (i.src2.is_constant) {
-      e.MOV(value, i.src2.constant());
+    const XReg address = ComputeMemoryAddress(e, i.src1, W4);
+    const auto guest_addr_reg = e.GetNativeParam(0).toW();
+    const auto host_addr_reg = e.GetNativeParam(1);
+    const auto value_reg = e.GetNativeParam(2);
+    if (i.src1.is_constant) {
+      e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+    } else {
+      e.MOV(guest_addr_reg, i.src1.reg().toW());
     }
-    e.STLXR(W0, value, address);
+    e.MOV(host_addr_reg, address);
+    if (i.src2.is_constant) {
+      e.MOV(value_reg, i.src2.constant());
+    } else {
+      e.MOV(value_reg, i.src2.reg().toX());
+    }
+    e.CallNativeSafe(e.backend()->reserved_store_64_helper);
+
     const bool emit_log = cvars::a64_log_reservation_failures;
     if (emit_log) {
       const WReg status = W5;
-      e.MOV(status, W0);
-      const auto guest_addr_reg = e.GetNativeParam(0).toW();
-      const auto value_reg = e.GetNativeParam(1);
+      // Log helpers treat status != 0 as failure, but the backend helper
+      // returns 1 on success.
+      e.EOR(status, W0, 1);
+      const auto log_guest_addr_reg = e.GetNativeParam(0).toW();
+      const auto log_value_reg = e.GetNativeParam(1);
       const auto status_reg = e.GetNativeParam(2).toW();
       if (i.src1.is_constant) {
-        e.MOV(guest_addr_reg, uint32_t(i.src1.constant()));
+        e.MOV(log_guest_addr_reg, uint32_t(i.src1.constant()));
       } else {
-        e.MOV(guest_addr_reg, i.src1.reg().toW());
+        e.MOV(log_guest_addr_reg, i.src1.reg().toW());
       }
       if (i.src2.is_constant) {
-        e.MOV(value_reg, i.src2.constant());
+        e.MOV(log_value_reg, i.src2.constant());
       } else {
-        e.MOV(value_reg, value);
+        e.MOV(log_value_reg, i.src2.reg().toX());
       }
       e.MOV(status_reg, status);
       e.CallNativeSafe(reinterpret_cast<void*>(LogReservationStore64));
       e.CMP(status, 0);
+      e.CSET(i.dest, Cond::EQ);
     } else {
       e.CMP(W0, 0);
+      e.CSET(i.dest, Cond::NE);
     }
-    e.CSET(i.dest, Cond::EQ);
   }
 };
 

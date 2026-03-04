@@ -46,13 +46,31 @@ struct A64BackendStackpoint {
 static_assert(sizeof(A64BackendStackpoint) == 32,
               "A64BackendStackpoint must be 32 bytes");
 
+static constexpr uint32_t RESERVE_BLOCK_SHIFT = 16;
+static constexpr uint64_t RESERVE_NUM_ENTRIES =
+    (1024ULL * 1024ULL * 1024ULL * 4ULL) >> RESERVE_BLOCK_SHIFT;
+
+// https://codalogic.com/blog/2022/12/06/Exploring-PowerPCs-read-modify-write-operations
+struct ReserveHelper {
+  uint64_t blocks[RESERVE_NUM_ENTRIES / 64] = {};
+};
+
+enum : uint32_t {
+  kA64BackendHasReserveBit = 0,
+};
+
 struct A64BackendContext {
   A64BackendStackpoint* stackpoints = nullptr;
+  ReserveHelper* reserve_helper = nullptr;
+  uint64_t cached_reserve_value = 0;
+  uint64_t cached_reserve_offset = 0;
   uint64_t pending_stack_sync_sp = 0;
   uint64_t pending_stack_sync_fp = 0;
   uint64_t pending_stack_sync_target = 0;
+  uint32_t cached_reserve_bit = 0;
   uint32_t current_stackpoint_depth = 0;
   uint32_t pending_stack_sync = 0;
+  uint32_t flags = 0;
   uint32_t njm_enabled = 1;
   uint32_t non_ieee_mode = 0;
 };
@@ -65,8 +83,7 @@ class A64Backend : public Backend {
   static constexpr uint32_t kGuestTrampolineEnd = 0x80040000;
   static constexpr uint32_t kGuestTrampolineMinLen = 8;
   static constexpr uint32_t kMaxGuestTrampolines =
-      (kGuestTrampolineEnd - kGuestTrampolineBase) /
-      kGuestTrampolineMinLen;
+      (kGuestTrampolineEnd - kGuestTrampolineBase) / kGuestTrampolineMinLen;
 
   explicit A64Backend();
   ~A64Backend() override;
@@ -114,6 +131,11 @@ class A64Backend : public Backend {
         reinterpret_cast<intptr_t>(ctx) - sizeof(A64BackendContext));
   }
 
+ public:
+  void* try_acquire_reservation_helper_ = nullptr;
+  void* reserved_store_32_helper = nullptr;
+  void* reserved_store_64_helper = nullptr;
+
  private:
   static bool ExceptionCallbackThunk(Exception* ex, void* data);
   bool ExceptionCallback(Exception* ex);
@@ -129,6 +151,7 @@ class A64Backend : public Backend {
   StackSyncThunk stack_sync_thunk_ = nullptr;
   StackSyncThunk stack_sync_helper_ = nullptr;
 
+  alignas(64) ReserveHelper reserve_helper_;
   uint8_t* guest_trampoline_memory_ = nullptr;
   BitMap guest_trampoline_address_bitmap_;
 };

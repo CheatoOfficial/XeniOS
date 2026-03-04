@@ -25,6 +25,8 @@
 #include "third_party/capstone/include/capstone/arm64.h"
 #include "third_party/capstone/include/capstone/capstone.h"
 
+#include "xenia/base/assert.h"
+#include "xenia/base/atomic.h"
 #include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
@@ -47,7 +49,7 @@ DECLARE_bool(record_mmio_access_exceptions);
 DECLARE_bool(log_mmio_recording);
 
 #if XE_PLATFORM_IOS
-constexpr bool kA64HostGuestStackSyncDefault = false;
+constexpr bool kA64HostGuestStackSyncDefault = true;
 constexpr int64_t kA64MaxStackpointsDefault = 16384;
 #else
 constexpr bool kA64HostGuestStackSyncDefault = true;
@@ -79,6 +81,125 @@ namespace backend {
 namespace a64 {
 
 using namespace oaknut::util;
+
+namespace {
+
+A64BackendContext* BackendContextFromRawContext(void* raw_context) {
+  return reinterpret_cast<A64BackendContext*>(
+      reinterpret_cast<uint8_t*>(raw_context) - sizeof(A64BackendContext));
+}
+
+void ReserveOffsetAndBit(ReserveHelper* reserve_helper, uint32_t guest_address,
+                         volatile uint64_t*& reserve_offset_out,
+                         uint32_t& reserve_bit_out) {
+  const uint32_t reserve_address = guest_address >> RESERVE_BLOCK_SHIFT;
+  reserve_offset_out = &reserve_helper->blocks[reserve_address >> 6];
+  reserve_bit_out = reserve_address & (64 - 1);
+}
+
+uint64_t TryAcquireReservationHelper(void* raw_context,
+                                     uint64_t guest_address) {
+  auto* backend_context = BackendContextFromRawContext(raw_context);
+  const uint32_t reserve_flag = 1U << kA64BackendHasReserveBit;
+  const bool already_has_reservation = (backend_context->flags & reserve_flag);
+  backend_context->flags &= ~reserve_flag;
+  assert_false(already_has_reservation);
+
+  volatile uint64_t* reserve_offset = nullptr;
+  uint32_t reserve_bit = 0;
+  ReserveOffsetAndBit(backend_context->reserve_helper,
+                      static_cast<uint32_t>(guest_address), reserve_offset,
+                      reserve_bit);
+  const uint64_t reserve_mask = uint64_t(1) << reserve_bit;
+
+  bool acquired = false;
+  while (true) {
+    const uint64_t old_value = *reserve_offset;
+    if (old_value & reserve_mask) {
+      break;
+    }
+    if (xe::atomic_cas(old_value, old_value | reserve_mask, reserve_offset)) {
+      acquired = true;
+      break;
+    }
+  }
+
+  backend_context->cached_reserve_offset =
+      reinterpret_cast<uintptr_t>(reserve_offset);
+  backend_context->cached_reserve_bit = reserve_bit;
+  if (acquired) {
+    backend_context->flags |= reserve_flag;
+  }
+  return acquired ? 1 : 0;
+}
+
+template <typename T>
+uint64_t ReservedStoreHelper(void* raw_context, uint64_t guest_address,
+                             uint64_t host_address, uint64_t value) {
+  auto* backend_context = BackendContextFromRawContext(raw_context);
+  const uint32_t reserve_flag = 1U << kA64BackendHasReserveBit;
+  const bool had_reservation = (backend_context->flags & reserve_flag);
+  backend_context->flags &= ~reserve_flag;
+  if (!had_reservation) {
+    return 0;
+  }
+
+  volatile uint64_t* reserve_offset = nullptr;
+  uint32_t reserve_bit = 0;
+  ReserveOffsetAndBit(backend_context->reserve_helper,
+                      static_cast<uint32_t>(guest_address), reserve_offset,
+                      reserve_bit);
+
+  if (backend_context->cached_reserve_offset !=
+          reinterpret_cast<uintptr_t>(reserve_offset) ||
+      backend_context->cached_reserve_bit != reserve_bit) {
+    assert_always();
+    return 0;
+  }
+
+  bool exchange_succeeded = false;
+  if constexpr (sizeof(T) == sizeof(uint64_t)) {
+    exchange_succeeded =
+        xe::atomic_cas(backend_context->cached_reserve_value, uint64_t(value),
+                       reinterpret_cast<volatile uint64_t*>(
+                           static_cast<uintptr_t>(host_address)));
+  } else {
+    exchange_succeeded = xe::atomic_cas(
+        uint32_t(backend_context->cached_reserve_value), uint32_t(value),
+        reinterpret_cast<volatile uint32_t*>(
+            static_cast<uintptr_t>(host_address)));
+  }
+
+  const uint64_t reserve_mask = uint64_t(1) << reserve_bit;
+  bool reservation_cleared = false;
+  while (true) {
+    const uint64_t old_value = *reserve_offset;
+    if ((old_value & reserve_mask) == 0) {
+      assert_always();
+      break;
+    }
+    if (xe::atomic_cas(old_value, old_value & ~reserve_mask, reserve_offset)) {
+      reservation_cleared = true;
+      break;
+    }
+  }
+
+  return (exchange_succeeded && reservation_cleared) ? 1 : 0;
+}
+
+uint64_t ReservedStore32Helper(void* raw_context, uint64_t guest_address,
+                               uint64_t host_address, uint64_t value) {
+  return ReservedStoreHelper<uint32_t>(raw_context, guest_address, host_address,
+                                       value);
+}
+
+uint64_t ReservedStore64Helper(void* raw_context, uint64_t guest_address,
+                               uint64_t host_address, uint64_t value) {
+  return ReservedStoreHelper<uint64_t>(raw_context, guest_address, host_address,
+                                       value);
+}
+
+}  // namespace
 
 class A64ThunkEmitter : public A64Emitter {
  public:
@@ -129,8 +250,7 @@ static void EmitMovSequence(uint32_t*& out, uint32_t reg, uint64_t value) {
   out += 4;
 }
 
-static void EmitGuestTrampoline(uint8_t* dst,
-                                backend::GuestTrampolineProc proc,
+static void EmitGuestTrampoline(uint8_t* dst, backend::GuestTrampolineProc proc,
                                 void* userdata1, void* userdata2,
                                 backend::a64::GuestToHostThunk thunk) {
   uint32_t* out = reinterpret_cast<uint32_t*>(dst);
@@ -138,13 +258,13 @@ static void EmitGuestTrampoline(uint8_t* dst,
   EmitMovSequence(out, 1, reinterpret_cast<uint64_t>(userdata1));  // X1
   EmitMovSequence(out, 2, reinterpret_cast<uint64_t>(userdata2));  // X2
   EmitMovSequence(out, 16, reinterpret_cast<uint64_t>(thunk));     // X16
-  *out++ = 0xD61F0000 | (16 << 5);  // BR X16
+  *out++ = 0xD61F0000 | (16 << 5);                                 // BR X16
 #if XE_PLATFORM_APPLE
   sys_icache_invalidate(dst, kGuestTrampolineCodeSize);
 #else
-  __builtin___clear_cache(reinterpret_cast<char*>(dst),
-                          reinterpret_cast<char*>(dst) +
-                              kGuestTrampolineCodeSize);
+  __builtin___clear_cache(
+      reinterpret_cast<char*>(dst),
+      reinterpret_cast<char*>(dst) + kGuestTrampolineCodeSize);
 #endif
 }
 
@@ -176,10 +296,10 @@ A64Backend::~A64Backend() {
   A64Emitter::FreeConstData(emitter_data_);
   ExceptionHandler::Uninstall(&ExceptionCallbackThunk, this);
   if (guest_trampoline_memory_) {
-    memory::DeallocFixed(guest_trampoline_memory_,
-                         static_cast<size_t>(kGuestTrampolineCodeSize) *
-                             kMaxGuestTrampolines,
-                         memory::DeallocationType::kRelease);
+    memory::DeallocFixed(
+        guest_trampoline_memory_,
+        static_cast<size_t>(kGuestTrampolineCodeSize) * kMaxGuestTrampolines,
+        memory::DeallocationType::kRelease);
     guest_trampoline_memory_ = nullptr;
   }
 }
@@ -220,6 +340,10 @@ bool A64Backend::Initialize(Processor* processor) {
   resolve_function_thunk_ = thunk_emitter.EmitResolveFunctionThunk();
   stack_sync_thunk_ = thunk_emitter.EmitStackSyncThunk();
   stack_sync_helper_ = thunk_emitter.EmitStackSyncHelper();
+  try_acquire_reservation_helper_ =
+      reinterpret_cast<void*>(TryAcquireReservationHelper);
+  reserved_store_32_helper = reinterpret_cast<void*>(ReservedStore32Helper);
+  reserved_store_64_helper = reinterpret_cast<void*>(ReservedStore64Helper);
 
 #if XE_A64_INDIRECTION_64BIT
   // On ARM64 platforms, the indirection table stores rel32 offsets with
@@ -234,8 +358,7 @@ bool A64Backend::Initialize(Processor* processor) {
 
   // Allocate some special indirections.
   code_cache_->CommitExecutableRange(0x9FFF0000, 0x9FFFFFFF);
-  code_cache_->CommitExecutableRange(kGuestTrampolineBase,
-                                     kGuestTrampolineEnd);
+  code_cache_->CommitExecutableRange(kGuestTrampolineBase, kGuestTrampolineEnd);
 
   // Allocate emitter constant data.
   emitter_data_ = A64Emitter::PlaceConstData();
@@ -551,6 +674,11 @@ void A64Backend::UninstallBreakpoint(Breakpoint* breakpoint) {
 
 void A64Backend::InitializeBackendContext(void* ctx) {
   auto* bctx = BackendContextForGuestContext(ctx);
+  bctx->reserve_helper = &reserve_helper_;
+  bctx->cached_reserve_value = 0;
+  bctx->cached_reserve_offset = 0;
+  bctx->cached_reserve_bit = 0;
+  bctx->flags = 0;
   if (cvars::a64_enable_host_guest_stack_synchronization &&
       cvars::max_stackpoints > 0) {
     bctx->stackpoints = new (std::nothrow)
@@ -577,6 +705,11 @@ void A64Backend::InitializeBackendContext(void* ctx) {
 
 void A64Backend::DeinitializeBackendContext(void* ctx) {
   auto* bctx = BackendContextForGuestContext(ctx);
+  bctx->reserve_helper = nullptr;
+  bctx->cached_reserve_value = 0;
+  bctx->cached_reserve_offset = 0;
+  bctx->cached_reserve_bit = 0;
+  bctx->flags = 0;
   delete[] bctx->stackpoints;
   bctx->stackpoints = nullptr;
   bctx->current_stackpoint_depth = 0;
@@ -616,7 +749,7 @@ void A64Backend::SetGuestRoundingMode(void* ctx, unsigned int mode) {
   asm volatile("mrs %0, fpcr" : "=r"(fpcr));
   fpcr &= ~(uint64_t(0x7) << 23);
   fpcr |= (uint64_t(fpcr_table[control]) << 23);
-  asm volatile("msr fpcr, %0" :: "r"(fpcr));
+  asm volatile("msr fpcr, %0" ::"r"(fpcr));
 #endif
 
   if (!ctx) {
@@ -640,8 +773,9 @@ void A64Backend::SetGuestRoundingMode(void* ctx, unsigned int mode) {
 uint32_t A64Backend::CreateGuestTrampoline(GuestTrampolineProc proc,
                                            void* userdata1, void* userdata2,
                                            bool long_term) {
-  size_t new_index = long_term ? guest_trampoline_address_bitmap_.AcquireFromBack()
-                               : guest_trampoline_address_bitmap_.Acquire();
+  size_t new_index = long_term
+                         ? guest_trampoline_address_bitmap_.AcquireFromBack()
+                         : guest_trampoline_address_bitmap_.Acquire();
   xenia_assert(new_index != static_cast<size_t>(-1));
 
   uint8_t* write_pos =
@@ -660,11 +794,12 @@ uint32_t A64Backend::CreateGuestTrampoline(GuestTrampolineProc proc,
       kGuestTrampolineBase +
       static_cast<uint32_t>(new_index) * kGuestTrampolineMinLen;
 #if XE_A64_INDIRECTION_64BIT
-  code_cache()->AddIndirection64(
-      guest_addr, reinterpret_cast<uint64_t>(write_pos));
+  code_cache()->AddIndirection64(guest_addr,
+                                 reinterpret_cast<uint64_t>(write_pos));
 #else
   code_cache()->AddIndirection(
-      guest_addr, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(write_pos)));
+      guest_addr,
+      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(write_pos)));
 #endif
   return guest_addr;
 }
@@ -754,21 +889,18 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
       const uint64_t tramp_base =
           reinterpret_cast<uint64_t>(guest_trampoline_memory_);
       const uint64_t tramp_end =
-          tramp_base +
-          static_cast<uint64_t>(kGuestTrampolineCodeSize) *
-              static_cast<uint64_t>(kMaxGuestTrampolines);
+          tramp_base + static_cast<uint64_t>(kGuestTrampolineCodeSize) *
+                           static_cast<uint64_t>(kMaxGuestTrampolines);
       if (host_pc >= tramp_base && host_pc < tramp_end) {
-        const size_t stub_index =
-            static_cast<size_t>((host_pc - tramp_base) /
-                                kGuestTrampolineCodeSize);
+        const size_t stub_index = static_cast<size_t>((host_pc - tramp_base) /
+                                                      kGuestTrampolineCodeSize);
         guest_pc = kGuestTrampolineBase +
-                   static_cast<uint32_t>(stub_index) *
-                       kGuestTrampolineMinLen;
+                   static_cast<uint32_t>(stub_index) * kGuestTrampolineMinLen;
         in_trampoline_stub = true;
       }
     }
-    auto function = in_trampoline_stub ? nullptr
-                                       : code_cache_->LookupFunction(host_pc);
+    auto function =
+        in_trampoline_stub ? nullptr : code_cache_->LookupFunction(host_pc);
     if (cvars::a64_fail_fast_on_access_violation &&
         (in_trampoline_stub || function)) {
       static std::atomic<bool> exiting_on_av{false};
@@ -803,9 +935,8 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
         thread_context ? thread_context->x[27] : 0,
         thread_context ? thread_context->x[28] : 0);
     if (in_trampoline_stub) {
-      XELOGE(
-          "A64 AV: host_pc in guest trampoline stub range (guest=0x{:08X})",
-          static_cast<uint32_t>(guest_pc));
+      XELOGE("A64 AV: host_pc in guest trampoline stub range (guest=0x{:08X})",
+             static_cast<uint32_t>(guest_pc));
     }
     const bool in_guest_code = function != nullptr;
     const ppc::PPCContext* ppc_context = nullptr;
@@ -834,8 +965,7 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
         }
         const uint32_t sp = static_cast<uint32_t>(ppc_context->r[1]);
         XELOGE("A64 AV: guest=0x{:08X} sp=0x{:08X} sp_to_fault=0x{:X}",
-               guest_fault, sp,
-               static_cast<uint32_t>(guest_fault - sp));
+               guest_fault, sp, static_cast<uint32_t>(guest_fault - sp));
         if (auto* memory = processor()->memory()) {
           if (auto* heap = memory->LookupHeap(guest_fault)) {
             uint32_t protect = 0;
@@ -863,19 +993,19 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
           }
           size_t length = sizeof(uint32_t);
           xe::memory::PageAccess access;
-          if (!xe::memory::QueryProtect(const_cast<uint32_t*>(code_ptr),
-                                        length, access) ||
+          if (!xe::memory::QueryProtect(const_cast<uint32_t*>(code_ptr), length,
+                                        access) ||
               access == xe::memory::PageAccess::kNoAccess) {
             continue;
           }
           const uint32_t instruction = xe::load_and_swap<uint32_t>(code_ptr);
           StringBuffer disasm;
           if (cpu::ppc::DisasmPPC(pc, instruction, &disasm)) {
-            XELOGE("A64 AV: guest_insn{} 0x{:08X} {}",
-                   (i == 0) ? "*" : " ", instruction, disasm.to_string());
+            XELOGE("A64 AV: guest_insn{} 0x{:08X} {}", (i == 0) ? "*" : " ",
+                   instruction, disasm.to_string());
           } else {
-            XELOGE("A64 AV: guest_insn{} 0x{:08X}",
-                   (i == 0) ? "*" : " ", instruction);
+            XELOGE("A64 AV: guest_insn{} 0x{:08X}", (i == 0) ? "*" : " ",
+                   instruction);
           }
 
           if (i <= 0) {
@@ -925,7 +1055,8 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
       const uint64_t code_base = code_cache_->execute_base_address();
       const uint64_t code_end = code_base + code_cache_->total_size();
       XELOGE(
-          "A64 AV: host_pc in code cache range? {} base=0x{:016X} end=0x{:016X}",
+          "A64 AV: host_pc in code cache range? {} base=0x{:016X} "
+          "end=0x{:016X}",
           (host_pc >= code_base && host_pc < code_end), code_base, code_end);
       Dl_info info;
       if (dladdr(reinterpret_cast<void*>(host_pc), &info) && info.dli_fname) {
@@ -996,7 +1127,7 @@ HostToGuestThunk A64ThunkEmitter::EmitHostToGuestThunk() {
   // Ensure membase is set for guest memory accesses.
   LDR(GetMembaseReg(), GetContextReg(),
       offsetof(ppc::PPCContext, virtual_membase));
-  MOV(X0, X2);               // return address
+  MOV(X0, X2);  // return address
   BLR(X16);
 
   EmitLoadNonvolatileRegs();
@@ -1336,7 +1467,8 @@ void A64ThunkEmitter::EmitSaveVolatileRegs() {
   STP(X11, X12, SP, offsetof(StackLayout::Thunk, r[10]));
   STP(X13, X14, SP, offsetof(StackLayout::Thunk, r[12]));
   STP(X15, X30, SP, offsetof(StackLayout::Thunk, r[14]));
-  // Preserve context/membase registers explicitly in case host code clobbers them.
+  // Preserve context/membase registers explicitly in case host code clobbers
+  // them.
   STR(X27, SP, offsetof(StackLayout::Thunk, r[16]));
   STR(X28, SP, offsetof(StackLayout::Thunk, r[17]));
 
