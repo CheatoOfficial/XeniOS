@@ -247,16 +247,17 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 }
 
 void GraphicsSystem::Shutdown() {
-  if (command_processor_) {
-    EndTracing();
-    command_processor_->Shutdown();
-    command_processor_.reset();
-  }
-
+  // Stop vblank generation before destroying the command processor it touches.
   if (frame_limiter_worker_thread_) {
     frame_limiter_worker_running_ = false;
     frame_limiter_worker_thread_->Wait(0, 0, 0, nullptr);
     frame_limiter_worker_thread_.reset();
+  }
+
+  if (command_processor_) {
+    EndTracing();
+    command_processor_->Shutdown();
+    command_processor_.reset();
   }
 
   if (presenter_) {
@@ -359,8 +360,7 @@ void GraphicsSystem::SetInterruptCallback(uint32_t callback,
 }
 
 void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
-  const uint32_t callback =
-      interrupt_callback_.load(std::memory_order_relaxed);
+  const uint32_t callback = interrupt_callback_.load(std::memory_order_relaxed);
   const uint32_t user_data =
       interrupt_callback_data_.load(std::memory_order_relaxed);
   kernel_state()->EmulateCPInterruptDPC(callback, user_data, source, cpu);
