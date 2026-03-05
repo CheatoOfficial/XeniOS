@@ -1693,11 +1693,8 @@ void MetalCommandProcessor::PrepareForWait() {
   // By submitting and waiting for all GPU work now, we ensure clean pool
   // drainage.
 
-  if (current_render_encoder_) {
-    current_render_encoder_->endEncoding();
-    current_render_encoder_->release();
-    current_render_encoder_ = nullptr;
-  }
+  // End through the shared helper so per-encoder bind caches are reset too.
+  EndRenderEncoder();
 
   if (current_command_buffer_) {
     uint64_t wait_value = 0;
@@ -5940,6 +5937,9 @@ void MetalCommandProcessor::BeginCommandBuffer() {
   }
 
   if (!current_render_encoder_) {
+    // If some path cleared the encoder without going through EndRenderEncoder,
+    // avoid leaking cached binding state into the new encoder.
+    ResetMslRenderEncoderStateCache();
     // Note: renderCommandEncoder() returns an autoreleased object, we must
     // retain it.
     current_render_encoder_ =
