@@ -3109,7 +3109,8 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     used_texture_mask |=
         metal_pixel_shader->GetUsedTextureMaskAfterTranslation();
   }
-  if (texture_cache_ && used_texture_mask) {
+  if (texture_cache_ && used_texture_mask &&
+      texture_cache_->AnyUsedTextureRequestWorkPending(used_texture_mask)) {
     texture_cache_->RequestTextures(used_texture_mask);
   }
 
@@ -4322,7 +4323,8 @@ bool MetalCommandProcessor::IssueDrawMsl(
     }
   }
 
-  if (texture_cache_ && used_texture_mask) {
+  if (texture_cache_ && used_texture_mask &&
+      texture_cache_->AnyUsedTextureRequestWorkPending(used_texture_mask)) {
     texture_cache_->RequestTextures(used_texture_mask);
   }
 
