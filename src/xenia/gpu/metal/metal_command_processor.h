@@ -10,10 +10,11 @@
 #ifndef XENIA_GPU_METAL_METAL_COMMAND_PROCESSOR_H_
 #define XENIA_GPU_METAL_METAL_COMMAND_PROCESSOR_H_
 
+#include <dispatch/dispatch.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <dispatch/dispatch.h>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -32,6 +33,7 @@
 #include "xenia/gpu/metal/metal_render_target_cache.h"
 #include "xenia/gpu/metal/metal_shared_memory.h"
 #include "xenia/gpu/metal/metal_texture_cache.h"
+#include "xenia/gpu/metal/msl_bindings.h"
 #include "xenia/gpu/metal/msl_shader.h"
 #include "xenia/gpu/spirv_shader_translator.h"
 #if METAL_SHADER_CONVERTER_AVAILABLE
@@ -90,7 +92,9 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
     return current_command_buffer_;
   }
-  bool HasActiveRenderEncoder() const { return current_render_encoder_ != nullptr; }
+  bool HasActiveRenderEncoder() const {
+    return current_render_encoder_ != nullptr;
+  }
   uint32_t current_draw_index() const { return current_draw_index_; }
   uint64_t GetCurrentSubmission() const;
   uint64_t GetCompletedSubmission() const;
@@ -494,6 +498,7 @@ class MetalCommandProcessor : public CommandProcessor {
     MTL::PixelFormat depth_format = MTL::PixelFormatInvalid;
     MTL::PixelFormat stencil_format = MTL::PixelFormatInvalid;
     uint32_t normalized_color_mask = 0;
+    uint32_t alpha_to_mask_enable = 0;
     uint32_t blendcontrol[4] = {};
     uint8_t priority = 0;
   };
@@ -720,6 +725,9 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_last_argbuf_vertex_sampler_count_ = 0;
   MTL::Buffer* msl_last_argbuf_vertex_buffer_ = nullptr;
   NS::UInteger msl_last_argbuf_vertex_offset_ = 0;
+  const MslShader::MslTranslation* msl_last_argbuf_vertex_translation_ =
+      nullptr;
+  uint32_t msl_last_argbuf_vertex_encoded_length_ = 0;
   uint64_t msl_last_argbuf_vertex_layout_uid_ = 0;
   std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
       msl_last_argbuf_pixel_textures_{};
@@ -729,6 +737,8 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_last_argbuf_pixel_sampler_count_ = 0;
   MTL::Buffer* msl_last_argbuf_pixel_buffer_ = nullptr;
   NS::UInteger msl_last_argbuf_pixel_offset_ = 0;
+  const MslShader::MslTranslation* msl_last_argbuf_pixel_translation_ = nullptr;
+  uint32_t msl_last_argbuf_pixel_encoded_length_ = 0;
   uint64_t msl_last_argbuf_pixel_layout_uid_ = 0;
   // D3D12-style SPIRV constant cache state.
   std::array<uint64_t, 4> msl_current_float_constant_map_vertex_{};
@@ -791,6 +801,7 @@ class MetalCommandProcessor : public CommandProcessor {
   // Each draw uses a different region of the descriptor heap to avoid
   // overwriting previous draws' descriptors before GPU execution
   uint32_t current_draw_index_ = 0;
+  bool copy_resolve_writes_pending_ = false;
 
   // Memexport tracking for shared memory invalidation.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
