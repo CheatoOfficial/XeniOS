@@ -708,10 +708,22 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_last_argbuf_pixel_sampler_count_ = 0;
   MTL::Buffer* msl_last_argbuf_pixel_buffer_ = nullptr;
   NS::UInteger msl_last_argbuf_pixel_offset_ = 0;
-  // Reusable scratch buffers for packed float constants (avoid per-draw stack
-  // allocation of 4KB arrays).
-  std::array<uint8_t, kCbvSizeBytes> msl_float_constants_scratch_vertex_{};
-  std::array<uint8_t, kCbvSizeBytes> msl_float_constants_scratch_pixel_{};
+  // D3D12-style SPIRV constant cache state.
+  std::array<uint64_t, 4> msl_current_float_constant_map_vertex_{};
+  std::array<uint64_t, 4> msl_current_float_constant_map_pixel_{};
+  bool msl_float_constants_dirty_vertex_ = true;
+  bool msl_float_constants_dirty_pixel_ = true;
+  bool msl_bool_loop_constants_dirty_ = true;
+  bool msl_fetch_constants_dirty_ = true;
+  std::array<uint8_t, kCbvSizeBytes> msl_cached_float_constants_vertex_{};
+  std::array<uint8_t, kCbvSizeBytes> msl_cached_float_constants_pixel_{};
+  std::array<uint8_t, kCbvSizeBytes> msl_cached_bool_loop_constants_{};
+  std::array<uint8_t, kCbvSizeBytes> msl_cached_fetch_constants_{};
+  // Uniforms slot binding dedupe.
+  MTL::Buffer* msl_bound_uniforms_buffer_ = nullptr;
+  NS::UInteger msl_bound_uniforms_vs_base_offset_ = 0;
+  NS::UInteger msl_bound_uniforms_ps_base_offset_ = 0;
+  bool msl_bound_uniforms_offsets_valid_ = false;
   MTL::RenderPipelineState* msl_bound_pipeline_state_ = nullptr;
   bool msl_viewport_valid_ = false;
   MTL::Viewport msl_viewport_ = {};
