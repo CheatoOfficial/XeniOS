@@ -671,6 +671,18 @@ class MetalCommandProcessor : public CommandProcessor {
   bool system_constants_dirty_ = true;
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
   bool logged_missing_texture_warning_ = false;
+  // SPIRV-Cross system/clip/tess constants versioning.
+  // Each ring-table slot tracks the last source version copied into it so
+  // draws can skip per-draw memcmp/copy churn for unchanged constants.
+  uint64_t msl_system_constants_version_ = 1;
+  uint64_t msl_clip_plane_constants_version_ = 1;
+  uint64_t msl_tessellation_constants_version_ = 1;
+  MTL::Buffer* msl_constants_versioned_uniform_buffer_ = nullptr;
+  std::vector<uint64_t> msl_system_constants_written_vertex_versions_;
+  std::vector<uint64_t> msl_system_constants_written_pixel_versions_;
+  std::vector<uint64_t> msl_clip_plane_constants_written_vertex_versions_;
+  std::vector<uint64_t> msl_tessellation_constants_written_vertex_versions_;
+  std::vector<uint64_t> msl_tessellation_constants_written_pixel_versions_;
   // SPIRV-Cross path: highest texture/sampler slot counts bound on the current
   // render encoder. Used to clear trailing slots when a later draw uses fewer
   // resources, preventing stale state leakage between draws.
@@ -678,6 +690,10 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_bound_pixel_texture_count_ = 0;
   uint32_t msl_bound_vertex_sampler_count_ = 0;
   uint32_t msl_bound_pixel_sampler_count_ = 0;
+  uint64_t msl_bound_vertex_texture_binding_uid_ = 0;
+  uint64_t msl_bound_pixel_texture_binding_uid_ = 0;
+  uint64_t msl_bound_vertex_sampler_binding_uid_ = 0;
+  uint64_t msl_bound_pixel_sampler_binding_uid_ = 0;
   std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
       msl_bound_vertex_textures_{};
   std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
@@ -688,6 +704,10 @@ class MetalCommandProcessor : public CommandProcessor {
       msl_bound_pixel_samplers_{};
   MTL::Buffer* msl_bound_vertex_argument_buffer_ = nullptr;
   MTL::Buffer* msl_bound_pixel_argument_buffer_ = nullptr;
+  NS::UInteger msl_bound_vertex_argument_buffer_offset_ = 0;
+  NS::UInteger msl_bound_pixel_argument_buffer_offset_ = 0;
+  bool msl_bound_vertex_argument_buffer_offset_valid_ = false;
+  bool msl_bound_pixel_argument_buffer_offset_valid_ = false;
   MTL::Buffer* msl_bound_shared_memory_buffer_ = nullptr;
   MTL::Buffer* msl_bound_null_buffer_ = nullptr;
   // Cached argument buffer content for change detection — skip re-encoding
@@ -700,6 +720,7 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_last_argbuf_vertex_sampler_count_ = 0;
   MTL::Buffer* msl_last_argbuf_vertex_buffer_ = nullptr;
   NS::UInteger msl_last_argbuf_vertex_offset_ = 0;
+  uint64_t msl_last_argbuf_vertex_layout_uid_ = 0;
   std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
       msl_last_argbuf_pixel_textures_{};
   uint32_t msl_last_argbuf_pixel_texture_count_ = 0;
@@ -708,6 +729,7 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t msl_last_argbuf_pixel_sampler_count_ = 0;
   MTL::Buffer* msl_last_argbuf_pixel_buffer_ = nullptr;
   NS::UInteger msl_last_argbuf_pixel_offset_ = 0;
+  uint64_t msl_last_argbuf_pixel_layout_uid_ = 0;
   // D3D12-style SPIRV constant cache state.
   std::array<uint64_t, 4> msl_current_float_constant_map_vertex_{};
   std::array<uint64_t, 4> msl_current_float_constant_map_pixel_{};

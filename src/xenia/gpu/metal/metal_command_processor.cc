@@ -1307,12 +1307,31 @@ bool MetalCommandProcessor::SetupContext() {
       draw_ring_count_ = kMaxSpirvRingPagesPerCommandBuffer;
     }
   }
+  msl_system_constants_version_ = 1;
+  msl_clip_plane_constants_version_ = 1;
+  msl_tessellation_constants_version_ = 1;
+  msl_constants_versioned_uniform_buffer_ = nullptr;
+  msl_system_constants_written_vertex_versions_.assign(draw_ring_count_, 0);
+  msl_system_constants_written_pixel_versions_.assign(draw_ring_count_, 0);
+  msl_clip_plane_constants_written_vertex_versions_.assign(draw_ring_count_, 0);
+  msl_tessellation_constants_written_vertex_versions_.assign(draw_ring_count_, 0);
+  msl_tessellation_constants_written_pixel_versions_.assign(draw_ring_count_, 0);
   msl_current_float_constant_map_vertex_.fill(0);
   msl_current_float_constant_map_pixel_.fill(0);
   msl_float_constants_dirty_vertex_ = true;
   msl_float_constants_dirty_pixel_ = true;
   msl_bool_loop_constants_dirty_ = true;
   msl_fetch_constants_dirty_ = true;
+  msl_bound_vertex_texture_binding_uid_ = 0;
+  msl_bound_pixel_texture_binding_uid_ = 0;
+  msl_bound_vertex_sampler_binding_uid_ = 0;
+  msl_bound_pixel_sampler_binding_uid_ = 0;
+  msl_bound_vertex_argument_buffer_offset_ = 0;
+  msl_bound_pixel_argument_buffer_offset_ = 0;
+  msl_bound_vertex_argument_buffer_offset_valid_ = false;
+  msl_bound_pixel_argument_buffer_offset_valid_ = false;
+  msl_last_argbuf_vertex_layout_uid_ = 0;
+  msl_last_argbuf_pixel_layout_uid_ = 0;
   msl_bound_uniforms_buffer_ = nullptr;
   msl_bound_uniforms_vs_base_offset_ = 0;
   msl_bound_uniforms_ps_base_offset_ = 0;
@@ -4417,7 +4436,10 @@ bool MetalCommandProcessor::IssueDrawMsl(
   }
 
   // Apply fixed-function state.
-  current_render_encoder_->setRenderPipelineState(pipeline);
+  if (msl_bound_pipeline_state_ != pipeline) {
+    current_render_encoder_->setRenderPipelineState(pipeline);
+    msl_bound_pipeline_state_ = pipeline;
+  }
   ApplyRasterizerState(primitive_polygonal);
   ApplyDepthStencilState(primitive_polygonal, normalized_depth_control);
 
@@ -4459,12 +4481,55 @@ bool MetalCommandProcessor::IssueDrawMsl(
       uniforms_base + table_index_vertex * kUniformsBytesPerTable;
   uint8_t* uniforms_pixel =
       uniforms_base + table_index_pixel * kUniformsBytesPerTable;
+  if (msl_constants_versioned_uniform_buffer_ != uniforms_buffer_) {
+    msl_constants_versioned_uniform_buffer_ = uniforms_buffer_;
+    std::fill(msl_system_constants_written_vertex_versions_.begin(),
+              msl_system_constants_written_vertex_versions_.end(), uint64_t(0));
+    std::fill(msl_system_constants_written_pixel_versions_.begin(),
+              msl_system_constants_written_pixel_versions_.end(), uint64_t(0));
+    std::fill(msl_clip_plane_constants_written_vertex_versions_.begin(),
+              msl_clip_plane_constants_written_vertex_versions_.end(),
+              uint64_t(0));
+    std::fill(msl_tessellation_constants_written_vertex_versions_.begin(),
+              msl_tessellation_constants_written_vertex_versions_.end(),
+              uint64_t(0));
+    std::fill(msl_tessellation_constants_written_pixel_versions_.begin(),
+              msl_tessellation_constants_written_pixel_versions_.end(),
+              uint64_t(0));
+  }
+  auto ensure_uniform_versions_size = [&](std::vector<uint64_t>& versions) {
+    if (versions.size() != draw_ring_count_) {
+      versions.assign(draw_ring_count_, 0);
+    }
+  };
+  ensure_uniform_versions_size(msl_system_constants_written_vertex_versions_);
+  ensure_uniform_versions_size(msl_system_constants_written_pixel_versions_);
+  ensure_uniform_versions_size(msl_clip_plane_constants_written_vertex_versions_);
+  ensure_uniform_versions_size(msl_tessellation_constants_written_vertex_versions_);
+  ensure_uniform_versions_size(msl_tessellation_constants_written_pixel_versions_);
+  const size_t ring_index_size = size_t(ring_index);
+  auto copy_uniform_block_if_stale =
+      [&](uint8_t* dst, const void* src, size_t size,
+          std::vector<uint64_t>& written_versions,
+          uint64_t source_version) {
+        if (ring_index_size >= written_versions.size()) {
+          return;
+        }
+        if (written_versions[ring_index_size] != source_version) {
+          std::memcpy(dst, src, size);
+          written_versions[ring_index_size] = source_version;
+        }
+  };
 
   // b0 (msl_buffer 1): System constants.
-  std::memcpy(uniforms_vertex, &spirv_system_constants_,
-              sizeof(SpirvShaderTranslator::SystemConstants));
-  std::memcpy(uniforms_pixel, &spirv_system_constants_,
-              sizeof(SpirvShaderTranslator::SystemConstants));
+  copy_uniform_block_if_stale(
+      uniforms_vertex, &spirv_system_constants_,
+      sizeof(SpirvShaderTranslator::SystemConstants),
+      msl_system_constants_written_vertex_versions_, msl_system_constants_version_);
+  copy_uniform_block_if_stale(
+      uniforms_pixel, &spirv_system_constants_,
+      sizeof(SpirvShaderTranslator::SystemConstants),
+      msl_system_constants_written_pixel_versions_, msl_system_constants_version_);
 
   // b1 (msl_buffer 2/3): Float constants.
   // SpirvShaderTranslator uses packed float constants like Vulkan.
@@ -4574,21 +4639,28 @@ bool MetalCommandProcessor::IssueDrawMsl(
 
   // b5 (msl_buffer 6): Clip plane constants (separate buffer for SPIR-V path).
   const size_t kClipPlaneConstantOffset = 4 * kCBVSize;
-  std::memcpy(uniforms_vertex + kClipPlaneConstantOffset,
-              &spirv_clip_plane_constants_,
-              sizeof(SpirvShaderTranslator::ClipPlaneConstants));
+  copy_uniform_block_if_stale(
+      uniforms_vertex + kClipPlaneConstantOffset, &spirv_clip_plane_constants_,
+      sizeof(SpirvShaderTranslator::ClipPlaneConstants),
+      msl_clip_plane_constants_written_vertex_versions_,
+      msl_clip_plane_constants_version_);
 
   // b6 (msl_buffer 7): Tessellation constants.
   const size_t kTessellationConstantOffset = 5 * kCBVSize;
-  std::memcpy(uniforms_vertex + kTessellationConstantOffset,
-              &spirv_tessellation_constants_,
-              sizeof(SpirvShaderTranslator::TessellationConstants));
-  std::memcpy(uniforms_pixel + kTessellationConstantOffset,
-              &spirv_tessellation_constants_,
-              sizeof(SpirvShaderTranslator::TessellationConstants));
+  copy_uniform_block_if_stale(
+      uniforms_vertex + kTessellationConstantOffset,
+      &spirv_tessellation_constants_,
+      sizeof(SpirvShaderTranslator::TessellationConstants),
+      msl_tessellation_constants_written_vertex_versions_,
+      msl_tessellation_constants_version_);
+  copy_uniform_block_if_stale(
+      uniforms_pixel + kTessellationConstantOffset,
+      &spirv_tessellation_constants_,
+      sizeof(SpirvShaderTranslator::TessellationConstants),
+      msl_tessellation_constants_written_pixel_versions_,
+      msl_tessellation_constants_version_);
 
-  // This branch doesn't track pipeline-change state here, so keep binding
-  // behavior conservative while still using cached slot contents.
+  // Keep binding behavior conservative while using per-encoder dedupe caches.
   const bool msl_bind_dedupe = true;
 
   // Bind shared memory buffer at msl_buffer 0.
@@ -4684,6 +4756,24 @@ bool MetalCommandProcessor::IssueDrawMsl(
       vertex_translation && vertex_translation->uses_argument_buffers();
   const bool pixel_uses_argbuf =
       pixel_translation && pixel_translation->uses_argument_buffers();
+  auto get_msl_binding_layout_uid = [](const MslShader::MslTranslation* translation)
+      -> uint64_t {
+    if (!translation) {
+      return 0;
+    }
+    const auto& texture_binding_indices =
+        translation->texture_binding_indices_for_msl_slots();
+    const auto& sampler_binding_indices =
+        translation->sampler_binding_indices_for_msl_slots();
+    uint64_t uid = XXH3_64bits(
+        texture_binding_indices.data(),
+        texture_binding_indices.size() * sizeof(texture_binding_indices[0]));
+    uid = XXH3_64bits_withSeed(
+        sampler_binding_indices.data(),
+        sampler_binding_indices.size() * sizeof(sampler_binding_indices[0]),
+        uid);
+    return uid;
+  };
 
   auto bind_msl_argument_buffer = [&](MslShader* shader,
                                       MslShader::MslTranslation* translation,
@@ -4780,8 +4870,12 @@ bool MetalCommandProcessor::IssueDrawMsl(
     auto& cached_argbuf_offset = is_pixel_stage
                                      ? msl_last_argbuf_pixel_offset_
                                      : msl_last_argbuf_vertex_offset_;
+    auto& cached_layout_uid = is_pixel_stage ? msl_last_argbuf_pixel_layout_uid_
+                                             : msl_last_argbuf_vertex_layout_uid_;
+    const uint64_t layout_uid = get_msl_binding_layout_uid(translation);
 
-    bool content_changed = texture_count != cached_texture_count ||
+    bool content_changed = layout_uid != cached_layout_uid ||
+                           texture_count != cached_texture_count ||
                            sampler_count != cached_sampler_count ||
                            !cached_argbuf_buffer;
     if (!content_changed && texture_count > 0) {
@@ -4840,6 +4934,7 @@ bool MetalCommandProcessor::IssueDrawMsl(
       cached_sampler_count = sampler_count;
       cached_argbuf_buffer = argbuf_buffer;
       cached_argbuf_offset = argbuf_offset;
+      cached_layout_uid = layout_uid;
     } else {
       // Content unchanged — reuse the previous argument buffer slice.
       argbuf_buffer = cached_argbuf_buffer;
@@ -4852,18 +4947,30 @@ bool MetalCommandProcessor::IssueDrawMsl(
             argbuf_buffer, 0,
             MslBufferIndex::kArgumentBufferTexturesSamplers);
         msl_bound_pixel_argument_buffer_ = argbuf_buffer;
+        msl_bound_pixel_argument_buffer_offset_valid_ = false;
       }
-      current_render_encoder_->setFragmentBufferOffset(
-          argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+      if (!msl_bound_pixel_argument_buffer_offset_valid_ ||
+          msl_bound_pixel_argument_buffer_offset_ != argbuf_offset) {
+        current_render_encoder_->setFragmentBufferOffset(
+            argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+        msl_bound_pixel_argument_buffer_offset_ = argbuf_offset;
+        msl_bound_pixel_argument_buffer_offset_valid_ = true;
+      }
     } else {
       if (argbuf_buffer != msl_bound_vertex_argument_buffer_) {
         current_render_encoder_->setVertexBuffer(
             argbuf_buffer, 0,
             MslBufferIndex::kArgumentBufferTexturesSamplers);
         msl_bound_vertex_argument_buffer_ = argbuf_buffer;
+        msl_bound_vertex_argument_buffer_offset_valid_ = false;
       }
-      current_render_encoder_->setVertexBufferOffset(
-          argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+      if (!msl_bound_vertex_argument_buffer_offset_valid_ ||
+          msl_bound_vertex_argument_buffer_offset_ != argbuf_offset) {
+        current_render_encoder_->setVertexBufferOffset(
+            argbuf_offset, MslBufferIndex::kArgumentBufferTexturesSamplers);
+        msl_bound_vertex_argument_buffer_offset_ = argbuf_offset;
+        msl_bound_vertex_argument_buffer_offset_valid_ = true;
+      }
     }
 
     UseRenderEncoderResource(argbuf_buffer, MTL::ResourceUsageRead);
@@ -4889,19 +4996,35 @@ bool MetalCommandProcessor::IssueDrawMsl(
         current_render_encoder_->setVertexTexture(texture, slot);
       }
     };
-    auto clear_slots_from = [&](uint32_t start, uint32_t end_exclusive) {
-      for (uint32_t slot = start; slot < end_exclusive; ++slot) {
-        bind_texture_slot(slot, nullptr);
-      }
-    };
-
     uint32_t* previous_bound_count = is_pixel_stage
                                          ? &msl_bound_pixel_texture_count_
                                          : &msl_bound_vertex_texture_count_;
+    uint64_t* cached_binding_uid = is_pixel_stage
+                                       ? &msl_bound_pixel_texture_binding_uid_
+                                       : &msl_bound_vertex_texture_binding_uid_;
+    auto* bound_textures = is_pixel_stage ? &msl_bound_pixel_textures_
+                                          : &msl_bound_vertex_textures_;
+    const uint64_t layout_uid = get_msl_binding_layout_uid(translation);
+    const uint64_t binding_uid =
+        (shader && translation && texture_cache_)
+            ? (uint64_t(reinterpret_cast<uintptr_t>(pipeline)) *
+                   UINT64_C(11400714819323198485) ^
+               layout_uid)
+            : 0;
+    const bool force_rebind = *cached_binding_uid != binding_uid;
+    auto clear_slots_from = [&](uint32_t start, uint32_t end_exclusive) {
+      for (uint32_t slot = start; slot < end_exclusive; ++slot) {
+        if (force_rebind || (*bound_textures)[slot] != nullptr) {
+          bind_texture_slot(slot, nullptr);
+          (*bound_textures)[slot] = nullptr;
+        }
+      }
+    };
 
     if (!shader || !translation || !texture_cache_) {
       clear_slots_from(0, *previous_bound_count);
       *previous_bound_count = 0;
+      *cached_binding_uid = binding_uid;
       return;
     }
 
@@ -4941,11 +5064,16 @@ bool MetalCommandProcessor::IssueDrawMsl(
       } else {
         texture = metal_texture_cache->GetNullTexture2D();
       }
-      bind_texture_slot(tex_index, texture);
+      if (force_rebind || (*bound_textures)[tex_index] != texture) {
+        bind_texture_slot(tex_index, texture);
+        (*bound_textures)[tex_index] = texture;
+      }
       if (texture) {
         UseRenderEncoderResource(texture, MTL::ResourceUsageRead);
       }
     }
+    *previous_bound_count = bound_count;
+    *cached_binding_uid = binding_uid;
   };
 
   auto bind_msl_samplers = [&](MslShader* shader,
@@ -4962,12 +5090,29 @@ bool MetalCommandProcessor::IssueDrawMsl(
     uint32_t* previous_bound_count = is_pixel_stage
                                          ? &msl_bound_pixel_sampler_count_
                                          : &msl_bound_vertex_sampler_count_;
+    uint64_t* cached_binding_uid = is_pixel_stage
+                                       ? &msl_bound_pixel_sampler_binding_uid_
+                                       : &msl_bound_vertex_sampler_binding_uid_;
+    auto* bound_samplers = is_pixel_stage ? &msl_bound_pixel_samplers_
+                                          : &msl_bound_vertex_samplers_;
+    const uint64_t layout_uid = get_msl_binding_layout_uid(translation);
+    const uint64_t binding_uid =
+        (shader && translation && texture_cache_)
+            ? (uint64_t(reinterpret_cast<uintptr_t>(pipeline)) *
+                   UINT64_C(11400714819323198485) ^
+               layout_uid)
+            : 0;
+    const bool force_rebind = *cached_binding_uid != binding_uid;
 
     if (!shader || !translation || !texture_cache_) {
       for (uint32_t slot = 0; slot < *previous_bound_count; ++slot) {
-        bind_sampler_slot(slot, null_sampler_);
+        if (force_rebind || (*bound_samplers)[slot] != null_sampler_) {
+          bind_sampler_slot(slot, null_sampler_);
+          (*bound_samplers)[slot] = null_sampler_;
+        }
       }
       *previous_bound_count = 0;
+      *cached_binding_uid = binding_uid;
       return;
     }
     // Samplers are remapped to compact Metal indices 0..M-1 in
@@ -4981,7 +5126,10 @@ bool MetalCommandProcessor::IssueDrawMsl(
                                     MslSamplerIndex::kMaxPerStage);
     if (*previous_bound_count > bound_count) {
       for (uint32_t slot = bound_count; slot < *previous_bound_count; ++slot) {
-        bind_sampler_slot(slot, null_sampler_);
+        if (force_rebind || (*bound_samplers)[slot] != null_sampler_) {
+          bind_sampler_slot(slot, null_sampler_);
+          (*bound_samplers)[slot] = null_sampler_;
+        }
       }
     }
     *previous_bound_count = bound_count;
@@ -4997,8 +5145,13 @@ bool MetalCommandProcessor::IssueDrawMsl(
           sampler_state = null_sampler_;
         }
       }
-      bind_sampler_slot(smp_index, sampler_state);
+      if (force_rebind || (*bound_samplers)[smp_index] != sampler_state) {
+        bind_sampler_slot(smp_index, sampler_state);
+        (*bound_samplers)[smp_index] = sampler_state;
+      }
     }
+    *previous_bound_count = bound_count;
+    *cached_binding_uid = binding_uid;
   };
 
   if (!vertex_uses_argbuf) {
@@ -5614,6 +5767,10 @@ void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
   msl_bound_pixel_texture_count_ = 0;
   msl_bound_vertex_sampler_count_ = 0;
   msl_bound_pixel_sampler_count_ = 0;
+  msl_bound_vertex_texture_binding_uid_ = 0;
+  msl_bound_pixel_texture_binding_uid_ = 0;
+  msl_bound_vertex_sampler_binding_uid_ = 0;
+  msl_bound_pixel_sampler_binding_uid_ = 0;
   msl_bound_vertex_textures_.fill(nullptr);
   msl_bound_pixel_textures_.fill(nullptr);
   msl_bound_vertex_samplers_.fill(nullptr);
@@ -5621,6 +5778,10 @@ void MetalCommandProcessor::ResetMslRenderEncoderStateCache() {
   msl_bound_shared_memory_buffer_ = nullptr;
   msl_bound_vertex_argument_buffer_ = nullptr;
   msl_bound_pixel_argument_buffer_ = nullptr;
+  msl_bound_vertex_argument_buffer_offset_ = 0;
+  msl_bound_pixel_argument_buffer_offset_ = 0;
+  msl_bound_vertex_argument_buffer_offset_valid_ = false;
+  msl_bound_pixel_argument_buffer_offset_valid_ = false;
   msl_bound_null_buffer_ = nullptr;
   msl_bound_uniforms_buffer_ = nullptr;
   msl_bound_uniforms_vs_base_offset_ = 0;
@@ -5644,12 +5805,14 @@ void MetalCommandProcessor::ResetMslCrossEncoderReuseCaches() {
   msl_last_argbuf_vertex_sampler_count_ = 0;
   msl_last_argbuf_vertex_buffer_ = nullptr;
   msl_last_argbuf_vertex_offset_ = 0;
+  msl_last_argbuf_vertex_layout_uid_ = 0;
   msl_last_argbuf_pixel_textures_.fill(nullptr);
   msl_last_argbuf_pixel_texture_count_ = 0;
   msl_last_argbuf_pixel_samplers_.fill(nullptr);
   msl_last_argbuf_pixel_sampler_count_ = 0;
   msl_last_argbuf_pixel_buffer_ = nullptr;
   msl_last_argbuf_pixel_offset_ = 0;
+  msl_last_argbuf_pixel_layout_uid_ = 0;
 }
 
 void MetalCommandProcessor::EndRenderEncoder() {
@@ -9591,6 +9754,13 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
     xenos::Endian index_endian, const draw_util::ViewportInfo& viewport_info,
     uint32_t used_texture_mask, reg::RB_DEPTHCONTROL normalized_depth_control,
     uint32_t normalized_color_mask) {
+  const SpirvShaderTranslator::SystemConstants previous_system_constants =
+      spirv_system_constants_;
+  const SpirvShaderTranslator::ClipPlaneConstants previous_clip_plane_constants =
+      spirv_clip_plane_constants_;
+  const SpirvShaderTranslator::TessellationConstants
+      previous_tessellation_constants = spirv_tessellation_constants_;
+
   const RegisterFile& regs = *register_file_;
   auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
   auto rb_alpha_ref = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
@@ -9827,6 +9997,29 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
       regs[XE_GPU_REG_VGT_MIN_VTX_INDX];
   spirv_tessellation_constants_.vertex_index_min_max[1] =
       regs[XE_GPU_REG_VGT_MAX_VTX_INDX];
+
+  if (std::memcmp(&previous_system_constants, &spirv_system_constants_,
+                  sizeof(spirv_system_constants_)) != 0) {
+    ++msl_system_constants_version_;
+    if (msl_system_constants_version_ == 0) {
+      msl_system_constants_version_ = 1;
+    }
+  }
+  if (std::memcmp(&previous_clip_plane_constants, &spirv_clip_plane_constants_,
+                  sizeof(spirv_clip_plane_constants_)) != 0) {
+    ++msl_clip_plane_constants_version_;
+    if (msl_clip_plane_constants_version_ == 0) {
+      msl_clip_plane_constants_version_ = 1;
+    }
+  }
+  if (std::memcmp(&previous_tessellation_constants,
+                  &spirv_tessellation_constants_,
+                  sizeof(spirv_tessellation_constants_)) != 0) {
+    ++msl_tessellation_constants_version_;
+    if (msl_tessellation_constants_version_ == 0) {
+      msl_tessellation_constants_version_ = 1;
+    }
+  }
 }
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
