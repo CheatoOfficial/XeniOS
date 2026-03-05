@@ -9482,6 +9482,14 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
   // Vertex index.
   consts.vertex_index_endian = index_endian;
   consts.vertex_base_index = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
+  const bool is_vs_expansion_draw =
+      primitive_processing_result.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kPointListAsTriangleStrip ||
+      primitive_processing_result.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kRectangleListAsTriangleStrip;
+  consts.vertex_index_count =
+      is_vs_expansion_draw ? primitive_processing_result.guest_draw_vertex_count
+                           : primitive_processing_result.host_draw_vertex_count;
 
   // Vertex index load address (for VS-based primitive expansion).
   if (flags &
