@@ -1201,6 +1201,31 @@ static NSArray<NSString*>* xe_compat_perf_labels(void) {
   return @[ @"Great", @"OK", @"Poor", @"N/A" ];
 }
 
+static CGFloat xe_compat_hero_height_for_width(CGFloat width) {
+  CGFloat card_width = MAX(width - 32.0, 0.0);
+  if (card_width <= 0.0) {
+    return 304.0;
+  }
+  return MAX(304.0, floor(card_width * 0.82));
+}
+
+static CGRect xe_compat_background_contents_rect(UIImage* image, CGSize bounds_size) {
+  if (!image || image.size.width <= 0.0 || image.size.height <= 0.0 || bounds_size.width <= 0.0 ||
+      bounds_size.height <= 0.0) {
+    return CGRectMake(0.0, 0.0, 1.0, 1.0);
+  }
+
+  CGFloat image_aspect = image.size.width / image.size.height;
+  CGFloat bounds_aspect = bounds_size.width / bounds_size.height;
+  if (image_aspect <= bounds_aspect + 0.01) {
+    return CGRectMake(0.0, 0.0, 1.0, 1.0);
+  }
+
+  CGFloat visible_width = bounds_aspect / image_aspect;
+  visible_width = MIN(MAX(visible_width, 0.01), 1.0);
+  return CGRectMake(0.0, 0.0, visible_width, 1.0);
+}
+
 static NSString* xe_device_machine(void) {
   size_t size = 0;
   sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
@@ -2624,8 +2649,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   UIImage* display = hero_background_artwork_ ?: hero_artwork_;
   hero_header_backdrop_view_.image = display;
   hero_header_backdrop_view_.hidden = (display == nil);
-  hero_header_backdrop_view_.layer.contentsRect =
-      hero_background_artwork_ ? CGRectMake(0.0, 0.0, 1.0, 1.0) : CGRectMake(0.0, 0.18, 1.0, 0.82);
+  hero_header_backdrop_view_.layer.contentsRect = hero_background_artwork_
+      ? xe_compat_background_contents_rect(display, hero_header_card_view_.bounds.size)
+      : CGRectMake(0.0, 0.18, 1.0, 0.82);
   hero_header_blur_view_.alpha = hero_background_artwork_ ? 0.22 : 0.30;
   hero_header_card_view_.backgroundColor =
       display ? [XeniaTheme bgSurface] : [XeniaTheme bgSurface2];
@@ -2714,14 +2740,17 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   CGRect frame = hero_header_view_.frame;
-  if (fabs(frame.size.width - width) > 0.5) {
+  CGFloat height = xe_compat_hero_height_for_width(width);
+  if (fabs(frame.size.width - width) > 0.5 || fabs(frame.size.height - height) > 0.5) {
     frame.size.width = width;
+    frame.size.height = height;
     hero_header_view_.frame = frame;
     self.tableView.tableHeaderView = hero_header_view_;
   }
   [hero_header_view_ setNeedsLayout];
   [hero_header_view_ layoutIfNeeded];
   hero_header_scrim_layer_.frame = hero_header_card_view_.bounds;
+  [self updateHeroHeaderArtwork];
 }
 
 - (void)buildHeroHeaderIfNeeded {
@@ -2739,7 +2768,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     width = UIScreen.mainScreen.bounds.size.width;
   }
 
-  hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, 340.0)];
+  CGFloat height = xe_compat_hero_height_for_width(width);
+  hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, height)];
   hero_header_view_.backgroundColor = [UIColor clearColor];
 
   hero_header_card_view_ = [[UIView alloc] init];
@@ -2899,7 +2929,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [content_stack.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
                                                constant:-26.0],
     [content_stack.topAnchor constraintGreaterThanOrEqualToAnchor:sheet_title_label.bottomAnchor
-                                                         constant:86.0],
+                                                         constant:74.0],
   ]];
 
   self.tableView.tableHeaderView = hero_header_view_;
