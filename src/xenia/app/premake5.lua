@@ -267,11 +267,15 @@ project("xenia-app")
         path.getabsolute(path.join(project_root, "assets", "icon"))
     local ios_icon_extra_src =
         path.getabsolute(path.join(project_root, "assets", "icon", "extra"))
+    local ios_lldbinit_installer =
+        path.getabsolute(path.join(project_root, "tools", "ios", "install_lldbinit_xenia_jit.sh"))
     postbuildcommands({
       -- Copy iOS icon PNGs from the same icon source folder used by macOS.
       'find "' .. ios_icon_src .. '" "' .. ios_icon_extra_src
           .. '" -maxdepth 1 -type f -name "*.png" -exec cp -f {} "'
           .. ios_app_bundle .. '/" \\;',
+      'if [ -z "${XENIA_SKIP_LLDBINIT_INSTALL}" ]; then /bin/bash "'
+          .. ios_lldbinit_installer .. '"; fi',
     })
   filter({})
 
