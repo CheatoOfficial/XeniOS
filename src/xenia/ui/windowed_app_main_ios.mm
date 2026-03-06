@@ -1202,11 +1202,11 @@ static NSArray<NSString*>* xe_compat_perf_labels(void) {
 }
 
 static CGFloat xe_compat_hero_height_for_width(CGFloat width) {
-  CGFloat card_width = MAX(width - 32.0, 0.0);
-  if (card_width <= 0.0) {
-    return 304.0;
+  CGFloat hero_width = MAX(width, 0.0);
+  if (hero_width <= 0.0) {
+    return 286.0;
   }
-  return MAX(304.0, floor(card_width * 0.82));
+  return MIN(360.0, MAX(286.0, floor(hero_width * 0.74)));
 }
 
 static CGRect xe_compat_background_contents_rect(UIImage* image, CGSize bounds_size) {
@@ -2891,9 +2891,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [NSLayoutConstraint activateConstraints:@[
     [hero_header_card_view_.topAnchor constraintEqualToAnchor:hero_header_view_.topAnchor],
     [hero_header_card_view_.leadingAnchor constraintEqualToAnchor:hero_header_view_.leadingAnchor
-                                                         constant:16.0],
+                                                         constant:0.0],
     [hero_header_card_view_.trailingAnchor constraintEqualToAnchor:hero_header_view_.trailingAnchor
-                                                          constant:-16.0],
+                                                          constant:0.0],
     [hero_header_card_view_.bottomAnchor constraintEqualToAnchor:hero_header_view_.bottomAnchor],
     [hero_header_backdrop_view_.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor],
     [hero_header_backdrop_view_.leadingAnchor
