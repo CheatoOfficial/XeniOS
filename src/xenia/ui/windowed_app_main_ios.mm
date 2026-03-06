@@ -1165,6 +1165,28 @@ static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   return pill;
 }
 
+static UIButton* xe_make_ios_sheet_close_button(id target, SEL action) {
+  UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
+  button.translatesAutoresizingMaskIntoConstraints = NO;
+  button.backgroundColor = [[XeniaTheme bgSurface] colorWithAlphaComponent:0.76];
+  button.layer.cornerRadius = 24.0;
+  button.layer.borderWidth = 0.5;
+  button.layer.borderColor = [[UIColor whiteColor] colorWithAlphaComponent:0.12].CGColor;
+  UIImageSymbolConfiguration* config =
+      [UIImageSymbolConfiguration configurationWithPointSize:22
+                                                     weight:UIImageSymbolWeightSemibold];
+  UIImage* image =
+      [[UIImage systemImageNamed:@"xmark.circle"] imageByApplyingSymbolConfiguration:config];
+  [button setImage:image forState:UIControlStateNormal];
+  button.tintColor = [XeniaTheme accent];
+  [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+  [NSLayoutConstraint activateConstraints:@[
+    [button.widthAnchor constraintEqualToConstant:48.0],
+    [button.heightAnchor constraintEqualToConstant:48.0],
+  ]];
+  return button;
+}
+
 static NSArray<NSString*>* xe_compat_statuses(void) {
   return @[ @"playable", @"ingame", @"intro", @"loads", @"nothing" ];
 }
@@ -2717,7 +2739,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     width = UIScreen.mainScreen.bounds.size.width;
   }
 
-  hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, 304.0)];
+  hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, 340.0)];
   hero_header_view_.backgroundColor = [UIColor clearColor];
 
   hero_header_card_view_ = [[UIView alloc] init];
@@ -2742,6 +2764,22 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   hero_header_scrim_layer_ = [[CAGradientLayer layer] retain];
   [hero_header_card_view_.layer addSublayer:hero_header_scrim_layer_];
+
+  UIView* handle_view = [[[UIView alloc] init] autorelease];
+  handle_view.translatesAutoresizingMaskIntoConstraints = NO;
+  handle_view.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.34];
+  handle_view.layer.cornerRadius = 3.0;
+  [hero_header_card_view_ addSubview:handle_view];
+
+  UILabel* sheet_title_label = [[[UILabel alloc] init] autorelease];
+  sheet_title_label.translatesAutoresizingMaskIntoConstraints = NO;
+  sheet_title_label.text = @"Compatibility";
+  sheet_title_label.font = [UIFont systemFontOfSize:24 weight:UIFontWeightSemibold];
+  sheet_title_label.textColor = [XeniaTheme textPrimary];
+  [hero_header_card_view_ addSubview:sheet_title_label];
+
+  UIButton* close_button = xe_make_ios_sheet_close_button(self, @selector(doneTapped:));
+  [hero_header_card_view_ addSubview:close_button];
 
   UIStackView* content_stack = [[[UIStackView alloc] init] autorelease];
   content_stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2801,7 +2839,17 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   [hero_pills_stack_ addArrangedSubview:hero_status_pill_];
   [hero_pills_stack_ addArrangedSubview:hero_perf_pill_];
-  [content_stack addArrangedSubview:hero_pills_stack_];
+
+  UIView* pills_row = [[[UIView alloc] init] autorelease];
+  pills_row.translatesAutoresizingMaskIntoConstraints = NO;
+  [pills_row addSubview:hero_pills_stack_];
+  [NSLayoutConstraint activateConstraints:@[
+    [hero_pills_stack_.topAnchor constraintEqualToAnchor:pills_row.topAnchor],
+    [hero_pills_stack_.leadingAnchor constraintEqualToAnchor:pills_row.leadingAnchor],
+    [hero_pills_stack_.bottomAnchor constraintEqualToAnchor:pills_row.bottomAnchor],
+    [hero_pills_stack_.trailingAnchor constraintLessThanOrEqualToAnchor:pills_row.trailingAnchor],
+  ]];
+  [content_stack addArrangedSubview:pills_row];
 
   hero_updated_label_ = [[UILabel alloc] init];
   hero_updated_label_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2831,14 +2879,27 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
         constraintEqualToAnchor:hero_header_card_view_.trailingAnchor],
     [hero_header_blur_view_.bottomAnchor
         constraintEqualToAnchor:hero_header_card_view_.bottomAnchor],
+    [handle_view.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor constant:10.0],
+    [handle_view.centerXAnchor constraintEqualToAnchor:hero_header_card_view_.centerXAnchor],
+    [handle_view.widthAnchor constraintEqualToConstant:60.0],
+    [handle_view.heightAnchor constraintEqualToConstant:6.0],
+    [sheet_title_label.topAnchor constraintEqualToAnchor:handle_view.bottomAnchor constant:16.0],
+    [sheet_title_label.centerXAnchor constraintEqualToAnchor:hero_header_card_view_.centerXAnchor],
+    [sheet_title_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:hero_header_card_view_.leadingAnchor
+                                                                 constant:72.0],
+    [sheet_title_label.trailingAnchor constraintLessThanOrEqualToAnchor:close_button.leadingAnchor
+                                                               constant:-12.0],
+    [close_button.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
+                                                constant:-18.0],
+    [close_button.centerYAnchor constraintEqualToAnchor:sheet_title_label.centerYAnchor],
     [content_stack.leadingAnchor constraintEqualToAnchor:hero_header_card_view_.leadingAnchor
                                                 constant:28.0],
     [content_stack.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
                                                  constant:-28.0],
     [content_stack.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
                                                constant:-26.0],
-    [content_stack.topAnchor constraintGreaterThanOrEqualToAnchor:hero_header_card_view_.topAnchor
-                                                         constant:118.0],
+    [content_stack.topAnchor constraintGreaterThanOrEqualToAnchor:sheet_title_label.bottomAnchor
+                                                         constant:86.0],
   ]];
 
   self.tableView.tableHeaderView = hero_header_view_;
@@ -2905,20 +2966,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (@available(iOS 15.0, *)) {
     self.tableView.sectionHeaderTopPadding = 0;
   }
-  UIBarButtonItem* done_button =
-      [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                                    target:self
-                                                    action:@selector(doneTapped:)];
-  self.navigationItem.leftBarButtonItem = done_button;
-  [done_button release];
-
-  UIBarButtonItem* report_button =
-      [[UIBarButtonItem alloc] initWithTitle:@"Report"
-                                       style:UIBarButtonItemStylePlain
-                                      target:self
-                                      action:@selector(submitReportTapped:)];
-  self.navigationItem.rightBarButtonItem = report_button;
-  [report_button release];
+  self.title = @"";
   [[NSNotificationCenter defaultCenter] addObserver:self
                                            selector:@selector(onDiscussionDidUpdate:)
                                                name:kXeniaDiscussionDidUpdateNotification
@@ -2926,6 +2974,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [self buildHeroHeaderIfNeeded];
   [self loadHeroArtwork];
   [self fetchDiscussion];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self.navigationController setNavigationBarHidden:YES animated:animated];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+  [super viewWillDisappear:animated];
+  [self.navigationController setNavigationBarHidden:NO animated:animated];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -3311,6 +3369,77 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   return cell;
 }
 
+- (UITableViewCell*)ctaCellForTableView:(UITableView*)__unused tableView {
+  UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                  reuseIdentifier:nil] autorelease];
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+  cell.backgroundColor = [UIColor clearColor];
+  cell.contentView.backgroundColor = [UIColor clearColor];
+
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [[XeniaTheme accent] colorWithAlphaComponent:0.04];
+  card.layer.cornerRadius = XeniaRadiusXl;
+  card.layer.borderWidth = 1.0;
+  card.layer.borderColor = [[XeniaTheme accent] colorWithAlphaComponent:0.20].CGColor;
+  card.clipsToBounds = YES;
+  [cell.contentView addSubview:card];
+
+  UILabel* heading = [[[UILabel alloc] init] autorelease];
+  heading.translatesAutoresizingMaskIntoConstraints = NO;
+  heading.text = @"Tested this game?";
+  heading.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+  heading.textColor = [XeniaTheme textPrimary];
+  heading.textAlignment = NSTextAlignmentCenter;
+  [card addSubview:heading];
+
+  UILabel* subtext = [[[UILabel alloc] init] autorelease];
+  subtext.translatesAutoresizingMaskIntoConstraints = NO;
+  subtext.text = @"Help the community by sharing how well this title runs on your device.";
+  subtext.font = [UIFont systemFontOfSize:14];
+  subtext.textColor = [XeniaTheme textSecondary];
+  subtext.numberOfLines = 0;
+  subtext.textAlignment = NSTextAlignmentCenter;
+  [card addSubview:subtext];
+
+  UIButton* submit_button = [UIButton buttonWithType:UIButtonTypeSystem];
+  submit_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [submit_button setTitle:@"Submit Report" forState:UIControlStateNormal];
+  submit_button.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+  [submit_button setTitleColor:[XeniaTheme accentFg] forState:UIControlStateNormal];
+  submit_button.backgroundColor = [XeniaTheme accent];
+  submit_button.layer.cornerRadius = XeniaRadiusMd;
+  submit_button.clipsToBounds = YES;
+  [submit_button addTarget:self
+                    action:@selector(submitReportTapped:)
+          forControlEvents:UIControlEventTouchUpInside];
+  [card addSubview:submit_button];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [card.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:6.0],
+    [card.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16.0],
+    [card.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16.0],
+    [card.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-6.0],
+    [heading.topAnchor constraintEqualToAnchor:card.topAnchor constant:18.0],
+    [heading.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [heading.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [subtext.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:8.0],
+    [subtext.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:24.0],
+    [subtext.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-24.0],
+    [submit_button.topAnchor constraintEqualToAnchor:subtext.bottomAnchor constant:16.0],
+    [submit_button.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
+    [submit_button.heightAnchor constraintEqualToConstant:44.0],
+    [submit_button.widthAnchor constraintGreaterThanOrEqualToConstant:164.0],
+    [submit_button.leadingAnchor constraintGreaterThanOrEqualToAnchor:card.leadingAnchor
+                                                             constant:16.0],
+    [submit_button.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor
+                                                           constant:-16.0],
+    [submit_button.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-18.0],
+  ]];
+
+  return cell;
+}
+
 - (UIView*)discussionPreviewCardForReport:(NSDictionary*)report reportIndex:(NSInteger)report_index {
   NSString* author = [report[@"submittedBy"] isKindOfClass:[NSString class]] ? report[@"submittedBy"]
                                                                              : @"anonymous";
@@ -3582,7 +3711,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (NSInteger)tableView:(UITableView* __unused)tableView
     numberOfRowsInSection:(NSInteger)__unused section {
-  return 2;
+  return 3;
 }
 
 - (UITableViewCell*)tableView:(UITableView*)tableView
@@ -3590,7 +3719,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (indexPath.row == 0) {
     return [self discussionPreviewCellForTableView:tableView];
   }
-  return [self detailsCellForTableView:tableView];
+  if (indexPath.row == 1) {
+    return [self detailsCellForTableView:tableView];
+  }
+  return [self ctaCellForTableView:tableView];
 }
 
 @end
