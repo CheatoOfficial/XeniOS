@@ -247,6 +247,13 @@ dword_result_t NtSetInformationFile_entry(
     case XFileDispositionInformation: {
       auto info = info_ptr.as<X_FILE_DISPOSITION_INFORMATION*>();
       bool delete_on_close = info->delete_file ? true : false;
+      if (delete_on_close && !file->entry()->parent()) {
+        result = X_STATUS_ACCESS_DENIED;
+        out_length = 0;
+        XELOGW("NtSetInformationFile ignoring delete-on-close for root path {}",
+               file->path());
+        break;
+      }
       file->entry()->SetForDeletion(static_cast<bool>(info->delete_file));
       out_length = 0;
       XELOGW("NtSetInformationFile set deleting flag for {} on close to: {}",
