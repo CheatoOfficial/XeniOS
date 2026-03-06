@@ -1151,12 +1151,12 @@ static NSString* xe_discussion_cache_path(uint32_t title_id) {
 static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   XeniaPaddedLabel* pill = [[[XeniaPaddedLabel alloc] init] autorelease];
   pill.translatesAutoresizingMaskIntoConstraints = NO;
-  pill.padding = UIEdgeInsetsMake(3, 10, 3, 10);
-  pill.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+  pill.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  pill.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
   pill.text = text ?: @"";
   pill.textColor = text_color ?: [XeniaTheme textMuted];
-  pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.12];
-  pill.layer.cornerRadius = 10.0;
+  pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.1];
+  pill.layer.cornerRadius = 8.0;
   pill.clipsToBounds = YES;
   return pill;
 }
@@ -1282,6 +1282,27 @@ static UIImage* xe_cached_game_art(uint32_t title_id) {
   return [UIImage imageWithContentsOfFile:path];
 }
 
+static NSString* xe_game_background_cache_dir(void) {
+  static NSString* dir;
+  if (!dir) {
+    NSString* caches =
+        NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+    dir = [[caches stringByAppendingPathComponent:@"game-background-art"] retain];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+  }
+  return dir;
+}
+
+static UIImage* xe_cached_game_background_art(uint32_t title_id) {
+  if (!title_id) return nil;
+  NSString* path = [xe_game_background_cache_dir()
+      stringByAppendingPathComponent:[xe_game_art_hex(title_id) stringByAppendingString:@".jpg"]];
+  return [UIImage imageWithContentsOfFile:path];
+}
+
 // Starts an async download of the tile art.  Calls `completion` on the main
 // queue with the downloaded image (or nil on failure).
 static void xe_fetch_game_art(uint32_t title_id,
@@ -1327,6 +1348,44 @@ static void xe_fetch_game_art(uint32_t title_id,
         if (completion) completion(image);
       });
     }];
+  [task resume];
+}
+
+static void xe_fetch_game_background_art(uint32_t title_id,
+                                         void (^completion)(UIImage* _Nullable image)) {
+  if (!title_id) {
+    if (completion) completion(nil);
+    return;
+  }
+  NSString* hex_upper = [[NSString stringWithFormat:@"%08X", title_id] uppercaseString];
+  NSString* url_str = [NSString stringWithFormat:@"https://raw.githubusercontent.com/xenia-manager/"
+                                                 @"x360db/main/titles/%@/artwork/background.jpg",
+                                                 hex_upper];
+  NSURL* url = [NSURL URLWithString:url_str];
+  if (!url) {
+    if (completion) completion(nil);
+    return;
+  }
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+        dataTaskWithURL:url
+      completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+        UIImage* image = nil;
+        if (!error && data.length > 0) {
+          NSHTTPURLResponse* http = (NSHTTPURLResponse*)response;
+          if ([http isKindOfClass:[NSHTTPURLResponse class]] && http.statusCode == 200) {
+            image = [UIImage imageWithData:data];
+            if (image) {
+              NSString* path = [xe_game_background_cache_dir()
+                  stringByAppendingPathComponent:[xe_game_art_hex(title_id)
+                                                     stringByAppendingString:@".jpg"]];
+              [data writeToFile:path atomically:YES];
+            }
+          }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (completion) completion(image);
+        });
+      }];
   [task resume];
 }
 
@@ -1658,6 +1717,7 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 - (instancetype)initWithTitleID:(uint32_t)title_id
                           title:(NSString*)title
                      compatData:(NSDictionary*)compat_data;
+- (void)setHeroArtwork:(UIImage*)image;
 @end
 
 @interface XeniaCompatReportViewController : UITableViewController <PHPickerViewControllerDelegate>
@@ -1665,6 +1725,7 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 @end
 
 @interface XeniaGameTileCell : UICollectionViewCell
+@property(nonatomic, strong) UIView* cardView;
 @property(nonatomic, strong) UIImageView* iconView;
 @property(nonatomic, strong) UILabel* titleLabel;
 @property(nonatomic, strong) XeniaPaddedLabel* compatPill;
@@ -1679,27 +1740,32 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
     return nil;
   }
 
-  // No card background — artwork IS the tile. Clean, modern, content-forward.
   self.contentView.backgroundColor = [UIColor clearColor];
+
+  self.cardView = [[UIView alloc] init];
+  self.cardView.translatesAutoresizingMaskIntoConstraints = NO;
+  self.cardView.backgroundColor = [XeniaTheme bgSurface];
+  self.cardView.layer.cornerRadius = XeniaRadiusLg;
+  self.cardView.layer.borderWidth = 0.5;
+  self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
+  self.cardView.clipsToBounds = YES;
+  [self.contentView addSubview:self.cardView];
 
   self.iconView = [[UIImageView alloc] init];
   self.iconView.translatesAutoresizingMaskIntoConstraints = NO;
   self.iconView.contentMode = UIViewContentModeScaleAspectFill;
   self.iconView.clipsToBounds = YES;
-  self.iconView.layer.cornerRadius = 10;
-  self.iconView.layer.borderWidth = 0.0;
-  self.iconView.layer.borderColor = [UIColor clearColor].CGColor;
-  self.iconView.backgroundColor = [XeniaTheme bgSurface];
-  [self.contentView addSubview:self.iconView];
+  self.iconView.backgroundColor = [XeniaTheme bgSurface2];
+  [self.cardView addSubview:self.iconView];
 
   self.titleLabel = [[UILabel alloc] init];
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
   self.titleLabel.textColor = [XeniaTheme textSecondary];
   self.titleLabel.textAlignment = NSTextAlignmentLeft;
   self.titleLabel.numberOfLines = 2;
   self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  [self.contentView addSubview:self.titleLabel];
+  [self.cardView addSubview:self.titleLabel];
 
   self.compatPill = [[XeniaPaddedLabel alloc] init];
   self.compatPill.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1711,27 +1777,28 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
   self.compatPill.hidden = YES;
   [self.compatPill setContentHuggingPriority:UILayoutPriorityRequired
                                      forAxis:UILayoutConstraintAxisHorizontal];
-  [self.compatPill
-      setContentCompressionResistancePriority:UILayoutPriorityRequired
-                                      forAxis:UILayoutConstraintAxisHorizontal];
-  [self.contentView addSubview:self.compatPill];
+  [self.compatPill setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                   forAxis:UILayoutConstraintAxisHorizontal];
+  [self.cardView addSubview:self.compatPill];
 
   [NSLayoutConstraint activateConstraints:@[
-    [self.iconView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
-    [self.iconView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
-    [self.iconView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
-    // Cover art aspect ratio ~219:300.
+    [self.cardView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+    [self.cardView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
+    [self.cardView.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+    [self.cardView.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+    [self.iconView.topAnchor constraintEqualToAnchor:self.cardView.topAnchor],
+    [self.iconView.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor],
+    [self.iconView.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor],
     [self.iconView.heightAnchor constraintEqualToAnchor:self.iconView.widthAnchor
                                              multiplier:300.0 / 219.0],
-    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:6],
-    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor
-                                                  constant:2],
+    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor],
+    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor constant:10],
     [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.compatPill.leadingAnchor
                                                    constant:-4],
-    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor],
     [self.compatPill.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
-    [self.compatPill.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
-                                                   constant:-2],
+    [self.compatPill.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
+                                                   constant:-8],
     [self.compatPill.widthAnchor constraintEqualToConstant:74],
   ]];
 
@@ -1740,8 +1807,11 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  self.iconView.image = nil;
+  self.titleLabel.text = @"";
   self.compatPill.text = @"";
   self.compatPill.hidden = YES;
+  self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
   self.controllerFocused = NO;
 }
 
@@ -1755,13 +1825,11 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
 - (void)updateControllerFocusAppearance {
   if (self.controllerFocused) {
-    self.iconView.layer.borderWidth = 2.0;
-    self.iconView.layer.borderColor = [XeniaTheme accent].CGColor;
+    self.cardView.layer.borderColor = [XeniaTheme accent].CGColor;
     self.titleLabel.textColor = [XeniaTheme textPrimary];
     self.transform = CGAffineTransformMakeScale(1.02, 1.02);
   } else {
-    self.iconView.layer.borderWidth = 0.0;
-    self.iconView.layer.borderColor = [UIColor clearColor].CGColor;
+    self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
     self.titleLabel.textColor = [XeniaTheme textSecondary];
     self.transform = CGAffineTransformIdentity;
   }
@@ -2370,6 +2438,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   uint32_t title_id_;
   NSString* game_title_;
   NSDictionary* compat_info_;
+  UIImage* hero_artwork_;
+  UIImage* hero_background_artwork_;
   NSMutableArray<NSDictionary*>* discussion_reports_;
   NSString* discussion_issue_url_;
   NSInteger discussion_issue_number_;
@@ -2398,17 +2468,77 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [game_title_ release];
   [compat_info_ release];
+  [hero_artwork_ release];
+  [hero_background_artwork_ release];
   [discussion_reports_ release];
   [discussion_issue_url_ release];
   [super dealloc];
 }
 
+- (void)setHeroArtwork:(UIImage*)image {
+  [hero_artwork_ release];
+  hero_artwork_ = [image retain];
+}
+
+- (void)setHeroBackgroundArtwork:(UIImage*)image {
+  [hero_background_artwork_ release];
+  hero_background_artwork_ = [image retain];
+}
+
+- (void)loadHeroArtwork {
+  if (!title_id_) {
+    return;
+  }
+
+  UIImage* cached_background = xe_cached_game_background_art(title_id_);
+  if (cached_background) {
+    [self setHeroBackgroundArtwork:cached_background];
+  }
+
+  if (!hero_artwork_) {
+    UIImage* cached_cover = xe_cached_game_art(title_id_);
+    if (cached_cover) {
+      [self setHeroArtwork:cached_cover];
+    }
+  }
+
+  if ((cached_background || hero_artwork_) && [self isViewLoaded]) {
+    [self.tableView reloadData];
+  }
+
+  const uint32_t expected_title_id = title_id_;
+  if (!cached_background) {
+    xe_fetch_game_background_art(expected_title_id, ^(UIImage* image) {
+      if (!image || self->title_id_ != expected_title_id) {
+        return;
+      }
+      [self setHeroBackgroundArtwork:image];
+      if ([self isViewLoaded]) {
+        [self.tableView reloadData];
+      }
+    });
+  }
+
+  if (!hero_artwork_) {
+    xe_fetch_game_art(expected_title_id, ^(UIImage* image) {
+      if (!image || self->title_id_ != expected_title_id) {
+        return;
+      }
+      [self setHeroArtwork:image];
+      if ([self isViewLoaded]) {
+        [self.tableView reloadData];
+      }
+    });
+  }
+}
+
 - (void)viewDidLoad {
   [super viewDidLoad];
-  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.view.backgroundColor = [XeniaTheme bgPrimary];
+  self.tableView.backgroundColor = [XeniaTheme bgPrimary];
   self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
-  self.tableView.estimatedRowHeight = 280.0;
+  self.tableView.estimatedRowHeight = 360.0;
   if (@available(iOS 15.0, *)) {
     self.tableView.sectionHeaderTopPadding = 0;
   }
@@ -2430,6 +2560,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                            selector:@selector(onDiscussionDidUpdate:)
                                                name:kXeniaDiscussionDidUpdateNotification
                                              object:nil];
+  [self loadHeroArtwork];
   [self fetchDiscussion];
 }
 
@@ -2638,6 +2769,53 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
     [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
   ]];
+
+  UIImage* hero_image = hero_background_artwork_ ?: hero_artwork_;
+  if (hero_image) {
+    UIView* hero_container = [[[UIView alloc] init] autorelease];
+    hero_container.translatesAutoresizingMaskIntoConstraints = NO;
+    hero_container.backgroundColor = [XeniaTheme bgSurface2];
+    hero_container.layer.cornerRadius = XeniaRadiusLg;
+    hero_container.clipsToBounds = YES;
+
+    UIImageView* hero_view = [[[UIImageView alloc] initWithImage:hero_image] autorelease];
+    hero_view.translatesAutoresizingMaskIntoConstraints = NO;
+    hero_view.contentMode = UIViewContentModeScaleAspectFill;
+    hero_view.clipsToBounds = YES;
+    hero_view.layer.contentsRect = hero_background_artwork_ ? CGRectMake(0.0, 0.0, 1.0, 1.0)
+                                                            : CGRectMake(0.0, 0.18, 1.0, 0.82);
+    [hero_container addSubview:hero_view];
+
+    UIVisualEffectView* blur_view = [[[UIVisualEffectView alloc]
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]]
+        autorelease];
+    blur_view.translatesAutoresizingMaskIntoConstraints = NO;
+    blur_view.alpha = hero_background_artwork_ ? 0.18 : 0.30;
+    [hero_container addSubview:blur_view];
+
+    UIView* tint_view = [[[UIView alloc] init] autorelease];
+    tint_view.translatesAutoresizingMaskIntoConstraints = NO;
+    tint_view.backgroundColor =
+        [[UIColor blackColor] colorWithAlphaComponent:(hero_background_artwork_ ? 0.16 : 0.24)];
+    [hero_container addSubview:tint_view];
+
+    [NSLayoutConstraint activateConstraints:@[
+      [hero_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
+      [hero_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
+      [hero_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
+      [hero_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
+      [blur_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
+      [blur_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
+      [blur_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
+      [blur_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
+      [tint_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
+      [tint_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
+      [tint_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
+      [tint_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
+      [hero_container.heightAnchor constraintEqualToConstant:176],
+    ]];
+    [stack addArrangedSubview:hero_container];
+  }
 
   UILabel* title_label = [[[UILabel alloc] init] autorelease];
   title_label.text = game_title_.length > 0 ? game_title_ : @"Unknown Title";
@@ -4352,7 +4530,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       CGFloat total_spacing = interitem_spacing * (columns - 1);
       CGFloat tile_width = floor((content_width - total_spacing) / columns);
       CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-      CGFloat tile_height = image_height + 24.0f;
+      CGFloat tile_height = image_height + 44.0f;
       if (tile_height * 2.0f + line_spacing <= content_height) {
         break;
       }
@@ -6131,10 +6309,26 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       [compat_data_ objectForKey:[NSString stringWithFormat:@"%08X", game.title_id]];
   NSString* game_title =
       game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
+  UIImage* hero_artwork = xe_cached_game_art(game.title_id);
+  if (!hero_artwork && !game.icon_data.empty()) {
+    NSData* data = [NSData dataWithBytes:game.icon_data.data() length:game.icon_data.size()];
+    hero_artwork = [UIImage imageWithData:data];
+  }
+  if (!hero_artwork && self.importedGamesCollectionView) {
+    NSIndexPath* index_path = [NSIndexPath indexPathForItem:(NSInteger)game_index inSection:0];
+    XeniaGameTileCell* tile =
+        (XeniaGameTileCell*)[self.importedGamesCollectionView cellForItemAtIndexPath:index_path];
+    if ([tile isKindOfClass:[XeniaGameTileCell class]]) {
+      hero_artwork = tile.iconView.image;
+    }
+  }
   XeniaGameCompatibilityViewController* compatibility_controller =
       [[XeniaGameCompatibilityViewController alloc] initWithTitleID:game.title_id
                                                               title:game_title
                                                          compatData:compat_data];
+  if (hero_artwork) {
+    [compatibility_controller setHeroArtwork:hero_artwork];
+  }
   XeniaLandscapeNavigationController* navigation_controller =
       [[XeniaLandscapeNavigationController alloc]
           initWithRootViewController:compatibility_controller];
