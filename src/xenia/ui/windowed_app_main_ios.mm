@@ -4524,6 +4524,31 @@ titleForFooterInSection:(NSInteger)section {
                                                 error:error]) {
     return {};
   }
+
+  if (HasContentSidecarDataDirectory(source_path)) {
+    std::filesystem::path source_sidecar = source_path;
+    source_sidecar += ".data";
+    std::filesystem::path destination_sidecar = destination;
+    destination_sidecar += ".data";
+
+    std::string error_message;
+    if (!xe_copy_directory_recursive(source_sidecar, destination_sidecar, &error_message)) {
+      std::error_code cleanup_error;
+      std::filesystem::remove(destination, cleanup_error);
+      std::filesystem::remove_all(destination_sidecar, cleanup_error);
+      if (error) {
+        *error = [NSError
+            errorWithDomain:@"XeniaIOSImport"
+                       code:1002
+                   userInfo:@{
+                     NSLocalizedDescriptionKey : ToNSString(
+                         error_message.empty() ? "Failed copying package sidecar." : error_message)
+                   }];
+      }
+      return {};
+    }
+  }
+
   return destination;
 }
 
@@ -5065,33 +5090,77 @@ titleForFooterInSection:(NSInteger)section {
   XELOGI("iOS: User selected game file: {} (security-scoped: {})", [url.path UTF8String],
          access_granted ? "yes" : "no");
 
-  NSError* import_error = nil;
-  std::filesystem::path imported_path = [self importGameIntoLibrary:url error:&import_error];
-  if (access_granted) {
-    [url stopAccessingSecurityScopedResource];
-  }
+  void (^import_selected_game)(void) = ^{
+    NSError* import_error = nil;
+    std::filesystem::path imported_path = [self importGameIntoLibrary:url error:&import_error];
+    if (access_granted) {
+      [url stopAccessingSecurityScopedResource];
+    }
 
-  if (imported_path.empty()) {
-    NSString* message = import_error.localizedDescription ?: @"Failed to import selected game.";
-    UIAlertController* alert =
-        [UIAlertController alertControllerWithTitle:@"Import Failed"
-                                            message:message
-                                     preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                              style:UIAlertActionStyleCancel
-                                            handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    if (imported_path.empty()) {
+      NSString* message = import_error.localizedDescription ?: @"Failed to import selected game.";
+      xe_present_ok_alert(self, @"Import Failed", message);
+      return;
+    }
+
+    [self refreshImportedGames];
+    NSString* imported_name = ToNSString(imported_path.filename().string());
+    if (self.jitAcquired) {
+      [self launchGameAtPath:imported_path displayName:imported_name];
+    } else {
+      self.statusLabel.text =
+          [NSString stringWithFormat:@"Imported %@. Waiting for JIT.", imported_name];
+    }
+  };
+
+  const std::filesystem::path selected_path([url.path UTF8String]);
+  const BOOL likely_direct_game = IsISOPath(selected_path) || IsDefaultXexPath(selected_path);
+  IOSSelectedContentPackage package_info;
+  const BOOL has_content_package_info =
+      xe_read_selected_content_package(selected_path, &package_info, nullptr);
+  const BOOL is_launchable_package =
+      has_content_package_info && (package_info.content_type == xe::XContentType::kXbox360Title ||
+                                   package_info.content_type == xe::XContentType::kInstalledGame);
+  const BOOL should_try_title_update_install = cvars::ios_async_import_ui && self.appContext &&
+                                               !likely_direct_game && !is_launchable_package;
+  if (should_try_title_update_install) {
+    self.statusLabel.text = @"Checking content package...";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      std::string status;
+      bool not_title_update = false;
+      bool success = self.appContext->InstallTitleUpdate(std::string([url.path UTF8String]),
+                                                         &status, &not_title_update);
+
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (success) {
+          if (access_granted) {
+            [url stopAccessingSecurityScopedResource];
+          }
+          NSString* message = status.empty() ? @"Installed title update." : ToNSString(status);
+          self.statusLabel.text = message;
+          [self refreshImportedGames];
+          xe_present_ok_alert(self, @"Title Update Installed", message);
+          return;
+        }
+
+        if (!not_title_update) {
+          if (access_granted) {
+            [url stopAccessingSecurityScopedResource];
+          }
+          NSString* message =
+              status.empty() ? @"Title update installation failed." : ToNSString(status);
+          self.statusLabel.text = message;
+          xe_present_ok_alert(self, @"Installation Failed", message);
+          return;
+        }
+
+        import_selected_game();
+      });
+    });
     return;
   }
 
-  [self refreshImportedGames];
-  NSString* imported_name = ToNSString(imported_path.filename().string());
-  if (self.jitAcquired) {
-    [self launchGameAtPath:imported_path displayName:imported_name];
-  } else {
-    self.statusLabel.text =
-        [NSString stringWithFormat:@"Imported %@. Waiting for JIT.", imported_name];
-  }
+  import_selected_game();
 }
 
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController* __unused)controller {
