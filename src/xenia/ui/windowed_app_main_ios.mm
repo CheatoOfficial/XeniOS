@@ -1961,6 +1961,8 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
                       UIFontWeightSemibold);
   [self.titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                                    forAxis:UILayoutConstraintAxisHorizontal];
+  [self.titleLabel setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                   forAxis:UILayoutConstraintAxisVertical];
   [self.cardView addSubview:self.titleLabel];
 
   self.compatPill = [[XeniaPaddedLabel alloc] init];
@@ -1989,14 +1991,20 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
                                              multiplier:300.0 / 219.0],
     [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:8.0],
     [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor constant:12.0],
-    [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.compatPill.leadingAnchor
-                                                             constant:-8.0],
-    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor constant:-8.0],
-    [self.compatPill.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
+                                                   constant:-12.0],
+    [self.titleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.compatPill.topAnchor
+                                                           constant:-6.0],
+    [self.titleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.cardView.bottomAnchor
+                                                           constant:-10.0],
+    [self.compatPill.topAnchor constraintGreaterThanOrEqualToAnchor:self.titleLabel.bottomAnchor
+                                                           constant:6.0],
     [self.compatPill.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
                                                    constant:-10.0],
-    [self.compatPill.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.titleLabel.trailingAnchor
-                                                               constant:8.0],
+    [self.compatPill.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor
+                                                 constant:-10.0],
+    [self.compatPill.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.cardView.leadingAnchor
+                                                               constant:12.0],
   ]];
 
   return self;
@@ -2830,8 +2838,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
   CGRect table_frame =
       host_view ? [self.view convertRect:self.view.bounds toView:host_view] : self.view.bounds;
-  CGFloat safe_top = host_view ? host_view.safeAreaInsets.top : self.view.safeAreaInsets.top;
-  CGFloat hero_top = CGRectGetMinY(table_frame) + safe_top + 12.0;
+  CGFloat hero_top = CGRectGetMinY(table_frame);
   hero_background_view_.frame =
       CGRectMake(CGRectGetMinX(table_frame), hero_top, width, height);
   if (fabs(frame.size.width - width) > 0.5 || fabs(frame.size.height - height) > 0.5) {
@@ -3033,7 +3040,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
         constraintEqualToAnchor:hero_header_card_view_.trailingAnchor],
     [hero_header_blur_view_.bottomAnchor
         constraintEqualToAnchor:hero_header_card_view_.bottomAnchor],
-    [handle_view.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor constant:10.0],
+    [handle_view.topAnchor constraintEqualToAnchor:hero_header_card_view_.safeAreaLayoutGuide.topAnchor
+                                          constant:8.0],
     [handle_view.centerXAnchor constraintEqualToAnchor:hero_header_card_view_.centerXAnchor],
     [handle_view.widthAnchor constraintEqualToConstant:60.0],
     [handle_view.heightAnchor constraintEqualToConstant:6.0],
@@ -7292,9 +7300,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   CGFloat tile_width = floor((content_width - total_spacing) / columns);
   tile_width = MAX(tile_width, 100.0f);
   // Cover art is ~219x300 (~1:1.37). Reserve enough room for a readable
-  // two-line title strip and a compat pill.
+  // two-line title strip and a compat pill on its own row.
   CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-  return CGSizeMake(tile_width, image_height + 56.0f);
+  return CGSizeMake(tile_width, image_height + 78.0f);
 }
 
 - (void)viewDidLayoutSubviews {
