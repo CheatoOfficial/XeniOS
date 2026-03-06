@@ -295,6 +295,36 @@ static NSURL* xe_first_open_url_context_url(
 }
 @end
 
+@interface XeniaPaddedLabel : UILabel
+@property(nonatomic) UIEdgeInsets padding;
+@end
+
+@implementation XeniaPaddedLabel
+
+- (CGSize)intrinsicContentSize {
+  CGSize size = [super intrinsicContentSize];
+  return CGSizeMake(size.width + _padding.left + _padding.right,
+                    size.height + _padding.top + _padding.bottom);
+}
+
+- (void)drawTextInRect:(CGRect)rect {
+  [super drawTextInRect:UIEdgeInsetsInsetRect(rect, _padding)];
+}
+
+- (CGRect)textRectForBounds:(CGRect)bounds
+     limitedToNumberOfLines:(NSInteger)numberOfLines {
+  CGRect inset = UIEdgeInsetsInsetRect(bounds, _padding);
+  CGRect result = [super textRectForBounds:inset
+                    limitedToNumberOfLines:numberOfLines];
+  result.origin.x -= _padding.left;
+  result.origin.y -= _padding.top;
+  result.size.width += _padding.left + _padding.right;
+  result.size.height += _padding.top + _padding.bottom;
+  return result;
+}
+
+@end
+
 // Border radii matching website's Tailwind scale.
 static constexpr CGFloat XeniaRadiusMd = 8.0;
 static constexpr CGFloat XeniaRadiusLg = 12.0;
@@ -695,6 +725,11 @@ struct IOSDiscoveredGame {
   std::string title;
   uint32_t title_id = 0;
   std::vector<uint8_t> icon_data;
+  bool has_compat_info = false;
+  std::string compat_status;
+  std::string compat_perf;
+  std::string compat_notes;
+  bool has_installed_content = false;
 };
 
 std::string ToLowerAsciiCopy(std::string value) {
@@ -730,6 +765,33 @@ bool IsLikelyGodPath(const std::filesystem::path& path) {
   return false;
 }
 
+bool LooksLikeHexContentFilename(const std::filesystem::path& path) {
+  const std::string filename = path.filename().string();
+  if (filename.size() < 24 || filename.size() > 40) {
+    return false;
+  }
+  return std::all_of(filename.begin(), filename.end(), [](unsigned char c) {
+    return std::isxdigit(c) != 0;
+  });
+}
+
+bool IsLikelyGodContainerFile(const std::filesystem::path& path) {
+  if (IsLikelyGodPath(path)) {
+    return true;
+  }
+  if (path.has_extension()) {
+    return false;
+  }
+  return LooksLikeHexContentFilename(path);
+}
+
+bool HasContentSidecarDataDirectory(const std::filesystem::path& path) {
+  std::filesystem::path sidecar_path = path;
+  sidecar_path += ".data";
+  std::error_code ec;
+  return std::filesystem::is_directory(sidecar_path, ec) && !ec;
+}
+
 std::string FormatTitleID(uint32_t title_id) {
   if (!title_id) {
     return std::string();
@@ -737,6 +799,76 @@ std::string FormatTitleID(uint32_t title_id) {
   char buffer[9] = {};
   std::snprintf(buffer, sizeof(buffer), "%08X", title_id);
   return std::string(buffer);
+}
+
+static NSString* xe_normalize_game_title_for_ui(NSString* title) {
+  if (!title || title.length == 0) {
+    return title;
+  }
+  if ([title rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]]
+          .location != NSNotFound) {
+    return title;
+  }
+  NSRange letter_range =
+      [title rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]];
+  if (letter_range.location == NSNotFound) {
+    return title;
+  }
+  NSRange lower_range =
+      [title rangeOfCharacterFromSet:[NSCharacterSet lowercaseLetterCharacterSet]];
+  if (lower_range.location != NSNotFound) {
+    return title;
+  }
+  NSCharacterSet* roman_set =
+      [NSCharacterSet characterSetWithCharactersInString:@"IVXLCDM"];
+  NSCharacterSet* non_roman_set = [roman_set invertedSet];
+  if ([title rangeOfCharacterFromSet:non_roman_set].location == NSNotFound) {
+    return title;
+  }
+  return [title localizedCapitalizedString];
+}
+
+std::string NormalizeGameTitleForUI(const std::string& title) {
+  NSString* normalized = xe_normalize_game_title_for_ui(ToNSString(title));
+  return normalized ? std::string([normalized UTF8String]) : title;
+}
+
+static UIColor* xe_compat_status_color(NSString* status) {
+  if ([status isEqualToString:@"playable"])
+    return [UIColor colorWithRed:0x34 / 255.0
+                           green:0xd3 / 255.0
+                            blue:0x99 / 255.0
+                           alpha:1.0];
+  if ([status isEqualToString:@"ingame"])
+    return [UIColor colorWithRed:0x60 / 255.0
+                           green:0xa5 / 255.0
+                            blue:0xfa / 255.0
+                           alpha:1.0];
+  if ([status isEqualToString:@"intro"])
+    return [UIColor colorWithRed:0xfb / 255.0
+                           green:0xbf / 255.0
+                            blue:0x24 / 255.0
+                           alpha:1.0];
+  if ([status isEqualToString:@"loads"])
+    return [UIColor colorWithRed:0xfb / 255.0
+                           green:0x92 / 255.0
+                            blue:0x3c / 255.0
+                           alpha:1.0];
+  if ([status isEqualToString:@"nothing"])
+    return [UIColor colorWithRed:0xf8 / 255.0
+                           green:0x71 / 255.0
+                            blue:0x71 / 255.0
+                           alpha:1.0];
+  return [XeniaTheme textMuted];
+}
+
+static NSString* xe_compat_status_label(NSString* status) {
+  if ([status isEqualToString:@"playable"]) return @"Playable";
+  if ([status isEqualToString:@"ingame"]) return @"In-Game";
+  if ([status isEqualToString:@"intro"]) return @"Intro";
+  if ([status isEqualToString:@"loads"]) return @"Loads";
+  if ([status isEqualToString:@"nothing"]) return @"Nothing";
+  return @"Unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -865,6 +997,107 @@ static void xe_fetch_game_art(uint32_t title_id,
   [task resume];
 }
 
+static NSString* xe_compat_cache_path(void) {
+  NSString* caches = NSSearchPathForDirectoriesInDomains(
+      NSCachesDirectory, NSUserDomainMask, YES)
+                         .firstObject;
+  return [caches stringByAppendingPathComponent:@"compat-data.json"];
+}
+
+static NSDictionary* xe_parse_compat_json(NSData* data) {
+  if (!data || data.length == 0) {
+    return nil;
+  }
+  NSError* error = nil;
+  id parsed = [NSJSONSerialization JSONObjectWithData:data
+                                              options:0
+                                                error:&error];
+  if (error || ![parsed isKindOfClass:[NSArray class]]) {
+    return nil;
+  }
+  NSMutableDictionary* dict =
+      [NSMutableDictionary dictionaryWithCapacity:[parsed count]];
+  for (NSDictionary* game in parsed) {
+    if (![game isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    NSString* title_id = game[@"titleId"];
+    if ([title_id isKindOfClass:[NSString class]] && title_id.length > 0) {
+      [dict setObject:game forKey:[title_id uppercaseString]];
+    }
+  }
+  return dict;
+}
+
+static NSDictionary* xe_load_cached_compat_data(void) {
+  NSData* cached = [NSData dataWithContentsOfFile:xe_compat_cache_path()];
+  if (cached.length == 0) {
+    return nil;
+  }
+  return xe_parse_compat_json(cached);
+}
+
+static NSURLSession* xe_compat_url_session(void) {
+  static NSURLSession* session = nil;
+  static dispatch_once_t once_token;
+  dispatch_once(&once_token, ^{
+    NSURLSessionConfiguration* config =
+        [NSURLSessionConfiguration defaultSessionConfiguration];
+    if (@available(iOS 11.0, *)) {
+      config.waitsForConnectivity = YES;
+    }
+    config.timeoutIntervalForRequest = 20.0;
+    config.timeoutIntervalForResource = 45.0;
+    session = [[NSURLSession sessionWithConfiguration:config] retain];
+  });
+  return session;
+}
+
+static void xe_fetch_compat_data(void (^completion)(NSDictionary* _Nullable data)) {
+  NSData* cached = [NSData dataWithContentsOfFile:xe_compat_cache_path()];
+  if (cached.length > 0) {
+    NSDictionary* cached_result = xe_parse_compat_json(cached);
+    if (cached_result) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (completion) {
+          completion(cached_result);
+        }
+      });
+    }
+  }
+
+  NSURL* url =
+      [NSURL URLWithString:@"https://xenios-compat-api.xenios.workers.dev/games"];
+  NSURLSessionDataTask* task =
+      [xe_compat_url_session()
+          dataTaskWithURL:url
+        completionHandler:^(NSData* data, NSURLResponse* response,
+                            NSError* error) {
+          if (error || data.length == 0) {
+            return;
+          }
+          NSHTTPURLResponse* http = (NSHTTPURLResponse*)response;
+          if (![http isKindOfClass:[NSHTTPURLResponse class]] ||
+              http.statusCode != 200) {
+            return;
+          }
+          if (cached.length > 0 && [cached isEqualToData:data]) {
+            return;
+          }
+          NSDictionary* result = xe_parse_compat_json(data);
+          if (!result) {
+            return;
+          }
+          [data writeToFile:xe_compat_cache_path() atomically:YES];
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) {
+              completion(result);
+            }
+          });
+        }];
+  [task resume];
+}
+
 std::string DisplayNameFromXexMetadata(const std::filesystem::path& path,
                                        const std::optional<xe::vfs::XexMetadata>& metadata) {
   if (metadata.has_value() && metadata->title_id) {
@@ -885,7 +1118,7 @@ bool BuildDiscoveredGameFromPath(const std::filesystem::path& path, IOSDiscovere
     if (metadata.has_value()) {
       game.title_id = metadata->title_id;
     }
-    game.title = DisplayNameFromXexMetadata(path, metadata);
+    game.title = NormalizeGameTitleForUI(DisplayNameFromXexMetadata(path, metadata));
     *game_out = std::move(game);
     return true;
   }
@@ -895,17 +1128,23 @@ bool BuildDiscoveredGameFromPath(const std::filesystem::path& path, IOSDiscovere
     if (metadata.has_value()) {
       game.title_id = metadata->title_id;
     }
-    game.title = DisplayNameFromXexMetadata(path, metadata);
+    game.title = NormalizeGameTitleForUI(DisplayNameFromXexMetadata(path, metadata));
     *game_out = std::move(game);
     return true;
   }
 
-  if (!IsLikelyGodPath(path)) {
+  if (!IsLikelyGodContainerFile(path)) {
     return false;
   }
 
   auto header = xe::vfs::XContentContainerDevice::ReadContainerHeader(path);
   if (!header || !header->content_header.is_magic_valid()) {
+    return false;
+  }
+
+  if (header->content_metadata.data_file_count > 0 &&
+      !HasContentSidecarDataDirectory(path)) {
+    XELOGW("iOS: Skipping XContent package missing .data sidecar: {}", path);
     return false;
   }
 
@@ -928,6 +1167,7 @@ bool BuildDiscoveredGameFromPath(const std::filesystem::path& path, IOSDiscovere
   } else {
     game.title = display_name;
   }
+  game.title = NormalizeGameTitleForUI(game.title);
 
   uint32_t thumb_size = header->content_metadata.title_thumbnail_size;
   if (thumb_size > 0 && thumb_size <= xe::vfs::XContentMetadata::kThumbLengthV1) {
@@ -1071,6 +1311,7 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 @interface XeniaGameTileCell : UICollectionViewCell
 @property(nonatomic, strong) UIImageView* iconView;
 @property(nonatomic, strong) UILabel* titleLabel;
+@property(nonatomic, strong) XeniaPaddedLabel* compatPill;
 @property(nonatomic, assign) BOOL controllerFocused;
 @end
 
@@ -1100,9 +1341,24 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
   self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
   self.titleLabel.textColor = [XeniaTheme textSecondary];
   self.titleLabel.textAlignment = NSTextAlignmentLeft;
-  self.titleLabel.numberOfLines = 1;
+  self.titleLabel.numberOfLines = 2;
   self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [self.contentView addSubview:self.titleLabel];
+
+  self.compatPill = [[XeniaPaddedLabel alloc] init];
+  self.compatPill.translatesAutoresizingMaskIntoConstraints = NO;
+  self.compatPill.padding = UIEdgeInsetsMake(1, 6, 1, 6);
+  self.compatPill.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+  self.compatPill.textAlignment = NSTextAlignmentCenter;
+  self.compatPill.layer.cornerRadius = 7;
+  self.compatPill.clipsToBounds = YES;
+  self.compatPill.hidden = YES;
+  [self.compatPill setContentHuggingPriority:UILayoutPriorityRequired
+                                     forAxis:UILayoutConstraintAxisHorizontal];
+  [self.compatPill
+      setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                      forAxis:UILayoutConstraintAxisHorizontal];
+  [self.contentView addSubview:self.compatPill];
 
   [NSLayoutConstraint activateConstraints:@[
     [self.iconView.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
@@ -1114,8 +1370,13 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
     [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:6],
     [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor
                                                   constant:2],
-    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
+    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.compatPill.leadingAnchor
+                                                   constant:-4],
+    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+    [self.compatPill.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    [self.compatPill.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor
                                                    constant:-2],
+    [self.compatPill.widthAnchor constraintEqualToConstant:74],
   ]];
 
   return self;
@@ -1123,6 +1384,8 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
 - (void)prepareForReuse {
   [super prepareForReuse];
+  self.compatPill.text = @"";
+  self.compatPill.hidden = YES;
   self.controllerFocused = NO;
 }
 
@@ -1985,10 +2248,13 @@ titleForFooterInSection:(NSInteger)section {
 - (void)pollControllerNavigation:(NSTimer*)timer;
 - (BOOL)readNativeControllerState:(xe::hid::X_INPUT_STATE*)out_state;
 - (BOOL)handleExternalLaunchURL:(NSURL*)url;
+- (void)startCompatFetchIfNeeded;
+- (void)applyCompatDataToDiscoveredGames;
 @end
 
 @implementation XeniaViewController {
   std::vector<IOSDiscoveredGame> discovered_games_;
+  NSDictionary* compat_data_;
   xe::ui::apple::ControllerNavigationMapper controller_navigation_mapper_;
   xe::ui::apple::FocusGraph launcher_focus_graph_;
   xe::ui::apple::FocusGraph in_game_focus_graph_;
@@ -1997,6 +2263,7 @@ titleForFooterInSection:(NSInteger)section {
   BOOL controller_navigation_was_enabled_;
   uint32_t native_controller_packet_number_;
   CGSize last_collection_layout_size_;
+  BOOL compat_fetch_started_;
   std::filesystem::path pending_external_launch_path_;
 }
 
@@ -2012,6 +2279,7 @@ titleForFooterInSection:(NSInteger)section {
   controller_navigation_was_enabled_ = NO;
   native_controller_packet_number_ = 0;
   last_collection_layout_size_ = CGSizeZero;
+  compat_fetch_started_ = NO;
   controller_navigation_mapper_.Reset();
 
   // Create the Metal-backed rendering view (full screen, behind everything).
@@ -2034,6 +2302,11 @@ titleForFooterInSection:(NSInteger)section {
   [self updateJITStatusIndicator];
   [self updateJITAvailabilityUI];
   [self refreshSignedInProfileUI];
+  NSDictionary* cached_compat_data = xe_load_cached_compat_data();
+  if (cached_compat_data) {
+    [compat_data_ release];
+    compat_data_ = [cached_compat_data retain];
+  }
   [self refreshImportedGames];
 
   // Start polling for JIT.
@@ -2049,11 +2322,31 @@ titleForFooterInSection:(NSInteger)section {
 
 - (void)viewDidAppear:(BOOL)animated {
   [super viewDidAppear:animated];
+  [self startCompatFetchIfNeeded];
   xe_request_portrait_orientation(self);
   if (!self.launcherLandscapeUnlocked) {
     self.launcherLandscapeUnlocked = YES;
     [self setNeedsUpdateOfSupportedInterfaceOrientations];
   }
+}
+
+- (void)startCompatFetchIfNeeded {
+  if (compat_fetch_started_) {
+    return;
+  }
+  compat_fetch_started_ = YES;
+  xe_fetch_compat_data(^(NSDictionary* data) {
+    if (!data) {
+      return;
+    }
+    if (self->compat_data_ && [self->compat_data_ isEqualToDictionary:data]) {
+      return;
+    }
+    [self->compat_data_ release];
+    self->compat_data_ = [data retain];
+    [self applyCompatDataToDiscoveredGames];
+    [self.importedGamesCollectionView reloadData];
+  });
 }
 
 - (void)setButton:(UIButton*)button controllerFocused:(BOOL)focused {
@@ -3740,7 +4033,7 @@ titleForFooterInSection:(NSInteger)section {
   // Format priority for dedup: GOD (full metadata + content) > ISO (full
   // disc filesystem) > standalone XEX (single executable, missing disc files).
   auto format_priority = [](const std::filesystem::path& p) -> int {
-    if (IsLikelyGodPath(p)) return 0;
+    if (IsLikelyGodContainerFile(p)) return 0;
     if (IsISOPath(p)) return 1;
     return 2;
   };
@@ -3766,7 +4059,7 @@ titleForFooterInSection:(NSInteger)section {
         }
       } else if (entry.is_regular_file(ec) &&
                  (IsISOPath(entry.path()) || IsDefaultXexPath(entry.path()) ||
-                  IsLikelyGodPath(entry.path()))) {
+                  IsLikelyGodContainerFile(entry.path()))) {
         const std::filesystem::path canonical_path =
             std::filesystem::weakly_canonical(entry.path(), ec);
         const std::filesystem::path unique_path =
@@ -3783,7 +4076,8 @@ titleForFooterInSection:(NSInteger)section {
             NSString* key = [NSString stringWithFormat:@"%08x", game.title_id];
             NSString* cached = [title_name_cache objectForKey:key];
             if (cached.length > 0) {
-              game.title = std::string([cached UTF8String]);
+              game.title = NormalizeGameTitleForUI(
+                  std::string([cached UTF8String]));
             }
           }
           if (game.title_id) {
@@ -3810,6 +4104,23 @@ titleForFooterInSection:(NSInteger)section {
 
   [title_name_cache release];
 
+  const std::filesystem::path content_root =
+      xe_get_ios_documents_path() / "content" / "0000000000000000";
+  for (auto& game : discovered_games_) {
+    if (!game.title_id) {
+      continue;
+    }
+    char title_id_buffer[9];
+    std::snprintf(title_id_buffer, sizeof(title_id_buffer), "%08X",
+                  game.title_id);
+    std::error_code ec;
+    if (std::filesystem::exists(content_root / title_id_buffer, ec)) {
+      game.has_installed_content = true;
+    }
+  }
+
+  [self applyCompatDataToDiscoveredGames];
+
   std::sort(discovered_games_.begin(), discovered_games_.end(),
             [](const IOSDiscoveredGame& a, const IOSDiscoveredGame& b) {
               if (a.title == b.title) {
@@ -3829,6 +4140,38 @@ titleForFooterInSection:(NSInteger)section {
   }
   [self rebuildLauncherFocusGraph];
   [self applyLauncherFocusVisuals];
+}
+
+- (void)applyCompatDataToDiscoveredGames {
+  for (auto& game : discovered_games_) {
+    game.has_compat_info = false;
+    game.compat_status.clear();
+    game.compat_perf.clear();
+    game.compat_notes.clear();
+    if (!compat_data_ || !game.title_id) {
+      continue;
+    }
+    NSString* key = [NSString stringWithFormat:@"%08X", game.title_id];
+    NSDictionary* info = [compat_data_ objectForKey:key];
+    if (!info) {
+      continue;
+    }
+    NSString* status = info[@"status"];
+    NSString* perf = info[@"perf"];
+    NSString* notes = info[@"notes"];
+    if ([status isKindOfClass:[NSString class]] && status.length > 0) {
+      game.has_compat_info = true;
+      game.compat_status = std::string([status UTF8String]);
+      game.compat_perf =
+          [perf isKindOfClass:[NSString class]]
+              ? std::string([perf UTF8String])
+              : "";
+      game.compat_notes =
+          [notes isKindOfClass:[NSString class]]
+              ? std::string([notes UTF8String])
+              : "";
+    }
+  }
 }
 
 - (void)presentJITRequiredAlert {
@@ -3938,6 +4281,18 @@ titleForFooterInSection:(NSInteger)section {
   NSString* title =
       game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
   cell.titleLabel.text = title;
+  if (game.has_compat_info) {
+    NSString* status = ToNSString(game.compat_status);
+    UIColor* pill_color = xe_compat_status_color(status);
+    cell.compatPill.text = xe_compat_status_label(status);
+    cell.compatPill.textColor = pill_color;
+    cell.compatPill.backgroundColor =
+        [pill_color colorWithAlphaComponent:0.1];
+    cell.compatPill.hidden = NO;
+  } else {
+    cell.compatPill.text = @"";
+    cell.compatPill.hidden = YES;
+  }
   cell.controllerFocused = controller_navigation_was_enabled_ &&
                            launcher_library_focus_active_ &&
                            focused_game_index_ == indexPath.item;
@@ -3993,6 +4348,38 @@ titleForFooterInSection:(NSInteger)section {
   [self launchGameAtPath:game.path displayName:ToNSString(game.title)];
 }
 
+- (UIContextMenuConfiguration*)collectionView:(UICollectionView*)collectionView
+    contextMenuConfigurationForItemAtIndexPath:(NSIndexPath*)indexPath
+                                         point:(CGPoint)point {
+  (void)collectionView;
+  (void)point;
+  if (indexPath.item < 0 ||
+      static_cast<size_t>(indexPath.item) >= discovered_games_.size()) {
+    return nil;
+  }
+
+  const size_t game_index = static_cast<size_t>(indexPath.item);
+  return [UIContextMenuConfiguration
+      configurationWithIdentifier:nil
+                  previewProvider:nil
+                   actionProvider:^UIMenu*(
+                       NSArray<UIMenuElement*>* __unused suggested_actions) {
+                     const IOSDiscoveredGame& game =
+                         self->discovered_games_[game_index];
+                     UIAction* play_action =
+                         [UIAction actionWithTitle:@"Play"
+                                            image:[UIImage
+                                                      systemImageNamed:@"play.fill"]
+                                       identifier:nil
+                                          handler:^(__unused UIAction* action) {
+                                            [self launchGameAtPath:game.path
+                                                       displayName:ToNSString(
+                                                                       game.title)];
+                                          }];
+                     return [UIMenu menuWithTitle:@"" children:@[ play_action ]];
+                   }];
+}
+
 #pragma mark - UICollectionViewDelegateFlowLayout
 
 - (CGSize)collectionView:(UICollectionView*)collectionView
@@ -4008,9 +4395,10 @@ titleForFooterInSection:(NSInteger)section {
   CGFloat total_spacing = spacing * (columns - 1);
   CGFloat tile_width = floor((content_width - total_spacing) / columns);
   tile_width = MAX(tile_width, 100.0f);
-  // Cover art is ~219x300 (~1:1.37).  Image height + 24pt for title label.
+  // Cover art is ~219x300 (~1:1.37). Reserve stable room for a two-line title
+  // and a compat pill without post-load reflow.
   CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-  return CGSizeMake(tile_width, image_height + 24.0f);
+  return CGSizeMake(tile_width, image_height + 44.0f);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -4168,6 +4556,7 @@ titleForFooterInSection:(NSInteger)section {
 - (void)dealloc {
   [self.jitPollTimer invalidate];
   [self.controllerNavTimer invalidate];
+  [compat_data_ release];
 }
 
 @end
