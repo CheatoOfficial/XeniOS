@@ -51,6 +51,7 @@ DECLARE_path(log_file);
 
 // Forward declarations of the Objective-C classes.
 @class XeniaAppDelegate;
+@class XeniaSceneDelegate;
 @class XeniaViewController;
 @class XeniaMetalView;
 
@@ -186,6 +187,15 @@ static void xe_request_landscape_orientation(UIViewController* view_controller) 
 static void xe_request_portrait_orientation(UIViewController* view_controller) {
   xe_request_orientation(view_controller, UIInterfaceOrientationMaskPortrait,
                          UIInterfaceOrientationPortrait);
+}
+
+static NSURL* xe_first_open_url_context_url(
+    NSSet<UIOpenURLContext*>* url_contexts) {
+  if (!url_contexts || url_contexts.count == 0) {
+    return nil;
+  }
+  UIOpenURLContext* context = [url_contexts anyObject];
+  return context.URL;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +377,101 @@ std::string TrimAscii(std::string value) {
 
 NSString* ToNSString(const std::string& value) {
   return [NSString stringWithUTF8String:value.c_str()];
+}
+
+NSString* DecodeURLComponent(NSString* value) {
+  if (!value || value.length == 0) {
+    return nil;
+  }
+  NSString* decoded = [value stringByRemovingPercentEncoding];
+  if (decoded && decoded.length > 0) {
+    return decoded;
+  }
+  return value;
+}
+
+bool BuildLaunchPathFromURLValue(NSString* value,
+                                 std::filesystem::path* path_out) {
+  if (!path_out) {
+    return false;
+  }
+  NSString* normalized = DecodeURLComponent(value);
+  if (!normalized || normalized.length == 0) {
+    return false;
+  }
+
+  NSURL* nested_url = [NSURL URLWithString:normalized];
+  if (nested_url && nested_url.isFileURL) {
+    normalized = nested_url.path;
+  }
+  if (!normalized || normalized.length == 0 ||
+      [normalized isEqualToString:@"/"]) {
+    return false;
+  }
+
+  if ([normalized hasPrefix:@"private/"]) {
+    normalized = [@"/" stringByAppendingString:normalized];
+  } else if (![normalized hasPrefix:@"/"]) {
+    normalized = [ToNSString(xe_get_ios_documents_path().string())
+        stringByAppendingPathComponent:normalized];
+  }
+
+  *path_out = std::filesystem::path([normalized UTF8String]).lexically_normal();
+  return !path_out->empty();
+}
+
+bool ExtractLaunchPathFromExternalURL(NSURL* url,
+                                      std::filesystem::path* path_out) {
+  if (!url || !path_out) {
+    return false;
+  }
+
+  if (url.isFileURL) {
+    const char* url_path = [url.path UTF8String];
+    if (url_path && url_path[0]) {
+      *path_out = std::filesystem::path(url_path).lexically_normal();
+      return true;
+    }
+  }
+
+  NSURLComponents* components =
+      [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+  if (components) {
+    NSArray<NSURLQueryItem*>* query_items = components.queryItems;
+    NSArray<NSString*>* candidate_keys =
+        @[ @"path", @"file", @"game", @"rom", @"url" ];
+    for (NSString* key in candidate_keys) {
+      for (NSURLQueryItem* item in query_items) {
+        if (!item.name ||
+            [item.name caseInsensitiveCompare:key] != NSOrderedSame) {
+          continue;
+        }
+        if (BuildLaunchPathFromURLValue(item.value, path_out)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  if (BuildLaunchPathFromURLValue(url.path, path_out)) {
+    return true;
+  }
+
+  BOOL host_looks_like_path = NO;
+  if (url.host && url.host.length > 0) {
+    host_looks_like_path = [url.host hasPrefix:@"/"] ||
+                           [url.host hasPrefix:@"private/"] ||
+                           [url.host hasPrefix:@"%2F"] ||
+                           [url.host hasPrefix:@"%2f"];
+  }
+  if (host_looks_like_path &&
+      (!url.path || url.path.length == 0 ||
+       [url.path isEqualToString:@"/"]) &&
+      BuildLaunchPathFromURLValue(url.host, path_out)) {
+    return true;
+  }
+
+  return false;
 }
 
 cvar::IConfigVar* GetConfigVar(const std::string& key) {
@@ -1879,6 +1984,7 @@ titleForFooterInSection:(NSInteger)section {
 - (void)hideInGameMenuOverlay;
 - (void)pollControllerNavigation:(NSTimer*)timer;
 - (BOOL)readNativeControllerState:(xe::hid::X_INPUT_STATE*)out_state;
+- (BOOL)handleExternalLaunchURL:(NSURL*)url;
 @end
 
 @implementation XeniaViewController {
@@ -1891,6 +1997,7 @@ titleForFooterInSection:(NSInteger)section {
   BOOL controller_navigation_was_enabled_;
   uint32_t native_controller_packet_number_;
   CGSize last_collection_layout_size_;
+  std::filesystem::path pending_external_launch_path_;
 }
 
 - (void)viewDidLoad {
@@ -2733,6 +2840,15 @@ titleForFooterInSection:(NSInteger)section {
   XELOGI("iOS: JIT acquired!");
   [self updateJITStatusIndicator];
   [self updateJITAvailabilityUI];
+
+  if (!pending_external_launch_path_.empty()) {
+    std::filesystem::path queued_path = pending_external_launch_path_;
+    pending_external_launch_path_.clear();
+    XELOGI("iOS: Launching queued external request: {}",
+           queued_path.string());
+    [self launchGameAtPath:queued_path
+               displayName:ToNSString(queued_path.filename().string())];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3731,6 +3847,31 @@ titleForFooterInSection:(NSInteger)section {
   [self presentViewController:alert animated:YES completion:nil];
 }
 
+- (BOOL)handleExternalLaunchURL:(NSURL*)url {
+  std::filesystem::path launch_path;
+  if (!ExtractLaunchPathFromExternalURL(url, &launch_path) ||
+      launch_path.empty()) {
+    NSString* absolute_url = [url absoluteString];
+    XELOGW("iOS: External launch URL missing path: {}",
+           absolute_url ? [absolute_url UTF8String] : "");
+    self.statusLabel.text = @"Launch URL missing game path.";
+    return NO;
+  }
+
+  XELOGI("iOS: External game launch requested: {}", launch_path.string());
+  if (!self.jitAcquired) {
+    pending_external_launch_path_ = launch_path;
+    self.statusLabel.text =
+        [NSString stringWithFormat:@"Waiting for JIT to launch: %@",
+                                   ToNSString(launch_path.filename().string())];
+    return YES;
+  }
+
+  [self launchGameAtPath:launch_path
+             displayName:ToNSString(launch_path.filename().string())];
+  return YES;
+}
+
 - (void)launchGameAtPath:(const std::filesystem::path&)game_path
              displayName:(NSString*)display_name {
   NSString* path_ns = ToNSString(game_path.string());
@@ -4036,6 +4177,11 @@ titleForFooterInSection:(NSInteger)section {
 // ---------------------------------------------------------------------------
 @interface XeniaAppDelegate : UIResponder <UIApplicationDelegate>
 @property(nonatomic, strong) UIWindow* window;
+- (BOOL)bootstrapApplicationWithWindow:(UIWindow*)window
+                             launchURL:(NSURL*)launch_url
+                             sourceTag:(const char*)source_tag;
+- (XeniaViewController*)xeniaViewController;
+- (BOOL)handleExternalLaunchURL:(NSURL*)url sourceTag:(const char*)source_tag;
 @end
 
 @implementation XeniaAppDelegate {
@@ -4045,6 +4191,48 @@ titleForFooterInSection:(NSInteger)section {
 
 - (BOOL)application:(UIApplication*)application
     didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
+  (void)application;
+  NSURL* launch_url = nil;
+  if (launchOptions) {
+    launch_url = [launchOptions objectForKey:UIApplicationLaunchOptionsURLKey];
+  }
+  if (@available(iOS 13.0, *)) {
+    if (launch_url) {
+      XELOGI("iOS: launch URL deferred to scene bootstrap");
+    }
+    return YES;
+  }
+
+  UIWindow* legacy_window =
+      [[[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]]
+          autorelease];
+  return [self bootstrapApplicationWithWindow:legacy_window
+                                    launchURL:launch_url
+                                    sourceTag:"launchOptions"];
+}
+
+- (BOOL)bootstrapApplicationWithWindow:(UIWindow*)window
+                             launchURL:(NSURL*)launch_url
+                             sourceTag:(const char*)source_tag {
+  if (!window) {
+    XELOGE("iOS: Cannot bootstrap app without a UIWindow");
+    return NO;
+  }
+  UIWindow* previous_window = self.window;
+  self.window = window;
+  if (app_) {
+    UIViewController* existing_root = previous_window.rootViewController;
+    if (!self.window.rootViewController && existing_root) {
+      self.window.rootViewController = existing_root;
+      [self.window makeKeyAndVisible];
+    }
+    if (launch_url) {
+      [self handleExternalLaunchURL:launch_url
+                          sourceTag:source_tag ? source_tag : "bootstrap"];
+    }
+    return YES;
+  }
+
   // Initialize cvars with no arguments on iOS (arguments come from config).
   int argc = 1;
   char arg0[] = "xenia_edge";
@@ -4057,8 +4245,6 @@ titleForFooterInSection:(NSInteger)section {
 
   // Set up the UIKit window and view controller FIRST, so the Metal view
   // is available when the app initializes.
-  self.window = [[UIWindow alloc]
-      initWithFrame:[[UIScreen mainScreen] bounds]];
   XeniaViewController* vc = [[XeniaViewController alloc] init];
   self.window.rootViewController = vc;
   [self.window makeKeyAndVisible];
@@ -4157,8 +4343,68 @@ titleForFooterInSection:(NSInteger)section {
     vc.appContext->LaunchGame(std::string());
   }
 
+  if (launch_url) {
+    [self handleExternalLaunchURL:launch_url
+                        sourceTag:source_tag ? source_tag : "bootstrap"];
+  }
+
   XELOGI("iOS: Application launched successfully");
   return YES;
+}
+
+- (XeniaViewController*)xeniaViewController {
+  UIViewController* root_view_controller = self.window.rootViewController;
+  if ([root_view_controller isKindOfClass:[XeniaViewController class]]) {
+    return (XeniaViewController*)root_view_controller;
+  }
+  return nil;
+}
+
+- (BOOL)handleExternalLaunchURL:(NSURL*)url sourceTag:(const char*)source_tag {
+  if (!url) {
+    return NO;
+  }
+
+  NSString* absolute_url = [url absoluteString];
+  XELOGI("iOS: Received app URL ({}) {}",
+         source_tag ? source_tag : "unknown",
+         absolute_url ? [absolute_url UTF8String] : "");
+
+  XeniaViewController* view_controller = [self xeniaViewController];
+  if (!view_controller) {
+    XELOGW("iOS: Ignoring URL launch; root view controller unavailable");
+    return NO;
+  }
+
+  BOOL handled = [view_controller handleExternalLaunchURL:url];
+  if (!handled) {
+    XELOGW("iOS: URL launch was not handled");
+  }
+  return handled ? YES : NO;
+}
+
+- (BOOL)application:(UIApplication*)application
+            openURL:(NSURL*)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey, id>*)options {
+  (void)application;
+  (void)options;
+  return [self handleExternalLaunchURL:url sourceTag:"openURL"];
+}
+
+- (UISceneConfiguration*)application:(UIApplication*)application
+    configurationForConnectingSceneSession:(UISceneSession*)connectingSceneSession
+                                    options:(UISceneConnectionOptions*)options {
+  (void)application;
+  (void)options;
+  if (@available(iOS 13.0, *)) {
+    UISceneConfiguration* configuration =
+        [[[UISceneConfiguration alloc] initWithName:@"Default Configuration"
+                                         sessionRole:connectingSceneSession.role]
+            autorelease];
+    configuration.delegateClass = [XeniaSceneDelegate class];
+    return configuration;
+  }
+  return nil;
 }
 
 - (UIInterfaceOrientationMask)application:(UIApplication*)application
@@ -4177,6 +4423,51 @@ titleForFooterInSection:(NSInteger)section {
     app_.reset();
   }
   app_context_.reset();
+}
+
+@end
+
+@interface XeniaSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property(nonatomic, strong) UIWindow* window;
+@end
+
+@implementation XeniaSceneDelegate
+
+- (void)scene:(UIScene*)scene
+    willConnectToSession:(UISceneSession*)session
+                  options:(UISceneConnectionOptions*)connectionOptions {
+  (void)session;
+  if (![scene isKindOfClass:[UIWindowScene class]]) {
+    XELOGE(
+        "iOS: scene connection ignored because scene is not a UIWindowScene");
+    return;
+  }
+
+  UIWindowScene* window_scene = (UIWindowScene*)scene;
+  UIWindow* scene_window =
+      [[[UIWindow alloc] initWithWindowScene:window_scene] autorelease];
+  self.window = scene_window;
+
+  NSURL* launch_url =
+      xe_first_open_url_context_url(connectionOptions.URLContexts);
+  XeniaAppDelegate* app_delegate =
+      (XeniaAppDelegate*)[UIApplication sharedApplication].delegate;
+  if (!app_delegate ||
+      ![app_delegate bootstrapApplicationWithWindow:scene_window
+                                          launchURL:launch_url
+                                          sourceTag:"sceneConnect"]) {
+    XELOGE("iOS: scene bootstrap failed");
+  }
+}
+
+- (void)scene:(UIScene*)scene openURLContexts:(NSSet<UIOpenURLContext*>*)URLContexts {
+  (void)scene;
+  NSURL* url = xe_first_open_url_context_url(URLContexts);
+  XeniaAppDelegate* app_delegate =
+      (XeniaAppDelegate*)[UIApplication sharedApplication].delegate;
+  if (app_delegate) {
+    [app_delegate handleExternalLaunchURL:url sourceTag:"sceneOpenURL"];
+  }
 }
 
 @end
