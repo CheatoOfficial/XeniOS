@@ -64,6 +64,9 @@ extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersiz
 #define CS_DEBUGGED 0x10000000
 #endif
 
+static NSString* const kXeniaDiscussionDidUpdateNotification =
+    @"XeniaDiscussionDidUpdateNotification";
+
 static BOOL xe_is_cs_debugged(void) {
   int flags = 0;
   return !csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) && (flags & CS_DEBUGGED);
@@ -1157,6 +1160,49 @@ static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   return pill;
 }
 
+static NSArray<NSString*>* xe_compat_statuses(void) {
+  return @[ @"playable", @"ingame", @"intro", @"loads", @"nothing" ];
+}
+
+static NSArray<NSString*>* xe_compat_status_labels(void) {
+  return @[ @"Playable", @"In-Game", @"Intro", @"Loads", @"Nothing" ];
+}
+
+static NSArray<NSString*>* xe_compat_perfs(void) { return @[ @"great", @"ok", @"poor", @"n/a" ]; }
+
+static NSArray<NSString*>* xe_compat_perf_labels(void) {
+  return @[ @"Great", @"OK", @"Poor", @"N/A" ];
+}
+
+static NSString* xe_device_machine(void) {
+  size_t size = 0;
+  sysctlbyname("hw.machine", nullptr, &size, nullptr, 0);
+  if (size == 0) {
+    return @"Unknown";
+  }
+
+  char* machine = static_cast<char*>(malloc(size));
+  if (!machine) {
+    return @"Unknown";
+  }
+  sysctlbyname("hw.machine", machine, &size, nullptr, 0);
+  NSString* value = [NSString stringWithCString:machine encoding:NSUTF8StringEncoding];
+  free(machine);
+  return value ?: @"Unknown";
+}
+
+static NSString* xe_device_display_name(void) {
+  NSString* machine = xe_device_machine();
+  NSString* model = [UIDevice currentDevice].model ?: @"";
+  if (model.length > 0 && machine.length > 0 && ![model isEqualToString:machine]) {
+    return [NSString stringWithFormat:@"%@ (%@)", model, machine];
+  }
+  if (machine.length > 0) {
+    return machine;
+  }
+  return model.length > 0 ? model : @"Unknown";
+}
+
 // ---------------------------------------------------------------------------
 // Game art cache — downloads tile art from Element18592/360-Game-Art by
 // title ID, caches to Library/Caches/game-art/{title_id_hex_lower}.png.
@@ -1611,6 +1657,10 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 - (instancetype)initWithTitleID:(uint32_t)title_id
                           title:(NSString*)title
                      compatData:(NSDictionary*)compat_data;
+@end
+
+@interface XeniaCompatReportViewController : UITableViewController
+- (instancetype)initWithTitleID:(uint32_t)title_id title:(NSString*)title;
 @end
 
 @interface XeniaGameTileCell : UICollectionViewCell
@@ -2344,6 +2394,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   [game_title_ release];
   [compat_info_ release];
   [discussion_reports_ release];
@@ -2360,10 +2411,24 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (@available(iOS 15.0, *)) {
     self.tableView.sectionHeaderTopPadding = 0;
   }
-  self.navigationItem.leftBarButtonItem =
+  UIBarButtonItem* done_button =
       [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                     target:self
                                                     action:@selector(doneTapped:)];
+  self.navigationItem.leftBarButtonItem = done_button;
+  [done_button release];
+
+  UIBarButtonItem* report_button =
+      [[UIBarButtonItem alloc] initWithTitle:@"Report"
+                                       style:UIBarButtonItemStylePlain
+                                      target:self
+                                      action:@selector(submitReportTapped:)];
+  self.navigationItem.rightBarButtonItem = report_button;
+  [report_button release];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(onDiscussionDidUpdate:)
+                                               name:kXeniaDiscussionDidUpdateNotification
+                                             object:nil];
   [self fetchDiscussion];
 }
 
@@ -2382,6 +2447,23 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return;
   }
   [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)submitReportTapped:(id)__unused sender {
+  XeniaCompatReportViewController* report_controller =
+      [[XeniaCompatReportViewController alloc] initWithTitleID:title_id_ title:game_title_];
+  [self.navigationController pushViewController:report_controller animated:YES];
+  [report_controller release];
+}
+
+- (void)onDiscussionDidUpdate:(NSNotification*)notification {
+  NSNumber* updated_title_id = notification.userInfo[@"titleId"];
+  if (![updated_title_id isKindOfClass:[NSNumber class]] ||
+      [updated_title_id unsignedIntValue] != title_id_) {
+    return;
+  }
+  discussion_loading_ = YES;
+  [self fetchDiscussion];
 }
 
 - (NSDictionary*)latestDiscussionReport {
@@ -2855,6 +2937,431 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return [self overviewCellForTableView:tableView];
   }
   return [self discussionCellForTableView:tableView];
+}
+
+@end
+
+@implementation XeniaCompatReportViewController {
+  uint32_t title_id_;
+  NSString* game_title_;
+  NSInteger selected_status_;
+  NSInteger selected_perf_;
+  UITextView* notes_text_view_;
+  BOOL submitting_;
+}
+
+- (instancetype)initWithTitleID:(uint32_t)title_id title:(NSString*)title {
+  self = [super initWithStyle:UITableViewStyleInsetGrouped];
+  if (self) {
+    title_id_ = title_id;
+    game_title_ = [title copy];
+    selected_status_ = -1;
+    selected_perf_ = -1;
+    submitting_ = NO;
+    self.title = @"Submit Report";
+  }
+  return self;
+}
+
+- (void)dealloc {
+  [game_title_ release];
+  [notes_text_view_ release];
+  [super dealloc];
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+  self.tableView.estimatedRowHeight = 64.0;
+  if (@available(iOS 15.0, *)) {
+    self.tableView.sectionHeaderTopPadding = 0;
+  }
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationPortrait;
+}
+
+- (void)dismissKeyboard {
+  [notes_text_view_ resignFirstResponder];
+}
+
+- (void)showAlertWithTitle:(NSString*)title message:(NSString*)message {
+  xe_present_ok_alert(self, title, message);
+}
+
+- (void)finishSuccessfulSubmissionWithIssueURL:(NSString*)issue_url {
+  [[NSFileManager defaultManager] removeItemAtPath:xe_discussion_cache_path(title_id_) error:nil];
+  [[NSNotificationCenter defaultCenter] postNotificationName:kXeniaDiscussionDidUpdateNotification
+                                                      object:nil
+                                                    userInfo:@{@"titleId" : @(title_id_)}];
+
+  NSString* message = @"Your compatibility report has been submitted.";
+  if ([issue_url isKindOfClass:[NSString class]] && issue_url.length > 0) {
+    message = [message stringByAppendingFormat:@"\n\nGitHub issue: %@", issue_url];
+  }
+
+  UIAlertController* alert =
+      [UIAlertController alertControllerWithTitle:@"Report Submitted"
+                                          message:message
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction
+                       actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:^(__unused UIAlertAction* action) {
+                                 if (self.navigationController) {
+                                   [self.navigationController popViewControllerAnimated:YES];
+                                 } else {
+                                   [self dismissViewControllerAnimated:YES completion:nil];
+                                 }
+                               }]];
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSString*)trimmedNotes {
+  return [notes_text_view_.text
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)submitReport {
+  if (submitting_) {
+    return;
+  }
+  if (selected_status_ < 0) {
+    [self showAlertWithTitle:@"Missing Status" message:@"Please select a compatibility status."];
+    return;
+  }
+  if (selected_perf_ < 0) {
+    [self showAlertWithTitle:@"Missing Performance" message:@"Please select a performance tier."];
+    return;
+  }
+
+  NSString* notes = [self trimmedNotes];
+  if (notes.length == 0) {
+    [self showAlertWithTitle:@"Missing Notes"
+                     message:@"Please add a short note about your experience."];
+    return;
+  }
+
+  submitting_ = YES;
+  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+                withRowAnimation:UITableViewRowAnimationNone];
+
+  NSString* device_machine = xe_device_machine();
+  NSString* device_display = xe_device_display_name();
+  NSDictionary* payload = @{
+    @"titleId" : [NSString stringWithFormat:@"%08X", title_id_],
+    @"title" : game_title_ ?: @"",
+    @"status" : xe_compat_statuses()[selected_status_],
+    @"perf" : xe_compat_perfs()[selected_perf_],
+    @"platform" : @"ios",
+    @"device" : device_display ?: @"Unknown",
+    @"deviceMachine" : device_machine ?: @"Unknown",
+    @"osVersion" : [UIDevice currentDevice].systemVersion ?: @"",
+    @"arch" : @"arm64",
+    @"gpuBackend" : @"msl",
+    @"notes" : notes,
+    @"tags" : @[],
+    @"screenshots" : @[],
+  };
+
+  NSError* json_error = nil;
+  NSData* request_body = [NSJSONSerialization dataWithJSONObject:payload
+                                                         options:0
+                                                           error:&json_error];
+  if (!request_body) {
+    submitting_ = NO;
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+                  withRowAnimation:UITableViewRowAnimationNone];
+    NSString* message =
+        json_error.localizedDescription ?: @"Unable to serialize the report payload.";
+    [self showAlertWithTitle:@"Submission Failed" message:message];
+    return;
+  }
+
+  XELOGI("iOS compat submit: title_id={:08X} status={} perf={} body_bytes={}", title_id_,
+         [xe_compat_statuses()[selected_status_] UTF8String],
+         [xe_compat_perfs()[selected_perf_] UTF8String],
+         static_cast<unsigned long long>(request_body.length));
+
+  NSURL* url = [NSURL URLWithString:@"https://xenios-compat-api.xenios.workers.dev/report"];
+  NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:url];
+  request.HTTPMethod = @"POST";
+  [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+  [request setValue:@"Bearer xenios-compat-report" forHTTPHeaderField:@"Authorization"];
+  request.HTTPBody = request_body;
+
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+      dataTaskWithRequest:request
+        completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            self->submitting_ = NO;
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+                          withRowAnimation:UITableViewRowAnimationNone];
+
+            if (error) {
+              [self showAlertWithTitle:@"Network Error" message:error.localizedDescription];
+              return;
+            }
+
+            NSHTTPURLResponse* http_response = (NSHTTPURLResponse*)response;
+            NSInteger status_code = [http_response isKindOfClass:[NSHTTPURLResponse class]]
+                                        ? http_response.statusCode
+                                        : 0;
+
+            NSString* response_text = @"";
+            if (data.length > 0) {
+              NSString* body_text =
+                  [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+              if (body_text.length > 0) {
+                response_text = body_text;
+              }
+            }
+
+            if (![http_response isKindOfClass:[NSHTTPURLResponse class]] || status_code < 200 ||
+                status_code >= 300) {
+              NSString* message =
+                  [NSString stringWithFormat:@"Server returned HTTP %ld", (long)status_code];
+              if (response_text.length > 0) {
+                message = [message stringByAppendingFormat:@"\n%@", response_text];
+              }
+              [self showAlertWithTitle:@"Submission Failed" message:message];
+              return;
+            }
+
+            NSString* issue_url = nil;
+            if (data.length > 0) {
+              id response_json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+              if ([response_json isKindOfClass:[NSDictionary class]] &&
+                  [response_json[@"issueUrl"] isKindOfClass:[NSString class]]) {
+                issue_url = response_json[@"issueUrl"];
+              }
+            }
+
+            [self finishSuccessfulSubmissionWithIssueURL:issue_url];
+          });
+        }];
+  [task resume];
+}
+
+#pragma mark - UITableViewDataSource
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
+  return 6;
+}
+
+- (NSInteger)tableView:(UITableView* __unused)tableView numberOfRowsInSection:(NSInteger)section {
+  switch (section) {
+    case 0:
+      return 2;
+    case 1:
+      return 4;
+    case 2:
+      return (NSInteger)xe_compat_statuses().count;
+    case 3:
+      return (NSInteger)xe_compat_perfs().count;
+    case 4:
+      return 1;
+    case 5:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView titleForHeaderInSection:(NSInteger)section {
+  switch (section) {
+    case 0:
+      return @"Game";
+    case 1:
+      return @"Device";
+    case 2:
+      return @"Compatibility Status";
+    case 3:
+      return @"Performance";
+    case 4:
+      return @"Notes";
+    default:
+      return nil;
+  }
+}
+
+- (CGFloat)tableView:(UITableView* __unused)tableView
+    heightForRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (indexPath.section == 4) {
+    return 128.0;
+  }
+  if (indexPath.section == 5) {
+    return 52.0;
+  }
+  return UITableViewAutomaticDimension;
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (indexPath.section == 0 || indexPath.section == 1) {
+    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+                                                    reuseIdentifier:nil] autorelease];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    if (indexPath.section == 0) {
+      if (indexPath.row == 0) {
+        cell.textLabel.text = @"Title";
+        cell.detailTextLabel.text = game_title_;
+      } else {
+        cell.textLabel.text = @"Title ID";
+        cell.detailTextLabel.text = [NSString stringWithFormat:@"%08X", title_id_];
+      }
+    } else {
+      switch (indexPath.row) {
+        case 0:
+          cell.textLabel.text = @"Device";
+          cell.detailTextLabel.text = xe_device_display_name();
+          break;
+        case 1:
+          cell.textLabel.text = @"OS Version";
+          cell.detailTextLabel.text = [UIDevice currentDevice].systemVersion;
+          break;
+        case 2:
+          cell.textLabel.text = @"Architecture";
+          cell.detailTextLabel.text = @"arm64";
+          break;
+        case 3:
+          cell.textLabel.text = @"GPU Backend";
+          cell.detailTextLabel.text = @"msl";
+          break;
+      }
+    }
+    return cell;
+  }
+
+  if (indexPath.section == 2 || indexPath.section == 3) {
+    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                    reuseIdentifier:nil] autorelease];
+    cell.tintColor = [XeniaTheme accent];
+    cell.textLabel.text = @"";
+    NSArray<NSString*>* keys = indexPath.section == 2 ? xe_compat_statuses() : xe_compat_perfs();
+    NSArray<NSString*>* labels =
+        indexPath.section == 2 ? xe_compat_status_labels() : xe_compat_perf_labels();
+    NSString* key = keys[indexPath.row];
+    NSString* label = labels[indexPath.row];
+    UIColor* color =
+        indexPath.section == 2 ? xe_compat_status_color(key) : xe_compat_perf_color(key);
+    XeniaPaddedLabel* pill = xe_make_tag_pill(label, color);
+    [cell.contentView addSubview:pill];
+    [NSLayoutConstraint activateConstraints:@[
+      [pill.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
+      [pill.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+    ]];
+
+    if (indexPath.section == 2) {
+      cell.accessoryType = indexPath.row == selected_status_ ? UITableViewCellAccessoryCheckmark
+                                                             : UITableViewCellAccessoryNone;
+    } else {
+      BOOL force_na = (selected_status_ == 4);
+      BOOL enabled = !force_na || indexPath.row == 3;
+      cell.accessoryType = indexPath.row == selected_perf_ ? UITableViewCellAccessoryCheckmark
+                                                           : UITableViewCellAccessoryNone;
+      cell.selectionStyle =
+          enabled ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
+      pill.alpha = enabled ? 1.0 : 0.35;
+    }
+    return cell;
+  }
+
+  if (indexPath.section == 4) {
+    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                    reuseIdentifier:nil] autorelease];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    if (!notes_text_view_) {
+      notes_text_view_ = [[UITextView alloc] init];
+      notes_text_view_.backgroundColor = [UIColor clearColor];
+      notes_text_view_.font = [UIFont systemFontOfSize:15];
+      notes_text_view_.textColor = [XeniaTheme textPrimary];
+      notes_text_view_.textContainerInset = UIEdgeInsetsMake(8, 4, 8, 4);
+
+      UIToolbar* keyboard_toolbar =
+          [[[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)] autorelease];
+      [keyboard_toolbar sizeToFit];
+      UIBarButtonItem* spacer =
+          [[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
+                                                         target:nil
+                                                         action:nil] autorelease];
+      UIBarButtonItem* done =
+          [[[UIBarButtonItem alloc] initWithTitle:@"Done"
+                                            style:UIBarButtonItemStyleDone
+                                           target:self
+                                           action:@selector(dismissKeyboard)] autorelease];
+      done.tintColor = [XeniaTheme accent];
+      keyboard_toolbar.items = @[ spacer, done ];
+      notes_text_view_.inputAccessoryView = keyboard_toolbar;
+    }
+
+    if (notes_text_view_.superview != cell.contentView) {
+      notes_text_view_.translatesAutoresizingMaskIntoConstraints = NO;
+      [cell.contentView addSubview:notes_text_view_];
+      [NSLayoutConstraint activateConstraints:@[
+        [notes_text_view_.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:8],
+        [notes_text_view_.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor
+                                                      constant:-8],
+        [notes_text_view_.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor
+                                                       constant:8],
+        [notes_text_view_.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor
+                                                        constant:-8],
+      ]];
+    }
+    return cell;
+  }
+
+  UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                  reuseIdentifier:nil] autorelease];
+  cell.backgroundColor = [XeniaTheme accent];
+  cell.clipsToBounds = YES;
+  cell.layer.cornerRadius = XeniaRadiusMd;
+  cell.textLabel.text = submitting_ ? @"Submitting..." : @"Submit Report";
+  cell.textLabel.textColor = [XeniaTheme accentFg];
+  cell.textLabel.textAlignment = NSTextAlignmentCenter;
+  cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+  return cell;
+}
+
+#pragma mark - UITableViewDelegate
+
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+  if (indexPath.section == 2) {
+    selected_status_ = indexPath.row;
+    if (selected_status_ == 4) {
+      selected_perf_ = 3;
+    }
+    [tableView reloadSections:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(2, 2)]
+             withRowAnimation:UITableViewRowAnimationNone];
+    return;
+  }
+
+  if (indexPath.section == 3) {
+    if (selected_status_ == 4 && indexPath.row != 3) {
+      return;
+    }
+    selected_perf_ = indexPath.row;
+    [tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+             withRowAnimation:UITableViewRowAnimationNone];
+    return;
+  }
+
+  if (indexPath.section == 4) {
+    [notes_text_view_ becomeFirstResponder];
+    return;
+  }
+
+  if (indexPath.section == 5) {
+    [self submitReport];
+  }
 }
 
 @end
