@@ -1158,6 +1158,10 @@ static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.1];
   pill.layer.cornerRadius = 8.0;
   pill.clipsToBounds = YES;
+  [pill setContentHuggingPriority:UILayoutPriorityRequired
+                          forAxis:UILayoutConstraintAxisHorizontal];
+  [pill setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                        forAxis:UILayoutConstraintAxisHorizontal];
   return pill;
 }
 
@@ -1192,16 +1196,90 @@ static NSString* xe_device_machine(void) {
   return value ?: @"Unknown";
 }
 
+static NSString* xe_device_display_name_for_machine(NSString* raw_machine) {
+  if (![raw_machine isKindOfClass:[NSString class]]) {
+    return @"Unknown";
+  }
+  NSString* machine = [raw_machine
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (machine.length == 0) {
+    return @"Unknown";
+  }
+  static NSDictionary<NSString*, NSString*>* overrides = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSMutableDictionary<NSString*, NSString*>* map = [NSMutableDictionary dictionary];
+    void (^add_names)(NSArray<NSString*>*, NSString*) = ^(NSArray<NSString*>* codes, NSString* name) {
+      for (NSString* code in codes) {
+        map[code] = name;
+      }
+    };
+
+    add_names(@[ @"iPhone13,1" ], @"iPhone 12 Mini");
+    add_names(@[ @"iPhone13,2" ], @"iPhone 12");
+    add_names(@[ @"iPhone13,3" ], @"iPhone 12 Pro");
+    add_names(@[ @"iPhone13,4" ], @"iPhone 12 Pro Max");
+    add_names(@[ @"iPhone14,2" ], @"iPhone 13 Pro");
+    add_names(@[ @"iPhone14,3" ], @"iPhone 13 Pro Max");
+    add_names(@[ @"iPhone14,4" ], @"iPhone 13 Mini");
+    add_names(@[ @"iPhone14,5" ], @"iPhone 13");
+    add_names(@[ @"iPhone14,6" ], @"iPhone SE 3rd Gen");
+    add_names(@[ @"iPhone14,7" ], @"iPhone 14");
+    add_names(@[ @"iPhone14,8" ], @"iPhone 14 Plus");
+    add_names(@[ @"iPhone15,2" ], @"iPhone 14 Pro");
+    add_names(@[ @"iPhone15,3" ], @"iPhone 14 Pro Max");
+    add_names(@[ @"iPhone15,4" ], @"iPhone 15");
+    add_names(@[ @"iPhone15,5" ], @"iPhone 15 Plus");
+    add_names(@[ @"iPhone16,1" ], @"iPhone 15 Pro");
+    add_names(@[ @"iPhone16,2" ], @"iPhone 15 Pro Max");
+    add_names(@[ @"iPhone17,1" ], @"iPhone 16 Pro");
+    add_names(@[ @"iPhone17,2" ], @"iPhone 16 Pro Max");
+    add_names(@[ @"iPhone17,3" ], @"iPhone 16");
+    add_names(@[ @"iPhone17,4" ], @"iPhone 16 Plus");
+    add_names(@[ @"iPhone17,5" ], @"iPhone 16e");
+    add_names(@[ @"iPhone18,1" ], @"iPhone 17 Pro");
+    add_names(@[ @"iPhone18,2" ], @"iPhone 17 Pro Max");
+    add_names(@[ @"iPhone18,3" ], @"iPhone 17");
+    add_names(@[ @"iPhone18,4" ], @"iPhone Air");
+
+    // Collapse WiFi and cellular iPad SKUs to a single product label.
+    add_names(@[ @"iPad8,9", @"iPad8,10" ], @"iPad Pro 11 inch 4th Gen");
+    add_names(@[ @"iPad8,11", @"iPad8,12" ], @"iPad Pro 12.9 inch 4th Gen");
+    add_names(@[ @"iPad11,1", @"iPad11,2" ], @"iPad mini 5th Gen");
+    add_names(@[ @"iPad11,3", @"iPad11,4" ], @"iPad Air 3rd Gen");
+    add_names(@[ @"iPad11,6", @"iPad11,7" ], @"iPad 8th Gen");
+    add_names(@[ @"iPad12,1", @"iPad12,2" ], @"iPad 9th Gen");
+    add_names(@[ @"iPad13,1", @"iPad13,2" ], @"iPad Air 4th Gen");
+    add_names(@[ @"iPad13,4", @"iPad13,5", @"iPad13,6", @"iPad13,7" ],
+              @"iPad Pro 11 inch 5th Gen");
+    add_names(@[ @"iPad13,8", @"iPad13,9", @"iPad13,10", @"iPad13,11" ],
+              @"iPad Pro 12.9 inch 5th Gen");
+    add_names(@[ @"iPad13,16", @"iPad13,17" ], @"iPad Air 5th Gen");
+    add_names(@[ @"iPad13,18", @"iPad13,19" ], @"iPad 10th Gen");
+    add_names(@[ @"iPad14,1", @"iPad14,2" ], @"iPad mini 6th Gen");
+    add_names(@[ @"iPad14,3", @"iPad14,4" ], @"iPad Pro 11 inch 4th Gen");
+    add_names(@[ @"iPad14,5", @"iPad14,6" ], @"iPad Pro 12.9 inch 6th Gen");
+    add_names(@[ @"iPad14,8", @"iPad14,9" ], @"iPad Air 11 inch 6th Gen");
+    add_names(@[ @"iPad14,10", @"iPad14,11" ], @"iPad Air 13 inch 6th Gen");
+    add_names(@[ @"iPad15,3", @"iPad15,4" ], @"iPad Air 11-inch 7th Gen");
+    add_names(@[ @"iPad15,5", @"iPad15,6" ], @"iPad Air 13-inch 7th Gen");
+    add_names(@[ @"iPad15,7", @"iPad15,8" ], @"iPad 11th Gen");
+    add_names(@[ @"iPad16,1", @"iPad16,2" ], @"iPad mini 7th Gen");
+    add_names(@[ @"iPad16,3", @"iPad16,4" ], @"iPad Pro 11 inch 5th Gen");
+    add_names(@[ @"iPad16,5", @"iPad16,6" ], @"iPad Pro 12.9 inch 7th Gen");
+
+    overrides = [map copy];
+  });
+
+  NSString* display_name = overrides[machine];
+  if ([display_name isKindOfClass:[NSString class]] && display_name.length > 0) {
+    return display_name;
+  }
+  return machine;
+}
+
 static NSString* xe_device_display_name(void) {
-  NSString* machine = xe_device_machine();
-  NSString* model = [UIDevice currentDevice].model ?: @"";
-  if (model.length > 0 && machine.length > 0 && ![model isEqualToString:machine]) {
-    return [NSString stringWithFormat:@"%@ (%@)", model, machine];
-  }
-  if (machine.length > 0) {
-    return machine;
-  }
-  return model.length > 0 ? model : @"Unknown";
+  return xe_device_display_name_for_machine(xe_device_machine());
 }
 
 // ---------------------------------------------------------------------------
@@ -2440,7 +2518,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   NSDictionary* compat_info_;
   UIImage* hero_artwork_;
   UIImage* hero_background_artwork_;
+  UIView* hero_header_view_;
+  UIView* hero_header_card_view_;
+  UIImageView* hero_header_backdrop_view_;
+  UIVisualEffectView* hero_header_blur_view_;
+  CAGradientLayer* hero_header_scrim_layer_;
+  UILabel* hero_title_label_;
+  UILabel* hero_tid_label_;
+  UIStackView* hero_pills_stack_;
+  XeniaPaddedLabel* hero_status_pill_;
+  XeniaPaddedLabel* hero_perf_pill_;
+  UILabel* hero_updated_label_;
   NSMutableArray<NSDictionary*>* discussion_reports_;
+  NSMutableSet<NSNumber*>* discussion_expanded_report_indexes_;
   NSString* discussion_issue_url_;
   NSInteger discussion_issue_number_;
   BOOL discussion_loading_;
@@ -2456,6 +2546,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     game_title_ = [title copy];
     compat_info_ = [compat_data retain];
     discussion_reports_ = [[NSMutableArray alloc] init];
+    discussion_expanded_report_indexes_ = [[NSMutableSet alloc] init];
     discussion_loading_ = YES;
     discussion_show_all_ = NO;
     discussion_issue_number_ = 0;
@@ -2470,7 +2561,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [compat_info_ release];
   [hero_artwork_ release];
   [hero_background_artwork_ release];
+  [hero_header_view_ release];
+  [hero_header_card_view_ release];
+  [hero_header_backdrop_view_ release];
+  [hero_header_blur_view_ release];
+  [hero_header_scrim_layer_ release];
+  [hero_title_label_ release];
+  [hero_tid_label_ release];
+  [hero_pills_stack_ release];
+  [hero_status_pill_ release];
+  [hero_perf_pill_ release];
+  [hero_updated_label_ release];
   [discussion_reports_ release];
+  [discussion_expanded_report_indexes_ release];
   [discussion_issue_url_ release];
   [super dealloc];
 }
@@ -2483,6 +2586,266 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)setHeroBackgroundArtwork:(UIImage*)image {
   [hero_background_artwork_ release];
   hero_background_artwork_ = [image retain];
+}
+
+- (NSDictionary*)bestResultSource {
+  if (compat_info_) {
+    return compat_info_;
+  }
+  return [self latestDiscussionReport];
+}
+
+- (void)updateHeroHeaderArtwork {
+  if (!hero_header_backdrop_view_) {
+    return;
+  }
+  UIImage* display = hero_background_artwork_ ?: hero_artwork_;
+  hero_header_backdrop_view_.image = display;
+  hero_header_backdrop_view_.hidden = (display == nil);
+  hero_header_backdrop_view_.layer.contentsRect =
+      hero_background_artwork_ ? CGRectMake(0.0, 0.0, 1.0, 1.0) : CGRectMake(0.0, 0.18, 1.0, 0.82);
+  hero_header_blur_view_.alpha = hero_background_artwork_ ? 0.22 : 0.30;
+  hero_header_card_view_.backgroundColor =
+      display ? [XeniaTheme bgSurface] : [XeniaTheme bgSurface2];
+  hero_header_scrim_layer_.colors = @[
+    (id)[UIColor colorWithWhite:0.0 alpha:0.10].CGColor,
+    (id)[UIColor colorWithWhite:0.0 alpha:0.40].CGColor,
+    (id)[UIColor colorWithWhite:0.0 alpha:0.82].CGColor,
+  ];
+  hero_header_scrim_layer_.locations = @[ @0.0, @0.56, @1.0 ];
+}
+
+- (void)updateHeroHeaderContent {
+  if (!hero_header_view_) {
+    return;
+  }
+
+  hero_title_label_.text = game_title_.length > 0 ? game_title_ : @"Unknown Title";
+  hero_tid_label_.text = title_id_ ? [NSString stringWithFormat:@"Title ID: %08X", title_id_]
+                                   : @"No title ID available";
+
+  NSDictionary* summary_source = [self bestResultSource];
+  NSDictionary* fallback_source = [self latestDiscussionReport];
+  NSString* status =
+      [summary_source[@"status"] isKindOfClass:[NSString class]] ? summary_source[@"status"] : nil;
+  if (status.length == 0) {
+    status = [fallback_source[@"status"] isKindOfClass:[NSString class]] ? fallback_source[@"status"]
+                                                                         : nil;
+  }
+  if (status.length > 0) {
+    UIColor* status_color = xe_compat_status_color(status);
+    hero_status_pill_.text = xe_compat_status_label(status);
+    hero_status_pill_.textColor = status_color;
+    hero_status_pill_.backgroundColor = [status_color colorWithAlphaComponent:0.1];
+    hero_status_pill_.hidden = NO;
+  } else {
+    hero_status_pill_.hidden = YES;
+  }
+
+  NSString* perf =
+      [summary_source[@"perf"] isKindOfClass:[NSString class]] ? summary_source[@"perf"] : nil;
+  if (perf.length == 0) {
+    perf = [fallback_source[@"perf"] isKindOfClass:[NSString class]] ? fallback_source[@"perf"]
+                                                                     : nil;
+  }
+  if (perf.length > 0) {
+    UIColor* perf_color = xe_compat_perf_color(perf);
+    hero_perf_pill_.text = xe_compat_perf_label(perf);
+    hero_perf_pill_.textColor = perf_color;
+    hero_perf_pill_.backgroundColor = [perf_color colorWithAlphaComponent:0.1];
+    hero_perf_pill_.hidden = NO;
+  } else {
+    hero_perf_pill_.hidden = YES;
+  }
+  hero_pills_stack_.hidden = hero_status_pill_.hidden && hero_perf_pill_.hidden;
+
+  NSString* updated_at =
+      [compat_info_[@"updatedAt"] isKindOfClass:[NSString class]]
+          ? compat_info_[@"updatedAt"]
+          : ([summary_source[@"date"] isKindOfClass:[NSString class]] ? summary_source[@"date"]
+                                                                      : nil);
+  if (updated_at.length == 0) {
+    updated_at =
+        [fallback_source[@"date"] isKindOfClass:[NSString class]] ? fallback_source[@"date"] : nil;
+  }
+  if (updated_at.length > 0) {
+    hero_updated_label_.text =
+        [NSString stringWithFormat:@"Last updated: %@", xe_format_iso_date(updated_at)];
+    hero_updated_label_.hidden = NO;
+  } else {
+    hero_updated_label_.hidden = YES;
+  }
+
+  [self updateHeroHeaderArtwork];
+}
+
+- (void)layoutHeroHeaderIfNeeded {
+  if (!hero_header_view_) {
+    return;
+  }
+  CGFloat width = CGRectGetWidth(self.tableView.bounds);
+  if (width <= 0.0) {
+    width = CGRectGetWidth(self.view.bounds);
+  }
+  if (width <= 0.0) {
+    return;
+  }
+
+  CGRect frame = hero_header_view_.frame;
+  if (fabs(frame.size.width - width) > 0.5) {
+    frame.size.width = width;
+    hero_header_view_.frame = frame;
+    self.tableView.tableHeaderView = hero_header_view_;
+  }
+  [hero_header_view_ setNeedsLayout];
+  [hero_header_view_ layoutIfNeeded];
+  hero_header_scrim_layer_.frame = hero_header_card_view_.bounds;
+}
+
+- (void)buildHeroHeaderIfNeeded {
+  if (hero_header_view_) {
+    [self updateHeroHeaderContent];
+    [self layoutHeroHeaderIfNeeded];
+    return;
+  }
+
+  CGFloat width = CGRectGetWidth(self.tableView.bounds);
+  if (width <= 0.0) {
+    width = CGRectGetWidth(self.view.bounds);
+  }
+  if (width <= 0.0) {
+    width = UIScreen.mainScreen.bounds.size.width;
+  }
+
+  hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, 304.0)];
+  hero_header_view_.backgroundColor = [UIColor clearColor];
+
+  hero_header_card_view_ = [[UIView alloc] init];
+  hero_header_card_view_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_header_card_view_.backgroundColor = [XeniaTheme bgSurface];
+  hero_header_card_view_.layer.cornerRadius = 28.0;
+  hero_header_card_view_.layer.borderWidth = 0.5;
+  hero_header_card_view_.layer.borderColor = [XeniaTheme border].CGColor;
+  hero_header_card_view_.clipsToBounds = YES;
+  [hero_header_view_ addSubview:hero_header_card_view_];
+
+  hero_header_backdrop_view_ = [[UIImageView alloc] init];
+  hero_header_backdrop_view_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_header_backdrop_view_.contentMode = UIViewContentModeScaleAspectFill;
+  hero_header_backdrop_view_.clipsToBounds = YES;
+  [hero_header_card_view_ addSubview:hero_header_backdrop_view_];
+
+  hero_header_blur_view_ = [[UIVisualEffectView alloc]
+      initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+  hero_header_blur_view_.translatesAutoresizingMaskIntoConstraints = NO;
+  [hero_header_card_view_ addSubview:hero_header_blur_view_];
+
+  hero_header_scrim_layer_ = [[CAGradientLayer layer] retain];
+  [hero_header_card_view_.layer addSublayer:hero_header_scrim_layer_];
+
+  UIStackView* content_stack = [[[UIStackView alloc] init] autorelease];
+  content_stack.translatesAutoresizingMaskIntoConstraints = NO;
+  content_stack.axis = UILayoutConstraintAxisVertical;
+  content_stack.spacing = 8.0;
+  [hero_header_card_view_ addSubview:content_stack];
+
+  hero_title_label_ = [[UILabel alloc] init];
+  hero_title_label_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_title_label_.font = [UIFont systemFontOfSize:30 weight:UIFontWeightBold];
+  hero_title_label_.textColor = [XeniaTheme textPrimary];
+  hero_title_label_.numberOfLines = 2;
+  hero_title_label_.lineBreakMode = NSLineBreakByTruncatingTail;
+  [content_stack addArrangedSubview:hero_title_label_];
+
+  hero_tid_label_ = [[UILabel alloc] init];
+  hero_tid_label_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_tid_label_.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
+  hero_tid_label_.textColor = [XeniaTheme textSecondary];
+  [content_stack addArrangedSubview:hero_tid_label_];
+
+  hero_pills_stack_ = [[UIStackView alloc] init];
+  hero_pills_stack_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_pills_stack_.axis = UILayoutConstraintAxisHorizontal;
+  hero_pills_stack_.spacing = 10.0;
+  hero_pills_stack_.alignment = UIStackViewAlignmentCenter;
+  [hero_pills_stack_ setContentHuggingPriority:UILayoutPriorityRequired
+                                       forAxis:UILayoutConstraintAxisHorizontal];
+  [hero_pills_stack_ setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                     forAxis:UILayoutConstraintAxisHorizontal];
+
+  hero_status_pill_ = [[XeniaPaddedLabel alloc] init];
+  hero_status_pill_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_status_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  hero_status_pill_.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+  hero_status_pill_.textAlignment = NSTextAlignmentCenter;
+  hero_status_pill_.layer.cornerRadius = 8.0;
+  hero_status_pill_.clipsToBounds = YES;
+  [hero_status_pill_ setContentHuggingPriority:UILayoutPriorityRequired
+                                       forAxis:UILayoutConstraintAxisHorizontal];
+  [hero_status_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                     forAxis:UILayoutConstraintAxisHorizontal];
+  hero_status_pill_.hidden = YES;
+
+  hero_perf_pill_ = [[XeniaPaddedLabel alloc] init];
+  hero_perf_pill_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_perf_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  hero_perf_pill_.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+  hero_perf_pill_.textAlignment = NSTextAlignmentCenter;
+  hero_perf_pill_.layer.cornerRadius = 8.0;
+  hero_perf_pill_.clipsToBounds = YES;
+  [hero_perf_pill_ setContentHuggingPriority:UILayoutPriorityRequired
+                                     forAxis:UILayoutConstraintAxisHorizontal];
+  [hero_perf_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                   forAxis:UILayoutConstraintAxisHorizontal];
+  hero_perf_pill_.hidden = YES;
+
+  [hero_pills_stack_ addArrangedSubview:hero_status_pill_];
+  [hero_pills_stack_ addArrangedSubview:hero_perf_pill_];
+  [content_stack addArrangedSubview:hero_pills_stack_];
+
+  hero_updated_label_ = [[UILabel alloc] init];
+  hero_updated_label_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_updated_label_.font = [UIFont systemFontOfSize:13];
+  hero_updated_label_.textColor = [XeniaTheme textMuted];
+  hero_updated_label_.numberOfLines = 1;
+  [content_stack addArrangedSubview:hero_updated_label_];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [hero_header_card_view_.topAnchor constraintEqualToAnchor:hero_header_view_.topAnchor],
+    [hero_header_card_view_.leadingAnchor constraintEqualToAnchor:hero_header_view_.leadingAnchor
+                                                         constant:16.0],
+    [hero_header_card_view_.trailingAnchor constraintEqualToAnchor:hero_header_view_.trailingAnchor
+                                                          constant:-16.0],
+    [hero_header_card_view_.bottomAnchor constraintEqualToAnchor:hero_header_view_.bottomAnchor],
+    [hero_header_backdrop_view_.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor],
+    [hero_header_backdrop_view_.leadingAnchor
+        constraintEqualToAnchor:hero_header_card_view_.leadingAnchor],
+    [hero_header_backdrop_view_.trailingAnchor
+        constraintEqualToAnchor:hero_header_card_view_.trailingAnchor],
+    [hero_header_backdrop_view_.bottomAnchor
+        constraintEqualToAnchor:hero_header_card_view_.bottomAnchor],
+    [hero_header_blur_view_.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor],
+    [hero_header_blur_view_.leadingAnchor
+        constraintEqualToAnchor:hero_header_card_view_.leadingAnchor],
+    [hero_header_blur_view_.trailingAnchor
+        constraintEqualToAnchor:hero_header_card_view_.trailingAnchor],
+    [hero_header_blur_view_.bottomAnchor
+        constraintEqualToAnchor:hero_header_card_view_.bottomAnchor],
+    [content_stack.leadingAnchor constraintEqualToAnchor:hero_header_card_view_.leadingAnchor
+                                                constant:28.0],
+    [content_stack.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
+                                                 constant:-28.0],
+    [content_stack.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
+                                               constant:-26.0],
+    [content_stack.topAnchor constraintGreaterThanOrEqualToAnchor:hero_header_card_view_.topAnchor
+                                                         constant:118.0],
+  ]];
+
+  self.tableView.tableHeaderView = hero_header_view_;
+  [hero_header_view_ setNeedsLayout];
+  [hero_header_view_ layoutIfNeeded];
+  [self updateHeroHeaderContent];
+  [self layoutHeroHeaderIfNeeded];
 }
 
 - (void)loadHeroArtwork {
@@ -2503,7 +2866,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   if ((cached_background || hero_artwork_) && [self isViewLoaded]) {
-    [self.tableView reloadData];
+    [self updateHeroHeaderContent];
   }
 
   const uint32_t expected_title_id = title_id_;
@@ -2514,7 +2877,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       }
       [self setHeroBackgroundArtwork:image];
       if ([self isViewLoaded]) {
-        [self.tableView reloadData];
+        [self updateHeroHeaderContent];
       }
     });
   }
@@ -2526,7 +2889,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       }
       [self setHeroArtwork:image];
       if ([self isViewLoaded]) {
-        [self.tableView reloadData];
+        [self updateHeroHeaderContent];
       }
     });
   }
@@ -2560,8 +2923,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                            selector:@selector(onDiscussionDidUpdate:)
                                                name:kXeniaDiscussionDidUpdateNotification
                                              object:nil];
+  [self buildHeroHeaderIfNeeded];
   [self loadHeroArtwork];
   [self fetchDiscussion];
+}
+
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+  [self layoutHeroHeaderIfNeeded];
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -2615,6 +2984,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)applyDiscussionJSON:(NSDictionary*)json {
   [discussion_reports_ removeAllObjects];
+  [discussion_expanded_report_indexes_ removeAllObjects];
 
   NSArray* raw_reports = json[@"reports"];
   if ([raw_reports isKindOfClass:[NSArray class]]) {
@@ -2641,6 +3011,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if ((NSInteger)discussion_reports_.count <= kXeniaDiscussionPreviewCount) {
     discussion_show_all_ = NO;
   }
+  if (discussion_reports_.count > 0) {
+    [discussion_expanded_report_indexes_ addObject:@0];
+  }
+  [self updateHeroHeaderContent];
 }
 
 - (void)fetchDiscussion {
@@ -2733,6 +3107,21 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [self.tableView reloadData];
 }
 
+- (void)toggleDiscussionReportExpansionTapped:(UIButton*)sender {
+  if (!sender) {
+    return;
+  }
+  NSNumber* report_index = [NSNumber numberWithInteger:sender.tag];
+  if ([discussion_expanded_report_indexes_ containsObject:report_index]) {
+    [discussion_expanded_report_indexes_ removeObject:report_index];
+  } else {
+    [discussion_expanded_report_indexes_ addObject:report_index];
+  }
+  NSIndexPath* discussion_path = [NSIndexPath indexPathForRow:0 inSection:0];
+  [self.tableView reloadRowsAtIndexPaths:@[ discussion_path ]
+                        withRowAnimation:UITableViewRowAnimationFade];
+}
+
 - (UIView*)cardViewForCell:(UITableViewCell*)cell {
   UIView* card = [[[UIView alloc] init] autorelease];
   card.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2750,188 +3139,202 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   return card;
 }
 
-- (UITableViewCell*)overviewCellForTableView:(UITableView*)__unused tableView {
+- (UIView*)detailsMetricTileWithLabel:(NSString*)label
+                                value:(NSString*)value
+                           valueColor:(UIColor*)value_color
+                          valueIsPill:(BOOL)value_is_pill {
+  UIView* tile = [[[UIView alloc] init] autorelease];
+  tile.translatesAutoresizingMaskIntoConstraints = NO;
+  tile.backgroundColor = [XeniaTheme bgPrimary];
+  tile.layer.cornerRadius = XeniaRadiusMd;
+  tile.layer.borderWidth = 0.5;
+  tile.layer.borderColor = [XeniaTheme border].CGColor;
+
+  UILabel* title = [[[UILabel alloc] init] autorelease];
+  title.translatesAutoresizingMaskIntoConstraints = NO;
+  title.text = label;
+  title.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+  title.textColor = [XeniaTheme textMuted];
+  [tile addSubview:title];
+
+  UIView* value_view = nil;
+  if (value_is_pill) {
+    value_view = xe_make_tag_pill(value ?: @"Unknown", value_color ?: [XeniaTheme textMuted]);
+  } else {
+    UILabel* value_label = [[[UILabel alloc] init] autorelease];
+    value_label.translatesAutoresizingMaskIntoConstraints = NO;
+    value_label.text = value ?: @"Unknown";
+    value_label.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    value_label.textColor = value_color ?: [XeniaTheme textPrimary];
+    value_label.numberOfLines = 1;
+    value_view = value_label;
+  }
+  [tile addSubview:value_view];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [tile.heightAnchor constraintGreaterThanOrEqualToConstant:86.0],
+    [title.topAnchor constraintEqualToAnchor:tile.topAnchor constant:12.0],
+    [title.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:12.0],
+    [title.trailingAnchor constraintLessThanOrEqualToAnchor:tile.trailingAnchor constant:-12.0],
+    [value_view.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10.0],
+    [value_view.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:12.0],
+    [value_view.trailingAnchor constraintLessThanOrEqualToAnchor:tile.trailingAnchor
+                                                        constant:-12.0],
+    [value_view.bottomAnchor constraintLessThanOrEqualToAnchor:tile.bottomAnchor constant:-12.0],
+  ]];
+
+  return tile;
+}
+
+- (UITableViewCell*)detailsCellForTableView:(UITableView*)__unused tableView {
   UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
                                                   reuseIdentifier:nil] autorelease];
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
   cell.backgroundColor = [UIColor clearColor];
   cell.contentView.backgroundColor = [UIColor clearColor];
 
+  NSDictionary* best_report = [self latestDiscussionReport];
+  NSString* status = [best_report[@"status"] isKindOfClass:[NSString class]]
+                         ? best_report[@"status"]
+                         : compat_info_[@"status"];
+  NSString* status_label = status.length > 0 ? xe_compat_status_label(status) : @"Unknown";
+  UIColor* status_color =
+      status.length > 0 ? xe_compat_status_color(status) : [XeniaTheme textMuted];
+
+  NSString* report_device = [best_report[@"deviceMachine"] isKindOfClass:[NSString class]]
+                                ? best_report[@"deviceMachine"]
+                                : best_report[@"device"];
+  NSString* device =
+      report_device.length > 0 ? xe_device_display_name_for_machine(report_device) : @"Unknown";
+
+  NSString* platform_display =
+      xe_platform_display_text(best_report[@"platform"], best_report[@"osVersion"]);
+  if (platform_display.length == 0) {
+    platform_display = @"Unknown";
+  }
+
+  NSString* gpu = [best_report[@"gpuBackend"] isKindOfClass:[NSString class]]
+                      ? best_report[@"gpuBackend"]
+                      : nil;
+  if (gpu.length == 0) {
+    gpu = @"Unknown";
+  } else {
+    gpu = [gpu uppercaseString];
+  }
+
+  NSString* based_on_date =
+      [best_report[@"date"] isKindOfClass:[NSString class]] ? best_report[@"date"] : nil;
+  if (based_on_date.length == 0 && [compat_info_[@"updatedAt"] isKindOfClass:[NSString class]]) {
+    based_on_date = compat_info_[@"updatedAt"];
+  }
+  NSString* footnote = @"Based on available compatibility data.";
+  if (based_on_date.length > 0) {
+    footnote = [NSString
+        stringWithFormat:@"Based on the latest report from %@.", xe_format_iso_date(based_on_date)];
+  }
+
   UIView* card = [self cardViewForCell:cell];
-  UIStackView* stack = [[[UIStackView alloc] init] autorelease];
-  stack.translatesAutoresizingMaskIntoConstraints = NO;
-  stack.axis = UILayoutConstraintAxisVertical;
-  stack.spacing = 12.0;
-  [card addSubview:stack];
+
+  UILabel* heading = [[[UILabel alloc] init] autorelease];
+  heading.translatesAutoresizingMaskIntoConstraints = NO;
+  heading.text = @"Details";
+  heading.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+  heading.textColor = [XeniaTheme textPrimary];
+  [card addSubview:heading];
+
+  UILabel* subheading = [[[UILabel alloc] init] autorelease];
+  subheading.translatesAutoresizingMaskIntoConstraints = NO;
+  subheading.text = @"BEST RESULT";
+  subheading.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+  subheading.textColor = [XeniaTheme textMuted];
+  [card addSubview:subheading];
+
+  UIStackView* grid = [[[UIStackView alloc] init] autorelease];
+  grid.translatesAutoresizingMaskIntoConstraints = NO;
+  grid.axis = UILayoutConstraintAxisVertical;
+  grid.spacing = 10.0;
+  [card addSubview:grid];
+
+  UIStackView* row_one = [[[UIStackView alloc] init] autorelease];
+  row_one.axis = UILayoutConstraintAxisHorizontal;
+  row_one.spacing = 10.0;
+  row_one.distribution = UIStackViewDistributionFillEqually;
+  [grid addArrangedSubview:row_one];
+
+  UIStackView* row_two = [[[UIStackView alloc] init] autorelease];
+  row_two.axis = UILayoutConstraintAxisHorizontal;
+  row_two.spacing = 10.0;
+  row_two.distribution = UIStackViewDistributionFillEqually;
+  [grid addArrangedSubview:row_two];
+
+  [row_one addArrangedSubview:[self detailsMetricTileWithLabel:@"STATUS"
+                                                         value:status_label
+                                                    valueColor:status_color
+                                                   valueIsPill:YES]];
+  [row_one addArrangedSubview:[self detailsMetricTileWithLabel:@"DEVICE"
+                                                         value:device
+                                                    valueColor:[XeniaTheme textPrimary]
+                                                   valueIsPill:NO]];
+  [row_two addArrangedSubview:[self detailsMetricTileWithLabel:@"PLATFORM"
+                                                         value:platform_display
+                                                    valueColor:[XeniaTheme textPrimary]
+                                                   valueIsPill:NO]];
+  [row_two addArrangedSubview:[self detailsMetricTileWithLabel:@"GPU"
+                                                         value:gpu
+                                                    valueColor:[XeniaTheme textPrimary]
+                                                   valueIsPill:NO]];
+
+  UILabel* footer = [[[UILabel alloc] init] autorelease];
+  footer.translatesAutoresizingMaskIntoConstraints = NO;
+  footer.text = footnote;
+  footer.font = [UIFont systemFontOfSize:12];
+  footer.textColor = [XeniaTheme textSecondary];
+  footer.numberOfLines = 0;
+  [card addSubview:footer];
+
   [NSLayoutConstraint activateConstraints:@[
-    [stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
-    [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
-    [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
-    [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
+    [heading.topAnchor constraintEqualToAnchor:card.topAnchor constant:16.0],
+    [heading.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [heading.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [subheading.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:12.0],
+    [subheading.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [subheading.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [grid.topAnchor constraintEqualToAnchor:subheading.bottomAnchor constant:10.0],
+    [grid.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [grid.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [footer.topAnchor constraintEqualToAnchor:grid.bottomAnchor constant:12.0],
+    [footer.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [footer.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [footer.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
   ]];
-
-  UIImage* hero_image = hero_background_artwork_ ?: hero_artwork_;
-  if (hero_image) {
-    UIView* hero_container = [[[UIView alloc] init] autorelease];
-    hero_container.translatesAutoresizingMaskIntoConstraints = NO;
-    hero_container.backgroundColor = [XeniaTheme bgSurface2];
-    hero_container.layer.cornerRadius = XeniaRadiusLg;
-    hero_container.clipsToBounds = YES;
-
-    UIImageView* hero_view = [[[UIImageView alloc] initWithImage:hero_image] autorelease];
-    hero_view.translatesAutoresizingMaskIntoConstraints = NO;
-    hero_view.contentMode = UIViewContentModeScaleAspectFill;
-    hero_view.clipsToBounds = YES;
-    hero_view.layer.contentsRect = hero_background_artwork_ ? CGRectMake(0.0, 0.0, 1.0, 1.0)
-                                                            : CGRectMake(0.0, 0.18, 1.0, 0.82);
-    [hero_container addSubview:hero_view];
-
-    UIVisualEffectView* blur_view = [[[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]]
-        autorelease];
-    blur_view.translatesAutoresizingMaskIntoConstraints = NO;
-    blur_view.alpha = hero_background_artwork_ ? 0.18 : 0.30;
-    [hero_container addSubview:blur_view];
-
-    UIView* tint_view = [[[UIView alloc] init] autorelease];
-    tint_view.translatesAutoresizingMaskIntoConstraints = NO;
-    tint_view.backgroundColor =
-        [[UIColor blackColor] colorWithAlphaComponent:(hero_background_artwork_ ? 0.16 : 0.24)];
-    [hero_container addSubview:tint_view];
-
-    [NSLayoutConstraint activateConstraints:@[
-      [hero_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
-      [hero_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
-      [hero_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
-      [hero_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
-      [blur_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
-      [blur_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
-      [blur_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
-      [blur_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
-      [tint_view.topAnchor constraintEqualToAnchor:hero_container.topAnchor],
-      [tint_view.leadingAnchor constraintEqualToAnchor:hero_container.leadingAnchor],
-      [tint_view.trailingAnchor constraintEqualToAnchor:hero_container.trailingAnchor],
-      [tint_view.bottomAnchor constraintEqualToAnchor:hero_container.bottomAnchor],
-      [hero_container.heightAnchor constraintEqualToConstant:176],
-    ]];
-    [stack addArrangedSubview:hero_container];
-  }
-
-  UILabel* title_label = [[[UILabel alloc] init] autorelease];
-  title_label.text = game_title_.length > 0 ? game_title_ : @"Unknown Title";
-  title_label.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
-  title_label.textColor = [XeniaTheme textPrimary];
-  title_label.numberOfLines = 2;
-  [stack addArrangedSubview:title_label];
-
-  UILabel* subtitle_label = [[[UILabel alloc] init] autorelease];
-  subtitle_label.text = title_id_ ? [NSString stringWithFormat:@"Title ID %08X", title_id_]
-                                  : @"No title ID available";
-  subtitle_label.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
-  subtitle_label.textColor = [XeniaTheme textMuted];
-  subtitle_label.numberOfLines = 1;
-  [stack addArrangedSubview:subtitle_label];
-
-  NSDictionary* summary_source = [self primaryCompatibilitySource];
-  NSString* status =
-      [summary_source[@"status"] isKindOfClass:[NSString class]] ? summary_source[@"status"] : nil;
-  NSString* perf =
-      [summary_source[@"perf"] isKindOfClass:[NSString class]] ? summary_source[@"perf"] : nil;
-
-  if (status.length > 0 || perf.length > 0) {
-    UIStackView* pills_row = [[[UIStackView alloc] init] autorelease];
-    pills_row.axis = UILayoutConstraintAxisHorizontal;
-    pills_row.spacing = 8.0;
-    pills_row.alignment = UIStackViewAlignmentLeading;
-    pills_row.translatesAutoresizingMaskIntoConstraints = NO;
-    if (status.length > 0) {
-      [pills_row addArrangedSubview:xe_make_tag_pill(xe_compat_status_label(status),
-                                                     xe_compat_status_color(status))];
-    }
-    if (perf.length > 0) {
-      [pills_row addArrangedSubview:xe_make_tag_pill(xe_compat_perf_label(perf),
-                                                     xe_compat_perf_color(perf))];
-    }
-    [stack addArrangedSubview:pills_row];
-  }
-
-  NSString* notes = nil;
-  if ([compat_info_[@"notes"] isKindOfClass:[NSString class]] &&
-      [compat_info_[@"notes"] length] > 0) {
-    notes = compat_info_[@"notes"];
-  } else if ([summary_source[@"notes"] isKindOfClass:[NSString class]] &&
-             [summary_source[@"notes"] length] > 0) {
-    notes = summary_source[@"notes"];
-  }
-
-  UILabel* notes_label = [[[UILabel alloc] init] autorelease];
-  notes_label.numberOfLines = 0;
-  notes_label.font = [UIFont systemFontOfSize:15];
-  notes_label.textColor = [XeniaTheme textSecondary];
-  notes_label.text = notes.length > 0 ? notes : @"No compatibility summary cached yet.";
-  [stack addArrangedSubview:notes_label];
-
-  NSString* updated_at =
-      [compat_info_[@"updatedAt"] isKindOfClass:[NSString class]]
-          ? compat_info_[@"updatedAt"]
-          : ([summary_source[@"date"] isKindOfClass:[NSString class]] ? summary_source[@"date"]
-                                                                      : nil);
-  if (updated_at.length > 0) {
-    UILabel* updated_label = [[[UILabel alloc] init] autorelease];
-    updated_label.numberOfLines = 1;
-    updated_label.font = [UIFont systemFontOfSize:13];
-    updated_label.textColor = [XeniaTheme textMuted];
-    updated_label.text =
-        [NSString stringWithFormat:@"Last updated %@", xe_format_iso_date(updated_at)];
-    [stack addArrangedSubview:updated_label];
-  }
 
   return cell;
 }
 
-- (UIView*)discussionCardForReport:(NSDictionary*)report {
-  UIView* card = [[[UIView alloc] init] autorelease];
-  card.translatesAutoresizingMaskIntoConstraints = NO;
-  card.backgroundColor = [XeniaTheme bgPrimary];
-  card.layer.cornerRadius = XeniaRadiusLg;
-  card.layer.borderWidth = 0.5;
-  card.layer.borderColor = [XeniaTheme border].CGColor;
+- (UIView*)discussionPreviewCardForReport:(NSDictionary*)report reportIndex:(NSInteger)report_index {
+  NSString* author = [report[@"submittedBy"] isKindOfClass:[NSString class]] ? report[@"submittedBy"]
+                                                                             : @"anonymous";
+  NSString* notes =
+      [report[@"notes"] isKindOfClass:[NSString class]] ? report[@"notes"] : @"";
+  NSString* date_string =
+      [report[@"date"] isKindOfClass:[NSString class]] ? report[@"date"] : @"";
+  NSString* formatted_date =
+      date_string.length >= 10 ? xe_format_iso_date(date_string) : date_string;
 
-  UILabel* author_label = [[[UILabel alloc] init] autorelease];
-  author_label.translatesAutoresizingMaskIntoConstraints = NO;
-  NSString* author = [report[@"submittedBy"] isKindOfClass:[NSString class]]
-                         ? report[@"submittedBy"]
-                         : @"anonymous";
-  author_label.text = author.length > 0 ? author : @"anonymous";
-  author_label.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-  author_label.textColor = [XeniaTheme textPrimary];
-  [card addSubview:author_label];
-
-  UILabel* date_label = [[[UILabel alloc] init] autorelease];
-  date_label.translatesAutoresizingMaskIntoConstraints = NO;
-  NSString* date = [report[@"date"] isKindOfClass:[NSString class]] ? report[@"date"] : nil;
-  date_label.text = date.length > 0 ? xe_format_iso_date(date) : @"";
-  date_label.font = [UIFont systemFontOfSize:13];
-  date_label.textColor = [XeniaTheme textMuted];
-  date_label.textAlignment = NSTextAlignmentRight;
-  [date_label setContentHuggingPriority:UILayoutPriorityRequired
-                                forAxis:UILayoutConstraintAxisHorizontal];
-  [date_label setContentCompressionResistancePriority:UILayoutPriorityRequired
-                                              forAxis:UILayoutConstraintAxisHorizontal];
-  [card addSubview:date_label];
+  if (![notes isKindOfClass:[NSString class]] || notes.length == 0) {
+    notes = @"No details provided.";
+  }
 
   NSMutableArray<NSString*>* info_parts = [NSMutableArray array];
   NSString* status = [report[@"status"] isKindOfClass:[NSString class]] ? report[@"status"] : nil;
   if (status.length > 0) {
     [info_parts addObject:xe_compat_status_label(status)];
   }
-  NSString* perf = [report[@"perf"] isKindOfClass:[NSString class]] ? report[@"perf"] : nil;
-  if (perf.length > 0) {
-    [info_parts addObject:xe_compat_perf_label(perf)];
-  }
-  NSString* device = [report[@"device"] isKindOfClass:[NSString class]] ? report[@"device"] : nil;
-  if (device.length > 0) {
-    [info_parts addObject:device];
+  NSString* report_device = [report[@"deviceMachine"] isKindOfClass:[NSString class]]
+                                ? report[@"deviceMachine"]
+                                : report[@"device"];
+  if ([report_device isKindOfClass:[NSString class]] && report_device.length > 0) {
+    [info_parts addObject:xe_device_display_name_for_machine(report_device)];
   }
   NSString* platform_display = xe_platform_display_text(report[@"platform"], report[@"osVersion"]);
   if (platform_display.length > 0) {
@@ -2942,48 +3345,119 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (gpu_backend.length > 0) {
     [info_parts addObject:[gpu_backend uppercaseString]];
   }
+  NSString* info_text = [info_parts componentsJoinedByString:@" \u00B7 "];
+
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [XeniaTheme bgPrimary];
+  card.layer.cornerRadius = XeniaRadiusMd;
+  card.layer.borderWidth = 0.5;
+  card.layer.borderColor = [XeniaTheme border].CGColor;
+
+  UILabel* author_label = [[[UILabel alloc] init] autorelease];
+  author_label.translatesAutoresizingMaskIntoConstraints = NO;
+  author_label.text = author.length > 0 ? author : @"anonymous";
+  author_label.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+  author_label.textColor = [XeniaTheme textPrimary];
+  [card addSubview:author_label];
+
+  UILabel* date_label = [[[UILabel alloc] init] autorelease];
+  date_label.translatesAutoresizingMaskIntoConstraints = NO;
+  date_label.text = formatted_date;
+  date_label.font = [UIFont systemFontOfSize:13];
+  date_label.textColor = [XeniaTheme textMuted];
+  date_label.textAlignment = NSTextAlignmentRight;
+  [date_label setContentHuggingPriority:UILayoutPriorityRequired
+                                forAxis:UILayoutConstraintAxisHorizontal];
+  [date_label setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                              forAxis:UILayoutConstraintAxisHorizontal];
+  [card addSubview:date_label];
 
   UILabel* info_label = [[[UILabel alloc] init] autorelease];
   info_label.translatesAutoresizingMaskIntoConstraints = NO;
-  info_label.text = [info_parts componentsJoinedByString:@" \u00B7 "];
+  info_label.text = info_text;
   info_label.font = [UIFont systemFontOfSize:13];
   info_label.textColor = [XeniaTheme textMuted];
-  info_label.numberOfLines = 0;
+  info_label.numberOfLines = 2;
   info_label.hidden = info_label.text.length == 0;
   [card addSubview:info_label];
 
   UILabel* notes_label = [[[UILabel alloc] init] autorelease];
   notes_label.translatesAutoresizingMaskIntoConstraints = NO;
-  NSString* notes = [report[@"notes"] isKindOfClass:[NSString class]] ? report[@"notes"] : nil;
-  notes_label.text = notes.length > 0 ? notes : @"No details provided.";
+  notes_label.text = notes;
   notes_label.font = [UIFont systemFontOfSize:15];
   notes_label.textColor = [XeniaTheme textSecondary];
-  notes_label.numberOfLines = 4;
+  BOOL report_expanded =
+      [discussion_expanded_report_indexes_ containsObject:[NSNumber numberWithInteger:report_index]];
+  notes_label.numberOfLines = report_expanded ? 0 : 3;
+  notes_label.lineBreakMode = report_expanded ? NSLineBreakByWordWrapping
+                                              : NSLineBreakByTruncatingTail;
   [card addSubview:notes_label];
+
+  BOOL can_expand_notes = notes.length > 170 || [notes rangeOfString:@"\n"].location != NSNotFound;
+  UIButton* expand_notes_button = [UIButton buttonWithType:UIButtonTypeSystem];
+  expand_notes_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [expand_notes_button setTitle:(report_expanded ? @"Show less" : @"Show more")
+                       forState:UIControlStateNormal];
+  [expand_notes_button setTitleColor:[XeniaTheme accent] forState:UIControlStateNormal];
+  expand_notes_button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+  expand_notes_button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+  expand_notes_button.tag = report_index;
+  expand_notes_button.hidden = !can_expand_notes;
+  [expand_notes_button addTarget:self
+                          action:@selector(toggleDiscussionReportExpansionTapped:)
+                forControlEvents:UIControlEventTouchUpInside];
+  [card addSubview:expand_notes_button];
+
+  UIButton* open_comment_button = [UIButton buttonWithType:UIButtonTypeSystem];
+  open_comment_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [open_comment_button setTitle:@"Open comment" forState:UIControlStateNormal];
+  [open_comment_button setTitleColor:[XeniaTheme accent] forState:UIControlStateNormal];
+  open_comment_button.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+  open_comment_button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+  open_comment_button.hidden = (discussion_issue_url_ == nil);
+  [open_comment_button addTarget:self
+                          action:@selector(viewIssueTapped:)
+                forControlEvents:UIControlEventTouchUpInside];
+  [card addSubview:open_comment_button];
 
   [NSLayoutConstraint activateConstraints:@[
     [author_label.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
-    [author_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+    [author_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:10],
     [date_label.firstBaselineAnchor constraintEqualToAnchor:author_label.firstBaselineAnchor],
-    [date_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+    [date_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-10],
     [date_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:author_label.trailingAnchor
                                                           constant:8],
-    [info_label.topAnchor constraintEqualToAnchor:author_label.bottomAnchor constant:6],
-    [info_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-    [info_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
-    [notes_label.topAnchor constraintEqualToAnchor:info_label.bottomAnchor constant:8],
-    [notes_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
-    [notes_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
-    [notes_label.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12],
+    [notes_label.topAnchor constraintEqualToAnchor:author_label.bottomAnchor constant:6],
+    [notes_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:10],
+    [notes_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-10],
+    [expand_notes_button.topAnchor constraintEqualToAnchor:notes_label.bottomAnchor constant:4],
+    [expand_notes_button.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:10],
+    [expand_notes_button.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor
+                                                                 constant:-10],
+    [info_label.topAnchor constraintEqualToAnchor:expand_notes_button.bottomAnchor constant:6],
+    [info_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:10],
+    [info_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-10],
+    [open_comment_button.topAnchor constraintEqualToAnchor:info_label.bottomAnchor constant:8],
+    [open_comment_button.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:10],
+    [open_comment_button.trailingAnchor constraintLessThanOrEqualToAnchor:card.trailingAnchor
+                                                                 constant:-10],
+    [open_comment_button.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-10],
   ]];
+  if (expand_notes_button.hidden) {
+    [expand_notes_button.heightAnchor constraintEqualToConstant:0].active = YES;
+  }
   if (info_label.hidden) {
     [info_label.heightAnchor constraintEqualToConstant:0].active = YES;
+  }
+  if (open_comment_button.hidden) {
+    [open_comment_button.heightAnchor constraintEqualToConstant:0].active = YES;
   }
 
   return card;
 }
 
-- (UITableViewCell*)discussionCellForTableView:(UITableView*)__unused tableView {
+- (UITableViewCell*)discussionPreviewCellForTableView:(UITableView*)__unused tableView {
   UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
                                                   reuseIdentifier:nil] autorelease];
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -3005,10 +3479,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   UIView* heading_row = [[[UIView alloc] init] autorelease];
   heading_row.translatesAutoresizingMaskIntoConstraints = NO;
+  heading_row.backgroundColor = [XeniaTheme bgSurface];
   UILabel* heading_label = [[[UILabel alloc] init] autorelease];
   heading_label.translatesAutoresizingMaskIntoConstraints = NO;
   heading_label.text = @"Discussion";
-  heading_label.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+  heading_label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
   heading_label.textColor = [XeniaTheme textPrimary];
   [heading_row addSubview:heading_label];
 
@@ -3016,11 +3491,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   heading_button.translatesAutoresizingMaskIntoConstraints = NO;
   NSString* button_title =
       discussion_issue_number_ > 0
-          ? [NSString stringWithFormat:@"Issue #%ld", (long)discussion_issue_number_]
+          ? [NSString stringWithFormat:@"View Issue #%ld", (long)discussion_issue_number_]
           : @"View on GitHub";
   [heading_button setTitle:button_title forState:UIControlStateNormal];
   [heading_button setTitleColor:[XeniaTheme accent] forState:UIControlStateNormal];
-  heading_button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+  heading_button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
   heading_button.hidden = (discussion_issue_url_ == nil);
   [heading_button addTarget:self
                      action:@selector(viewIssueTapped:)
@@ -3040,7 +3515,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   if (discussion_loading_) {
     UILabel* loading_label = [[[UILabel alloc] init] autorelease];
-    loading_label.text = @"Loading compatibility discussion...";
+    loading_label.text = @"Loading discussion...";
     loading_label.font = [UIFont systemFontOfSize:15];
     loading_label.textColor = [XeniaTheme textMuted];
     loading_label.numberOfLines = 1;
@@ -3050,7 +3525,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   if (discussion_reports_.count == 0) {
     UILabel* empty_label = [[[UILabel alloc] init] autorelease];
-    empty_label.text = @"No compatibility reports have been posted for this title yet.";
+    empty_label.text = @"No reports yet. Be the first to submit one.";
     empty_label.font = [UIFont systemFontOfSize:15];
     empty_label.textColor = [XeniaTheme textMuted];
     empty_label.numberOfLines = 0;
@@ -3066,7 +3541,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     if (![report isKindOfClass:[NSDictionary class]]) {
       continue;
     }
-    [stack addArrangedSubview:[self discussionCardForReport:report]];
+    [stack addArrangedSubview:[self discussionPreviewCardForReport:report reportIndex:report_index]];
   }
 
   if (report_count > kXeniaDiscussionPreviewCount) {
@@ -3113,9 +3588,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (UITableViewCell*)tableView:(UITableView*)tableView
         cellForRowAtIndexPath:(NSIndexPath*)indexPath {
   if (indexPath.row == 0) {
-    return [self overviewCellForTableView:tableView];
+    return [self discussionPreviewCellForTableView:tableView];
   }
-  return [self discussionCellForTableView:tableView];
+  return [self detailsCellForTableView:tableView];
 }
 
 @end
