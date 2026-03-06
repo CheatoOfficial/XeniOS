@@ -43,6 +43,7 @@
 #include "xenia/hid/nop/nop_hid.h"
 #include "xenia/hid/sdl/sdl_hid.h"
 #include "xenia/kernel/xam/xam.h"
+#include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_state.h"
 
 // CVars normally defined in xenia_main.cc (excluded on iOS).
@@ -67,6 +68,9 @@ DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 // CVar normally defined in windowed_app_main_qt.cc (excluded on iOS).
 DEFINE_transient_path(target, "", "Specifies the target file to run.",
                       "General");
+DECLARE_string(launch_module);
+DECLARE_uint32(launch_flags);
+DECLARE_string(launch_data);
 
 namespace xe {
 namespace app {
@@ -109,6 +113,7 @@ class EmulatorAppIOS final : public xe::ui::WindowedApp {
   std::atomic<bool> shutting_down_{false};
   std::mutex launch_mutex_;
   std::optional<std::filesystem::path> queued_launch_path_;
+  bool title_update_install_in_progress_ = false;
   std::atomic<bool> emulator_initialized_{false};
   std::atomic<bool> emulator_cpu_initialized_{false};
 };
@@ -197,6 +202,58 @@ bool EmulatorAppIOS::OnInitialize() {
   // Create the emulator instance.
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
+
+  // iOS title-to-title relaunch flow:
+  // 1. XamLoaderLaunchTitle invokes this callback with relaunch parameters.
+  // 2. We queue the resolved target and preserve launch metadata in cvars.
+  // 3. XamLoaderLaunchTitle then terminates the current title.
+  // 4. Emulator thread exit triggers StartQueuedLaunchIfIdle().
+  emulator_->set_on_launch_new_title(
+      [this](const std::string& host_path, const std::string& launch_module,
+             uint32_t launch_flags, const std::string& launch_data_hex) {
+        if (shutting_down_.load(std::memory_order_acquire)) {
+          XELOGW("iOS: Ignoring title relaunch request while shutting down");
+          return;
+        }
+
+        std::filesystem::path relaunch_target;
+        if (!host_path.empty()) {
+          relaunch_target = std::filesystem::path(host_path);
+        }
+        if (!launch_module.empty()) {
+          std::filesystem::path launch_module_path(launch_module);
+          if (relaunch_target.empty()) {
+            relaunch_target = launch_module_path;
+          } else if (relaunch_target.extension() == ".xex" ||
+                     relaunch_target.extension() == ".XEX") {
+            relaunch_target = relaunch_target.parent_path() / launch_module_path;
+          } else {
+            relaunch_target = relaunch_target / launch_module_path;
+          }
+        }
+        relaunch_target = relaunch_target.lexically_normal();
+        if (relaunch_target.empty()) {
+          XELOGW("iOS: Ignoring title relaunch request with empty target "
+                 "(host_path='{}', launch_module='{}')",
+                 host_path, launch_module);
+          return;
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(launch_mutex_);
+          queued_launch_path_ = relaunch_target;
+        }
+
+        cvars::launch_module = launch_module;
+        cvars::launch_flags = launch_flags;
+        cvars::launch_data = launch_data_hex;
+
+        XELOGI("iOS: Queued title relaunch target='{}' module='{}' flags={} "
+               "data_len={}",
+               relaunch_target.string(), launch_module, launch_flags,
+               launch_data_hex.size());
+      });
+
   emulator_->on_launch.AddListener(
       [](uint32_t title_id, const std::string_view title_name) {
         if (title_id == 0 || title_name.empty()) {
@@ -263,12 +320,27 @@ bool EmulatorAppIOS::OnInitialize() {
           XELOGI("iOS: Game launch requested: {}", path);
         }
         auto game_path = std::filesystem::path(path);
+        if (!game_path.empty()) {
+          // User-driven launches should not reuse prior relaunch metadata.
+          cvars::launch_module = "";
+          cvars::launch_flags = 0;
+          cvars::launch_data = "";
+        }
 
-        if (emulator_thread_running_.load(std::memory_order_acquire)) {
-          {
-            std::lock_guard<std::mutex> lock(launch_mutex_);
-            queued_launch_path_ = game_path;
+        bool should_queue_launch = false;
+        {
+          std::lock_guard<std::mutex> lock(launch_mutex_);
+          if (title_update_install_in_progress_) {
+            XELOGW("iOS: Ignoring game launch while title update installation "
+                   "is in progress");
+            return;
           }
+          if (emulator_thread_running_.load(std::memory_order_acquire)) {
+            queued_launch_path_ = game_path;
+            should_queue_launch = true;
+          }
+        }
+        if (should_queue_launch) {
           XELOGI("iOS: Emulator thread is running; queued launch '{}'",
                  game_path);
           RequestGameStop("Queued launch");
@@ -283,12 +355,130 @@ bool EmulatorAppIOS::OnInitialize() {
     return RequestGameStop("TerminateCurrentGame");
   });
 
+  ios_context.set_title_update_install_callback(
+      [this](const std::string& package_path, std::string* status_out,
+             bool* not_title_update_out) {
+        auto set_status = [&](const std::string& status) {
+          if (status_out) {
+            *status_out = status;
+          }
+        };
+        auto set_not_title_update = [&](bool not_title_update) {
+          if (not_title_update_out) {
+            *not_title_update_out = not_title_update;
+          }
+        };
+        set_not_title_update(false);
+
+        if (package_path.empty()) {
+          set_status("No title update package selected.");
+          return false;
+        }
+        if (shutting_down_.load(std::memory_order_acquire)) {
+          set_status("App is shutting down.");
+          return false;
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(launch_mutex_);
+          if (!emulator_) {
+            set_status("Emulator is not initialized.");
+            return false;
+          }
+          if (title_update_install_in_progress_) {
+            set_status("Another title update installation is already running.");
+            return false;
+          }
+          if (emulator_thread_running_.load(std::memory_order_acquire)) {
+            set_status("Stop the current game before installing a title update.");
+            return false;
+          }
+          title_update_install_in_progress_ = true;
+        }
+
+        struct TitleUpdateInstallScope {
+          EmulatorAppIOS* app = nullptr;
+          ~TitleUpdateInstallScope() {
+            if (!app) {
+              return;
+            }
+            std::lock_guard<std::mutex> lock(app->launch_mutex_);
+            app->title_update_install_in_progress_ = false;
+          }
+        } install_scope{this};
+
+        if (!EnsureProfileServicesReady()) {
+          set_status(
+              "Profile services are still initializing. Please try again.");
+          return false;
+        }
+
+        Emulator::ContentInstallEntry entry{std::filesystem::path(package_path)};
+        X_STATUS parse_status = X_STATUS_UNSUCCESSFUL;
+        X_STATUS install_status = X_STATUS_UNSUCCESSFUL;
+        {
+          std::lock_guard<std::mutex> lock(launch_mutex_);
+          if (shutting_down_.load(std::memory_order_acquire)) {
+            set_status("App is shutting down.");
+            return false;
+          }
+          if (!emulator_) {
+            set_status("Emulator is unavailable.");
+            return false;
+          }
+          parse_status =
+              emulator_->ProcessContentPackageHeader(entry.path_, entry);
+        }
+        if (XFAILED(parse_status) ||
+            entry.installation_state_ == Emulator::InstallState::failed) {
+          set_not_title_update(true);
+          set_status("Selected file is not a title update package.");
+          return false;
+        }
+
+        if (entry.content_type_ != XContentType::kInstaller) {
+          set_not_title_update(true);
+          set_status("Selected file is not a title update package.");
+          return false;
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(launch_mutex_);
+          if (shutting_down_.load(std::memory_order_acquire)) {
+            set_status("App is shutting down.");
+            return false;
+          }
+          if (!emulator_) {
+            set_status("Emulator is unavailable.");
+            return false;
+          }
+          install_status = emulator_->InstallContentPackage(entry.path_, entry);
+        }
+        if (XFAILED(install_status) ||
+            entry.installation_state_ != Emulator::InstallState::installed) {
+          std::string reason = entry.installation_error_message_.empty()
+                                   ? "Title update installation failed."
+                                   : entry.installation_error_message_;
+          set_status(reason);
+          return false;
+        }
+
+        const std::string installed_name =
+            entry.name_.empty()
+                ? std::filesystem::path(package_path).filename().string()
+                : entry.name_;
+        set_status("Installed title update: " + installed_name);
+        return true;
+      });
+
   ios_context.set_controller_state_callback(
       [this](uint32_t user_index, hid::X_INPUT_STATE* out_state) {
+        std::lock_guard<std::mutex> lock(launch_mutex_);
         if (!out_state || !emulator_ || !emulator_->input_system()) {
           return false;
         }
-        return emulator_->input_system()->GetStateForUI(user_index, 1, out_state) ==
+        return emulator_->input_system()->GetStateForUI(user_index, 1,
+                                                        out_state) ==
                X_ERROR_SUCCESS;
       });
 
@@ -415,6 +605,9 @@ void EmulatorAppIOS::StartQueuedLaunchIfIdle() {
   std::optional<std::filesystem::path> queued_path;
   {
     std::lock_guard<std::mutex> lock(launch_mutex_);
+    if (title_update_install_in_progress_) {
+      return;
+    }
     if (!queued_launch_path_.has_value()) {
       return;
     }
@@ -444,7 +637,10 @@ void EmulatorAppIOS::OnDestroy() {
     emulator_thread_.join();
     emulator_thread_running_.store(false, std::memory_order_release);
   }
-  emulator_.reset();
+  {
+    std::lock_guard<std::mutex> lock(launch_mutex_);
+    emulator_.reset();
+  }
   window_.reset();
 }
 
@@ -483,7 +679,24 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
       XELOGE("iOS: Emulator::Setup failed with status {:08X}", setup_result);
       emulator_initialized_.store(false, std::memory_order_release);
       emulator_cpu_initialized_.store(false, std::memory_order_release);
+      if (launched_with_game) {
+        app_context().CallInUIThread([this]() {
+          auto& ios_context =
+              static_cast<ui::IOSWindowedAppContext&>(app_context());
+          ios_context.NotifyGameExited();
+        });
+      }
       return;
+    }
+
+    emulator_->MountStandardDrives();
+    if (auto* fs = emulator_->file_system()) {
+      std::string cache_target;
+      if (fs->FindSymbolicLink("cache:", cache_target)) {
+        XELOGI("iOS: cache: mounted to {}", cache_target);
+      } else {
+        XELOGW("iOS: cache: mount missing after MountStandardDrives");
+      }
     }
 
     auto* graphics_system = emulator_->graphics_system();
@@ -538,7 +751,30 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
     auto abs_path = std::filesystem::absolute(game_path);
     XELOGI("iOS: Launching game: {}", abs_path);
 
+    auto xam = emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
+    if (xam) {
+      auto& loader_data = xam->loader_data();
+      loader_data.host_path = xe::path_to_utf8(abs_path);
+      loader_data.launch_data_present = false;
+      loader_data.launch_flags = 0;
+      loader_data.launch_data.clear();
+      if (cvars::launch_flags != 0 || !cvars::launch_data.empty()) {
+        loader_data.launch_data_present = true;
+        loader_data.launch_flags = cvars::launch_flags;
+        const std::string& hex = cvars::launch_data;
+        for (size_t i = 0; i + 1 < hex.length(); i += 2) {
+          std::string byte_str = hex.substr(i, 2);
+          uint8_t byte =
+              static_cast<uint8_t>(std::stoul(byte_str, nullptr, 16));
+          loader_data.launch_data.push_back(byte);
+        }
+      }
+    }
+
     X_STATUS launch_result = emulator_->LaunchPath(abs_path);
+    cvars::launch_module = "";
+    cvars::launch_flags = 0;
+    cvars::launch_data = "";
     if (XFAILED(launch_result)) {
       XELOGE("iOS: Failed to launch game: {:08X}", launch_result);
       return;

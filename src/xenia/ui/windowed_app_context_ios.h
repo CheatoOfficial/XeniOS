@@ -69,6 +69,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   using ProfileCreateCallback = std::function<uint64_t(const std::string&)>;
   using ProfileSignInCallback = std::function<bool(uint64_t)>;
   using GameTerminateCallback = std::function<bool()>;
+  using TitleUpdateInstallCallback = std::function<bool(const std::string&, std::string*, bool*)>;
   using GameExitedCallback = std::function<void()>;
   using ProfileServicesReadyCallback = std::function<void()>;
   using SignInUIPromptCallback = std::function<bool(uint32_t, uint32_t)>;
@@ -126,6 +127,23 @@ class IOSWindowedAppContext final : public WindowedAppContext {
       return false;
     }
     return game_terminate_callback_();
+  }
+
+  void set_title_update_install_callback(TitleUpdateInstallCallback callback) {
+    title_update_install_callback_ = std::move(callback);
+  }
+  bool InstallTitleUpdate(const std::string& path, std::string* status_out,
+                          bool* not_title_update_out) const {
+    if (not_title_update_out) {
+      *not_title_update_out = false;
+    }
+    if (!title_update_install_callback_) {
+      if (status_out) {
+        *status_out = "Title update installation is unavailable.";
+      }
+      return false;
+    }
+    return title_update_install_callback_(path, status_out, not_title_update_out);
   }
 
   void set_game_exited_callback(GameExitedCallback callback) {
@@ -195,6 +213,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   ProfileCreateCallback profile_create_callback_;
   ProfileSignInCallback profile_sign_in_callback_;
   GameTerminateCallback game_terminate_callback_;
+  TitleUpdateInstallCallback title_update_install_callback_;
   GameExitedCallback game_exited_callback_;
   SignInUIPromptCallback signin_ui_prompt_callback_;
   ControllerStateCallback controller_state_callback_;
