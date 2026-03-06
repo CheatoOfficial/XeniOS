@@ -1148,11 +1148,79 @@ static NSString* xe_discussion_cache_path(uint32_t title_id) {
       stringByAppendingPathComponent:[NSString stringWithFormat:@"discussion-%08X.json", title_id]];
 }
 
+static UIFont* xe_scaled_system_font(UIFontTextStyle text_style,
+                                     CGFloat point_size,
+                                     UIFontWeight weight) {
+  UIFont* base_font = [UIFont systemFontOfSize:point_size weight:weight];
+  return [[UIFontMetrics metricsForTextStyle:text_style] scaledFontForFont:base_font];
+}
+
+static UIFont* xe_scaled_monospaced_font(UIFontTextStyle text_style,
+                                         CGFloat point_size,
+                                         UIFontWeight weight) {
+  UIFont* base_font = [UIFont monospacedSystemFontOfSize:point_size weight:weight];
+  return [[UIFontMetrics metricsForTextStyle:text_style] scaledFontForFont:base_font];
+}
+
+static void xe_apply_label_font(UILabel* label,
+                                UIFontTextStyle text_style,
+                                CGFloat point_size,
+                                UIFontWeight weight) {
+  if (!label) {
+    return;
+  }
+  label.font = xe_scaled_system_font(text_style, point_size, weight);
+  if (@available(iOS 10.0, *)) {
+    label.adjustsFontForContentSizeCategory = YES;
+  }
+}
+
+static void xe_apply_monospaced_label_font(UILabel* label,
+                                           UIFontTextStyle text_style,
+                                           CGFloat point_size,
+                                           UIFontWeight weight) {
+  if (!label) {
+    return;
+  }
+  label.font = xe_scaled_monospaced_font(text_style, point_size, weight);
+  if (@available(iOS 10.0, *)) {
+    label.adjustsFontForContentSizeCategory = YES;
+  }
+}
+
+static void xe_apply_button_title_font(UIButton* button,
+                                       UIFontTextStyle text_style,
+                                       CGFloat point_size,
+                                       UIFontWeight weight) {
+  if (!button.titleLabel) {
+    return;
+  }
+  button.titleLabel.font = xe_scaled_system_font(text_style, point_size, weight);
+  if (@available(iOS 10.0, *)) {
+    button.titleLabel.adjustsFontForContentSizeCategory = YES;
+  }
+}
+
+static void xe_apply_text_view_font(UITextView* text_view,
+                                    UIFontTextStyle text_style,
+                                    CGFloat point_size,
+                                    UIFontWeight weight,
+                                    BOOL monospaced) {
+  if (!text_view) {
+    return;
+  }
+  text_view.font = monospaced ? xe_scaled_monospaced_font(text_style, point_size, weight)
+                              : xe_scaled_system_font(text_style, point_size, weight);
+  if (@available(iOS 10.0, *)) {
+    text_view.adjustsFontForContentSizeCategory = YES;
+  }
+}
+
 static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   XeniaPaddedLabel* pill = [[[XeniaPaddedLabel alloc] init] autorelease];
   pill.translatesAutoresizingMaskIntoConstraints = NO;
   pill.padding = UIEdgeInsetsMake(2, 8, 2, 8);
-  pill.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+  xe_apply_label_font(pill, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
   pill.text = text ?: @"";
   pill.textColor = text_color ?: [XeniaTheme textMuted];
   pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.1];
@@ -1885,20 +1953,23 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
   self.titleLabel = [[UILabel alloc] init];
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-  self.titleLabel.textColor = [XeniaTheme textSecondary];
+  self.titleLabel.textColor = [XeniaTheme textPrimary];
   self.titleLabel.textAlignment = NSTextAlignmentLeft;
   self.titleLabel.numberOfLines = 2;
   self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  xe_apply_label_font(self.titleLabel, UIFontTextStyleSubheadline, 14.0,
+                      UIFontWeightSemibold);
+  [self.titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
+                                                   forAxis:UILayoutConstraintAxisHorizontal];
   [self.cardView addSubview:self.titleLabel];
 
   self.compatPill = [[XeniaPaddedLabel alloc] init];
   self.compatPill.translatesAutoresizingMaskIntoConstraints = NO;
-  self.compatPill.padding = UIEdgeInsetsMake(1, 6, 1, 6);
-  self.compatPill.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+  self.compatPill.padding = UIEdgeInsetsMake(2, 8, 2, 8);
   self.compatPill.textAlignment = NSTextAlignmentCenter;
-  self.compatPill.layer.cornerRadius = 7;
+  self.compatPill.layer.cornerRadius = 8;
   self.compatPill.clipsToBounds = YES;
+  xe_apply_label_font(self.compatPill, UIFontTextStyleCaption1, 12.0, UIFontWeightSemibold);
   self.compatPill.hidden = YES;
   [self.compatPill setContentHuggingPriority:UILayoutPriorityRequired
                                      forAxis:UILayoutConstraintAxisHorizontal];
@@ -1916,15 +1987,16 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
     [self.iconView.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor],
     [self.iconView.heightAnchor constraintEqualToAnchor:self.iconView.widthAnchor
                                              multiplier:300.0 / 219.0],
-    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor],
-    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor constant:10],
-    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.compatPill.leadingAnchor
-                                                   constant:-4],
-    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor],
+    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:8.0],
+    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor constant:12.0],
+    [self.titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.compatPill.leadingAnchor
+                                                             constant:-8.0],
+    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor constant:-8.0],
     [self.compatPill.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
     [self.compatPill.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
-                                                   constant:-8],
-    [self.compatPill.widthAnchor constraintEqualToConstant:74],
+                                                   constant:-10.0],
+    [self.compatPill.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.titleLabel.trailingAnchor
+                                                               constant:8.0],
   ]];
 
   return self;
@@ -1955,7 +2027,7 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
     self.transform = CGAffineTransformMakeScale(1.02, 1.02);
   } else {
     self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
-    self.titleLabel.textColor = [XeniaTheme textSecondary];
+    self.titleLabel.textColor = [XeniaTheme textPrimary];
     self.transform = CGAffineTransformIdentity;
   }
 }
@@ -2566,6 +2638,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   UIImage* hero_artwork_;
   UIImage* hero_background_artwork_;
   UIView* hero_header_view_;
+  UIView* hero_background_view_;
   UIView* hero_header_card_view_;
   UIImageView* hero_header_backdrop_view_;
   UIVisualEffectView* hero_header_blur_view_;
@@ -2582,6 +2655,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   NSInteger discussion_issue_number_;
   BOOL discussion_loading_;
   BOOL discussion_show_all_;
+  BOOL hero_scroll_layout_initialized_;
 }
 
 - (instancetype)initWithTitleID:(uint32_t)title_id
@@ -2604,11 +2678,13 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)dealloc {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [hero_background_view_ removeFromSuperview];
   [game_title_ release];
   [compat_info_ release];
   [hero_artwork_ release];
   [hero_background_artwork_ release];
   [hero_header_view_ release];
+  [hero_background_view_ release];
   [hero_header_card_view_ release];
   [hero_header_backdrop_view_ release];
   [hero_header_blur_view_ release];
@@ -2741,11 +2817,50 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   CGRect frame = hero_header_view_.frame;
   CGFloat height = xe_compat_hero_height_for_width(width);
+  if (!hero_background_view_) {
+    hero_background_view_ = [[UIView alloc] initWithFrame:CGRectZero];
+    hero_background_view_.backgroundColor = [UIColor clearColor];
+    hero_background_view_.clipsToBounds = NO;
+    [hero_background_view_ addSubview:hero_header_view_];
+  }
+  UIView* host_view = self.navigationController.view ?: self.view.superview ?: self.view;
+  if (host_view && hero_background_view_.superview != host_view) {
+    [hero_background_view_ removeFromSuperview];
+    [host_view addSubview:hero_background_view_];
+  }
+  CGRect table_frame =
+      host_view ? [self.view convertRect:self.view.bounds toView:host_view] : self.view.bounds;
+  CGFloat safe_top = host_view ? host_view.safeAreaInsets.top : self.view.safeAreaInsets.top;
+  CGFloat hero_top = CGRectGetMinY(table_frame) + safe_top + 12.0;
+  hero_background_view_.frame =
+      CGRectMake(CGRectGetMinX(table_frame), hero_top, width, height);
   if (fabs(frame.size.width - width) > 0.5 || fabs(frame.size.height - height) > 0.5) {
     frame.size.width = width;
     frame.size.height = height;
     hero_header_view_.frame = frame;
-    self.tableView.tableHeaderView = hero_header_view_;
+  }
+  CGFloat desired_top_inset =
+      CGRectGetMaxY(hero_background_view_.frame) - CGRectGetMinY(table_frame) + 12.0;
+  CGFloat relative_offset = self.tableView.contentOffset.y + self.tableView.contentInset.top;
+  if (fabs(self.tableView.contentInset.top - desired_top_inset) > 0.5) {
+    UIEdgeInsets content_inset = self.tableView.contentInset;
+    content_inset.top = desired_top_inset;
+    self.tableView.contentInset = content_inset;
+    if (@available(iOS 13.0, *)) {
+      UIEdgeInsets vertical_insets = self.tableView.verticalScrollIndicatorInsets;
+      vertical_insets.top = desired_top_inset;
+      self.tableView.verticalScrollIndicatorInsets = vertical_insets;
+    } else {
+      UIEdgeInsets indicator_insets = content_inset;
+      indicator_insets.top = desired_top_inset;
+      self.tableView.scrollIndicatorInsets = indicator_insets;
+    }
+    self.tableView.contentOffset =
+        CGPointMake(self.tableView.contentOffset.x, relative_offset - desired_top_inset);
+  }
+  if (!hero_scroll_layout_initialized_) {
+    self.tableView.contentOffset = CGPointMake(self.tableView.contentOffset.x, -desired_top_inset);
+    hero_scroll_layout_initialized_ = YES;
   }
   [hero_header_view_ setNeedsLayout];
   [hero_header_view_ layoutIfNeeded];
@@ -2771,11 +2886,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   CGFloat height = xe_compat_hero_height_for_width(width);
   hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, height)];
   hero_header_view_.backgroundColor = [UIColor clearColor];
+  hero_background_view_ = [[UIView alloc] initWithFrame:hero_header_view_.frame];
+  hero_background_view_.backgroundColor = [UIColor clearColor];
+  hero_background_view_.clipsToBounds = NO;
+  [hero_background_view_ addSubview:hero_header_view_];
 
   hero_header_card_view_ = [[UIView alloc] init];
   hero_header_card_view_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_header_card_view_.backgroundColor = [XeniaTheme bgSurface];
   hero_header_card_view_.layer.cornerRadius = 28.0;
+  if (@available(iOS 11.0, *)) {
+    hero_header_card_view_.layer.maskedCorners =
+        kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+  }
   hero_header_card_view_.layer.borderWidth = 0.5;
   hero_header_card_view_.layer.borderColor = [XeniaTheme border].CGColor;
   hero_header_card_view_.clipsToBounds = YES;
@@ -2804,8 +2927,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   UILabel* sheet_title_label = [[[UILabel alloc] init] autorelease];
   sheet_title_label.translatesAutoresizingMaskIntoConstraints = NO;
   sheet_title_label.text = @"Compatibility";
-  sheet_title_label.font = [UIFont systemFontOfSize:24 weight:UIFontWeightSemibold];
   sheet_title_label.textColor = [XeniaTheme textPrimary];
+  xe_apply_label_font(sheet_title_label, UIFontTextStyleTitle2, 24.0, UIFontWeightSemibold);
   [hero_header_card_view_ addSubview:sheet_title_label];
 
   UIButton* close_button = xe_make_ios_sheet_close_button(self, @selector(doneTapped:));
@@ -2819,16 +2942,17 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   hero_title_label_ = [[UILabel alloc] init];
   hero_title_label_.translatesAutoresizingMaskIntoConstraints = NO;
-  hero_title_label_.font = [UIFont systemFontOfSize:30 weight:UIFontWeightBold];
   hero_title_label_.textColor = [XeniaTheme textPrimary];
   hero_title_label_.numberOfLines = 2;
   hero_title_label_.lineBreakMode = NSLineBreakByTruncatingTail;
+  xe_apply_label_font(hero_title_label_, UIFontTextStyleLargeTitle, 30.0, UIFontWeightBold);
   [content_stack addArrangedSubview:hero_title_label_];
 
   hero_tid_label_ = [[UILabel alloc] init];
   hero_tid_label_.translatesAutoresizingMaskIntoConstraints = NO;
-  hero_tid_label_.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
   hero_tid_label_.textColor = [XeniaTheme textSecondary];
+  xe_apply_monospaced_label_font(hero_tid_label_, UIFontTextStyleBody, 14.0,
+                                 UIFontWeightRegular);
   [content_stack addArrangedSubview:hero_tid_label_];
 
   hero_pills_stack_ = [[UIStackView alloc] init];
@@ -2844,10 +2968,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   hero_status_pill_ = [[XeniaPaddedLabel alloc] init];
   hero_status_pill_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_status_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
-  hero_status_pill_.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
   hero_status_pill_.textAlignment = NSTextAlignmentCenter;
   hero_status_pill_.layer.cornerRadius = 8.0;
   hero_status_pill_.clipsToBounds = YES;
+  xe_apply_label_font(hero_status_pill_, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
   [hero_status_pill_ setContentHuggingPriority:UILayoutPriorityRequired
                                        forAxis:UILayoutConstraintAxisHorizontal];
   [hero_status_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
@@ -2857,10 +2981,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   hero_perf_pill_ = [[XeniaPaddedLabel alloc] init];
   hero_perf_pill_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_perf_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
-  hero_perf_pill_.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
   hero_perf_pill_.textAlignment = NSTextAlignmentCenter;
   hero_perf_pill_.layer.cornerRadius = 8.0;
   hero_perf_pill_.clipsToBounds = YES;
+  xe_apply_label_font(hero_perf_pill_, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
   [hero_perf_pill_ setContentHuggingPriority:UILayoutPriorityRequired
                                      forAxis:UILayoutConstraintAxisHorizontal];
   [hero_perf_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
@@ -2883,9 +3007,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   hero_updated_label_ = [[UILabel alloc] init];
   hero_updated_label_.translatesAutoresizingMaskIntoConstraints = NO;
-  hero_updated_label_.font = [UIFont systemFontOfSize:13];
   hero_updated_label_.textColor = [XeniaTheme textMuted];
   hero_updated_label_.numberOfLines = 1;
+  xe_apply_label_font(hero_updated_label_, UIFontTextStyleFootnote, 13.0, UIFontWeightRegular);
   [content_stack addArrangedSubview:hero_updated_label_];
 
   [NSLayoutConstraint activateConstraints:@[
@@ -2932,7 +3056,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                                          constant:74.0],
   ]];
 
-  self.tableView.tableHeaderView = hero_header_view_;
   [hero_header_view_ setNeedsLayout];
   [hero_header_view_ layoutIfNeeded];
   [self updateHeroHeaderContent];
@@ -2989,10 +3112,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.view.backgroundColor = [XeniaTheme bgPrimary];
-  self.tableView.backgroundColor = [XeniaTheme bgPrimary];
+  self.tableView.backgroundColor = [UIColor clearColor];
   self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
   self.tableView.estimatedRowHeight = 360.0;
+  self.tableView.alwaysBounceVertical = YES;
+  if (@available(iOS 11.0, *)) {
+    self.tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+  }
   if (@available(iOS 15.0, *)) {
     self.tableView.sectionHeaderTopPadding = 0;
   }
@@ -3009,10 +3136,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
   [self.navigationController setNavigationBarHidden:YES animated:animated];
+  [self layoutHeroHeaderIfNeeded];
+  hero_background_view_.hidden = NO;
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
   [super viewWillDisappear:animated];
+  hero_background_view_.hidden = YES;
+  [hero_background_view_ removeFromSuperview];
   [self.navigationController setNavigationBarHidden:NO animated:animated];
 }
 
@@ -3030,6 +3161,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)doneTapped:(id)__unused sender {
+  hero_background_view_.hidden = YES;
+  [hero_background_view_ removeFromSuperview];
   if (self.navigationController.presentingViewController &&
       self.navigationController.viewControllers.firstObject == self) {
     [self.navigationController dismissViewControllerAnimated:YES completion:nil];
@@ -3039,6 +3172,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)submitReportTapped:(id)__unused sender {
+  hero_background_view_.hidden = YES;
+  [hero_background_view_ removeFromSuperview];
   XeniaCompatReportViewController* report_controller =
       [[XeniaCompatReportViewController alloc] initWithTitleID:title_id_ title:game_title_];
   [self.navigationController pushViewController:report_controller animated:YES];
@@ -4181,9 +4316,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     if (!notes_text_view_) {
       notes_text_view_ = [[UITextView alloc] init];
       notes_text_view_.backgroundColor = [UIColor clearColor];
-      notes_text_view_.font = [UIFont systemFontOfSize:15];
       notes_text_view_.textColor = [XeniaTheme textPrimary];
       notes_text_view_.textContainerInset = UIEdgeInsetsMake(8, 4, 8, 4);
+      xe_apply_text_view_font(notes_text_view_, UIFontTextStyleBody, 15.0, UIFontWeightRegular,
+                              NO);
 
       UIToolbar* keyboard_toolbar =
           [[[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)] autorelease];
@@ -4251,7 +4387,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   cell.textLabel.text = submitting_ ? @"Submitting..." : @"Submit Report";
   cell.textLabel.textColor = [XeniaTheme accentFg];
   cell.textLabel.textAlignment = NSTextAlignmentCenter;
-  cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+  xe_apply_label_font(cell.textLabel, UIFontTextStyleHeadline, 17.0, UIFontWeightSemibold);
   return cell;
 }
 
@@ -5139,7 +5275,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (NSInteger)launcherGridColumnCountForContentSize:(CGSize)content_size {
   CGFloat content_width = content_size.width;
-  CGFloat content_height = content_size.height;
 
   NSInteger columns = 2;
   if (content_width >= 1100.0f) {
@@ -5148,34 +5283,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     columns = 4;
   } else if (content_width >= 680.0f) {
     columns = 3;
-  }
-
-  const CGFloat interitem_spacing = 14.0f;
-  const CGFloat line_spacing = 16.0f;
-  const CGFloat max_tile_width = 255.0f;
-  while (columns < 7) {
-    CGFloat total_spacing = interitem_spacing * (columns - 1);
-    CGFloat tile_width = floor((content_width - total_spacing) / columns);
-    if (tile_width <= max_tile_width) {
-      break;
-    }
-    ++columns;
-  }
-
-  if (content_height > 0.0f) {
-    while (columns < 7) {
-      CGFloat total_spacing = interitem_spacing * (columns - 1);
-      CGFloat tile_width = floor((content_width - total_spacing) / columns);
-      CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-      CGFloat tile_height = image_height + 44.0f;
-      if (tile_height * 2.0f + line_spacing <= content_height) {
-        break;
-      }
-      if (tile_width <= 120.0f) {
-        break;
-      }
-      ++columns;
-    }
   }
   return columns;
 }
@@ -5884,7 +5991,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   // ── Games grid ─────────────────────────────────────────────────────────
 
   UICollectionViewFlowLayout* gridLayout = [[UICollectionViewFlowLayout alloc] init];
-  gridLayout.minimumInteritemSpacing = 14;
+  gridLayout.minimumInteritemSpacing = 16;
   gridLayout.minimumLineSpacing = 16;
   self.importedGamesCollectionView =
       [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:gridLayout];
@@ -7176,7 +7283,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     sizeForItemAtIndexPath:(NSIndexPath* __unused)indexPath {
   CGFloat content_width = collectionView.bounds.size.width;
   NSInteger columns = [self launcherGridColumnCountForContentSize:collectionView.bounds.size];
-  CGFloat spacing = 14.0f;
+  CGFloat spacing = 16.0f;
   if ([collectionView.collectionViewLayout isKindOfClass:[UICollectionViewFlowLayout class]]) {
     spacing = [(UICollectionViewFlowLayout*)collectionView.collectionViewLayout
         minimumInteritemSpacing];
@@ -7184,10 +7291,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   CGFloat total_spacing = spacing * (columns - 1);
   CGFloat tile_width = floor((content_width - total_spacing) / columns);
   tile_width = MAX(tile_width, 100.0f);
-  // Cover art is ~219x300 (~1:1.37). Reserve stable room for a two-line title
-  // and a compat pill without post-load reflow.
+  // Cover art is ~219x300 (~1:1.37). Reserve enough room for a readable
+  // two-line title strip and a compat pill.
   CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-  return CGSizeMake(tile_width, image_height + 44.0f);
+  return CGSizeMake(tile_width, image_height + 56.0f);
 }
 
 - (void)viewDidLayoutSubviews {
