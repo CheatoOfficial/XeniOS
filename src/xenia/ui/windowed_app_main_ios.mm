@@ -801,6 +801,208 @@ std::string FormatTitleID(uint32_t title_id) {
   return std::string(buffer);
 }
 
+enum class IOSInstalledContentKind {
+  kTitleUpdate,
+  kDlc,
+};
+
+struct IOSInstalledContentEntry {
+  IOSInstalledContentKind kind = IOSInstalledContentKind::kTitleUpdate;
+  std::string name;
+  std::filesystem::path path;
+};
+
+struct IOSSelectedContentPackage {
+  uint32_t title_id = 0;
+  xe::XContentType content_type = xe::XContentType::kSavedGame;
+  std::filesystem::path path;
+};
+
+static std::filesystem::path xe_title_content_root(uint32_t title_id) {
+  char title_id_buffer[9] = {};
+  std::snprintf(title_id_buffer, sizeof(title_id_buffer), "%08X", title_id);
+  return xe_get_ios_documents_path() / "content" / "0000000000000000" / title_id_buffer;
+}
+
+static std::filesystem::path xe_title_update_content_root(uint32_t title_id) {
+  return xe_title_content_root(title_id) / "000B0000";
+}
+
+static std::filesystem::path xe_dlc_content_root(uint32_t title_id) {
+  return xe_title_content_root(title_id) / "00000002";
+}
+
+static NSString* xe_installed_content_kind_label(IOSInstalledContentKind kind) {
+  switch (kind) {
+    case IOSInstalledContentKind::kTitleUpdate:
+      return @"Title Update";
+    case IOSInstalledContentKind::kDlc:
+      return @"DLC";
+  }
+  return @"Content";
+}
+
+static void xe_present_ok_alert(UIViewController* presenter, NSString* title, NSString* message) {
+  if (!presenter) {
+    return;
+  }
+  UIAlertController* alert =
+      [UIAlertController alertControllerWithTitle:title ?: @"Notice"
+                                          message:message ?: @""
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+static std::string xe_content_package_directory_name(const std::filesystem::path& package_path) {
+  std::string name = package_path.stem().string();
+  if (name.empty()) {
+    name = package_path.filename().string();
+  }
+  return name;
+}
+
+static bool xe_read_selected_content_package(const std::filesystem::path& path,
+                                             IOSSelectedContentPackage* package_out,
+                                             NSString** error_message_out) {
+  if (error_message_out) {
+    *error_message_out = nil;
+  }
+
+  auto header = xe::vfs::XContentContainerDevice::ReadContainerHeader(path);
+  if (!header || !header->content_header.is_magic_valid()) {
+    if (error_message_out) {
+      *error_message_out = @"Could not read the content package header.";
+    }
+    return false;
+  }
+
+  if (header->content_metadata.data_file_count > 0 && !HasContentSidecarDataDirectory(path)) {
+    if (error_message_out) {
+      *error_message_out = @"This content package is missing its required .data sidecar folder.";
+    }
+    return false;
+  }
+
+  if (package_out) {
+    package_out->title_id = header->content_metadata.execution_info.title_id;
+    package_out->content_type =
+        static_cast<xe::XContentType>(header->content_metadata.content_type.get());
+    package_out->path = path;
+  }
+  return true;
+}
+
+static bool xe_copy_directory_recursive(const std::filesystem::path& source,
+                                        const std::filesystem::path& destination,
+                                        std::string* error_message_out) {
+  std::error_code ec;
+  std::filesystem::remove_all(destination, ec);
+  ec.clear();
+  std::filesystem::copy(
+      source, destination,
+      std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+      ec);
+  if (ec) {
+    if (error_message_out) {
+      *error_message_out = ec.message();
+    }
+    return false;
+  }
+  return true;
+}
+
+static bool xe_copy_content_package_into_root(const IOSSelectedContentPackage& package_info,
+                                              const std::filesystem::path& destination_root,
+                                              std::string* error_message_out) {
+  if (error_message_out) {
+    *error_message_out = "";
+  }
+
+  const std::filesystem::path package_directory =
+      destination_root / xe_content_package_directory_name(package_info.path);
+  std::error_code ec;
+  std::filesystem::create_directories(package_directory, ec);
+  if (ec) {
+    if (error_message_out) {
+      *error_message_out = "Failed creating content folder: " + ec.message();
+    }
+    return false;
+  }
+
+  const std::filesystem::path destination_file = package_directory / package_info.path.filename();
+  std::filesystem::copy_file(package_info.path, destination_file,
+                             std::filesystem::copy_options::overwrite_existing, ec);
+  if (ec) {
+    if (error_message_out) {
+      *error_message_out = "Failed copying package: " + ec.message();
+    }
+    return false;
+  }
+
+  if (HasContentSidecarDataDirectory(package_info.path)) {
+    std::filesystem::path source_sidecar = package_info.path;
+    source_sidecar += ".data";
+    std::filesystem::path destination_sidecar = destination_file;
+    destination_sidecar += ".data";
+    if (!xe_copy_directory_recursive(source_sidecar, destination_sidecar, error_message_out)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void xe_collect_installed_content(const std::filesystem::path& root,
+                                         IOSInstalledContentKind kind,
+                                         std::vector<IOSInstalledContentEntry>* content_out) {
+  if (!content_out) {
+    return;
+  }
+
+  std::error_code ec;
+  if (!std::filesystem::exists(root, ec)) {
+    return;
+  }
+
+  std::filesystem::directory_iterator it(root, ec);
+  std::filesystem::directory_iterator end;
+  for (; !ec && it != end; ++it) {
+    if (!it->is_directory(ec) || ec) {
+      ec.clear();
+      continue;
+    }
+
+    IOSInstalledContentEntry entry;
+    entry.kind = kind;
+    entry.name = it->path().filename().string();
+    entry.path = it->path();
+    content_out->push_back(std::move(entry));
+  }
+}
+
+static std::vector<IOSInstalledContentEntry> xe_list_installed_content(uint32_t title_id) {
+  std::vector<IOSInstalledContentEntry> content;
+  if (!title_id) {
+    return content;
+  }
+
+  xe_collect_installed_content(xe_title_update_content_root(title_id),
+                               IOSInstalledContentKind::kTitleUpdate, &content);
+  xe_collect_installed_content(xe_dlc_content_root(title_id), IOSInstalledContentKind::kDlc,
+                               &content);
+  std::sort(content.begin(), content.end(),
+            [](const IOSInstalledContentEntry& a, const IOSInstalledContentEntry& b) {
+              if (a.kind != b.kind) {
+                return a.kind < b.kind;
+              }
+              return a.name < b.name;
+            });
+  return content;
+}
+
 static NSString* xe_normalize_game_title_for_ui(NSString* title) {
   if (!title || title.length == 0) {
     return title;
@@ -1288,6 +1490,13 @@ bool ApplyIOSConfigSections(const std::vector<IOSConfigSection>& sections) {
 typedef void (^IOSChoiceSelectionHandler)(int64_t value);
 typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 
+@protocol XeniaGameContentHost <NSObject>
+- (BOOL)installTitleUpdateAtPath:(NSString*)path
+                          status:(NSString**)status_out
+                  notTitleUpdate:(BOOL*)not_title_update_out;
+- (void)refreshImportedGames;
+@end
+
 @interface XeniaChoiceListViewController : UITableViewController
 - (instancetype)initWithTitle:(NSString*)title
                      subtitle:(NSString*)subtitle
@@ -1306,6 +1515,12 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 @interface XeniaProfileViewController : UITableViewController
 - (instancetype)initWithAppContext:(xe::ui::IOSWindowedAppContext*)app_context
                             onStatus:(IOSProfileStatusHandler)on_status;
+@end
+
+@interface XeniaGameContentViewController : UITableViewController <UIDocumentPickerDelegate>
+- (instancetype)initWithTitleID:(uint32_t)title_id
+                          title:(NSString*)title
+                           host:(id<XeniaGameContentHost>)host;
 @end
 
 @interface XeniaGameTileCell : UICollectionViewCell
@@ -1714,6 +1929,296 @@ titleForFooterInSection:(NSInteger)section {
   } else if (on_status_) {
     on_status_(@"Failed to sign in profile.");
   }
+}
+
+@end
+
+@implementation XeniaGameContentViewController {
+  uint32_t title_id_;
+  NSString* game_title_;
+  id<XeniaGameContentHost> host_;  // not retained; presenter owns this sheet
+  std::vector<IOSInstalledContentEntry> installed_content_;
+}
+
+- (instancetype)initWithTitleID:(uint32_t)title_id
+                          title:(NSString*)title
+                           host:(id<XeniaGameContentHost>)host {
+  self = [super initWithStyle:UITableViewStyleInsetGrouped];
+  if (self) {
+    title_id_ = title_id;
+    game_title_ = [title copy];
+    host_ = host;
+    self.title = @"Manage Content";
+  }
+  return self;
+}
+
+- (void)dealloc {
+  [game_title_ release];
+  [super dealloc];
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16);
+  self.navigationItem.leftBarButtonItem =
+      [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                    target:self
+                                                    action:@selector(doneTapped:)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self reloadInstalledContent];
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationPortrait;
+}
+
+- (void)doneTapped:(id)__unused sender {
+  if (self.navigationController.presentingViewController &&
+      self.navigationController.viewControllers.firstObject == self) {
+    [self.navigationController dismissViewControllerAnimated:YES completion:nil];
+    return;
+  }
+  [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)reloadInstalledContent {
+  installed_content_ = xe_list_installed_content(title_id_);
+  [self.tableView reloadData];
+}
+
+- (void)refreshLauncherContentState {
+  if (host_) {
+    [host_ refreshImportedGames];
+  }
+  [self reloadInstalledContent];
+}
+
+- (void)presentAddContentPicker {
+  UIDocumentPickerViewController* picker =
+      [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeData ]];
+  picker.delegate = self;
+  picker.allowsMultipleSelection = NO;
+  picker.shouldShowFileExtensions = YES;
+  [self presentViewController:picker animated:YES completion:nil];
+  [picker release];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
+  return 2;
+}
+
+- (NSInteger)tableView:(UITableView* __unused)tableView numberOfRowsInSection:(NSInteger)section {
+  if (section == 0) {
+    return 1;
+  }
+  return installed_content_.empty() ? 1 : static_cast<NSInteger>(installed_content_.size());
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView titleForHeaderInSection:(NSInteger)section {
+  if (section == 0) {
+    return @"Actions";
+  }
+  return @"Installed Content";
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView titleForFooterInSection:(NSInteger)section {
+  if (section == 0) {
+    if (game_title_.length > 0) {
+      return
+          [NSString stringWithFormat:@"Install title updates or DLC packages for %@.", game_title_];
+    }
+    return @"Install title updates or DLC packages for this game.";
+  }
+  if (installed_content_.empty()) {
+    return @"No title updates or DLC are installed for this title.";
+  }
+  return @"Swipe left on an installed entry to delete it.";
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (indexPath.section == 0) {
+    static NSString* const kActionCellIdentifier = @"XeniaGameContentActionCell";
+    UITableViewCell* cell = [tableView dequeueReusableCellWithIdentifier:kActionCellIdentifier];
+    if (!cell) {
+      cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                     reuseIdentifier:kActionCellIdentifier] autorelease];
+    }
+    cell.textLabel.text = @"Add Content";
+    cell.textLabel.textColor = self.view.tintColor;
+    cell.detailTextLabel.text = @"Import a title update or DLC package for this game.";
+    cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+    cell.imageView.image = [UIImage systemImageNamed:@"plus.circle.fill"];
+    cell.imageView.tintColor = self.view.tintColor;
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    return cell;
+  }
+
+  if (installed_content_.empty()) {
+    static NSString* const kEmptyCellIdentifier = @"XeniaGameContentEmptyCell";
+    UITableViewCell* cell = [tableView dequeueReusableCellWithIdentifier:kEmptyCellIdentifier];
+    if (!cell) {
+      cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                     reuseIdentifier:kEmptyCellIdentifier] autorelease];
+    }
+    cell.textLabel.text = @"No content installed";
+    cell.detailTextLabel.text = @"Add a title update or DLC package from Files.";
+    cell.textLabel.textColor = [XeniaTheme textMuted];
+    cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    return cell;
+  }
+
+  static NSString* const kContentCellIdentifier = @"XeniaGameContentCell";
+  UITableViewCell* cell = [tableView dequeueReusableCellWithIdentifier:kContentCellIdentifier];
+  if (!cell) {
+    cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                   reuseIdentifier:kContentCellIdentifier] autorelease];
+  }
+
+  const IOSInstalledContentEntry& entry = installed_content_[static_cast<size_t>(indexPath.row)];
+  cell.textLabel.text = ToNSString(entry.name);
+  cell.textLabel.textColor = [XeniaTheme textPrimary];
+  cell.detailTextLabel.text = xe_installed_content_kind_label(entry.kind);
+  cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+  cell.accessoryType = UITableViewCellAccessoryNone;
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+  return cell;
+}
+
+- (BOOL)tableView:(UITableView* __unused)tableView canEditRowAtIndexPath:(NSIndexPath*)indexPath {
+  return indexPath.section == 1 && !installed_content_.empty();
+}
+
+- (void)tableView:(UITableView* __unused)tableView
+    commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+     forRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (editingStyle != UITableViewCellEditingStyleDelete || indexPath.section != 1 ||
+      installed_content_.empty()) {
+    return;
+  }
+
+  const IOSInstalledContentEntry& entry = installed_content_[static_cast<size_t>(indexPath.row)];
+  const std::filesystem::path entry_path = entry.path;
+  NSString* display_name = ToNSString(entry.name);
+  UIAlertController* confirm = [UIAlertController
+      alertControllerWithTitle:@"Delete Content"
+                       message:[NSString stringWithFormat:@"Delete \"%@\"? This cannot be undone.",
+                                                          display_name]
+                preferredStyle:UIAlertControllerStyleAlert];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+  [confirm
+      addAction:[UIAlertAction
+                    actionWithTitle:@"Delete"
+                              style:UIAlertActionStyleDestructive
+                            handler:^(__unused UIAlertAction* action) {
+                              std::error_code ec;
+                              std::filesystem::remove_all(entry_path, ec);
+                              if (ec) {
+                                xe_present_ok_alert(
+                                    self, @"Delete Failed",
+                                    [NSString stringWithFormat:@"Failed deleting %@: %s",
+                                                               display_name, ec.message().c_str()]);
+                                return;
+                              }
+                              [self refreshLauncherContentState];
+                            }]];
+  [self presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
+  if (indexPath.section == 0) {
+    [self presentAddContentPicker];
+  }
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController* __unused)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+  if (urls.count == 0) {
+    return;
+  }
+
+  NSURL* url = urls[0];
+  BOOL access_granted = [url startAccessingSecurityScopedResource];
+  IOSSelectedContentPackage package_info;
+  NSString* validation_error = nil;
+  if (!xe_read_selected_content_package(std::filesystem::path([url.path UTF8String]), &package_info,
+                                        &validation_error)) {
+    if (access_granted) {
+      [url stopAccessingSecurityScopedResource];
+    }
+    xe_present_ok_alert(self, @"Invalid Package",
+                        validation_error ?: @"Could not read the selected content package.");
+    return;
+  }
+
+  if (package_info.title_id != title_id_) {
+    if (access_granted) {
+      [url stopAccessingSecurityScopedResource];
+    }
+    xe_present_ok_alert(
+        self, @"Wrong Game",
+        [NSString stringWithFormat:@"This package is for title %08X, but the current game is %08X.",
+                                   package_info.title_id, title_id_]);
+    return;
+  }
+
+  BOOL install_success = NO;
+  NSString* result_title = @"Unsupported Content";
+  NSString* result_message = nil;
+  switch (package_info.content_type) {
+    case xe::XContentType::kInstaller: {
+      NSString* status_message = nil;
+      install_success = host_ && [host_ installTitleUpdateAtPath:url.path
+                                                          status:&status_message
+                                                  notTitleUpdate:nullptr];
+      result_title = install_success ? @"Installed" : @"Install Failed";
+      result_message = install_success ? (status_message ?: @"Title update installed successfully.")
+                                       : (status_message ?: @"Title update installation failed.");
+    } break;
+    case xe::XContentType::kMarketplaceContent: {
+      std::string error_message;
+      install_success = xe_copy_content_package_into_root(
+          package_info, xe_dlc_content_root(title_id_), &error_message);
+      result_title = install_success ? @"Installed" : @"Install Failed";
+      result_message =
+          install_success
+              ? @"DLC installed successfully."
+              : ToNSString(error_message.empty() ? "DLC installation failed." : error_message);
+    } break;
+    default:
+      result_message =
+          [NSString stringWithFormat:@"Content type 0x%08X is not a title update or DLC.",
+                                     static_cast<uint32_t>(package_info.content_type)];
+      break;
+  }
+
+  if (access_granted) {
+    [url stopAccessingSecurityScopedResource];
+  }
+
+  if (install_success) {
+    [self refreshLauncherContentState];
+  }
+  xe_present_ok_alert(self, result_title, result_message);
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController* __unused)controller {
+  XELOGI("iOS: Manage Content picker cancelled");
 }
 
 @end
@@ -2201,7 +2706,8 @@ titleForFooterInSection:(NSInteger)section {
 // ---------------------------------------------------------------------------
 @interface XeniaViewController : UIViewController <UIDocumentPickerDelegate,
                                                    UICollectionViewDataSource,
-                                                   UICollectionViewDelegateFlowLayout>
+                                                   UICollectionViewDelegateFlowLayout,
+                                                   XeniaGameContentHost>
 @property(nonatomic, strong) XeniaMetalView* metalView;
 @property(nonatomic, strong) UIView* launcherOverlay;
 @property(nonatomic, strong) UIButton* openGameButton;
@@ -2250,6 +2756,10 @@ titleForFooterInSection:(NSInteger)section {
 - (BOOL)handleExternalLaunchURL:(NSURL*)url;
 - (void)startCompatFetchIfNeeded;
 - (void)applyCompatDataToDiscoveredGames;
+- (void)presentManageContentSheetForIndex:(size_t)game_index;
+- (BOOL)installTitleUpdateAtPath:(NSString*)path
+                          status:(NSString**)status_out
+                  notTitleUpdate:(BOOL*)not_title_update_out;
 @end
 
 @implementation XeniaViewController {
@@ -2844,7 +3354,12 @@ titleForFooterInSection:(NSInteger)section {
   }
 
   if (actions.context) {
-    [self openProfileTapped:self.profileButton];
+    if (launcher_focus_graph_.current() == kLauncherFocusLibrary && focused_game_index_ >= 0 &&
+        focused_game_index_ < game_count) {
+      [self presentManageContentSheetForIndex:static_cast<size_t>(focused_game_index_)];
+    } else {
+      [self openProfileTapped:self.profileButton];
+    }
     handled = YES;
   }
   if (actions.quick_action) {
@@ -4104,17 +4619,12 @@ titleForFooterInSection:(NSInteger)section {
 
   [title_name_cache release];
 
-  const std::filesystem::path content_root =
-      xe_get_ios_documents_path() / "content" / "0000000000000000";
   for (auto& game : discovered_games_) {
     if (!game.title_id) {
       continue;
     }
-    char title_id_buffer[9];
-    std::snprintf(title_id_buffer, sizeof(title_id_buffer), "%08X",
-                  game.title_id);
     std::error_code ec;
-    if (std::filesystem::exists(content_root / title_id_buffer, ec)) {
+    if (std::filesystem::exists(xe_title_content_root(game.title_id), ec)) {
       game.has_installed_content = true;
     }
   }
@@ -4221,6 +4731,18 @@ titleForFooterInSection:(NSInteger)section {
   NSString* fallback_name = ToNSString(game_path.filename().string());
   NSString* game_label = display_name.length ? display_name : fallback_name;
 
+  if (IsLikelyGodContainerFile(game_path)) {
+    auto header = xe::vfs::XContentContainerDevice::ReadContainerHeader(game_path);
+    if (header && header->content_metadata.data_file_count > 0 &&
+        !HasContentSidecarDataDirectory(game_path)) {
+      self.statusLabel.text = @"Selected game is missing its .data folder.";
+      xe_present_ok_alert(
+          self, @"Missing Game Data",
+          @"This package needs its matching .data folder before it can be launched.");
+      return;
+    }
+  }
+
   if (!self.jitAcquired) {
     [self presentJITRequiredAlert];
     return;
@@ -4256,6 +4778,72 @@ titleForFooterInSection:(NSInteger)section {
     self.launcherOverlay.hidden = NO;
     self.launcherOverlay.alpha = 1.0;
   }
+}
+
+- (BOOL)installTitleUpdateAtPath:(NSString*)path
+                          status:(NSString**)status_out
+                  notTitleUpdate:(BOOL*)not_title_update_out {
+  if (status_out) {
+    *status_out = nil;
+  }
+  if (not_title_update_out) {
+    *not_title_update_out = NO;
+  }
+  if (!self.appContext) {
+    if (status_out) {
+      *status_out = @"App context unavailable.";
+    }
+    return NO;
+  }
+
+  std::string status;
+  bool not_title_update = false;
+  BOOL success = self.appContext->InstallTitleUpdate(std::string([path UTF8String]), &status,
+                                                     &not_title_update);
+  if (status_out && !status.empty()) {
+    *status_out = ToNSString(status);
+  }
+  if (not_title_update_out) {
+    *not_title_update_out = not_title_update;
+  }
+  return success;
+}
+
+- (void)presentManageContentSheetForIndex:(size_t)game_index {
+  if (game_index >= discovered_games_.size()) {
+    return;
+  }
+
+  const IOSDiscoveredGame& game = discovered_games_[game_index];
+  if (!game.title_id) {
+    xe_present_ok_alert(
+        self, @"Unavailable",
+        @"This item does not expose a title ID, so installed content cannot be managed.");
+    return;
+  }
+
+  XeniaGameContentViewController* content_controller = [[XeniaGameContentViewController alloc]
+      initWithTitleID:game.title_id
+                title:(game.title.empty() ? ToNSString(game.path.stem().string())
+                                          : ToNSString(game.title))host:self];
+  XeniaLandscapeNavigationController* navigation_controller =
+      [[XeniaLandscapeNavigationController alloc] initWithRootViewController:content_controller];
+  if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+    navigation_controller.modalPresentationStyle = UIModalPresentationFormSheet;
+    if (@available(iOS 15.0, *)) {
+      UISheetPresentationController* sheet = navigation_controller.sheetPresentationController;
+      sheet.detents = @[
+        [UISheetPresentationControllerDetent mediumDetent],
+        [UISheetPresentationControllerDetent largeDetent]
+      ];
+      sheet.prefersGrabberVisible = YES;
+    }
+  } else {
+    navigation_controller.modalPresentationStyle = UIModalPresentationFullScreen;
+  }
+  [self presentViewController:navigation_controller animated:YES completion:nil];
+  [navigation_controller release];
+  [content_controller release];
 }
 
 #pragma mark - UICollectionViewDataSource
@@ -4366,17 +4954,27 @@ titleForFooterInSection:(NSInteger)section {
                        NSArray<UIMenuElement*>* __unused suggested_actions) {
                      const IOSDiscoveredGame& game =
                          self->discovered_games_[game_index];
-                     UIAction* play_action =
-                         [UIAction actionWithTitle:@"Play"
-                                            image:[UIImage
-                                                      systemImageNamed:@"play.fill"]
-                                       identifier:nil
-                                          handler:^(__unused UIAction* action) {
-                                            [self launchGameAtPath:game.path
-                                                       displayName:ToNSString(
-                                                                       game.title)];
-                                          }];
-                     return [UIMenu menuWithTitle:@"" children:@[ play_action ]];
+                     const std::filesystem::path game_path = game.path;
+                     NSString* game_title = ToNSString(game.title);
+                     const BOOL can_manage_content = game.title_id != 0;
+                     UIAction* play_action = [UIAction
+                         actionWithTitle:@"Play"
+                                   image:[UIImage systemImageNamed:@"play.fill"]
+                              identifier:nil
+                                 handler:^(__unused UIAction* action) {
+                                   [self launchGameAtPath:game_path displayName:game_title];
+                                 }];
+                     UIAction* content_action =
+                         [UIAction actionWithTitle:@"Manage Content"
+                                             image:[UIImage systemImageNamed:@"square.stack.3d.up"]
+                                        identifier:nil
+                                           handler:^(__unused UIAction* action) {
+                                             [self presentManageContentSheetForIndex:game_index];
+                                           }];
+                     if (!can_manage_content) {
+                       content_action.attributes = UIMenuElementAttributesDisabled;
+                     }
+                     return [UIMenu menuWithTitle:@"" children:@[ play_action, content_action ]];
                    }];
 }
 
