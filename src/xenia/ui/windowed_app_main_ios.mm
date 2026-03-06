@@ -1073,6 +1073,90 @@ static NSString* xe_compat_status_label(NSString* status) {
   return @"Unknown";
 }
 
+static UIColor* xe_compat_perf_color(NSString* perf) {
+  if ([perf isEqualToString:@"great"]) {
+    return [XeniaTheme accent];
+  }
+  if ([perf isEqualToString:@"ok"]) {
+    return [UIColor colorWithRed:0x60 / 255.0 green:0xa5 / 255.0 blue:0xfa / 255.0 alpha:1.0];
+  }
+  if ([perf isEqualToString:@"poor"]) {
+    return [XeniaTheme statusWarning];
+  }
+  return [XeniaTheme textMuted];
+}
+
+static NSString* xe_compat_perf_label(NSString* perf) {
+  if ([perf isEqualToString:@"great"]) return @"Great";
+  if ([perf isEqualToString:@"ok"]) return @"Okay";
+  if ([perf isEqualToString:@"poor"]) return @"Poor";
+  if ([perf isEqualToString:@"n/a"]) return @"N/A";
+  return @"Unknown";
+}
+
+static NSString* xe_format_iso_date(NSString* iso) {
+  if (!iso || iso.length < 10) {
+    return iso ?: @"";
+  }
+  static NSDateFormatter* parser = nil;
+  static NSDateFormatter* date_only_parser = nil;
+  static NSDateFormatter* formatter = nil;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    parser = [[NSDateFormatter alloc] init];
+    parser.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss";
+    parser.locale = [[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"] autorelease];
+    date_only_parser = [[NSDateFormatter alloc] init];
+    date_only_parser.dateFormat = @"yyyy-MM-dd";
+    date_only_parser.locale =
+        [[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"] autorelease];
+    formatter = [[NSDateFormatter alloc] init];
+    formatter.dateStyle = NSDateFormatterMediumStyle;
+    formatter.timeStyle = NSDateFormatterNoStyle;
+  });
+
+  NSString* trimmed = [iso substringToIndex:MIN(iso.length, (NSUInteger)19)];
+  NSDate* date = [parser dateFromString:trimmed];
+  if (!date) {
+    date = [date_only_parser dateFromString:[iso substringToIndex:MIN(iso.length, (NSUInteger)10)]];
+  }
+  return date ? [formatter stringFromDate:date]
+              : [iso substringToIndex:MIN(iso.length, (NSUInteger)10)];
+}
+
+static NSString* xe_platform_display_text(NSString* platform, NSString* os_version) {
+  if (![platform isKindOfClass:[NSString class]] || platform.length == 0) {
+    return @"";
+  }
+  NSString* platform_name = [platform isEqualToString:@"ios"]     ? @"iOS"
+                            : [platform isEqualToString:@"macos"] ? @"macOS"
+                                                                  : platform;
+  if (![os_version isKindOfClass:[NSString class]] || os_version.length == 0) {
+    return platform_name;
+  }
+  return [NSString stringWithFormat:@"%@ %@", platform_name, os_version];
+}
+
+static NSString* xe_discussion_cache_path(uint32_t title_id) {
+  NSString* caches =
+      NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+  return [caches
+      stringByAppendingPathComponent:[NSString stringWithFormat:@"discussion-%08X.json", title_id]];
+}
+
+static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
+  XeniaPaddedLabel* pill = [[[XeniaPaddedLabel alloc] init] autorelease];
+  pill.translatesAutoresizingMaskIntoConstraints = NO;
+  pill.padding = UIEdgeInsetsMake(3, 10, 3, 10);
+  pill.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+  pill.text = text ?: @"";
+  pill.textColor = text_color ?: [XeniaTheme textMuted];
+  pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.12];
+  pill.layer.cornerRadius = 10.0;
+  pill.clipsToBounds = YES;
+  return pill;
+}
+
 // ---------------------------------------------------------------------------
 // Game art cache — downloads tile art from Element18592/360-Game-Art by
 // title ID, caches to Library/Caches/game-art/{title_id_hex_lower}.png.
@@ -1521,6 +1605,12 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
 - (instancetype)initWithTitleID:(uint32_t)title_id
                           title:(NSString*)title
                            host:(id<XeniaGameContentHost>)host;
+@end
+
+@interface XeniaGameCompatibilityViewController : UITableViewController
+- (instancetype)initWithTitleID:(uint32_t)title_id
+                          title:(NSString*)title
+                     compatData:(NSDictionary*)compat_data;
 @end
 
 @interface XeniaGameTileCell : UICollectionViewCell
@@ -2223,6 +2313,552 @@ titleForFooterInSection:(NSInteger)section {
 
 @end
 
+static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
+
+@implementation XeniaGameCompatibilityViewController {
+  uint32_t title_id_;
+  NSString* game_title_;
+  NSDictionary* compat_info_;
+  NSMutableArray<NSDictionary*>* discussion_reports_;
+  NSString* discussion_issue_url_;
+  NSInteger discussion_issue_number_;
+  BOOL discussion_loading_;
+  BOOL discussion_show_all_;
+}
+
+- (instancetype)initWithTitleID:(uint32_t)title_id
+                          title:(NSString*)title
+                     compatData:(NSDictionary*)compat_data {
+  self = [super initWithStyle:UITableViewStylePlain];
+  if (self) {
+    title_id_ = title_id;
+    game_title_ = [title copy];
+    compat_info_ = [compat_data retain];
+    discussion_reports_ = [[NSMutableArray alloc] init];
+    discussion_loading_ = YES;
+    discussion_show_all_ = NO;
+    discussion_issue_number_ = 0;
+    self.title = @"Compatibility";
+  }
+  return self;
+}
+
+- (void)dealloc {
+  [game_title_ release];
+  [compat_info_ release];
+  [discussion_reports_ release];
+  [discussion_issue_url_ release];
+  [super dealloc];
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+  self.tableView.estimatedRowHeight = 280.0;
+  if (@available(iOS 15.0, *)) {
+    self.tableView.sectionHeaderTopPadding = 0;
+  }
+  self.navigationItem.leftBarButtonItem =
+      [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                    target:self
+                                                    action:@selector(doneTapped:)];
+  [self fetchDiscussion];
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationPortrait;
+}
+
+- (void)doneTapped:(id)__unused sender {
+  if (self.navigationController.presentingViewController &&
+      self.navigationController.viewControllers.firstObject == self) {
+    [self.navigationController dismissViewControllerAnimated:YES completion:nil];
+    return;
+  }
+  [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (NSDictionary*)latestDiscussionReport {
+  if (discussion_reports_.count == 0) {
+    return nil;
+  }
+  id report = discussion_reports_.firstObject;
+  return [report isKindOfClass:[NSDictionary class]] ? report : nil;
+}
+
+- (NSDictionary*)primaryCompatibilitySource {
+  if (compat_info_) {
+    return compat_info_;
+  }
+  return [self latestDiscussionReport];
+}
+
+- (void)applyDiscussionJSON:(NSDictionary*)json {
+  [discussion_reports_ removeAllObjects];
+
+  NSArray* raw_reports = json[@"reports"];
+  if ([raw_reports isKindOfClass:[NSArray class]]) {
+    for (id item in raw_reports) {
+      if ([item isKindOfClass:[NSDictionary class]]) {
+        [discussion_reports_ addObject:item];
+      }
+    }
+  }
+
+  [discussion_issue_url_ release];
+  discussion_issue_url_ = nil;
+  id issue_url = json[@"issueUrl"];
+  if ([issue_url isKindOfClass:[NSString class]] && [issue_url length] > 0) {
+    discussion_issue_url_ = [issue_url copy];
+  }
+
+  discussion_issue_number_ = 0;
+  id issue_number = json[@"issueNumber"];
+  if ([issue_number isKindOfClass:[NSNumber class]]) {
+    discussion_issue_number_ = [issue_number integerValue];
+  }
+
+  if ((NSInteger)discussion_reports_.count <= kXeniaDiscussionPreviewCount) {
+    discussion_show_all_ = NO;
+  }
+}
+
+- (void)fetchDiscussion {
+  NSString* cache_path = xe_discussion_cache_path(title_id_);
+  NSData* cached_data = [NSData dataWithContentsOfFile:cache_path];
+  if (cached_data.length > 0) {
+    NSError* cache_error = nil;
+    id cached_json = [NSJSONSerialization JSONObjectWithData:cached_data
+                                                     options:0
+                                                       error:&cache_error];
+    if (!cache_error && [cached_json isKindOfClass:[NSDictionary class]]) {
+      [self applyDiscussionJSON:(NSDictionary*)cached_json];
+      discussion_loading_ = NO;
+      [self.tableView reloadData];
+    }
+  }
+
+  NSDictionary* cache_attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:cache_path
+                                                                                    error:nil];
+  NSDate* cache_modified_date = cache_attributes[NSFileModificationDate];
+  if (cache_modified_date && [[NSDate date] timeIntervalSinceDate:cache_modified_date] < 300.0 &&
+      !discussion_loading_) {
+    return;
+  }
+
+  NSString* url_string = [NSString
+      stringWithFormat:@"https://xenios-compat-api.xenios.workers.dev/games/%08X/discussion",
+                       title_id_];
+  NSURL* url = [NSURL URLWithString:url_string];
+  if (!url) {
+    discussion_loading_ = NO;
+    [self.tableView reloadData];
+    return;
+  }
+
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+        dataTaskWithURL:url
+      completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+        if (error || data.length == 0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            self->discussion_loading_ = NO;
+            [self.tableView reloadData];
+          });
+          return;
+        }
+
+        NSHTTPURLResponse* http_response = (NSHTTPURLResponse*)response;
+        if (![http_response isKindOfClass:[NSHTTPURLResponse class]] ||
+            http_response.statusCode != 200) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            self->discussion_loading_ = NO;
+            [self.tableView reloadData];
+          });
+          return;
+        }
+
+        NSError* json_error = nil;
+        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&json_error];
+        if (json_error || ![json isKindOfClass:[NSDictionary class]]) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            self->discussion_loading_ = NO;
+            [self.tableView reloadData];
+          });
+          return;
+        }
+
+        [data writeToFile:cache_path atomically:YES];
+        dispatch_async(dispatch_get_main_queue(), ^{
+          self->discussion_loading_ = NO;
+          [self applyDiscussionJSON:(NSDictionary*)json];
+          [self.tableView reloadData];
+        });
+      }];
+  [task resume];
+}
+
+- (void)viewIssueTapped:(id)__unused sender {
+  if (!discussion_issue_url_) {
+    return;
+  }
+  NSURL* url = [NSURL URLWithString:discussion_issue_url_];
+  if (!url) {
+    return;
+  }
+  [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
+- (void)toggleDiscussionExpansionTapped:(id)__unused sender {
+  discussion_show_all_ = !discussion_show_all_;
+  [self.tableView reloadData];
+}
+
+- (UIView*)cardViewForCell:(UITableViewCell*)cell {
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [XeniaTheme bgSurface];
+  card.layer.cornerRadius = XeniaRadiusXl;
+  card.layer.borderWidth = 0.5;
+  card.layer.borderColor = [XeniaTheme border].CGColor;
+  [cell.contentView addSubview:card];
+  [NSLayoutConstraint activateConstraints:@[
+    [card.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:6],
+    [card.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
+    [card.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16],
+    [card.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-6],
+  ]];
+  return card;
+}
+
+- (UITableViewCell*)overviewCellForTableView:(UITableView*)__unused tableView {
+  UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                  reuseIdentifier:nil] autorelease];
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+  cell.backgroundColor = [UIColor clearColor];
+  cell.contentView.backgroundColor = [UIColor clearColor];
+
+  UIView* card = [self cardViewForCell:cell];
+  UIStackView* stack = [[[UIStackView alloc] init] autorelease];
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.spacing = 12.0;
+  [card addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
+    [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+    [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+    [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
+  ]];
+
+  UILabel* title_label = [[[UILabel alloc] init] autorelease];
+  title_label.text = game_title_.length > 0 ? game_title_ : @"Unknown Title";
+  title_label.font = [UIFont systemFontOfSize:22 weight:UIFontWeightSemibold];
+  title_label.textColor = [XeniaTheme textPrimary];
+  title_label.numberOfLines = 2;
+  [stack addArrangedSubview:title_label];
+
+  UILabel* subtitle_label = [[[UILabel alloc] init] autorelease];
+  subtitle_label.text = title_id_ ? [NSString stringWithFormat:@"Title ID %08X", title_id_]
+                                  : @"No title ID available";
+  subtitle_label.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
+  subtitle_label.textColor = [XeniaTheme textMuted];
+  subtitle_label.numberOfLines = 1;
+  [stack addArrangedSubview:subtitle_label];
+
+  NSDictionary* summary_source = [self primaryCompatibilitySource];
+  NSString* status =
+      [summary_source[@"status"] isKindOfClass:[NSString class]] ? summary_source[@"status"] : nil;
+  NSString* perf =
+      [summary_source[@"perf"] isKindOfClass:[NSString class]] ? summary_source[@"perf"] : nil;
+
+  if (status.length > 0 || perf.length > 0) {
+    UIStackView* pills_row = [[[UIStackView alloc] init] autorelease];
+    pills_row.axis = UILayoutConstraintAxisHorizontal;
+    pills_row.spacing = 8.0;
+    pills_row.alignment = UIStackViewAlignmentLeading;
+    pills_row.translatesAutoresizingMaskIntoConstraints = NO;
+    if (status.length > 0) {
+      [pills_row addArrangedSubview:xe_make_tag_pill(xe_compat_status_label(status),
+                                                     xe_compat_status_color(status))];
+    }
+    if (perf.length > 0) {
+      [pills_row addArrangedSubview:xe_make_tag_pill(xe_compat_perf_label(perf),
+                                                     xe_compat_perf_color(perf))];
+    }
+    [stack addArrangedSubview:pills_row];
+  }
+
+  NSString* notes = nil;
+  if ([compat_info_[@"notes"] isKindOfClass:[NSString class]] &&
+      [compat_info_[@"notes"] length] > 0) {
+    notes = compat_info_[@"notes"];
+  } else if ([summary_source[@"notes"] isKindOfClass:[NSString class]] &&
+             [summary_source[@"notes"] length] > 0) {
+    notes = summary_source[@"notes"];
+  }
+
+  UILabel* notes_label = [[[UILabel alloc] init] autorelease];
+  notes_label.numberOfLines = 0;
+  notes_label.font = [UIFont systemFontOfSize:15];
+  notes_label.textColor = [XeniaTheme textSecondary];
+  notes_label.text = notes.length > 0 ? notes : @"No compatibility summary cached yet.";
+  [stack addArrangedSubview:notes_label];
+
+  NSString* updated_at =
+      [compat_info_[@"updatedAt"] isKindOfClass:[NSString class]]
+          ? compat_info_[@"updatedAt"]
+          : ([summary_source[@"date"] isKindOfClass:[NSString class]] ? summary_source[@"date"]
+                                                                      : nil);
+  if (updated_at.length > 0) {
+    UILabel* updated_label = [[[UILabel alloc] init] autorelease];
+    updated_label.numberOfLines = 1;
+    updated_label.font = [UIFont systemFontOfSize:13];
+    updated_label.textColor = [XeniaTheme textMuted];
+    updated_label.text =
+        [NSString stringWithFormat:@"Last updated %@", xe_format_iso_date(updated_at)];
+    [stack addArrangedSubview:updated_label];
+  }
+
+  return cell;
+}
+
+- (UIView*)discussionCardForReport:(NSDictionary*)report {
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [XeniaTheme bgPrimary];
+  card.layer.cornerRadius = XeniaRadiusLg;
+  card.layer.borderWidth = 0.5;
+  card.layer.borderColor = [XeniaTheme border].CGColor;
+
+  UILabel* author_label = [[[UILabel alloc] init] autorelease];
+  author_label.translatesAutoresizingMaskIntoConstraints = NO;
+  NSString* author = [report[@"submittedBy"] isKindOfClass:[NSString class]]
+                         ? report[@"submittedBy"]
+                         : @"anonymous";
+  author_label.text = author.length > 0 ? author : @"anonymous";
+  author_label.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+  author_label.textColor = [XeniaTheme textPrimary];
+  [card addSubview:author_label];
+
+  UILabel* date_label = [[[UILabel alloc] init] autorelease];
+  date_label.translatesAutoresizingMaskIntoConstraints = NO;
+  NSString* date = [report[@"date"] isKindOfClass:[NSString class]] ? report[@"date"] : nil;
+  date_label.text = date.length > 0 ? xe_format_iso_date(date) : @"";
+  date_label.font = [UIFont systemFontOfSize:13];
+  date_label.textColor = [XeniaTheme textMuted];
+  date_label.textAlignment = NSTextAlignmentRight;
+  [date_label setContentHuggingPriority:UILayoutPriorityRequired
+                                forAxis:UILayoutConstraintAxisHorizontal];
+  [date_label setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                              forAxis:UILayoutConstraintAxisHorizontal];
+  [card addSubview:date_label];
+
+  NSMutableArray<NSString*>* info_parts = [NSMutableArray array];
+  NSString* status = [report[@"status"] isKindOfClass:[NSString class]] ? report[@"status"] : nil;
+  if (status.length > 0) {
+    [info_parts addObject:xe_compat_status_label(status)];
+  }
+  NSString* perf = [report[@"perf"] isKindOfClass:[NSString class]] ? report[@"perf"] : nil;
+  if (perf.length > 0) {
+    [info_parts addObject:xe_compat_perf_label(perf)];
+  }
+  NSString* device = [report[@"device"] isKindOfClass:[NSString class]] ? report[@"device"] : nil;
+  if (device.length > 0) {
+    [info_parts addObject:device];
+  }
+  NSString* platform_display = xe_platform_display_text(report[@"platform"], report[@"osVersion"]);
+  if (platform_display.length > 0) {
+    [info_parts addObject:platform_display];
+  }
+  NSString* gpu_backend =
+      [report[@"gpuBackend"] isKindOfClass:[NSString class]] ? report[@"gpuBackend"] : nil;
+  if (gpu_backend.length > 0) {
+    [info_parts addObject:[gpu_backend uppercaseString]];
+  }
+
+  UILabel* info_label = [[[UILabel alloc] init] autorelease];
+  info_label.translatesAutoresizingMaskIntoConstraints = NO;
+  info_label.text = [info_parts componentsJoinedByString:@" \u00B7 "];
+  info_label.font = [UIFont systemFontOfSize:13];
+  info_label.textColor = [XeniaTheme textMuted];
+  info_label.numberOfLines = 0;
+  info_label.hidden = info_label.text.length == 0;
+  [card addSubview:info_label];
+
+  UILabel* notes_label = [[[UILabel alloc] init] autorelease];
+  notes_label.translatesAutoresizingMaskIntoConstraints = NO;
+  NSString* notes = [report[@"notes"] isKindOfClass:[NSString class]] ? report[@"notes"] : nil;
+  notes_label.text = notes.length > 0 ? notes : @"No details provided.";
+  notes_label.font = [UIFont systemFontOfSize:15];
+  notes_label.textColor = [XeniaTheme textSecondary];
+  notes_label.numberOfLines = 4;
+  [card addSubview:notes_label];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [author_label.topAnchor constraintEqualToAnchor:card.topAnchor constant:12],
+    [author_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+    [date_label.firstBaselineAnchor constraintEqualToAnchor:author_label.firstBaselineAnchor],
+    [date_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+    [date_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:author_label.trailingAnchor
+                                                          constant:8],
+    [info_label.topAnchor constraintEqualToAnchor:author_label.bottomAnchor constant:6],
+    [info_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+    [info_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+    [notes_label.topAnchor constraintEqualToAnchor:info_label.bottomAnchor constant:8],
+    [notes_label.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+    [notes_label.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+    [notes_label.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-12],
+  ]];
+  if (info_label.hidden) {
+    [info_label.heightAnchor constraintEqualToConstant:0].active = YES;
+  }
+
+  return card;
+}
+
+- (UITableViewCell*)discussionCellForTableView:(UITableView*)__unused tableView {
+  UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                  reuseIdentifier:nil] autorelease];
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+  cell.backgroundColor = [UIColor clearColor];
+  cell.contentView.backgroundColor = [UIColor clearColor];
+
+  UIView* card = [self cardViewForCell:cell];
+  UIStackView* stack = [[[UIStackView alloc] init] autorelease];
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.spacing = 12.0;
+  [card addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:16],
+    [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16],
+    [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+    [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16],
+  ]];
+
+  UIView* heading_row = [[[UIView alloc] init] autorelease];
+  heading_row.translatesAutoresizingMaskIntoConstraints = NO;
+  UILabel* heading_label = [[[UILabel alloc] init] autorelease];
+  heading_label.translatesAutoresizingMaskIntoConstraints = NO;
+  heading_label.text = @"Discussion";
+  heading_label.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+  heading_label.textColor = [XeniaTheme textPrimary];
+  [heading_row addSubview:heading_label];
+
+  UIButton* heading_button = [UIButton buttonWithType:UIButtonTypeSystem];
+  heading_button.translatesAutoresizingMaskIntoConstraints = NO;
+  NSString* button_title =
+      discussion_issue_number_ > 0
+          ? [NSString stringWithFormat:@"Issue #%ld", (long)discussion_issue_number_]
+          : @"View on GitHub";
+  [heading_button setTitle:button_title forState:UIControlStateNormal];
+  [heading_button setTitleColor:[XeniaTheme accent] forState:UIControlStateNormal];
+  heading_button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+  heading_button.hidden = (discussion_issue_url_ == nil);
+  [heading_button addTarget:self
+                     action:@selector(viewIssueTapped:)
+           forControlEvents:UIControlEventTouchUpInside];
+  [heading_row addSubview:heading_button];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [heading_label.topAnchor constraintEqualToAnchor:heading_row.topAnchor],
+    [heading_label.leadingAnchor constraintEqualToAnchor:heading_row.leadingAnchor],
+    [heading_label.bottomAnchor constraintEqualToAnchor:heading_row.bottomAnchor],
+    [heading_button.firstBaselineAnchor constraintEqualToAnchor:heading_label.firstBaselineAnchor],
+    [heading_button.trailingAnchor constraintEqualToAnchor:heading_row.trailingAnchor],
+    [heading_button.leadingAnchor constraintGreaterThanOrEqualToAnchor:heading_label.trailingAnchor
+                                                              constant:8],
+  ]];
+  [stack addArrangedSubview:heading_row];
+
+  if (discussion_loading_) {
+    UILabel* loading_label = [[[UILabel alloc] init] autorelease];
+    loading_label.text = @"Loading compatibility discussion...";
+    loading_label.font = [UIFont systemFontOfSize:15];
+    loading_label.textColor = [XeniaTheme textMuted];
+    loading_label.numberOfLines = 1;
+    [stack addArrangedSubview:loading_label];
+    return cell;
+  }
+
+  if (discussion_reports_.count == 0) {
+    UILabel* empty_label = [[[UILabel alloc] init] autorelease];
+    empty_label.text = @"No compatibility reports have been posted for this title yet.";
+    empty_label.font = [UIFont systemFontOfSize:15];
+    empty_label.textColor = [XeniaTheme textMuted];
+    empty_label.numberOfLines = 0;
+    [stack addArrangedSubview:empty_label];
+    return cell;
+  }
+
+  NSInteger report_count = (NSInteger)discussion_reports_.count;
+  NSInteger visible_count =
+      discussion_show_all_ ? report_count : MIN(report_count, kXeniaDiscussionPreviewCount);
+  for (NSInteger report_index = 0; report_index < visible_count; ++report_index) {
+    NSDictionary* report = discussion_reports_[report_index];
+    if (![report isKindOfClass:[NSDictionary class]]) {
+      continue;
+    }
+    [stack addArrangedSubview:[self discussionCardForReport:report]];
+  }
+
+  if (report_count > kXeniaDiscussionPreviewCount) {
+    UILabel* summary_label = [[[UILabel alloc] init] autorelease];
+    summary_label.text =
+        discussion_show_all_
+            ? [NSString stringWithFormat:@"Showing all %ld reports.", (long)report_count]
+            : [NSString stringWithFormat:@"Showing latest %ld of %ld reports.", (long)visible_count,
+                                         (long)report_count];
+    summary_label.font = [UIFont systemFontOfSize:12];
+    summary_label.textColor = [XeniaTheme textMuted];
+    summary_label.numberOfLines = 1;
+    [stack addArrangedSubview:summary_label];
+
+    UIButton* toggle_button = [UIButton buttonWithType:UIButtonTypeSystem];
+    toggle_button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    NSString* toggle_title =
+        discussion_show_all_
+            ? @"Show fewer reports"
+            : [NSString stringWithFormat:@"Show all %ld reports", (long)report_count];
+    [toggle_button setTitle:toggle_title forState:UIControlStateNormal];
+    [toggle_button setTitleColor:[XeniaTheme accent] forState:UIControlStateNormal];
+    toggle_button.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    [toggle_button addTarget:self
+                      action:@selector(toggleDiscussionExpansionTapped:)
+            forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:toggle_button];
+  }
+
+  return cell;
+}
+
+#pragma mark - UITableViewDataSource
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
+  return 1;
+}
+
+- (NSInteger)tableView:(UITableView* __unused)tableView
+    numberOfRowsInSection:(NSInteger)__unused section {
+  return 2;
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (indexPath.row == 0) {
+    return [self overviewCellForTableView:tableView];
+  }
+  return [self discussionCellForTableView:tableView];
+}
+
+@end
+
 @implementation XeniaLogViewController {
   UITextView* textView_;
   UILabel* footerLabel_;
@@ -2756,6 +3392,7 @@ titleForFooterInSection:(NSInteger)section {
 - (BOOL)handleExternalLaunchURL:(NSURL*)url;
 - (void)startCompatFetchIfNeeded;
 - (void)applyCompatDataToDiscoveredGames;
+- (void)presentCompatibilitySheetForIndex:(size_t)game_index;
 - (void)presentManageContentSheetForIndex:(size_t)game_index;
 - (BOOL)installTitleUpdateAtPath:(NSString*)path
                           status:(NSString**)status_out
@@ -4834,6 +5471,48 @@ titleForFooterInSection:(NSInteger)section {
   return success;
 }
 
+- (void)presentCompatibilitySheetForIndex:(size_t)game_index {
+  if (game_index >= discovered_games_.size()) {
+    return;
+  }
+
+  const IOSDiscoveredGame& game = discovered_games_[game_index];
+  if (!game.title_id) {
+    xe_present_ok_alert(self, @"Unavailable",
+                        @"This item does not expose a title ID, so compatibility details "
+                        @"cannot be loaded.");
+    return;
+  }
+
+  NSDictionary* compat_data =
+      [compat_data_ objectForKey:[NSString stringWithFormat:@"%08X", game.title_id]];
+  NSString* game_title =
+      game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
+  XeniaGameCompatibilityViewController* compatibility_controller =
+      [[XeniaGameCompatibilityViewController alloc] initWithTitleID:game.title_id
+                                                              title:game_title
+                                                         compatData:compat_data];
+  XeniaLandscapeNavigationController* navigation_controller =
+      [[XeniaLandscapeNavigationController alloc]
+          initWithRootViewController:compatibility_controller];
+  if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+    navigation_controller.modalPresentationStyle = UIModalPresentationFormSheet;
+    if (@available(iOS 15.0, *)) {
+      UISheetPresentationController* sheet = navigation_controller.sheetPresentationController;
+      sheet.detents = @[
+        [UISheetPresentationControllerDetent mediumDetent],
+        [UISheetPresentationControllerDetent largeDetent]
+      ];
+      sheet.prefersGrabberVisible = YES;
+    }
+  } else {
+    navigation_controller.modalPresentationStyle = UIModalPresentationFullScreen;
+  }
+  [self presentViewController:navigation_controller animated:YES completion:nil];
+  [navigation_controller release];
+  [compatibility_controller release];
+}
+
 - (void)presentManageContentSheetForIndex:(size_t)game_index {
   if (game_index >= discovered_games_.size()) {
     return;
@@ -4982,6 +5661,7 @@ titleForFooterInSection:(NSInteger)section {
                      const std::filesystem::path game_path = game.path;
                      NSString* game_title = ToNSString(game.title);
                      const BOOL can_manage_content = game.title_id != 0;
+                     const BOOL can_view_compatibility = game.title_id != 0;
                      UIAction* play_action = [UIAction
                          actionWithTitle:@"Play"
                                    image:[UIImage systemImageNamed:@"play.fill"]
@@ -4989,6 +5669,13 @@ titleForFooterInSection:(NSInteger)section {
                                  handler:^(__unused UIAction* action) {
                                    [self launchGameAtPath:game_path displayName:game_title];
                                  }];
+                     UIAction* compatibility_action =
+                         [UIAction actionWithTitle:@"Compatibility"
+                                             image:[UIImage systemImageNamed:@"checkmark.shield"]
+                                        identifier:nil
+                                           handler:^(__unused UIAction* action) {
+                                             [self presentCompatibilitySheetForIndex:game_index];
+                                           }];
                      UIAction* content_action =
                          [UIAction actionWithTitle:@"Manage Content"
                                              image:[UIImage systemImageNamed:@"square.stack.3d.up"]
@@ -4996,10 +5683,15 @@ titleForFooterInSection:(NSInteger)section {
                                            handler:^(__unused UIAction* action) {
                                              [self presentManageContentSheetForIndex:game_index];
                                            }];
+                     if (!can_view_compatibility) {
+                       compatibility_action.attributes = UIMenuElementAttributesDisabled;
+                     }
                      if (!can_manage_content) {
                        content_action.attributes = UIMenuElementAttributesDisabled;
                      }
-                     return [UIMenu menuWithTitle:@"" children:@[ play_action, content_action ]];
+                     return [UIMenu
+                         menuWithTitle:@""
+                              children:@[ play_action, compatibility_action, content_action ]];
                    }];
 }
 
