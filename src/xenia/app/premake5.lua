@@ -235,6 +235,7 @@ project("xenia-app")
       "Foundation.framework",
       "Metal.framework",
       "MetalKit.framework",
+      "PhotosUI.framework",
       "QuartzCore.framework",
       "UIKit.framework",
       "UniformTypeIdentifiers.framework",

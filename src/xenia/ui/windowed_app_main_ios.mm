@@ -7,8 +7,9 @@
  ******************************************************************************
  */
 
-#import <MetalKit/MetalKit.h>
 #import <GameController/GameController.h>
+#import <MetalKit/MetalKit.h>
+#import <PhotosUI/PhotosUI.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
@@ -1659,7 +1660,7 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
                      compatData:(NSDictionary*)compat_data;
 @end
 
-@interface XeniaCompatReportViewController : UITableViewController
+@interface XeniaCompatReportViewController : UITableViewController <PHPickerViewControllerDelegate>
 - (instancetype)initWithTitleID:(uint32_t)title_id title:(NSString*)title;
 @end
 
@@ -2947,6 +2948,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   NSInteger selected_status_;
   NSInteger selected_perf_;
   UITextView* notes_text_view_;
+  NSMutableArray<UIImage*>* screenshots_;
   BOOL submitting_;
 }
 
@@ -2957,6 +2959,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     game_title_ = [title copy];
     selected_status_ = -1;
     selected_perf_ = -1;
+    screenshots_ = [[NSMutableArray alloc] init];
     submitting_ = NO;
     self.title = @"Submit Report";
   }
@@ -2966,6 +2969,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)dealloc {
   [game_title_ release];
   [notes_text_view_ release];
+  [screenshots_ release];
   [super dealloc];
 }
 
@@ -3049,8 +3053,20 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   submitting_ = YES;
-  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:6]
                 withRowAnimation:UITableViewRowAnimationNone];
+
+  NSMutableArray<NSString*>* screenshot_data =
+      [NSMutableArray arrayWithCapacity:screenshots_.count];
+  NSUInteger screenshot_total_bytes = 0;
+  for (UIImage* image in screenshots_) {
+    NSData* jpeg = UIImageJPEGRepresentation(image, 0.8);
+    if (!jpeg) {
+      continue;
+    }
+    screenshot_total_bytes += jpeg.length;
+    [screenshot_data addObject:[jpeg base64EncodedStringWithOptions:0]];
+  }
 
   NSString* device_machine = xe_device_machine();
   NSString* device_display = xe_device_display_name();
@@ -3067,7 +3083,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     @"gpuBackend" : @"msl",
     @"notes" : notes,
     @"tags" : @[],
-    @"screenshots" : @[],
+    @"screenshots" : screenshot_data,
   };
 
   NSError* json_error = nil;
@@ -3076,7 +3092,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                                            error:&json_error];
   if (!request_body) {
     submitting_ = NO;
-    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:6]
                   withRowAnimation:UITableViewRowAnimationNone];
     NSString* message =
         json_error.localizedDescription ?: @"Unable to serialize the report payload.";
@@ -3084,9 +3100,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return;
   }
 
-  XELOGI("iOS compat submit: title_id={:08X} status={} perf={} body_bytes={}", title_id_,
-         [xe_compat_statuses()[selected_status_] UTF8String],
-         [xe_compat_perfs()[selected_perf_] UTF8String],
+  XELOGI("iOS compat submit: title_id={:08X} status={} perf={} screenshots={} "
+         "screenshot_bytes={} body_bytes={}",
+         title_id_, [xe_compat_statuses()[selected_status_] UTF8String],
+         [xe_compat_perfs()[selected_perf_] UTF8String], (int)screenshot_data.count,
+         static_cast<unsigned long long>(screenshot_total_bytes),
          static_cast<unsigned long long>(request_body.length));
 
   NSURL* url = [NSURL URLWithString:@"https://xenios-compat-api.xenios.workers.dev/report"];
@@ -3101,7 +3119,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
         completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
           dispatch_async(dispatch_get_main_queue(), ^{
             self->submitting_ = NO;
-            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:6]
                           withRowAnimation:UITableViewRowAnimationNone];
 
             if (error) {
@@ -3149,10 +3167,74 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [task resume];
 }
 
+- (void)addScreenshotTapped {
+  if (screenshots_.count >= 5) {
+    [self showAlertWithTitle:@"Limit Reached" message:@"You can attach up to 5 screenshots."];
+    return;
+  }
+
+  PHPickerConfiguration* configuration = [[PHPickerConfiguration alloc] init];
+  configuration.selectionLimit = static_cast<NSInteger>(5 - screenshots_.count);
+  configuration.filter = [PHPickerFilter imagesFilter];
+
+  PHPickerViewController* picker =
+      [[PHPickerViewController alloc] initWithConfiguration:configuration];
+  picker.delegate = self;
+  [self presentViewController:picker animated:YES completion:nil];
+  [picker release];
+  [configuration release];
+}
+
+#pragma mark - PHPickerViewControllerDelegate
+
+- (void)picker:(PHPickerViewController*)picker didFinishPicking:(NSArray<PHPickerResult*>*)results {
+  [picker dismissViewControllerAnimated:YES completion:nil];
+
+  for (PHPickerResult* result in results) {
+    if (screenshots_.count >= 5) {
+      break;
+    }
+    [result.itemProvider
+        loadObjectOfClass:[UIImage class]
+        completionHandler:^(id<NSItemProviderReading> object, NSError* __unused error) {
+          UIImage* image = (UIImage*)object;
+          if (!image) {
+            return;
+          }
+
+          // Re-render to strip metadata and keep uploads bounded.
+          CGFloat max_dimension = 1280.0;
+          CGSize size = image.size;
+          CGFloat scale = 1.0;
+          if (size.width > max_dimension || size.height > max_dimension) {
+            scale = (size.width > size.height) ? (max_dimension / size.width)
+                                               : (max_dimension / size.height);
+          }
+          CGSize new_size = CGSizeMake(size.width * scale, size.height * scale);
+          UIGraphicsBeginImageContextWithOptions(new_size, NO, 1.0);
+          [image drawInRect:CGRectMake(0, 0, new_size.width, new_size.height)];
+          UIImage* sanitized_image = UIGraphicsGetImageFromCurrentImageContext();
+          UIGraphicsEndImageContext();
+          if (!sanitized_image) {
+            return;
+          }
+
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (self->screenshots_.count >= 5) {
+              return;
+            }
+            [self->screenshots_ addObject:sanitized_image];
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+                          withRowAnimation:UITableViewRowAnimationAutomatic];
+          });
+        }];
+  }
+}
+
 #pragma mark - UITableViewDataSource
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
-  return 6;
+  return 7;
 }
 
 - (NSInteger)tableView:(UITableView* __unused)tableView numberOfRowsInSection:(NSInteger)section {
@@ -3168,6 +3250,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     case 4:
       return 1;
     case 5:
+      return static_cast<NSInteger>(screenshots_.count) + 1;
+    case 6:
       return 1;
     default:
       return 0;
@@ -3186,6 +3270,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       return @"Performance";
     case 4:
       return @"Notes";
+    case 5:
+      return @"Screenshots";
     default:
       return nil;
   }
@@ -3196,7 +3282,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (indexPath.section == 4) {
     return 128.0;
   }
-  if (indexPath.section == 5) {
+  if (indexPath.section == 6) {
     return 52.0;
   }
   return UITableViewAutomaticDimension;
@@ -3317,6 +3403,31 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return cell;
   }
 
+  if (indexPath.section == 5) {
+    if (indexPath.row < static_cast<NSInteger>(screenshots_.count)) {
+      UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                      reuseIdentifier:nil] autorelease];
+      cell.selectionStyle = UITableViewCellSelectionStyleNone;
+      UIImage* thumbnail = screenshots_[indexPath.row];
+      cell.imageView.image = thumbnail;
+      cell.imageView.contentMode = UIViewContentModeScaleAspectFill;
+      cell.imageView.clipsToBounds = YES;
+      cell.imageView.layer.cornerRadius = 4.0;
+      cell.textLabel.text =
+          [NSString stringWithFormat:@"Screenshot %ld", (long)(indexPath.row + 1)];
+      cell.textLabel.textColor = [XeniaTheme textPrimary];
+      return cell;
+    }
+
+    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                    reuseIdentifier:nil] autorelease];
+    cell.textLabel.text = @"Add Screenshot";
+    cell.textLabel.textColor = [XeniaTheme accent];
+    cell.imageView.image = [UIImage systemImageNamed:@"plus.circle"];
+    cell.imageView.tintColor = [XeniaTheme accent];
+    return cell;
+  }
+
   UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
                                                   reuseIdentifier:nil] autorelease];
   cell.backgroundColor = [XeniaTheme accent];
@@ -3360,8 +3471,33 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   if (indexPath.section == 5) {
+    if (indexPath.row >= static_cast<NSInteger>(screenshots_.count)) {
+      [self addScreenshotTapped];
+    }
+    return;
+  }
+
+  if (indexPath.section == 6) {
     [self submitReport];
   }
+}
+
+- (BOOL)tableView:(UITableView* __unused)tableView canEditRowAtIndexPath:(NSIndexPath*)indexPath {
+  return (indexPath.section == 5 && indexPath.row < static_cast<NSInteger>(screenshots_.count));
+}
+
+- (void)tableView:(UITableView*)tableView
+    commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+     forRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (editingStyle != UITableViewCellEditingStyleDelete) {
+    return;
+  }
+  if (indexPath.section != 5 || indexPath.row >= static_cast<NSInteger>(screenshots_.count)) {
+    return;
+  }
+  [screenshots_ removeObjectAtIndex:indexPath.row];
+  [tableView reloadSections:[NSIndexSet indexSetWithIndex:5]
+           withRowAnimation:UITableViewRowAnimationAutomatic];
 }
 
 @end
