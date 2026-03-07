@@ -1209,6 +1209,13 @@ static NSString* xe_compat_channel_label(NSString* channel) {
   return @"Unknown";
 }
 
+static NSString* xe_release_stage_display_label(NSString* stage) {
+  if ([stage isEqualToString:@"alpha"]) return @"Alpha";
+  if ([stage isEqualToString:@"beta"]) return @"Beta";
+  if ([stage isEqualToString:@"rc"]) return @"RC";
+  return nil;
+}
+
 static NSString* xe_build_version_label(NSDictionary* build_info) {
   NSString* app_version = xe_string_from_object(build_info[@"appVersion"]);
   NSString* build_number = xe_string_from_object(build_info[@"buildNumber"]);
@@ -1246,13 +1253,21 @@ static NSString* xe_user_facing_build_label(NSDictionary* build_info) {
   }
 
   NSString* channel = xe_string_from_object(build_info[@"channel"]);
+  NSString* stage_label =
+      xe_release_stage_display_label(xe_string_from_object(build_info[@"stage"]));
   NSString* version_label = xe_build_version_label(build_info);
   NSString* commit_short = xe_string_from_object(build_info[@"commitShort"]);
 
   if ([channel isEqualToString:@"preview"] && version_label.length > 0) {
+    if (stage_label.length > 0) {
+      return [NSString stringWithFormat:@"%@ Preview %@", stage_label, version_label];
+    }
     return [NSString stringWithFormat:@"Preview %@", version_label];
   }
   if ([channel isEqualToString:@"release"] && version_label.length > 0) {
+    if (stage_label.length > 0) {
+      return [NSString stringWithFormat:@"%@ %@", stage_label, version_label];
+    }
     return [NSString stringWithFormat:@"Version %@", version_label];
   }
   if (commit_short.length > 0) {
@@ -1314,8 +1329,9 @@ static NSDictionary* xe_compat_build_info_from_entry(NSDictionary* entry) {
       xe_string_from_object(nested ? nested[@"buildNumber"] : entry[@"buildNumber"]);
   NSString* commit_short =
       xe_string_from_object(nested ? nested[@"commitShort"] : entry[@"commitShort"]);
+  NSString* stage = xe_string_from_object(nested ? nested[@"stage"] : entry[@"stage"]);
   if (build_id.length == 0 && channel.length == 0 && app_version.length == 0 &&
-      build_number.length == 0 && commit_short.length == 0 && !official) {
+      build_number.length == 0 && commit_short.length == 0 && stage.length == 0 && !official) {
     return nil;
   }
 
@@ -1338,6 +1354,9 @@ static NSDictionary* xe_compat_build_info_from_entry(NSDictionary* entry) {
   if (commit_short.length > 0) {
     build[@"commitShort"] = commit_short;
   }
+  if (stage.length > 0) {
+    build[@"stage"] = stage;
+  }
   return build.count > 0 ? build : nil;
 }
 
@@ -1357,33 +1376,27 @@ static NSDictionary* xe_current_compat_report_build_info(void) {
       build_number = @"1";
     }
 
-    NSString* version_lower = [app_version lowercaseString];
-    NSString* branch = [NSString stringWithUTF8String:XE_BUILD_BRANCH];
-    NSString* branch_lower = [branch lowercaseString];
-    BOOL placeholder_version = [app_version isEqualToString:@"1.0"] &&
-                               [build_number isEqualToString:@"1"];
-    NSString* channel = nil;
-    if ([version_lower containsString:@"preview"] || [version_lower containsString:@"beta"] ||
-        [version_lower containsString:@"alpha"] || [version_lower containsString:@"rc"] ||
-        [version_lower containsString:@"testflight"] ||
-        [branch_lower containsString:@"preview"] || [branch_lower containsString:@"beta"] ||
-        [branch_lower containsString:@"alpha"] || [branch_lower containsString:@"testflight"]) {
-      channel = @"preview";
-    } else if (placeholder_version) {
-      channel = @"self-built";
-    } else if ([branch_lower isEqualToString:@"main"] || [branch_lower isEqualToString:@"master"] ||
-               [branch_lower containsString:@"release"]) {
-      channel = @"release";
-    } else {
-      channel = @"self-built";
-    }
-
-    BOOL official = !placeholder_version && ![channel isEqualToString:@"self-built"];
+    NSString* attested_channel =
+        xe_string_from_object([bundle objectForInfoDictionaryKey:@"XeniOSBuildChannel"]);
+    NSString* build_stage =
+        xe_string_from_object([bundle objectForInfoDictionaryKey:@"XeniOSBuildStage"]);
+    NSString* attestation_payload =
+        xe_string_from_object([bundle objectForInfoDictionaryKey:@"XeniOSBuildAttestationPayload"]);
+    NSString* attestation_signature = xe_string_from_object(
+        [bundle objectForInfoDictionaryKey:@"XeniOSBuildAttestationSignature"]);
+    BOOL has_attested_channel =
+        [attested_channel isEqualToString:@"release"] || [attested_channel isEqualToString:@"preview"];
+    BOOL has_attestation =
+        attestation_payload.length > 0 && attestation_signature.length > 0;
+    NSString* channel =
+        has_attested_channel && has_attestation ? attested_channel : @"self-built";
+    BOOL official = has_attested_channel && has_attestation;
     NSString* commit_short = [NSString stringWithUTF8String:XE_BUILD_COMMIT_SHORT];
     NSString* build_id = [NSString
         stringWithFormat:@"ios-%@-%@-%@", channel, xe_sanitize_build_component(app_version),
                          xe_sanitize_build_component(build_number)];
-    build_info = [[NSDictionary alloc] initWithObjectsAndKeys:
+
+    NSMutableDictionary* mutable_build_info = [NSMutableDictionary dictionaryWithObjectsAndKeys:
         build_id, @"buildId",
         channel, @"channel",
         @(official), @"official",
@@ -1391,6 +1404,16 @@ static NSDictionary* xe_current_compat_report_build_info(void) {
         build_number, @"buildNumber",
         commit_short, @"commitShort",
         nil];
+    if (build_stage.length > 0) {
+      mutable_build_info[@"stage"] = build_stage;
+    }
+    if (has_attestation) {
+      mutable_build_info[@"attestation"] = @{
+        @"payload" : attestation_payload,
+        @"signature" : attestation_signature,
+      };
+    }
+    build_info = [mutable_build_info copy];
   });
   return build_info;
 }
