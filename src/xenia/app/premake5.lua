@@ -169,7 +169,6 @@ project("xenia-app")
           "@executable_path/../Frameworks @loader_path/../Frameworks",
     })
     links({
-      "spirv-cross",
       "xenia-gpu-metal",
       "xenia-ui-metal",
       "dxilconv",

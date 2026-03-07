@@ -314,6 +314,9 @@ jobs:
           retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands')
           # DirectXShaderCompiler has nested submodules needed for dxilconv
           retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 external/SPIRV-Headers external/SPIRV-Tools
+          # Restore non-submodule files in third_party/ that the submodule
+          # cache may have overwritten with stale versions.
+          git checkout -- third_party/*.lua
 
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
             ./xenia-build.py premake
@@ -440,7 +443,7 @@ jobs:
         uses: actions/cache@main
         with:
           path: tools/build/bin/premake5
-          key: ${{ runner.os }}-premake5-${{ hashFiles('third_party/premake-core/**') }}
+          key: ${{ runner.os }}-premake5-ios-${{ hashFiles('.gitmodules') }}
 
       - name: Cache build output
         id: cache-build-ios
@@ -484,6 +487,9 @@ jobs:
 
           # Update submodules (no DirectXShaderCompiler needed for iOS)
           retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler')
+          # Restore non-submodule files in third_party/ that the submodule
+          # cache may have overwritten with stale versions.
+          git checkout -- third_party/*.lua
 
           # Remove any stale premake5 binary left in the submodule tree by
           # a previous cache run.  premake.py checks this path first and
