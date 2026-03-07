@@ -26,8 +26,8 @@ drivers.
   * The build script will automatically detect it if installed in `C:\Qt`
 
 ```
-git clone https://github.com/has207/xenia-edge.git
-cd xenia-edge
+git clone https://github.com/xenios-jp/XeniOS.git
+cd XeniOS
 xb setup
 
 # Build on command line (add --config=release for release):
