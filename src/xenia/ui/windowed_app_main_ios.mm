@@ -2216,7 +2216,8 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 - (void)setHeroArtwork:(UIImage*)image;
 @end
 
-@interface XeniaCompatReportViewController : UITableViewController <PHPickerViewControllerDelegate>
+@interface XeniaCompatReportViewController
+    : UITableViewController <PHPickerViewControllerDelegate, UITextViewDelegate>
 - (instancetype)initWithTitleID:(uint32_t)title_id title:(NSString*)title;
 @end
 
@@ -4539,6 +4540,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 @end
+  UILabel* notes_placeholder_label_;
+  UIBarButtonItem* keyboard_done_button_;
 
 @implementation XeniaCompatReportViewController {
   uint32_t title_id_;
@@ -4558,8 +4561,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     selected_status_ = -1;
     selected_perf_ = -1;
     screenshots_ = [[NSMutableArray alloc] init];
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
     submitting_ = NO;
     self.title = @"Submit Report";
+  [notes_placeholder_label_ release];
+  [keyboard_done_button_ release];
   }
   return self;
 }
@@ -4569,9 +4575,23 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [notes_text_view_ release];
   [screenshots_ release];
   [super dealloc];
+  self.tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+  keyboard_done_button_ =
+      [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                    target:self
+                                                    action:@selector(dismissKeyboard)];
+  keyboard_done_button_.tintColor = [XeniaTheme accent];
 }
 
 - (void)viewDidLoad {
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(keyboardWillChangeFrame:)
+                                               name:UIKeyboardWillChangeFrameNotification
+                                             object:nil];
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(keyboardWillHide:)
+                                               name:UIKeyboardWillHideNotification
+                                             object:nil];
   [super viewDidLoad];
   self.tableView.backgroundColor = [UIColor systemBackgroundColor];
   self.tableView.rowHeight = UITableViewAutomaticDimension;
@@ -4586,6 +4606,236 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+- (void)scrollNotesEditorIntoViewAnimated:(BOOL)animated {
+  NSIndexPath* notes_path = [NSIndexPath indexPathForRow:0 inSection:4];
+  if ([self.tableView numberOfSections] <= notes_path.section ||
+      [self.tableView numberOfRowsInSection:notes_path.section] <= notes_path.row) {
+    return;
+  }
+  [self.tableView scrollToRowAtIndexPath:notes_path
+                        atScrollPosition:UITableViewScrollPositionTop
+                                animated:animated];
+  if (!notes_text_view_) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    CGRect target = [self->notes_text_view_ convertRect:self->notes_text_view_.bounds
+                                                 toView:self.tableView];
+    target = CGRectInset(target, 0.0, -12.0);
+    [self.tableView scrollRectToVisible:target animated:animated];
+  });
+}
+
+- (void)keyboardWillChangeFrame:(NSNotification*)notification {
+  NSDictionary* user_info = notification.userInfo;
+  CGRect keyboard_end =
+      [user_info[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+  CGRect keyboard_in_view = [self.view convertRect:keyboard_end fromView:nil];
+  CGFloat overlap =
+      MAX(0.0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboard_in_view));
+  CGFloat safe_bottom = self.view.safeAreaInsets.bottom;
+  CGFloat bottom_inset = MAX(0.0, overlap - safe_bottom);
+
+  NSTimeInterval duration = [user_info[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+  UIViewAnimationOptions options =
+      (UIViewAnimationOptions)([user_info[UIKeyboardAnimationCurveUserInfoKey] integerValue] << 16);
+
+  [UIView animateWithDuration:duration
+                        delay:0.0
+                      options:options
+                   animations:^{
+                     UIEdgeInsets content_inset = self.tableView.contentInset;
+                     content_inset.bottom = bottom_inset + 16.0;
+                     self.tableView.contentInset = content_inset;
+                     self.tableView.scrollIndicatorInsets = content_inset;
+                   }
+                   completion:nil];
+
+  if ([notes_text_view_ isFirstResponder]) {
+    [self scrollNotesEditorIntoViewAnimated:YES];
+  }
+}
+
+- (void)keyboardWillHide:(NSNotification*)notification {
+  NSDictionary* user_info = notification.userInfo;
+  NSTimeInterval duration = [user_info[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+  UIViewAnimationOptions options =
+      (UIViewAnimationOptions)([user_info[UIKeyboardAnimationCurveUserInfoKey] integerValue] << 16);
+  [UIView animateWithDuration:duration
+                        delay:0.0
+                      options:options
+                   animations:^{
+                     UIEdgeInsets content_inset = self.tableView.contentInset;
+                     content_inset.bottom = 0.0;
+                     self.tableView.contentInset = content_inset;
+                     self.tableView.scrollIndicatorInsets = content_inset;
+                   }
+                   completion:nil];
+}
+
+- (void)textViewDidBeginEditing:(UITextView*)textView {
+  if (textView != notes_text_view_) {
+    return;
+  }
+  self.navigationItem.rightBarButtonItem = keyboard_done_button_;
+  [self scrollNotesEditorIntoViewAnimated:YES];
+}
+
+- (void)textViewDidChange:(UITextView*)textView {
+  if (textView == notes_text_view_) {
+    notes_placeholder_label_.hidden = (textView.text.length > 0);
+  }
+}
+
+- (void)textViewDidEndEditing:(UITextView*)textView {
+  if (textView == notes_text_view_) {
+    self.navigationItem.rightBarButtonItem = nil;
+  }
+}
+
+- (void)viewDidLayoutSubviews {
+  [super viewDidLayoutSubviews];
+  if (!notes_text_view_ || !notes_placeholder_label_) {
+    return;
+  }
+  UIEdgeInsets insets = notes_text_view_.textContainerInset;
+  CGFloat line_padding = notes_text_view_.textContainer.lineFragmentPadding;
+  CGFloat available_width =
+      CGRectGetWidth(notes_text_view_.bounds) - insets.left - insets.right - (line_padding * 2.0);
+  if (available_width > 0.0) {
+    notes_placeholder_label_.preferredMaxLayoutWidth = floor(available_width);
+  }
+}
+
+- (UIButton*)reportOptionButtonWithTitle:(NSString*)title
+                                   color:(UIColor*)color
+                                selected:(BOOL)selected
+                                 enabled:(BOOL)enabled
+                                  target:(SEL)target
+                                     tag:(NSInteger)tag {
+  UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
+  button.translatesAutoresizingMaskIntoConstraints = NO;
+  [button setTitle:title forState:UIControlStateNormal];
+  [button setTitleColor:color forState:UIControlStateNormal];
+  xe_apply_button_title_font(button, UIFontTextStyleCaption1, 13.0, UIFontWeightSemibold);
+  button.contentEdgeInsets = UIEdgeInsetsMake(6.0, 12.0, 6.0, 12.0);
+  button.backgroundColor = [color colorWithAlphaComponent:selected ? 0.16 : 0.10];
+  button.layer.cornerRadius = 10.0;
+  button.layer.borderWidth = selected ? 1.0 : 0.0;
+  button.layer.borderColor = [color colorWithAlphaComponent:0.45].CGColor;
+  button.enabled = enabled;
+  button.alpha = enabled ? 1.0 : 0.35;
+  button.tag = tag;
+  [button addTarget:self action:target forControlEvents:UIControlEventTouchUpInside];
+  return button;
+}
+
+- (UITableViewCell*)reportOptionsCellForSection:(NSInteger)section
+                               tableView:(UITableView* __unused)tableView {
+  UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                                  reuseIdentifier:nil] autorelease];
+  cell.selectionStyle = UITableViewCellSelectionStyleNone;
+  cell.backgroundColor = [UIColor clearColor];
+  cell.contentView.backgroundColor = [UIColor clearColor];
+
+  NSArray<NSString*>* keys = section == 2 ? xe_compat_statuses() : xe_compat_perfs();
+  NSArray<NSString*>* labels =
+      section == 2 ? xe_compat_status_labels() : xe_compat_perf_labels();
+
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [XeniaTheme bgSurface];
+  card.layer.cornerRadius = XeniaRadiusXl;
+  card.layer.borderWidth = 0.5;
+  card.layer.borderColor = [XeniaTheme border].CGColor;
+  [cell.contentView addSubview:card];
+  [NSLayoutConstraint activateConstraints:@[
+    [card.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:6.0],
+    [card.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16.0],
+    [card.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-16.0],
+    [card.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-6.0],
+  ]];
+  UIStackView* vertical_stack = [[[UIStackView alloc] init] autorelease];
+  vertical_stack.translatesAutoresizingMaskIntoConstraints = NO;
+  vertical_stack.axis = UILayoutConstraintAxisVertical;
+  vertical_stack.spacing = 10.0;
+  [card addSubview:vertical_stack];
+
+  NSMutableArray<NSArray<NSNumber*>*>* rows = [NSMutableArray array];
+  if (section == 2) {
+    [rows addObject:@[ @0, @1, @2 ]];
+    [rows addObject:@[ @3, @4 ]];
+  } else {
+    [rows addObject:@[ @0, @1 ]];
+    [rows addObject:@[ @2, @3 ]];
+  }
+
+  for (NSArray<NSNumber*>* row_indexes in rows) {
+    UIStackView* row = [[[UIStackView alloc] init] autorelease];
+    row.axis = UILayoutConstraintAxisHorizontal;
+    row.spacing = 10.0;
+    row.alignment = UIStackViewAlignmentLeading;
+    row.distribution = UIStackViewDistributionFillProportionally;
+
+    for (NSNumber* index_number in row_indexes) {
+      NSInteger option_index = [index_number integerValue];
+      NSString* key = keys[option_index];
+      NSString* label = labels[option_index];
+      UIColor* color =
+          section == 2 ? xe_compat_status_color(key) : xe_compat_perf_color(key);
+      BOOL selected = section == 2 ? (option_index == selected_status_)
+                                   : (option_index == selected_perf_);
+      BOOL enabled = YES;
+      if (section == 3) {
+        BOOL force_na = (selected_status_ == 4);
+        enabled = !force_na || option_index == 3;
+      }
+      UIButton* button = [self reportOptionButtonWithTitle:label
+                                                     color:color
+                                                  selected:selected
+                                                   enabled:enabled
+                                                    target:(section == 2)
+                                                               ? @selector(reportStatusButtonTapped:)
+                                                               : @selector(reportPerfButtonTapped:)
+                                                       tag:option_index];
+      [row addArrangedSubview:button];
+    }
+
+    UIView* spacer = [[[UIView alloc] init] autorelease];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer.widthAnchor constraintGreaterThanOrEqualToConstant:1.0].active = YES;
+    [row addArrangedSubview:spacer];
+    [vertical_stack addArrangedSubview:row];
+  }
+
+  [NSLayoutConstraint activateConstraints:@[
+    [vertical_stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:14.0],
+    [vertical_stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+    [vertical_stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+    [vertical_stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
+  ]];
+
+  return cell;
+}
+
+- (void)reportStatusButtonTapped:(UIButton*)sender {
+  selected_status_ = sender.tag;
+  if (selected_status_ == 4) {
+    selected_perf_ = 3;
+  }
+  [self.tableView reloadSections:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(2, 2)]
+                withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)reportPerfButtonTapped:(UIButton*)sender {
+  if (selected_status_ == 4 && sender.tag != 3) {
+    return;
+  }
+  selected_perf_ = sender.tag;
+  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
+                withRowAnimation:UITableViewRowAnimationNone];
+}
+
   return UIInterfaceOrientationPortrait;
 }
 
@@ -4842,9 +5092,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     case 1:
       return 4;
     case 2:
-      return (NSInteger)xe_compat_statuses().count;
+      return 1;
     case 3:
-      return (NSInteger)xe_compat_perfs().count;
+      return 1;
     case 4:
       return 1;
     case 5:
@@ -4924,41 +5174,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   if (indexPath.section == 2 || indexPath.section == 3) {
-    UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-                                                    reuseIdentifier:nil] autorelease];
-    cell.tintColor = [XeniaTheme accent];
-    cell.textLabel.text = @"";
-    NSArray<NSString*>* keys = indexPath.section == 2 ? xe_compat_statuses() : xe_compat_perfs();
-    NSArray<NSString*>* labels =
-        indexPath.section == 2 ? xe_compat_status_labels() : xe_compat_perf_labels();
-    NSString* key = keys[indexPath.row];
-    NSString* label = labels[indexPath.row];
-    UIColor* color =
-        indexPath.section == 2 ? xe_compat_status_color(key) : xe_compat_perf_color(key);
-    XeniaPaddedLabel* pill = xe_make_tag_pill(label, color);
-    [cell.contentView addSubview:pill];
-    [NSLayoutConstraint activateConstraints:@[
-      [pill.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:16],
-      [pill.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
-    ]];
-
-    if (indexPath.section == 2) {
-      cell.accessoryType = indexPath.row == selected_status_ ? UITableViewCellAccessoryCheckmark
-                                                             : UITableViewCellAccessoryNone;
-    } else {
-      BOOL force_na = (selected_status_ == 4);
-      BOOL enabled = !force_na || indexPath.row == 3;
-      cell.accessoryType = indexPath.row == selected_perf_ ? UITableViewCellAccessoryCheckmark
-                                                           : UITableViewCellAccessoryNone;
-      cell.selectionStyle =
-          enabled ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
-      pill.alpha = enabled ? 1.0 : 0.35;
-    }
-    return cell;
+    return [self reportOptionsCellForSection:indexPath.section tableView:tableView];
   }
 
   if (indexPath.section == 4) {
     UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+      notes_text_view_.delegate = self;
                                                     reuseIdentifier:nil] autorelease];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     if (!notes_text_view_) {
@@ -4969,21 +5190,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       xe_apply_text_view_font(notes_text_view_, UIFontTextStyleBody, 15.0, UIFontWeightRegular,
                               NO);
 
-      UIToolbar* keyboard_toolbar =
-          [[[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 320, 44)] autorelease];
-      [keyboard_toolbar sizeToFit];
-      UIBarButtonItem* spacer =
-          [[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
-                                                         target:nil
-                                                         action:nil] autorelease];
-      UIBarButtonItem* done =
-          [[[UIBarButtonItem alloc] initWithTitle:@"Done"
-                                            style:UIBarButtonItemStyleDone
-                                           target:self
-                                           action:@selector(dismissKeyboard)] autorelease];
-      done.tintColor = [XeniaTheme accent];
-      keyboard_toolbar.items = @[ spacer, done ];
-      notes_text_view_.inputAccessoryView = keyboard_toolbar;
+      notes_placeholder_label_ = [[UILabel alloc] init];
+      notes_placeholder_label_.translatesAutoresizingMaskIntoConstraints = NO;
+      notes_placeholder_label_.text = @"Describe your experience (e.g. crashes, graphical "
+                                      @"glitches, audio issues, performance drops)...";
+      notes_placeholder_label_.textColor = [XeniaTheme textMuted];
+      notes_placeholder_label_.numberOfLines = 0;
+      notes_placeholder_label_.lineBreakMode = NSLineBreakByWordWrapping;
+      notes_placeholder_label_.userInteractionEnabled = NO;
+      xe_apply_label_font(notes_placeholder_label_, UIFontTextStyleBody, 15.0,
+                          UIFontWeightRegular);
     }
 
     if (notes_text_view_.superview != cell.contentView) {
@@ -4992,6 +5208,22 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       [NSLayoutConstraint activateConstraints:@[
         [notes_text_view_.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:8],
         [notes_text_view_.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor
+    if (notes_placeholder_label_.superview != cell.contentView) {
+      UIEdgeInsets insets = notes_text_view_.textContainerInset;
+      CGFloat line_padding = notes_text_view_.textContainer.lineFragmentPadding;
+      [cell.contentView addSubview:notes_placeholder_label_];
+      [NSLayoutConstraint activateConstraints:@[
+        [notes_placeholder_label_.topAnchor constraintEqualToAnchor:notes_text_view_.topAnchor
+                                                           constant:insets.top],
+        [notes_placeholder_label_.leadingAnchor
+            constraintEqualToAnchor:notes_text_view_.leadingAnchor
+                           constant:insets.left + line_padding],
+        [notes_placeholder_label_.trailingAnchor
+            constraintEqualToAnchor:notes_text_view_.trailingAnchor
+                           constant:-(insets.right + line_padding)],
+      ]];
+    }
+    notes_placeholder_label_.hidden = (notes_text_view_.text.length > 0);
                                                       constant:-8],
         [notes_text_view_.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor
                                                        constant:8],
@@ -5043,26 +5275,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
-  if (indexPath.section == 2) {
-    selected_status_ = indexPath.row;
-    if (selected_status_ == 4) {
-      selected_perf_ = 3;
-    }
-    [tableView reloadSections:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(2, 2)]
-             withRowAnimation:UITableViewRowAnimationNone];
-    return;
-  }
-
-  if (indexPath.section == 3) {
-    if (selected_status_ == 4 && indexPath.row != 3) {
-      return;
-    }
-    selected_perf_ = indexPath.row;
-    [tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
-             withRowAnimation:UITableViewRowAnimationNone];
-    return;
-  }
 
   if (indexPath.section == 4) {
     [notes_text_view_ becomeFirstResponder];
