@@ -1,4 +1,4 @@
-package jp.xenia.emulator;
+package jp.xenios.emulator;
 
 import android.app.Activity;
 import android.content.Intent;

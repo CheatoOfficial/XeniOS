@@ -1,4 +1,4 @@
-package jp.xenia.emulator;
+package jp.xenios.emulator;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -11,15 +11,15 @@ import android.view.View;
 
 import org.jetbrains.annotations.Nullable;
 
-import jp.xenia.XeniaRuntimeException;
+import jp.xenios.XeniosRuntimeException;
 
 public abstract class WindowedAppActivity extends Activity {
     // The EXTRA_CVARS value literal is also used in the native code.
 
     /**
-     * Name of the Bundle intent extra containing Xenia config variable launch arguments.
+     * Name of the Bundle intent extra containing XeniOS config variable launch arguments.
      */
-    public static final String EXTRA_CVARS = "jp.xenia.emulator.WindowedAppActivity.EXTRA_CVARS";
+    public static final String EXTRA_CVARS = "jp.xenios.emulator.WindowedAppActivity.EXTRA_CVARS";
 
     static {
         System.loadLibrary("xenia-app");
@@ -110,7 +110,7 @@ public abstract class WindowedAppActivity extends Activity {
         mAppContext = initializeWindowedAppOnCreate(windowedAppIdentifier, getAssets());
         if (mAppContext == 0) {
             finish();
-            throw new XeniaRuntimeException(
+            throw new XeniosRuntimeException(
                     "Error initializing the windowed app " + windowedAppIdentifier);
         }
     }
