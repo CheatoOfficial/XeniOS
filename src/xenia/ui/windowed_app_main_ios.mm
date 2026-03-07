@@ -19,6 +19,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <chrono>
 #include <cctype>
 #include <cerrno>
@@ -1219,12 +1221,12 @@ static void xe_apply_text_view_font(UITextView* text_view,
 static XeniaPaddedLabel* xe_make_tag_pill(NSString* text, UIColor* text_color) {
   XeniaPaddedLabel* pill = [[[XeniaPaddedLabel alloc] init] autorelease];
   pill.translatesAutoresizingMaskIntoConstraints = NO;
-  pill.padding = UIEdgeInsetsMake(2, 8, 2, 8);
-  xe_apply_label_font(pill, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
+  pill.padding = UIEdgeInsetsMake(1, 6, 1, 6);
+  xe_apply_label_font(pill, UIFontTextStyleCaption2, 10.0, UIFontWeightMedium);
   pill.text = text ?: @"";
   pill.textColor = text_color ?: [XeniaTheme textMuted];
   pill.backgroundColor = [(text_color ?: [XeniaTheme textMuted]) colorWithAlphaComponent:0.1];
-  pill.layer.cornerRadius = 8.0;
+  pill.layer.cornerRadius = 6.0;
   pill.clipsToBounds = YES;
   [pill setContentHuggingPriority:UILayoutPriorityRequired
                           forAxis:UILayoutConstraintAxisHorizontal];
@@ -1269,29 +1271,22 @@ static NSArray<NSString*>* xe_compat_perf_labels(void) {
   return @[ @"Great", @"OK", @"Poor", @"N/A" ];
 }
 
-static CGFloat xe_compat_hero_height_for_width(CGFloat width) {
+static CGFloat xe_compat_hero_height_for_width(CGFloat width,
+                                               UIImage* background_art = nil) {
   CGFloat hero_width = MAX(width, 0.0);
   if (hero_width <= 0.0) {
     return 286.0;
   }
+  // When background art is available, derive height from the image aspect
+  // ratio so the hero card shows more of the artwork.
+  if (background_art && background_art.size.width > 0.0 &&
+      background_art.size.height > 0.0) {
+    CGFloat image_aspect =
+        background_art.size.width / background_art.size.height;
+    CGFloat derived = floor(hero_width / image_aspect);
+    return MIN(360.0, MAX(240.0, derived));
+  }
   return MIN(360.0, MAX(286.0, floor(hero_width * 0.74)));
-}
-
-static CGRect xe_compat_background_contents_rect(UIImage* image, CGSize bounds_size) {
-  if (!image || image.size.width <= 0.0 || image.size.height <= 0.0 || bounds_size.width <= 0.0 ||
-      bounds_size.height <= 0.0) {
-    return CGRectMake(0.0, 0.0, 1.0, 1.0);
-  }
-
-  CGFloat image_aspect = image.size.width / image.size.height;
-  CGFloat bounds_aspect = bounds_size.width / bounds_size.height;
-  if (image_aspect <= bounds_aspect + 0.01) {
-    return CGRectMake(0.0, 0.0, 1.0, 1.0);
-  }
-
-  CGFloat visible_width = bounds_aspect / image_aspect;
-  visible_width = MIN(MAX(visible_width, 0.01), 1.0);
-  return CGRectMake(0.0, 0.0, visible_width, 1.0);
 }
 
 static NSString* xe_device_machine(void) {
@@ -1905,6 +1900,314 @@ typedef void (^IOSProfileStatusHandler)(NSString* status_message);
                           title:(NSString*)title
                            host:(id<XeniaGameContentHost>)host;
 @end
+
+// ---------------------------------------------------------------------------
+// Hero glow palette extraction – samples game artwork to produce primary and
+// secondary tint colors for the animated radial-wave glow on the compat sheet.
+// ---------------------------------------------------------------------------
+
+static BOOL xe_color_to_rgb_components(UIColor* color, CGFloat* r, CGFloat* g,
+                                       CGFloat* b, CGFloat* a) {
+  if (!color || !r || !g || !b || !a) return NO;
+  if ([color getRed:r green:g blue:b alpha:a]) return YES;
+  CGFloat white = 0.0;
+  if ([color getWhite:&white alpha:a]) {
+    *r = white;
+    *g = white;
+    *b = white;
+    return YES;
+  }
+  return NO;
+}
+
+static UIColor* xe_blend_rgb_colors(UIColor* a, UIColor* b, CGFloat amount) {
+  if (!a) return b ?: [XeniaTheme accent];
+  if (!b) return a;
+  CGFloat ra = 0.0, ga = 0.0, ba = 0.0, aa = 1.0;
+  CGFloat rb = 0.0, gb = 0.0, bb = 0.0, ab = 1.0;
+  if (!xe_color_to_rgb_components(a, &ra, &ga, &ba, &aa) ||
+      !xe_color_to_rgb_components(b, &rb, &gb, &bb, &ab)) {
+    return a;
+  }
+  CGFloat t = MIN(1.0, MAX(0.0, amount));
+  return [UIColor colorWithRed:ra + (rb - ra) * t
+                         green:ga + (gb - ga) * t
+                          blue:ba + (bb - ba) * t
+                         alpha:aa + (ab - aa) * t];
+}
+
+static CGFloat xe_color_luma(UIColor* color) {
+  CGFloat r = 0.0, g = 0.0, b = 0.0, a = 1.0;
+  if (!xe_color_to_rgb_components(color, &r, &g, &b, &a)) return 0.0;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+static CGFloat xe_wrap_unit(CGFloat value) {
+  CGFloat wrapped = fmod(value, 1.0);
+  if (wrapped < 0.0) wrapped += 1.0;
+  return wrapped;
+}
+
+static CGFloat xe_shortest_hue_delta(CGFloat from, CGFloat to) {
+  CGFloat delta = xe_wrap_unit(to) - xe_wrap_unit(from);
+  if (delta > 0.5) delta -= 1.0;
+  if (delta < -0.5) delta += 1.0;
+  return delta;
+}
+
+typedef struct {
+  UIColor* primary;
+  UIColor* secondary;
+} XEHeroGlowPalette;
+
+static double xe_hue_from_rgb(double r, double g, double b) {
+  double max_v = std::max({r, g, b});
+  double min_v = std::min({r, g, b});
+  double delta = max_v - min_v;
+  if (delta <= 1e-6) return 0.0;
+  double h = 0.0;
+  if (max_v == r) {
+    h = (g - b) / delta;
+  } else if (max_v == g) {
+    h = 2.0 + (b - r) / delta;
+  } else {
+    h = 4.0 + (r - g) / delta;
+  }
+  h /= 6.0;
+  if (h < 0.0) h += 1.0;
+  return h;
+}
+
+static UIColor* xe_color_from_weighted_rgb(double r, double g, double b,
+                                           double weight) {
+  if (weight <= 0.0) return nil;
+  return [UIColor colorWithRed:(CGFloat)(r / weight)
+                         green:(CGFloat)(g / weight)
+                          blue:(CGFloat)(b / weight)
+                         alpha:1.0];
+}
+
+static UIColor* xe_adjusted_glow_color(UIColor* color, BOOL secondary) {
+  if (!color) return [XeniaTheme accent];
+  CGFloat h = 0.0, s = 0.0, v = 0.0, a = 1.0;
+  if (![color getHue:&h saturation:&s brightness:&v alpha:&a]) {
+    CGFloat r = 0.0, g = 0.0, b = 0.0;
+    if (![color getRed:&r green:&g blue:&b alpha:&a]) {
+      return [XeniaTheme accent];
+    }
+    color = [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    if (![color getHue:&h saturation:&s brightness:&v alpha:&a]) {
+      return [XeniaTheme accent];
+    }
+  }
+
+  UIColor* mint = [XeniaTheme accent];
+  CGFloat mh = 0.0, ms = 0.0, mv = 0.0, ma = 1.0;
+  [mint getHue:&mh saturation:&ms brightness:&mv alpha:&ma];
+  (void)ms;
+  (void)mv;
+  (void)ma;
+
+  if (s < 0.11) {
+    CGFloat hue = xe_wrap_unit(mh + xe_shortest_hue_delta(mh, h) * 0.22);
+    CGFloat sat = secondary ? 0.30 : 0.36;
+    CGFloat val = MIN(1.0, MAX(secondary ? 0.56 : 0.62, v * (secondary ? 1.20 : 1.28)));
+    return [UIColor colorWithHue:hue saturation:sat brightness:val alpha:1.0];
+  }
+
+  h = xe_wrap_unit(h);
+  s = MIN(0.98, MAX(secondary ? 0.40 : 0.48, s * (secondary ? 1.36 : 1.52)));
+  v = MIN(1.0, MAX(secondary ? 0.58 : 0.64,
+      v * (secondary ? 1.24 : 1.34) + (secondary ? 0.02 : 0.05)));
+  if (secondary) {
+    h = xe_wrap_unit(h + xe_shortest_hue_delta(h, mh) * 0.05);
+  }
+  return [UIColor colorWithHue:h saturation:s brightness:v alpha:1.0];
+}
+
+static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
+  XEHeroGlowPalette palette;
+  palette.primary = [XeniaTheme accent];
+  palette.secondary = [XeniaTheme accentHover];
+  if (!image || !image.CGImage) return palette;
+
+  static constexpr size_t kSampleW = 40;
+  static constexpr size_t kSampleH = 56;
+  static constexpr size_t kHueBins = 24;
+  static constexpr size_t kBytesPerPixel = 4;
+  static constexpr size_t kStride = kSampleW * kBytesPerPixel;
+  static constexpr double kTopIgnoreRatio = 0.20;
+  uint8_t pixels[kSampleH][kStride];
+  memset(pixels, 0, sizeof(pixels));
+
+  CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+  if (!color_space) return palette;
+  CGContextRef ctx = CGBitmapContextCreate(
+      pixels, kSampleW, kSampleH, 8, kStride, color_space,
+      kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+  CGColorSpaceRelease(color_space);
+  if (!ctx) return palette;
+  CGContextSetInterpolationQuality(ctx, kCGInterpolationLow);
+  CGContextDrawImage(ctx, CGRectMake(0, 0, kSampleW, kSampleH), image.CGImage);
+  CGContextRelease(ctx);
+
+  double hue_weight[kHueBins] = {};
+  double hue_r[kHueBins] = {};
+  double hue_g[kHueBins] = {};
+  double hue_b[kHueBins] = {};
+  double primary_hue_weight[kHueBins] = {};
+  double primary_hue_r[kHueBins] = {};
+  double primary_hue_g[kHueBins] = {};
+  double primary_hue_b[kHueBins] = {};
+  double accent_hue_weight[kHueBins] = {};
+  double accent_hue_r[kHueBins] = {};
+  double accent_hue_g[kHueBins] = {};
+  double accent_hue_b[kHueBins] = {};
+  double neutral_r = 0.0, neutral_g = 0.0, neutral_b = 0.0, neutral_w = 0.0;
+  double total_r = 0.0, total_g = 0.0, total_b = 0.0, total_w = 0.0;
+
+  const size_t top_ignore_row =
+      (size_t)floor((double)kSampleH * kTopIgnoreRatio);
+  const double usable_rows = (double)(kSampleH - top_ignore_row);
+  for (size_t y = top_ignore_row; y < kSampleH; ++y) {
+    double row_t =
+        usable_rows > 0.0 ? ((double)(y - top_ignore_row) / usable_rows) : 0.0;
+    for (size_t x = 0; x < kSampleW; ++x) {
+      size_t idx = x * kBytesPerPixel;
+      double r = pixels[y][idx] / 255.0;
+      double g = pixels[y][idx + 1] / 255.0;
+      double b = pixels[y][idx + 2] / 255.0;
+      double a = pixels[y][idx + 3] / 255.0;
+      if (a < 0.10) continue;
+
+      double max_v = std::max({r, g, b});
+      double min_v = std::min({r, g, b});
+      double delta = max_v - min_v;
+      double sat = max_v > 1e-6 ? (delta / max_v) : 0.0;
+      double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      if (luma < 0.02) continue;
+
+      double center_x = ((double)x + 0.5) / (double)kSampleW;
+      double center_bias = 0.70 + 0.30 * (1.0 - fabs(center_x - 0.5) * 2.0);
+      double vertical_bias = 0.86 + 0.14 * row_t;
+      double base_w = a * center_bias * vertical_bias;
+      double top_bias = 1.28 - row_t * 0.84;
+      double bottom_bias = 0.30 + row_t * 1.18;
+
+      double total_weight = base_w * (0.12 + luma * 0.72 + sat * 0.64);
+      total_r += r * total_weight;
+      total_g += g * total_weight;
+      total_b += b * total_weight;
+      total_w += total_weight;
+
+      if (sat >= 0.12) {
+        double hue = xe_hue_from_rgb(r, g, b);
+        size_t bin = (size_t)floor(hue * (double)kHueBins) % kHueBins;
+        double weight = base_w * (0.16 + sat * 2.05 + luma * 0.82);
+        hue_weight[bin] += weight;
+        hue_r[bin] += r * weight;
+        hue_g[bin] += g * weight;
+        hue_b[bin] += b * weight;
+        double primary_weight = weight * top_bias;
+        primary_hue_weight[bin] += primary_weight;
+        primary_hue_r[bin] += r * primary_weight;
+        primary_hue_g[bin] += g * primary_weight;
+        primary_hue_b[bin] += b * primary_weight;
+        double accent_weight = weight * bottom_bias;
+        accent_hue_weight[bin] += accent_weight;
+        accent_hue_r[bin] += r * accent_weight;
+        accent_hue_g[bin] += g * accent_weight;
+        accent_hue_b[bin] += b * accent_weight;
+      } else {
+        double neutral_weight = base_w * (0.14 + luma * 0.86);
+        neutral_r += r * neutral_weight;
+        neutral_g += g * neutral_weight;
+        neutral_b += b * neutral_weight;
+        neutral_w += neutral_weight;
+      }
+    }
+  }
+
+  size_t primary_bin = 0;
+  for (size_t i = 1; i < kHueBins; ++i) {
+    if (primary_hue_weight[i] > primary_hue_weight[primary_bin]) primary_bin = i;
+  }
+  if (primary_hue_weight[primary_bin] <= 0.0) {
+    for (size_t i = 1; i < kHueBins; ++i) {
+      if (hue_weight[i] > hue_weight[primary_bin]) primary_bin = i;
+    }
+  }
+
+  UIColor* primary = nil;
+  UIColor* secondary = nil;
+  if (primary_hue_weight[primary_bin] > 0.0) {
+    primary = xe_color_from_weighted_rgb(
+        primary_hue_r[primary_bin], primary_hue_g[primary_bin],
+        primary_hue_b[primary_bin], primary_hue_weight[primary_bin]);
+  } else if (hue_weight[primary_bin] > 0.0) {
+    primary = xe_color_from_weighted_rgb(hue_r[primary_bin], hue_g[primary_bin],
+                                         hue_b[primary_bin],
+                                         hue_weight[primary_bin]);
+  }
+  if (!primary) {
+    primary = xe_color_from_weighted_rgb(total_r, total_g, total_b, total_w);
+  }
+
+  if (accent_hue_weight[primary_bin] > 0.0 ||
+      hue_weight[primary_bin] > 0.0) {
+    size_t secondary_bin = kHueBins;
+    for (size_t i = 0; i < kHueBins; ++i) {
+      if (i == primary_bin) continue;
+      size_t distance =
+          (i > primary_bin) ? (i - primary_bin) : (primary_bin - i);
+      distance = std::min(distance, kHueBins - distance);
+      if (distance < 2) continue;
+      if (accent_hue_weight[i] < accent_hue_weight[primary_bin] * 0.24 &&
+          hue_weight[i] < hue_weight[primary_bin] * 0.24) {
+        continue;
+      }
+      double i_weight =
+          accent_hue_weight[i] > 0.0 ? accent_hue_weight[i] : hue_weight[i];
+      double best_weight =
+          (secondary_bin == kHueBins)
+              ? -1.0
+              : (accent_hue_weight[secondary_bin] > 0.0
+                     ? accent_hue_weight[secondary_bin]
+                     : hue_weight[secondary_bin]);
+      if (i_weight > best_weight) {
+        secondary_bin = i;
+      }
+    }
+    if (secondary_bin != kHueBins) {
+      if (accent_hue_weight[secondary_bin] > 0.0) {
+        secondary = xe_color_from_weighted_rgb(
+            accent_hue_r[secondary_bin], accent_hue_g[secondary_bin],
+            accent_hue_b[secondary_bin], accent_hue_weight[secondary_bin]);
+      } else {
+        secondary = xe_color_from_weighted_rgb(
+            hue_r[secondary_bin], hue_g[secondary_bin],
+            hue_b[secondary_bin], hue_weight[secondary_bin]);
+      }
+    }
+  }
+
+  if (!secondary && neutral_w > 0.0) {
+    secondary =
+        xe_color_from_weighted_rgb(neutral_r, neutral_g, neutral_b, neutral_w);
+  }
+  if (!secondary) {
+    secondary =
+        primary ? xe_blend_rgb_colors(primary, [XeniaTheme accentHover], 0.28)
+                : [XeniaTheme accentHover];
+  }
+  if (!primary) {
+    primary = [XeniaTheme accent];
+  }
+
+  palette.primary = xe_adjusted_glow_color(primary, NO);
+  palette.secondary = xe_adjusted_glow_color(secondary, YES);
+  return palette;
+}
 
 @interface XeniaGameCompatibilityViewController : UITableViewController
 - (instancetype)initWithTitleID:(uint32_t)title_id
@@ -2645,6 +2948,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   NSDictionary* compat_info_;
   UIImage* hero_artwork_;
   UIImage* hero_background_artwork_;
+  CAGradientLayer* hero_background_gradient_layer_;
+  CAGradientLayer* hero_wave_layer_a_;
+  CAGradientLayer* hero_wave_layer_b_;
+  CAGradientLayer* hero_wave_layer_c_;
+  UIColor* hero_glow_color_;
+  UIColor* hero_glow_secondary_color_;
+  UIView* hero_handle_view_;
+  UILabel* hero_sheet_title_label_;
+  UIButton* hero_close_button_;
+  UIStackView* hero_content_stack_;
   UIView* hero_header_view_;
   UIView* hero_background_view_;
   UIView* hero_header_card_view_;
@@ -2673,6 +2986,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (self) {
     title_id_ = title_id;
     game_title_ = [title copy];
+    hero_glow_color_ = [[XeniaTheme accent] retain];
+    hero_glow_secondary_color_ = [[XeniaTheme accentHover] retain];
     compat_info_ = [compat_data retain];
     discussion_reports_ = [[NSMutableArray alloc] init];
     discussion_expanded_report_indexes_ = [[NSMutableSet alloc] init];
@@ -2688,9 +3003,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [hero_background_view_ removeFromSuperview];
   [game_title_ release];
+  [hero_handle_view_ release];
+  [hero_sheet_title_label_ release];
+  [hero_close_button_ release];
+  [hero_content_stack_ release];
   [compat_info_ release];
   [hero_artwork_ release];
   [hero_background_artwork_ release];
+  [hero_background_gradient_layer_ release];
+  [hero_wave_layer_a_ release];
+  [hero_wave_layer_b_ release];
+  [hero_wave_layer_c_ release];
+  [hero_glow_color_ release];
+  [hero_glow_secondary_color_ release];
   [hero_header_view_ release];
   [hero_background_view_ release];
   [hero_header_card_view_ release];
@@ -2711,6 +3036,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)setHeroArtwork:(UIImage*)image {
   [hero_artwork_ release];
+  // Re-layout so the hero height adapts to the image's aspect ratio.
+  if ([self isViewLoaded]) {
+    [self layoutHeroHeaderIfNeeded];
+  }
   hero_artwork_ = [image retain];
 }
 
@@ -2734,17 +3063,234 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   hero_header_backdrop_view_.image = display;
   hero_header_backdrop_view_.hidden = (display == nil);
   hero_header_backdrop_view_.layer.contentsRect = hero_background_artwork_
-      ? xe_compat_background_contents_rect(display, hero_header_card_view_.bounds.size)
+      ? CGRectMake(0.0, 0.0, 1.0, 1.0)
       : CGRectMake(0.0, 0.18, 1.0, 0.82);
-  hero_header_blur_view_.alpha = hero_background_artwork_ ? 0.22 : 0.30;
   hero_header_card_view_.backgroundColor =
       display ? [XeniaTheme bgSurface] : [XeniaTheme bgSurface2];
-  hero_header_scrim_layer_.colors = @[
-    (id)[UIColor colorWithWhite:0.0 alpha:0.10].CGColor,
-    (id)[UIColor colorWithWhite:0.0 alpha:0.40].CGColor,
-    (id)[UIColor colorWithWhite:0.0 alpha:0.82].CGColor,
+  [self applyHeroGlowColors];
+}
+
+- (void)updateHeroGlowColorFromImage:(UIImage*)image {
+  if (!image) return;
+  XEHeroGlowPalette palette = xe_extract_hero_glow_palette(image);
+  UIColor* primary = palette.primary ?: [XeniaTheme accent];
+  UIColor* secondary = palette.secondary ?: [XeniaTheme accentHover];
+  [hero_glow_color_ release];
+  hero_glow_color_ = [primary retain];
+  [hero_glow_secondary_color_ release];
+  hero_glow_secondary_color_ = [secondary retain];
+  [self applyHeroGlowColors];
+}
+
+- (void)applyHeroGlowColors {
+  if (!hero_background_gradient_layer_) return;
+
+  UIColor* primary = hero_glow_color_ ?: [XeniaTheme accent];
+  UIColor* secondary = hero_glow_secondary_color_
+      ?: xe_blend_rgb_colors(primary, [XeniaTheme accentHover], 0.26);
+  UIColor* tertiary = xe_blend_rgb_colors(primary, secondary, 0.34);
+  CGFloat avg_luma =
+      xe_color_luma(primary) * 0.70 + xe_color_luma(secondary) * 0.30;
+  BOOL has_background_art = (hero_background_artwork_ != nil);
+  if (hero_header_backdrop_view_) {
+    if (has_background_art) {
+      hero_header_backdrop_view_.alpha =
+          MIN(0.96, MAX(0.78, 0.94 - avg_luma * 0.20));
+    } else {
+      hero_header_backdrop_view_.alpha =
+          MIN(0.88, MAX(0.62, 0.82 - avg_luma * 0.24));
+    }
+  }
+  if (hero_header_blur_view_) {
+    if (has_background_art) {
+      hero_header_blur_view_.alpha =
+          MIN(0.36, MAX(0.14, 0.14 + avg_luma * 0.14));
+    } else {
+      hero_header_blur_view_.alpha =
+          MIN(0.60, MAX(0.30, 0.36 + avg_luma * 0.18));
+    }
+  }
+  if (hero_header_scrim_layer_) {
+    CGFloat top_alpha = MIN(0.30, MAX(0.10, 0.10 + avg_luma * 0.16));
+    CGFloat mid_alpha = MIN(0.60, MAX(0.38, 0.38 + avg_luma * 0.20));
+    CGFloat bottom_alpha = MIN(0.92, MAX(0.80, 0.80 + avg_luma * 0.12));
+    hero_header_scrim_layer_.colors = @[
+      (id)[UIColor colorWithWhite:0.0 alpha:top_alpha].CGColor,
+      (id)[UIColor colorWithWhite:0.0 alpha:mid_alpha].CGColor,
+      (id)[UIColor colorWithWhite:0.0 alpha:bottom_alpha].CGColor,
+    ];
+    hero_header_scrim_layer_.locations = @[@0.0, @0.58, @1.0];
+  }
+
+  hero_background_gradient_layer_.colors = @[
+    (id)[primary colorWithAlphaComponent:0.28].CGColor,
+    (id)[secondary colorWithAlphaComponent:0.16].CGColor,
+    (id)[tertiary colorWithAlphaComponent:0.08].CGColor,
+    (id)[UIColor clearColor].CGColor,
   ];
-  hero_header_scrim_layer_.locations = @[ @0.0, @0.56, @1.0 ];
+  hero_background_gradient_layer_.locations = @[@0.0, @0.30, @0.66, @1.0];
+
+  if (hero_wave_layer_a_) {
+    hero_wave_layer_a_.colors = @[
+      (id)[primary colorWithAlphaComponent:0.24].CGColor,
+      (id)[primary colorWithAlphaComponent:0.14].CGColor,
+      (id)[primary colorWithAlphaComponent:0.06].CGColor,
+      (id)[UIColor clearColor].CGColor,
+    ];
+  }
+  if (hero_wave_layer_b_) {
+    hero_wave_layer_b_.colors = @[
+      (id)[secondary colorWithAlphaComponent:0.21].CGColor,
+      (id)[secondary colorWithAlphaComponent:0.12].CGColor,
+      (id)[secondary colorWithAlphaComponent:0.05].CGColor,
+      (id)[UIColor clearColor].CGColor,
+    ];
+  }
+  if (hero_wave_layer_c_) {
+    UIColor* cloud = xe_blend_rgb_colors(secondary, primary, 0.24);
+    hero_wave_layer_c_.colors = @[
+      (id)[cloud colorWithAlphaComponent:0.18].CGColor,
+      (id)[cloud colorWithAlphaComponent:0.10].CGColor,
+      (id)[cloud colorWithAlphaComponent:0.04].CGColor,
+      (id)[UIColor clearColor].CGColor,
+    ];
+  }
+}
+
+- (void)layoutHeroHeaderOverlayFrames {
+  if (!hero_header_card_view_) return;
+  CGRect bounds = hero_header_card_view_.bounds;
+  if (CGRectIsEmpty(bounds)) return;
+  CGFloat card_w = bounds.size.width;
+
+  // Handle: centered, 60x6, 8pt from top.
+  CGFloat handle_w = 60.0, handle_h = 6.0;
+  hero_handle_view_.frame =
+      CGRectMake(floor((card_w - handle_w) / 2.0), 8.0, handle_w, handle_h);
+
+  // Sheet title: centered, below handle.
+  CGFloat title_y = CGRectGetMaxY(hero_handle_view_.frame) + 16.0;
+  CGFloat title_max_w = card_w - 72.0 - 60.0;  // left margin + close button area
+  CGSize title_size = [hero_sheet_title_label_ sizeThatFits:CGSizeMake(title_max_w, CGFLOAT_MAX)];
+  hero_sheet_title_label_.frame =
+      CGRectMake(floor((card_w - title_size.width) / 2.0), title_y,
+                 ceil(title_size.width), ceil(title_size.height));
+
+  // Close button: 48x48, right-aligned, vertically centered with title.
+  CGFloat btn_size = 48.0;
+  CGFloat title_center_y = CGRectGetMidY(hero_sheet_title_label_.frame);
+  hero_close_button_.frame =
+      CGRectMake(card_w - 16.0 - btn_size,
+                 floor(title_center_y - btn_size / 2.0), btn_size, btn_size);
+}
+
+- (void)updateHeroGradientFrames {
+  if (!hero_header_card_view_) return;
+  CGRect bounds = hero_header_card_view_.bounds;
+  if (CGRectIsEmpty(bounds)) return;
+  hero_header_scrim_layer_.frame = bounds;
+  hero_background_gradient_layer_.frame = bounds;
+  CGRect wave_frame = CGRectInset(bounds, -bounds.size.width * 0.44,
+                                  -bounds.size.height * 0.86);
+  wave_frame.origin.y -= bounds.size.height * 0.60;
+  hero_wave_layer_a_.frame = wave_frame;
+  hero_wave_layer_b_.frame = wave_frame;
+  hero_wave_layer_c_.frame = wave_frame;
+}
+
+- (void)ensureHeroTopGlowAnimation {
+  if (!hero_wave_layer_a_ || !hero_wave_layer_b_ || !hero_wave_layer_c_ ||
+      UIAccessibilityIsReduceMotionEnabled()) {
+    [hero_wave_layer_a_ removeAllAnimations];
+    [hero_wave_layer_b_ removeAllAnimations];
+    [hero_wave_layer_c_ removeAllAnimations];
+    hero_wave_layer_a_.opacity = 0.08;
+    hero_wave_layer_b_.opacity = 0.06;
+    hero_wave_layer_c_.opacity = 0.05;
+    return;
+  }
+
+  NSArray<CAGradientLayer*>* waves =
+      @[ hero_wave_layer_a_, hero_wave_layer_b_, hero_wave_layer_c_ ];
+  NSArray<NSNumber*>* durations = @[ @19.8, @24.2, @28.4 ];
+  NSArray<NSNumber*>* peaks = @[ @0.13, @0.10, @0.08 ];
+  NSArray<NSNumber*>* scale_y_to = @[ @1.08, @1.10, @1.07 ];
+  NSArray<NSNumber*>* scale_x_to = @[ @1.06, @1.08, @1.05 ];
+
+  for (NSUInteger i = 0; i < waves.count; ++i) {
+    CAGradientLayer* wave = waves[i];
+    NSString* key = [NSString stringWithFormat:@"xenia.hero.wave.%lu.group",
+                                              (unsigned long)i];
+    if ([wave animationForKey:key]) continue;
+
+    double peak = [peaks[i] doubleValue];
+    CAKeyframeAnimation* opacity =
+        [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+    opacity.values = @[
+      @0.02, @(peak * 0.70), @(peak * 0.95), @(peak * 0.50), @0.03,
+      @(peak * 0.82), @0.02
+    ];
+    opacity.keyTimes =
+        @[ @0.0, @0.15, @0.33, @0.51, @0.68, @0.86, @1.0 ];
+    opacity.calculationMode = kCAAnimationLinear;
+
+    CAKeyframeAnimation* scale_y =
+        [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.y"];
+    scale_y.values = @[
+      @0.97, @1.01, scale_y_to[i], @1.02, @0.99, @1.03, @0.97
+    ];
+    scale_y.keyTimes =
+        @[ @0.0, @0.18, @0.36, @0.55, @0.71, @0.88, @1.0 ];
+    scale_y.calculationMode = kCAAnimationLinear;
+
+    CAKeyframeAnimation* scale_x =
+        [CAKeyframeAnimation animationWithKeyPath:@"transform.scale.x"];
+    scale_x.values = @[
+      @0.98, @1.01, scale_x_to[i], @1.01, @0.99, @1.02, @0.98
+    ];
+    scale_x.keyTimes =
+        @[ @0.0, @0.16, @0.34, @0.52, @0.69, @0.87, @1.0 ];
+    scale_x.calculationMode = kCAAnimationLinear;
+
+    CGFloat x_span =
+        wave.bounds.size.width * (0.004 + 0.002 * (CGFloat)i);
+    CGFloat y_span =
+        wave.bounds.size.height * (0.003 + 0.002 * (CGFloat)i);
+    CGFloat x_jitter =
+        (((CGFloat)arc4random_uniform(180) / 100.0) - 0.90) * x_span;
+    CGFloat y_jitter =
+        (((CGFloat)arc4random_uniform(180) / 100.0) - 0.90) * y_span;
+    CAKeyframeAnimation* drift_x =
+        [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    drift_x.values = @[
+      @(-x_span * 0.26), @(x_span * 0.18 + x_jitter),
+      @(x_span * 0.34), @(x_span * -0.08), @(-x_span * 0.22)
+    ];
+    drift_x.keyTimes = @[ @0.0, @0.27, @0.52, @0.78, @1.0 ];
+    drift_x.calculationMode = kCAAnimationLinear;
+    CAKeyframeAnimation* drift_y =
+        [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.y"];
+    drift_y.values = @[
+      @(-y_span * 0.22), @(y_span * 0.20),
+      @(y_span * 0.34 + y_jitter), @(y_span * -0.04),
+      @(-y_span * 0.22)
+    ];
+    drift_y.keyTimes = @[ @0.0, @0.29, @0.58, @0.81, @1.0 ];
+    drift_y.calculationMode = kCAAnimationLinear;
+
+    CAAnimationGroup* group = [CAAnimationGroup animation];
+    group.animations =
+        @[ opacity, scale_y, scale_x, drift_x, drift_y ];
+    group.duration = [durations[i] doubleValue] +
+        ((double)arc4random_uniform(520) / 100.0);
+    group.beginTime = CACurrentMediaTime() +
+        ((double)arc4random_uniform(420) / 100.0);
+    group.repeatCount = HUGE_VALF;
+    group.timingFunction = [CAMediaTimingFunction
+        functionWithName:kCAMediaTimingFunctionLinear];
+    group.removedOnCompletion = NO;
+    [wave addAnimation:group forKey:key];
+  }
 }
 
 - (void)updateHeroHeaderContent {
@@ -2823,15 +3369,26 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return;
   }
 
-  CGRect frame = hero_header_view_.frame;
-  CGFloat height = xe_compat_hero_height_for_width(width);
+  CGFloat height = xe_compat_hero_height_for_width(width, hero_background_artwork_);
   if (!hero_background_view_) {
     hero_background_view_ = [[UIView alloc] initWithFrame:CGRectZero];
-    hero_background_view_.backgroundColor = [UIColor clearColor];
+    hero_background_view_.backgroundColor = [XeniaTheme bgPrimary];
     hero_background_view_.clipsToBounds = NO;
     [hero_background_view_ addSubview:hero_header_view_];
   }
   UIView* host_view = self.navigationController.view ?: self.view.superview ?: self.view;
+  // Push the hero below the dynamic island / status bar safe area.
+  // Use the window's safe area rather than the host view's, because the
+  // host view's insets can be stale during navigation push/pop transitions.
+  CGFloat safe_top = 0.0;
+  if (@available(iOS 11.0, *)) {
+    UIWindow* window = host_view.window ?: self.view.window;
+    safe_top = window ? window.safeAreaInsets.top : host_view.safeAreaInsets.top;
+  }
+  // Start the hero background at the top of the screen (y=0) so it covers
+  // the status bar / dynamic island area, preventing bleed-through during
+  // the sheet slide-up animation. The hero_header_view_ inside is offset
+  // downward by safe_top so content sits below the dynamic island.
   if (host_view && hero_background_view_.superview != host_view) {
     [hero_background_view_ removeFromSuperview];
     [host_view addSubview:hero_background_view_];
@@ -2840,12 +3397,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       host_view ? [self.view convertRect:self.view.bounds toView:host_view] : self.view.bounds;
   CGFloat hero_top = CGRectGetMinY(table_frame);
   hero_background_view_.frame =
-      CGRectMake(CGRectGetMinX(table_frame), hero_top, width, height);
-  if (fabs(frame.size.width - width) > 0.5 || fabs(frame.size.height - height) > 0.5) {
-    frame.size.width = width;
-    frame.size.height = height;
-    hero_header_view_.frame = frame;
-  }
+      CGRectMake(CGRectGetMinX(table_frame), hero_top, width, height + safe_top);
+  hero_header_view_.frame =
+      CGRectMake(0.0, safe_top, width, height);
   CGFloat desired_top_inset =
       CGRectGetMaxY(hero_background_view_.frame) - CGRectGetMinY(table_frame) + 12.0;
   CGFloat relative_offset = self.tableView.contentOffset.y + self.tableView.contentInset.top;
@@ -2890,11 +3444,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     width = UIScreen.mainScreen.bounds.size.width;
   }
 
-  CGFloat height = xe_compat_hero_height_for_width(width);
+  CGFloat height = xe_compat_hero_height_for_width(width, hero_background_artwork_);
   hero_header_view_ = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, width, height)];
   hero_header_view_.backgroundColor = [UIColor clearColor];
   hero_background_view_ = [[UIView alloc] initWithFrame:hero_header_view_.frame];
-  hero_background_view_.backgroundColor = [UIColor clearColor];
+  hero_background_view_.backgroundColor = [XeniaTheme bgPrimary];
   hero_background_view_.clipsToBounds = NO;
   [hero_background_view_ addSubview:hero_header_view_];
 
@@ -2925,42 +3479,85 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   hero_header_scrim_layer_ = [[CAGradientLayer layer] retain];
   [hero_header_card_view_.layer addSublayer:hero_header_scrim_layer_];
 
-  UIView* handle_view = [[[UIView alloc] init] autorelease];
-  handle_view.translatesAutoresizingMaskIntoConstraints = NO;
-  handle_view.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.34];
-  handle_view.layer.cornerRadius = 3.0;
-  [hero_header_card_view_ addSubview:handle_view];
+  // Base glow gradient from the top.
+  hero_background_gradient_layer_ = [[CAGradientLayer layer] retain];
+  [hero_header_card_view_.layer insertSublayer:hero_background_gradient_layer_
+                                         above:hero_header_scrim_layer_];
 
-  UILabel* sheet_title_label = [[[UILabel alloc] init] autorelease];
-  sheet_title_label.translatesAutoresizingMaskIntoConstraints = NO;
-  sheet_title_label.text = @"Compatibility";
-  sheet_title_label.textColor = [XeniaTheme textPrimary];
-  xe_apply_label_font(sheet_title_label, UIFontTextStyleTitle2, 24.0, UIFontWeightSemibold);
-  [hero_header_card_view_ addSubview:sheet_title_label];
+  // Three layered radial-glow waves.
+  hero_wave_layer_a_ = [[CAGradientLayer layer] retain];
+  hero_wave_layer_a_.type = kCAGradientLayerRadial;
+  hero_wave_layer_a_.locations = @[@0.00, @0.34, @0.68, @1.00];
+  hero_wave_layer_a_.startPoint = CGPointMake(0.52, -0.44);
+  hero_wave_layer_a_.endPoint = CGPointMake(0.52, 1.00);
+  hero_wave_layer_a_.opacity = 0.06;
 
-  UIButton* close_button = xe_make_ios_sheet_close_button(self, @selector(doneTapped:));
-  [hero_header_card_view_ addSubview:close_button];
+  hero_wave_layer_b_ = [[CAGradientLayer layer] retain];
+  hero_wave_layer_b_.type = kCAGradientLayerRadial;
+  hero_wave_layer_b_.locations = @[@0.00, @0.36, @0.70, @1.00];
+  hero_wave_layer_b_.startPoint = CGPointMake(0.34, -0.52);
+  hero_wave_layer_b_.endPoint = CGPointMake(0.36, 1.00);
+  hero_wave_layer_b_.opacity = 0.05;
 
-  UIStackView* content_stack = [[[UIStackView alloc] init] autorelease];
-  content_stack.translatesAutoresizingMaskIntoConstraints = NO;
-  content_stack.axis = UILayoutConstraintAxisVertical;
-  content_stack.spacing = 8.0;
-  [hero_header_card_view_ addSubview:content_stack];
+  hero_wave_layer_c_ = [[CAGradientLayer layer] retain];
+  hero_wave_layer_c_.type = kCAGradientLayerRadial;
+  hero_wave_layer_c_.locations = @[@0.00, @0.40, @0.72, @1.00];
+  hero_wave_layer_c_.startPoint = CGPointMake(0.70, -0.50);
+  hero_wave_layer_c_.endPoint = CGPointMake(0.68, 1.00);
+  hero_wave_layer_c_.opacity = 0.04;
+
+  [hero_header_card_view_.layer insertSublayer:hero_wave_layer_a_
+                                         above:hero_background_gradient_layer_];
+  [hero_header_card_view_.layer insertSublayer:hero_wave_layer_b_
+                                         above:hero_wave_layer_a_];
+  [hero_header_card_view_.layer insertSublayer:hero_wave_layer_c_
+                                         above:hero_wave_layer_b_];
+
+  [self applyHeroGlowColors];
+
+  // Handle, sheet title, and close button use manual frames (not auto
+  // layout) so they survive hero_background_view_ remove/re-add cycles
+  // across navigation push/pop transitions without constraint breakage.
+  hero_handle_view_ = [[UIView alloc] init];
+  hero_handle_view_.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.34];
+  hero_handle_view_.layer.cornerRadius = 3.0;
+  [hero_header_card_view_ addSubview:hero_handle_view_];
+
+  hero_sheet_title_label_ = [[UILabel alloc] init];
+  hero_sheet_title_label_.text = @"Compatibility";
+  hero_sheet_title_label_.textColor = [XeniaTheme textPrimary];
+  hero_sheet_title_label_.textAlignment = NSTextAlignmentCenter;
+  xe_apply_label_font(hero_sheet_title_label_, UIFontTextStyleTitle2, 18.0, UIFontWeightSemibold);
+  [hero_header_card_view_ addSubview:hero_sheet_title_label_];
+
+  hero_close_button_ = [xe_make_ios_sheet_close_button(self, @selector(doneTapped:)) retain];
+  // Convert close button from auto layout to manual frame positioning.
+  for (NSLayoutConstraint* c in [hero_close_button_.constraints copy]) {
+    c.active = NO;
+  }
+  hero_close_button_.translatesAutoresizingMaskIntoConstraints = YES;
+  [hero_header_card_view_ addSubview:hero_close_button_];
+
+  hero_content_stack_ = [[UIStackView alloc] init];
+  hero_content_stack_.translatesAutoresizingMaskIntoConstraints = NO;
+  hero_content_stack_.axis = UILayoutConstraintAxisVertical;
+  hero_content_stack_.spacing = 8.0;
+  [hero_header_card_view_ addSubview:hero_content_stack_];
 
   hero_title_label_ = [[UILabel alloc] init];
   hero_title_label_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_title_label_.textColor = [XeniaTheme textPrimary];
   hero_title_label_.numberOfLines = 2;
   hero_title_label_.lineBreakMode = NSLineBreakByTruncatingTail;
-  xe_apply_label_font(hero_title_label_, UIFontTextStyleLargeTitle, 30.0, UIFontWeightBold);
-  [content_stack addArrangedSubview:hero_title_label_];
+  xe_apply_label_font(hero_title_label_, UIFontTextStyleLargeTitle, 26.0, UIFontWeightBold);
+  [hero_content_stack_ addArrangedSubview:hero_title_label_];
 
   hero_tid_label_ = [[UILabel alloc] init];
   hero_tid_label_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_tid_label_.textColor = [XeniaTheme textSecondary];
-  xe_apply_monospaced_label_font(hero_tid_label_, UIFontTextStyleBody, 14.0,
+  xe_apply_monospaced_label_font(hero_tid_label_, UIFontTextStyleBody, 13.0,
                                  UIFontWeightRegular);
-  [content_stack addArrangedSubview:hero_tid_label_];
+  [hero_content_stack_ addArrangedSubview:hero_tid_label_];
 
   hero_pills_stack_ = [[UIStackView alloc] init];
   hero_pills_stack_.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2974,11 +3571,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   hero_status_pill_ = [[XeniaPaddedLabel alloc] init];
   hero_status_pill_.translatesAutoresizingMaskIntoConstraints = NO;
-  hero_status_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  hero_status_pill_.padding = UIEdgeInsetsMake(2, 7, 2, 7);
   hero_status_pill_.textAlignment = NSTextAlignmentCenter;
-  hero_status_pill_.layer.cornerRadius = 8.0;
+  hero_status_pill_.layer.cornerRadius = 7.0;
   hero_status_pill_.clipsToBounds = YES;
-  xe_apply_label_font(hero_status_pill_, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
+  xe_apply_label_font(hero_status_pill_, UIFontTextStyleCaption1, 11.0, UIFontWeightMedium);
   [hero_status_pill_ setContentHuggingPriority:UILayoutPriorityRequired
                                        forAxis:UILayoutConstraintAxisHorizontal];
   [hero_status_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
@@ -2987,11 +3584,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   hero_perf_pill_ = [[XeniaPaddedLabel alloc] init];
   hero_perf_pill_.translatesAutoresizingMaskIntoConstraints = NO;
-  hero_perf_pill_.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  hero_perf_pill_.padding = UIEdgeInsetsMake(2, 7, 2, 7);
   hero_perf_pill_.textAlignment = NSTextAlignmentCenter;
-  hero_perf_pill_.layer.cornerRadius = 8.0;
+  hero_perf_pill_.layer.cornerRadius = 7.0;
   hero_perf_pill_.clipsToBounds = YES;
-  xe_apply_label_font(hero_perf_pill_, UIFontTextStyleCaption1, 12.0, UIFontWeightMedium);
+  xe_apply_label_font(hero_perf_pill_, UIFontTextStyleCaption1, 11.0, UIFontWeightMedium);
   [hero_perf_pill_ setContentHuggingPriority:UILayoutPriorityRequired
                                      forAxis:UILayoutConstraintAxisHorizontal];
   [hero_perf_pill_ setContentCompressionResistancePriority:UILayoutPriorityRequired
@@ -3010,21 +3607,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [hero_pills_stack_.bottomAnchor constraintEqualToAnchor:pills_row.bottomAnchor],
     [hero_pills_stack_.trailingAnchor constraintLessThanOrEqualToAnchor:pills_row.trailingAnchor],
   ]];
-  [content_stack addArrangedSubview:pills_row];
+  [hero_content_stack_ addArrangedSubview:pills_row];
 
   hero_updated_label_ = [[UILabel alloc] init];
   hero_updated_label_.translatesAutoresizingMaskIntoConstraints = NO;
   hero_updated_label_.textColor = [XeniaTheme textMuted];
   hero_updated_label_.numberOfLines = 1;
-  xe_apply_label_font(hero_updated_label_, UIFontTextStyleFootnote, 13.0, UIFontWeightRegular);
-  [content_stack addArrangedSubview:hero_updated_label_];
+  xe_apply_label_font(hero_updated_label_, UIFontTextStyleFootnote, 12.0, UIFontWeightRegular);
+  [hero_content_stack_ addArrangedSubview:hero_updated_label_];
 
   [NSLayoutConstraint activateConstraints:@[
     [hero_header_card_view_.topAnchor constraintEqualToAnchor:hero_header_view_.topAnchor],
-    [hero_header_card_view_.leadingAnchor constraintEqualToAnchor:hero_header_view_.leadingAnchor
-                                                         constant:0.0],
-    [hero_header_card_view_.trailingAnchor constraintEqualToAnchor:hero_header_view_.trailingAnchor
-                                                          constant:0.0],
+    [hero_header_card_view_.leadingAnchor constraintEqualToAnchor:hero_header_view_.leadingAnchor],
+    [hero_header_card_view_.trailingAnchor constraintEqualToAnchor:hero_header_view_.trailingAnchor],
     [hero_header_card_view_.bottomAnchor constraintEqualToAnchor:hero_header_view_.bottomAnchor],
     [hero_header_backdrop_view_.topAnchor constraintEqualToAnchor:hero_header_card_view_.topAnchor],
     [hero_header_backdrop_view_.leadingAnchor
@@ -3040,28 +3635,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
         constraintEqualToAnchor:hero_header_card_view_.trailingAnchor],
     [hero_header_blur_view_.bottomAnchor
         constraintEqualToAnchor:hero_header_card_view_.bottomAnchor],
-    [handle_view.topAnchor constraintEqualToAnchor:hero_header_card_view_.safeAreaLayoutGuide.topAnchor
-                                          constant:8.0],
-    [handle_view.centerXAnchor constraintEqualToAnchor:hero_header_card_view_.centerXAnchor],
-    [handle_view.widthAnchor constraintEqualToConstant:60.0],
-    [handle_view.heightAnchor constraintEqualToConstant:6.0],
-    [sheet_title_label.topAnchor constraintEqualToAnchor:handle_view.bottomAnchor constant:16.0],
-    [sheet_title_label.centerXAnchor constraintEqualToAnchor:hero_header_card_view_.centerXAnchor],
-    [sheet_title_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:hero_header_card_view_.leadingAnchor
-                                                                 constant:72.0],
-    [sheet_title_label.trailingAnchor constraintLessThanOrEqualToAnchor:close_button.leadingAnchor
-                                                               constant:-12.0],
-    [close_button.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
-                                                constant:-18.0],
-    [close_button.centerYAnchor constraintEqualToAnchor:sheet_title_label.centerYAnchor],
-    [content_stack.leadingAnchor constraintEqualToAnchor:hero_header_card_view_.leadingAnchor
-                                                constant:28.0],
-    [content_stack.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
-                                                 constant:-28.0],
-    [content_stack.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
-                                               constant:-26.0],
-    [content_stack.topAnchor constraintGreaterThanOrEqualToAnchor:sheet_title_label.bottomAnchor
-                                                         constant:74.0],
+    // content_stack uses auto layout only for leading/trailing/bottom.
+    // No top constraint — its top position is determined by its content height
+    // and the bottom anchor, avoiding any conflict with the manual-frame views above.
+    [hero_content_stack_.leadingAnchor constraintEqualToAnchor:hero_header_card_view_.leadingAnchor
+                                                      constant:28.0],
+    [hero_content_stack_.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
+                                                       constant:-28.0],
+  [self layoutHeroHeaderOverlayFrames];
+    [hero_content_stack_.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
+                                                     constant:-26.0],
   ]];
 
   [hero_header_view_ setNeedsLayout];
@@ -3072,6 +3655,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)loadHeroArtwork {
   if (!title_id_) {
+    [self updateHeroGlowColorFromImage:cached_background];
     return;
   }
 
@@ -3081,6 +3665,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   if (!hero_artwork_) {
+  // If we have artwork but no background, use cover art for the glow.
+  if (!cached_background && hero_artwork_) {
+    [self updateHeroGlowColorFromImage:hero_artwork_];
+  }
+
     UIImage* cached_cover = xe_cached_game_art(title_id_);
     if (cached_cover) {
       [self setHeroArtwork:cached_cover];
@@ -3092,6 +3681,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   const uint32_t expected_title_id = title_id_;
+      [self updateHeroGlowColorFromImage:image];
   if (!cached_background) {
     xe_fetch_game_background_art(expected_title_id, ^(UIImage* image) {
       if (!image || self->title_id_ != expected_title_id) {
@@ -3104,6 +3694,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     });
   }
 
+      if (!self->hero_background_artwork_) {
+        [self updateHeroGlowColorFromImage:image];
+      }
   if (!hero_artwork_) {
     xe_fetch_game_art(expected_title_id, ^(UIImage* image) {
       if (!image || self->title_id_ != expected_title_id) {
@@ -3135,15 +3728,58 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [[NSNotificationCenter defaultCenter] addObserver:self
                                            selector:@selector(onDiscussionDidUpdate:)
                                                name:kXeniaDiscussionDidUpdateNotification
+- (void)viewSafeAreaInsetsDidChange {
+  [super viewSafeAreaInsetsDidChange];
+  // Add bottom safe area inset so the Submit Report card isn't clipped
+  // behind the home indicator.
+  UIEdgeInsets insets = self.tableView.contentInset;
+  CGFloat safe_bottom = 0.0;
+  if (@available(iOS 11.0, *)) {
+    safe_bottom = self.view.safeAreaInsets.bottom;
+  }
+  if (fabs(insets.bottom - safe_bottom) > 0.5) {
+    insets.bottom = safe_bottom;
+    self.tableView.contentInset = insets;
+  }
+}
+
                                              object:nil];
   [self buildHeroHeaderIfNeeded];
   [self loadHeroArtwork];
   [self fetchDiscussion];
+
+  id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+  if (coordinator && coordinator.interactive) {
+    // Interactive swipe-back: don't show hero yet — wait for completion.
+    hero_background_view_.hidden = YES;
+    [coordinator notifyWhenInteractionChangesUsingBlock:^(
+        id<UIViewControllerTransitionCoordinatorContext> context) {
+      if (context.isCancelled) {
+        // Swipe was cancelled — keep hidden, viewWillDisappear will handle.
+        return;
+      }
+      // Swipe committed — show hero now.
+      [self layoutHeroHeaderIfNeeded];
+      [self layoutHeroHeaderOverlayFrames];
+      self->hero_background_view_.hidden = NO;
+    }];
+  } else {
+    // Non-interactive transition (back button, programmatic pop):
+    // show immediately.
+    hero_background_view_.hidden = NO;
+  }
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+  [super viewDidAppear:animated];
+  [self.navigationController setNavigationBarHidden:YES animated:NO];
+  [self layoutHeroHeaderIfNeeded];
+  [self layoutHeroHeaderOverlayFrames];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
-  [self.navigationController setNavigationBarHidden:YES animated:animated];
+  [self.navigationController setNavigationBarHidden:YES animated:NO];
   [self layoutHeroHeaderIfNeeded];
   hero_background_view_.hidden = NO;
 }
@@ -3152,7 +3788,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [super viewWillDisappear:animated];
   hero_background_view_.hidden = YES;
   [hero_background_view_ removeFromSuperview];
-  [self.navigationController setNavigationBarHidden:NO animated:animated];
+  [self layoutHeroHeaderOverlayFrames];
+  [self updateHeroGradientFrames];
+  [self ensureHeroTopGlowAnimation];
+  [self.navigationController setNavigationBarHidden:NO animated:NO];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -3176,6 +3815,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self.navigationController dismissViewControllerAnimated:YES completion:nil];
     return;
   }
+  [self.navigationController setNavigationBarHidden:NO animated:NO];
   [self.navigationController popViewControllerAnimated:YES];
 }
 
@@ -7398,6 +8038,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   const BOOL likely_direct_game = IsISOPath(selected_path) || IsDefaultXexPath(selected_path);
   IOSSelectedContentPackage package_info;
   const BOOL has_content_package_info =
+  navigation_controller.view.backgroundColor = [XeniaTheme bgPrimary];
       xe_read_selected_content_package(selected_path, &package_info, nullptr);
   const BOOL is_launchable_package =
       has_content_package_info && (package_info.content_type == xe::XContentType::kXbox360Title ||
