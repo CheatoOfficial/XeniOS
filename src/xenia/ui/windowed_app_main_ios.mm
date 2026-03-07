@@ -2099,7 +2099,7 @@ std::vector<IOSConfigSection> BuildIOSConfigSections() {
 
   IOSConfigSection compatibility;
   compatibility.title = "Compatibility";
-  compatibility.footer = "Saved to xenia-edge.config.toml in the app Documents folder.";
+  compatibility.footer = "Saved to xenios.config.toml in the app Documents folder.";
   AddBoolSetting(compatibility.items, "gpu_allow_invalid_fetch_constants",
                  "Allow Invalid Fetch Constants",
                  "Unsafe workaround for games with bad fetch constants.", true);
@@ -6269,7 +6269,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   saveButton_.enabled = NO;
 
   NSString* title = saved ? @"Settings Saved" : @"Save Completed With Warnings";
-  NSString* message = saved ? @"Saved to xenia-edge.config.toml."
+  NSString* message = saved ? @"Saved to xenios.config.toml."
                             : @"Some settings could not be applied. Check xenia.log.";
   UIAlertController* alert =
       [UIAlertController alertControllerWithTitle:title
@@ -9030,7 +9030,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   // Initialize cvars with no arguments on iOS (arguments come from config).
   int argc = 1;
-  char arg0[] = "xenia_edge";
+  char arg0[] = "xenios";
   char* argv[] = {arg0};
   char** argv_ptr = argv;
   cvar::ParseLaunchArguments(argc, argv_ptr, "", {});

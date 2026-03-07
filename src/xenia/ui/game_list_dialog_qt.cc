@@ -996,10 +996,8 @@ void GameListDialogQt::OnGameRightClicked(const QPoint& pos) {
     delete dialog;
   } else if (selected == compatibility_action && compatibility_action) {
     // Open the Xenios compatibility tracker with this title ID.
-    const std::string base_url =
-        "https://github.com/xenios-jp/game-compatibility/issues";
-    const std::string url =
-        fmt::format("{}?q=is%3Aissue+{:08X}", base_url, title_id);
+    const std::string base_url = "https://xenios.jp/compatibility";
+    const std::string url = fmt::format("{}?q={:08X}", base_url, title_id);
     QDesktopServices::openUrl(QUrl(SafeQString(url)));
   } else if (selected == remove_action) {
     RemoveTitleFromDashboard(title_id);

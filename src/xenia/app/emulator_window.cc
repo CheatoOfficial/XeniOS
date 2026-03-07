@@ -265,7 +265,7 @@ using xe::ui::UIEvent;
 using namespace xe::hid;
 using namespace xe::gpu;
 
-constexpr std::string_view kBaseTitle = "Xenia-edge";
+constexpr std::string_view kBaseTitle = "XeniOS";
 
 EmulatorWindow::EmulatorWindow(Emulator* emulator,
                                ui::WindowedAppContext& app_context,
@@ -1313,7 +1313,7 @@ void EmulatorWindow::ExportScreenshot(const xe::ui::RawImage& image) {
     return;
   }
 
-  // Find where xenia.exe or xenia_edge.exe is located and create a
+  // Find where xenia.exe or xenios.exe is located and create a
   // screenshots folder
   auto screenshot_path =
       (xe::filesystem::GetExecutableFolder() / "screenshots" / title_id);
@@ -1900,30 +1900,26 @@ void EmulatorWindow::ToggleControllerVibration() {
 }
 
 void EmulatorWindow::ShowCompatibility() {
-  const std::string_view base_url =
-      "https://github.com/xenios-jp/game-compatibility/issues";
+  const std::string_view base_url = "https://xenios.jp/compatibility";
   std::string url;
-  // Avoid searching for a title ID of "00000000".
   uint32_t title_id = emulator_->title_id();
   if (!title_id) {
-    url = base_url;
+    url = std::string(base_url);
   } else {
-    url = fmt::format("{}?q=is%3Aissue+{:08X}", base_url, title_id);
+    url = fmt::format("{}?q={:08X}", base_url, title_id);
   }
   LaunchWebBrowser(url);
 }
 
-void EmulatorWindow::ShowFAQ() {
-  LaunchWebBrowser("https://github.com/xenia-canary/xenia-canary/wiki/FAQ");
-}
+void EmulatorWindow::ShowFAQ() { LaunchWebBrowser("https://xenios.jp/faq"); }
 
 void EmulatorWindow::ShowBuildCommit() {
 #ifdef XE_BUILD_IS_PR
   LaunchWebBrowser(
-      "https://github.com/has207/xenia-edge/pull/" XE_BUILD_PR_NUMBER);
+      "https://github.com/xenios-jp/XeniOS/pull/" XE_BUILD_PR_NUMBER);
 #else
   LaunchWebBrowser(
-      "https://github.com/has207/xenia-edge/commit/" XE_BUILD_COMMIT);
+      "https://github.com/xenios-jp/XeniOS/commit/" XE_BUILD_COMMIT);
 #endif
 }
 
@@ -1933,25 +1929,28 @@ void EmulatorWindow::ShowAbout() {
     return;
   }
 
-  QString about_text = QString(
-                           "<h2>Xenia Edge</h2>"
-                           "<p>Experimental fork of Xenia Canary</p>"
-                           "<p><b>Branch:</b> %1<br>"
-                           "<b>Commit:</b> %2<br>"
-                           "<b>Build Date:</b> %3<br>"
-                           "<b>Qt Version:</b> %4</p>"
-                           "<p>For more information, visit <a "
-                           "href=\"https://github.com/has207/"
-                           "xenia-edge\">github.com/has207/xenia-edge</a></p>"
-                           "<p><small>Icons by <a "
-                           "href=\"https://icons8.com\">Icons8</a></small></p>")
-                           .arg(XE_BUILD_BRANCH)
-                           .arg(XE_BUILD_COMMIT_SHORT)
-                           .arg(XE_BUILD_DATE)
-                           .arg(qVersion());
+  QString about_text =
+      QString(
+          "<h2>XeniOS</h2>"
+          "<p>Experimental Apple-focused fork of Xenia, based on Xenia Edge</p>"
+          "<p><b>Branch:</b> %1<br>"
+          "<b>Commit:</b> %2<br>"
+          "<b>Build Date:</b> %3<br>"
+          "<b>Qt Version:</b> %4</p>"
+          "<p>For more information, visit <a "
+          "href=\"https://xenios.jp\">xenios.jp</a>, <a "
+          "href=\"https://discord.gg/QwcTtNKTGf\">Discord</a>, or <a "
+          "href=\"https://github.com/xenios-jp/"
+          "XeniOS\">github.com/xenios-jp/XeniOS</a></p>"
+          "<p><small>Icons by <a "
+          "href=\"https://icons8.com\">Icons8</a></small></p>")
+          .arg(XE_BUILD_BRANCH)
+          .arg(XE_BUILD_COMMIT_SHORT)
+          .arg(XE_BUILD_DATE)
+          .arg(qVersion());
 
   QMessageBox about_box(qt_window->qwindow());
-  about_box.setWindowTitle("About Xenia Edge");
+  about_box.setWindowTitle("About XeniOS");
   about_box.setTextFormat(Qt::RichText);
   about_box.setText(about_text);
   about_box.setStandardButtons(QMessageBox::Ok);

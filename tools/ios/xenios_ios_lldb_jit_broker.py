@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LLDB stop-hook broker for Xenia iOS universal JIT breakpoints.
+"""LLDB stop-hook broker for XeniOS iOS universal JIT breakpoints.
 
 This script handles the BRK protocol emitted by A64CodeCache on iOS:
   - brk #0xf00d with x16=1: prepare region (x0=addr, x1=len)
@@ -7,8 +7,8 @@ This script handles the BRK protocol emitted by A64CodeCache on iOS:
   - brk #0x69 (legacy): prepare region (x0=addr, x1=len)
 
 Usage from LLDB / Xcode debug console:
-  command script import /absolute/path/to/tools/ios/xenia_ios_lldb_jit_broker.py
-  xenia-jit-broker-install
+  command script import /absolute/path/to/tools/ios/xenios_ios_lldb_jit_broker.py
+  xenios-jit-broker-install
 """
 
 import re
@@ -30,7 +30,7 @@ JIT_PAGE_STRIDE = 0x4000
 _installed_hook_id = None
 _autostart_hook_id = None
 _broker_installed = False
-_target_name_patterns = ("xenia_edge", "xenia-app", "xenia")
+_target_name_patterns = ("xenios", "xenia-app", "xenia")
 _auto_detach_after_first_prepare = True
 
 
@@ -144,8 +144,8 @@ def _prepare_region(debugger, address, length):
   return True, target_address, note
 
 
-class XeniaIOSJITStopHook:
-  """LLDB scripted stop-hook for Xenia iOS JIT BRK protocol."""
+class XeniosIOSJITStopHook:
+  """LLDB scripted stop-hook for XeniOS iOS JIT BRK protocol."""
 
   def __init__(self, target, extra_args, internal_dict):
     self.target = target
@@ -204,7 +204,7 @@ class XeniaIOSJITStopHook:
           self.detached = True
           command_ok = True
           _disable_broker_hook_fast(self.debugger)
-          _stream_write(stream, "xenia-jit-broker: detached and broker hook disabled")
+          _stream_write(stream, "xenios-jit-broker: detached and broker hook disabled")
         elif x16 == CMD_PREPARE_REGION:
           ok, out_address, note = _prepare_region(self.debugger, x0, x1)
           _write_reg_u64(frame, "x0", out_address)
@@ -212,19 +212,19 @@ class XeniaIOSJITStopHook:
           if ok:
             _stream_write(
                 stream,
-                "xenia-jit-broker: prepared universal region "
+                "xenios-jit-broker: prepared universal region "
                 f"addr=0x{x0:x} len=0x{x1:x} ({note})",
             )
             if _auto_detach_after_first_prepare:
               self.one_shot_prepare_done = True
               _stream_write(
                   stream,
-                  "xenia-jit-broker: one-shot prepare done; awaiting detach command",
+                  "xenios-jit-broker: one-shot prepare done; awaiting detach command",
               )
           else:
             _stream_write(
                 stream,
-                "xenia-jit-broker: failed universal prepare "
+                "xenios-jit-broker: failed universal prepare "
                 f"addr=0x{x0:x} len=0x{x1:x} ({note})",
             )
         else:
@@ -237,7 +237,7 @@ class XeniaIOSJITStopHook:
         if ok:
           _stream_write(
               stream,
-              "xenia-jit-broker: prepared legacy region "
+              "xenios-jit-broker: prepared legacy region "
               f"addr=0x{x0:x} len=0x{x1:x} ({note})",
           )
           if _auto_detach_after_first_prepare:
@@ -245,12 +245,12 @@ class XeniaIOSJITStopHook:
             _disable_broker_hook_fast(self.debugger)
             _stream_write(
                 stream,
-                "xenia-jit-broker: detached after one-shot legacy prepare and broker hook disabled",
+                "xenios-jit-broker: detached after one-shot legacy prepare and broker hook disabled",
             )
         else:
           _stream_write(
               stream,
-              "xenia-jit-broker: failed legacy prepare "
+              "xenios-jit-broker: failed legacy prepare "
               f"addr=0x{x0:x} len=0x{x1:x} ({note})",
           )
       else:
@@ -265,12 +265,12 @@ class XeniaIOSJITStopHook:
       if not command_ok:
         _stream_write(
             stream,
-            "xenia-jit-broker: continuing after prepare failure; "
-            "Xenia will retry/fallback",
+            "xenios-jit-broker: continuing after prepare failure; "
+            "XeniOS will retry/fallback",
         )
       return False
     except Exception as exc:
-      _stream_write(stream, f"xenia-jit-broker: internal stop-hook exception: {exc}")
+      _stream_write(stream, f"xenios-jit-broker: internal stop-hook exception: {exc}")
       return True
 
 
@@ -351,7 +351,7 @@ def _remove_autostart_hooks(debugger):
   hook_ids = []
   if _autostart_hook_id is not None:
     hook_ids.append(_autostart_hook_id)
-  hook_ids.extend(_find_stop_hook_ids_containing(debugger, "xenia-jit-broker-autostart"))
+  hook_ids.extend(_find_stop_hook_ids_containing(debugger, "xenios-jit-broker-autostart"))
   _delete_stop_hooks(debugger, hook_ids)
   _autostart_hook_id = None
 
@@ -364,7 +364,7 @@ def _remove_broker_hooks(debugger):
     hook_ids.append(_installed_hook_id)
   hook_ids.extend(
       _find_stop_hook_ids_containing(
-          debugger, "xenia_ios_lldb_jit_broker.XeniaIOSJITStopHook"
+          debugger, "xenios_ios_lldb_jit_broker.XeniosIOSJITStopHook"
       )
   )
   _delete_stop_hooks(debugger, hook_ids)
@@ -405,7 +405,7 @@ def _get_target_executable(debugger):
   return executable.GetFilename() or ""
 
 
-def _is_xenia_target(debugger):
+def _is_xenios_target(debugger):
   executable_name = _get_target_executable(debugger).lower()
   if not executable_name:
     return False
@@ -445,7 +445,7 @@ def _is_jit_brk_stop(exe_ctx):
   return brk_imm in (UNIVERSAL_BRK_IMM, LEGACY_PREPARE_BRK_IMM)
 
 
-def install_xenia_jit_broker(debugger, command, exe_ctx, result, internal_dict):
+def install_xenios_jit_broker(debugger, command, exe_ctx, result, internal_dict):
   global _installed_hook_id
   global _broker_installed
   del command
@@ -464,40 +464,40 @@ def install_xenia_jit_broker(debugger, command, exe_ctx, result, internal_dict):
   sigtrap = _run_command(debugger, "process handle -p false -s true -n true SIGTRAP")
   if not sigtrap.Succeeded():
     result.AppendWarning(
-        "xenia-jit-broker: failed to update SIGTRAP handling: %s"
+        "xenios-jit-broker: failed to update SIGTRAP handling: %s"
         % (sigtrap.GetError() or "")
     )
   sigusr2 = _run_command(debugger, "process handle -p true -s false -n false SIGUSR2")
   if not sigusr2.Succeeded():
     result.AppendWarning(
-        "xenia-jit-broker: failed to update SIGUSR2 handling: %s"
+        "xenios-jit-broker: failed to update SIGUSR2 handling: %s"
         % (sigusr2.GetError() or "")
     )
   disabled_builtin_hooks = _disable_builtin_memory_diagnosis_hooks(debugger)
   if disabled_builtin_hooks > 0:
     result.AppendMessage(
-        f"xenia-jit-broker: disabled {disabled_builtin_hooks} built-in memory diagnosis stop-hook(s)"
+        f"xenios-jit-broker: disabled {disabled_builtin_hooks} built-in memory diagnosis stop-hook(s)"
     )
 
   hook = _run_command(
       debugger,
-      "target stop-hook add -P xenia_ios_lldb_jit_broker.XeniaIOSJITStopHook -I false",
+      "target stop-hook add -P xenios_ios_lldb_jit_broker.XeniosIOSJITStopHook -I false",
   )
   if not hook.Succeeded():
     result.SetError(
-        "xenia-jit-broker: failed to install stop-hook: %s" % (hook.GetError() or "")
+        "xenios-jit-broker: failed to install stop-hook: %s" % (hook.GetError() or "")
     )
     return
 
   output = hook.GetOutput() or ""
   _installed_hook_id = _parse_hook_id_from_add_output(output)
   _broker_installed = True
-  result.AppendMessage("xenia-jit-broker: installed")
+  result.AppendMessage("xenios-jit-broker: installed")
   if output.strip():
     result.AppendMessage(output.strip())
 
 
-def install_autostart_xenia_jit_broker(debugger, command, exe_ctx, result, internal_dict):
+def install_autostart_xenios_jit_broker(debugger, command, exe_ctx, result, internal_dict):
   global _autostart_hook_id
   del command
   del exe_ctx
@@ -506,37 +506,37 @@ def install_autostart_xenia_jit_broker(debugger, command, exe_ctx, result, inter
   _remove_autostart_hooks(debugger)
   hook = _run_command(
       debugger,
-      'target stop-hook add -o "xenia-jit-broker-autostart" -I false',
+      'target stop-hook add -o "xenios-jit-broker-autostart" -I false',
   )
   if not hook.Succeeded():
     result.SetError(
-        "xenia-jit-broker: failed to install autostart hook: %s"
+        "xenios-jit-broker: failed to install autostart hook: %s"
         % (hook.GetError() or "")
     )
     return
 
   output = hook.GetOutput() or ""
   _autostart_hook_id = _parse_hook_id_from_add_output(output)
-  result.AppendMessage("xenia-jit-broker: autostart hook installed")
+  result.AppendMessage("xenios-jit-broker: autostart hook installed")
   if output.strip():
     result.AppendMessage(output.strip())
 
 
-def reset_xenia_jit_broker_hooks(debugger, command, exe_ctx, result, internal_dict):
+def reset_xenios_jit_broker_hooks(debugger, command, exe_ctx, result, internal_dict):
   del command
   del exe_ctx
   del internal_dict
   _remove_broker_hooks(debugger)
   _remove_autostart_hooks(debugger)
-  result.AppendMessage("xenia-jit-broker: removed all broker/autostart hooks")
+  result.AppendMessage("xenios-jit-broker: removed all broker/autostart hooks")
 
 
-def autostart_xenia_jit_broker(debugger, command, exe_ctx, result, internal_dict):
+def autostart_xenios_jit_broker(debugger, command, exe_ctx, result, internal_dict):
   del command
   del internal_dict
   global _broker_installed
 
-  if not _is_xenia_target(debugger):
+  if not _is_xenios_target(debugger):
     return
 
   # Avoid expensive / noisy stop-hook list queries on every stop.
@@ -548,34 +548,34 @@ def autostart_xenia_jit_broker(debugger, command, exe_ctx, result, internal_dict
   del process
 
   # Lazy install: only arm the broker when we've actually stopped on one of
-  # Xenia's JIT BRK instructions.
+  # XeniOS JIT BRK instructions.
   if not exe_ctx or not _is_jit_brk_stop(exe_ctx):
     return
-  install_xenia_jit_broker(debugger, "", None, result, None)
+  install_xenios_jit_broker(debugger, "", None, result, None)
   _disable_autostart_hook_fast(debugger)
-  result.AppendMessage("xenia-jit-broker: lazy autostart armed")
+  result.AppendMessage("xenios-jit-broker: lazy autostart armed")
 
 
 def __lldb_init_module(debugger, internal_dict):
   del internal_dict
   debugger.HandleCommand(
       "command script add -o -f "
-      "xenia_ios_lldb_jit_broker.install_xenia_jit_broker "
-      "xenia-jit-broker-install"
+      "xenios_ios_lldb_jit_broker.install_xenios_jit_broker "
+      "xenios-jit-broker-install"
   )
   debugger.HandleCommand(
       "command script add -o -f "
-      "xenia_ios_lldb_jit_broker.autostart_xenia_jit_broker "
-      "xenia-jit-broker-autostart"
+      "xenios_ios_lldb_jit_broker.autostart_xenios_jit_broker "
+      "xenios-jit-broker-autostart"
   )
   debugger.HandleCommand(
       "command script add -o -f "
-      "xenia_ios_lldb_jit_broker.install_autostart_xenia_jit_broker "
-      "xenia-jit-broker-autostart-install"
+      "xenios_ios_lldb_jit_broker.install_autostart_xenios_jit_broker "
+      "xenios-jit-broker-autostart-install"
   )
   debugger.HandleCommand(
       "command script add -o -f "
-      "xenia_ios_lldb_jit_broker.reset_xenia_jit_broker_hooks "
-      "xenia-jit-broker-reset-hooks"
+      "xenios_ios_lldb_jit_broker.reset_xenios_jit_broker_hooks "
+      "xenios-jit-broker-reset-hooks"
   )
-  print("xenia-ios-lldb-jit-broker loaded. Run: xenia-jit-broker-install")
+  print("xenios-ios-lldb-jit-broker loaded. Run: xenios-jit-broker-install")

@@ -276,8 +276,8 @@ int main(int argc, char** argv) {
   if (is_game_process) {
     qt_app.setApplicationName("Xbox 360 Game");
   } else {
-    qt_app.setApplicationName("Xenia Edge");
-    qt_app.setDesktopFileName("xenia_edge");
+    qt_app.setApplicationName("XeniOS");
+    qt_app.setDesktopFileName("xenios");
   }
 
   // Use Qt's own menu bar instead of native on all platforms

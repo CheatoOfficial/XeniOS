@@ -503,7 +503,7 @@ std::unique_ptr<gpu::GraphicsSystem> EmulatorApp::CreateGraphicsSystem() {
         "Also, ensure that you have the latest driver installed for your GPU.\n"
         "\n"
 #endif  // XE_PLATFORM_ANDROID
-        "See https://xenia.jp/faq/ for more information and the system "
+        "See https://xenios.jp/faq for more information and the system "
         "requirements.");
   }
   return gpu_implementation;

@@ -22,7 +22,7 @@ class StartupCpuFeatureCheck {
       error_message =
           "Your CPU does not support AVX, which is required by Xenia. See "
           "the "
-          "FAQ for system requirements at https://xenia.jp";
+          "FAQ for system requirements at https://xenios.jp/faq";
     }
     if (error_message != nullptr) {
       fprintf(stderr, "WARNING: %s\n", error_message);

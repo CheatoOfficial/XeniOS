@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BROKER_PY="${REPO_ROOT}/tools/ios/xenia_ios_lldb_jit_broker.py"
+BROKER_PY="${REPO_ROOT}/tools/ios/xenios_ios_lldb_jit_broker.py"
 # Escape backslashes/quotes so the path is safe inside LLDB double quotes.
 BROKER_PY_LLDB="${BROKER_PY//\\/\\\\}"
 BROKER_PY_LLDB="${BROKER_PY_LLDB//\"/\\\"}"
@@ -15,8 +15,8 @@ fi
 
 touch "${LLDBINIT_XCODE}"
 
-BLOCK_BEGIN="# >>> xenia-ios-jit-broker >>>"
-BLOCK_END="# <<< xenia-ios-jit-broker <<<"
+BLOCK_BEGIN="# >>> xenios-ios-jit-broker >>>"
+BLOCK_END="# <<< xenios-ios-jit-broker <<<"
 
 tmp="$(mktemp)"
 trap 'rm -f "${tmp}"' EXIT
@@ -30,14 +30,14 @@ awk -v b="${BLOCK_BEGIN}" -v e="${BLOCK_END}" '
 
 cat >> "${tmp}" <<EOF
 ${BLOCK_BEGIN}
-# Auto-load Xenia iOS JIT broker module for Xcode LLDB sessions.
+# Auto-load XeniOS iOS JIT broker module for Xcode LLDB sessions.
 command script import "${BROKER_PY_LLDB}"
 # Reset any stale hooks from prior LLDB sessions.
-xenia-jit-broker-reset-hooks
+xenios-jit-broker-reset-hooks
 # Stable mode: install scripted broker hook up front (single hook, one-shot detach).
-xenia-jit-broker-install
+xenios-jit-broker-install
 ${BLOCK_END}
 EOF
 
 mv "${tmp}" "${LLDBINIT_XCODE}"
-echo "Updated ${LLDBINIT_XCODE} with Xenia iOS JIT broker (stable one-shot mode)."
+echo "Updated ${LLDBINIT_XCODE} with XeniOS iOS JIT broker (stable one-shot mode)."

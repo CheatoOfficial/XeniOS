@@ -102,7 +102,7 @@ X64Emitter::X64Emitter(X64Backend* backend, XbyakAllocator* allocator)
   if (!cpu_.has(Xbyak::util::Cpu::tAVX)) {
     XELOGW(
         "Your CPU does not support AVX, which is required by Xenia. See the "
-        "FAQ for system requirements at https://xenia.jp");
+        "FAQ for system requirements at https://xenios.jp/faq");
   }
 #endif
 

@@ -205,9 +205,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
              "physical games from your Xbox 360 console.\n\nWould you like "
              "to open it?",
              L"Xenia", MB_YESNO | MB_ICONQUESTION) == IDYES)) {
-      LaunchWebBrowser(
-          "https://github.com/xenia-canary/xenia-canary/wiki/"
-          "Quickstart#how-to-rip-games");
+      LaunchWebBrowser("https://xenios.jp/docs");
     }
     SetPersistentEmulatorFlags(persistent_flags |
                                EmulatorFlagDisclaimerAcknowledged);
