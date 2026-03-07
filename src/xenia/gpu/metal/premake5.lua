@@ -67,7 +67,7 @@ project("xenia-gpu-metal")
       path.join(project_root, "third_party/Vulkan-Headers/include"),
     }
     defines {
-      "SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS",
+      -- Exceptions are enabled for SPIRV-Cross (see spirv-cross.lua).
     }
     links {
       "Metal.framework",
