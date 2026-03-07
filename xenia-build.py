@@ -547,7 +547,7 @@ def main():
         print("WARNING: Visual Studio not found!"
               "\nBuilding for Windows will not be supported."
               " Please refer to the building guide:"
-              f"\nhttps://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
+              f"\nhttps://github.com/xenios-jp/XeniOS/blob/{default_branch}/docs/building.md")
 
     # Setup main argument parser and common arguments.
     parser = ArgumentParser(prog="xenia-build.py")
@@ -1106,7 +1106,7 @@ def run_windeployqt(bin_path, config):
         return True
 
     # Find the xenia executable
-    exe_path = os.path.join(bin_path, "xenia_edge.exe")
+    exe_path = os.path.join(bin_path, "xenios.exe")
     if not os.path.exists(exe_path):
         # Executable not found, might not be building xenia-app
         return True
@@ -1428,7 +1428,7 @@ class BaseBuildCommand(Command):
             print("ERROR: Vulkan SDK not found!"
                   "\nPlease install Vulkan SDK from:"
                   "\nhttps://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
-                  f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
+                  f"\nSee: https://github.com/xenios-jp/XeniOS/blob/{default_branch}/docs/building.md")
             return 1
         if not args["no_premake"]:
             print("- running premake...")

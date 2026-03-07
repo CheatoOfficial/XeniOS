@@ -201,6 +201,20 @@ find_first_app() {
   printf '%s' "$app"
 }
 
+bundle_executable_path() {
+  local app_bundle="$1"
+  local plist
+  plist="$(bundle_plist_path "$app_bundle")" || return 1
+  local executable_name
+  executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist" 2>/dev/null || true)"
+  [ -n "$executable_name" ] || return 1
+  if [ -d "$app_bundle/Contents/MacOS" ]; then
+    printf '%s/%s' "$app_bundle/Contents/MacOS" "$executable_name"
+    return 0
+  fi
+  printf '%s/%s' "$app_bundle" "$executable_name"
+}
+
 resolve_macdeployqt() {
   if [ -n "${MACDEPLOYQT:-}" ] && [ -x "${MACDEPLOYQT}" ]; then
     echo "${MACDEPLOYQT}"
@@ -314,6 +328,71 @@ plist_set_bool() {
   local value="$3"
   plist_delete_key "$plist" "$key"
   /usr/libexec/PlistBuddy -c "Add :$key bool $value" "$plist" >/dev/null
+}
+
+plist_merge() {
+  local plist="$1"
+  local other_plist="$2"
+  [ -f "$other_plist" ] || return 0
+  /usr/libexec/PlistBuddy -c "Merge $other_plist" "$plist" >/dev/null
+}
+
+bundle_resources_path() {
+  local app_bundle="$1"
+  if [ -d "$app_bundle/Contents/Resources" ]; then
+    printf '%s' "$app_bundle/Contents/Resources"
+    return 0
+  fi
+  printf '%s' "$app_bundle"
+}
+
+clean_compiled_icon_assets() {
+  local resources_dir="$1"
+  [ -d "$resources_dir" ] || return 0
+  rm -f "$resources_dir/Assets.car"
+  rm -f "$resources_dir/AppIcon.icns"
+  rm -f "$resources_dir"/AppIcon*.png
+}
+
+compile_bundle_icon_assets() {
+  local app_bundle="$1"
+  local platform="$2"
+  local min_version="$3"
+  local icon_catalog="$root/assets/apple/AppIcon.icon"
+
+  [ -d "$icon_catalog" ] || die "missing icon catalog: $icon_catalog"
+
+  local resources_dir plist partial_plist
+  resources_dir="$(bundle_resources_path "$app_bundle")"
+  plist="$(bundle_plist_path "$app_bundle")" || die "Info.plist not found in $app_bundle"
+  mkdir -p "$resources_dir"
+  clean_compiled_icon_assets "$resources_dir"
+
+  partial_plist="$(mktemp "${TMPDIR:-/tmp}/xenios_icon_plist.XXXXXX")"
+  rm -f "$partial_plist"
+
+  local -a actool_cmd=(
+    xcrun actool
+    --compile "$resources_dir"
+    --app-icon AppIcon
+    --platform "$platform"
+    --minimum-deployment-target "$min_version"
+    --output-partial-info-plist "$partial_plist"
+  )
+
+  if [ "$platform" = "iphoneos" ]; then
+    actool_cmd+=(--target-device iphone --target-device ipad)
+    plist_delete_key "$plist" "CFBundleIcons"
+    plist_delete_key "$plist" "CFBundleIcons~ipad"
+  else
+    plist_delete_key "$plist" "CFBundleIconFile"
+    plist_delete_key "$plist" "CFBundleIconName"
+  fi
+
+  actool_cmd+=("$icon_catalog")
+  "${actool_cmd[@]}" >/dev/null
+  plist_merge "$plist" "$partial_plist"
+  rm -f "$partial_plist"
 }
 
 stamp_bundle_version_metadata() {
@@ -466,7 +545,8 @@ sign_macos_app() {
   local entitlements="$2"
   local identity="${3:--}"
 
-  local main_exe="$app_bundle/Contents/MacOS/xenia_edge"
+  local main_exe=""
+  main_exe="$(bundle_executable_path "$app_bundle" || true)"
   local frameworks_dir="$app_bundle/Contents/Frameworks"
   local plugins_dir="$app_bundle/Contents/PlugIns"
 
@@ -523,7 +603,7 @@ package_macos_dmg() {
   cp -R "$app_bundle" "$dmg_contents/"
   cp -f "$license_file" "$dmg_contents/" || true
   ln -s /Applications "$dmg_contents/Applications"
-  hdiutil create -volname "Xenia-Edge" -srcfolder "$dmg_contents" -ov -format UDZO "$dmg_out"
+  hdiutil create -volname "XeniOS" -srcfolder "$dmg_contents" -ov -format UDZO "$dmg_out"
   rm -rf "$dmg_contents"
 }
 
@@ -698,6 +778,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 need_bin xcodebuild
+need_bin xcrun
 need_bin codesign
 need_bin hdiutil
 need_bin ditto
@@ -731,11 +812,6 @@ if [ "$build_macos_arm64" -eq 1 ]; then
   mac_dir="build/bin/Mac-ARM64/$buildcfg"
   app_bundle="$(find_first_app "$mac_dir")" || die "macOS arm64 app not found in $mac_dir"
 
-  mkdir -p "$app_bundle/Contents/Resources"
-  if [ -f assets/icon/xenia.icns ]; then
-    cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
-  fi
-
   deploy_qt_if_missing "$app_bundle"
 
   if [ -f third_party/metal-shader-converter/lib/libmetalirconverter.dylib ]; then
@@ -751,6 +827,7 @@ if [ "$build_macos_arm64" -eq 1 ]; then
 
   stamp_bundle_version_metadata "$app_bundle" "$release_version" "$release_build_number"
   stamp_bundle_stage_metadata "$app_bundle" "$release_stage"
+  compile_bundle_icon_assets "$app_bundle" "macosx" "$macos_min"
   stamp_bundle_attestation "$app_bundle" "macos" "$build_channel" "$release_version" \
     "$release_build_number" "$release_stage" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
   require_sdl2_deployment_target "$app_bundle" "$macos_min"
@@ -769,11 +846,6 @@ if [ "$build_macos_x86_64" -eq 1 ]; then
   mac_dir="build/bin/Mac-x86_64/$buildcfg"
   app_bundle="$(find_first_app "$mac_dir")" || die "macOS x86_64 app not found in $mac_dir"
 
-  mkdir -p "$app_bundle/Contents/Resources"
-  if [ -f assets/icon/xenia.icns ]; then
-    cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
-  fi
-
   deploy_qt_if_missing "$app_bundle"
 
   if [ -f third_party/metal-shader-converter/lib/libmetalirconverter.dylib ]; then
@@ -789,6 +861,7 @@ if [ "$build_macos_x86_64" -eq 1 ]; then
 
   stamp_bundle_version_metadata "$app_bundle" "$release_version" "$release_build_number"
   stamp_bundle_stage_metadata "$app_bundle" "$release_stage"
+  compile_bundle_icon_assets "$app_bundle" "macosx" "$macos_min"
   stamp_bundle_attestation "$app_bundle" "macos" "$build_channel" "$release_version" \
     "$release_build_number" "$release_stage" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
   require_sdl2_deployment_target "$app_bundle" "$macos_min"
@@ -816,6 +889,7 @@ if [ "$build_ios" -eq 1 ]; then
 
   stamp_bundle_version_metadata "$app_bundle" "$release_version" "$release_build_number"
   stamp_bundle_stage_metadata "$app_bundle" "$release_stage"
+  compile_bundle_icon_assets "$app_bundle" "iphoneos" "$ios_min"
   stamp_bundle_attestation "$app_bundle" "ios" "$build_channel" "$release_version" \
     "$release_build_number" "$release_stage" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
   # Ad-hoc sign to embed entitlements (increased-memory-limit).

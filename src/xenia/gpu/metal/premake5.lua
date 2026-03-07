@@ -207,7 +207,7 @@ project("xenia-gpu-metal-trace-viewer")
     xcodebuildsettings({
       ["GENERATE_INFOPLIST_FILE"] = "YES",
       ["MACOSX_DEPLOYMENT_TARGET"] = "15.0",
-      ["PRODUCT_BUNDLE_IDENTIFIER"] = "com.xenia.gpu-metal-trace-viewer",
+      ["PRODUCT_BUNDLE_IDENTIFIER"] = "jp.xenios.gpu-metal-trace-viewer",
       ["CODE_SIGN_STYLE"] = "Automatic",
       ["LD_RUNPATH_SEARCH_PATHS"] =
           "@executable_path/../Frameworks @loader_path/../Frameworks "

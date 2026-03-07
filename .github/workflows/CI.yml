@@ -33,6 +33,7 @@ jobs:
 
   build-linux-x86_64:
     name: Build Linux x86_64
+    if: false
     needs: lint
     runs-on: ubuntu-24.04
     steps:
@@ -163,47 +164,47 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          binary=build/bin/Linux-x86_64/Release/xenia_edge
+          binary=build/bin/Linux-x86_64/Release/xenios
           if [ $(stat -c%s $binary) -le 100000 ]; then
             echo "::error::Binary is too small."
           fi
           chmod +x $binary
-          mkdir -p artifacts/xenia_edge
+          mkdir -p artifacts/xenios
 
           # Use linuxdeploy to bundle Qt dependencies
           export QMAKE=/opt/Qt/6.10.1/gcc_64/bin/qmake
           export LD_LIBRARY_PATH=/opt/Qt/6.10.1/gcc_64/lib:$LD_LIBRARY_PATH
 
           # Install icons with proper naming for linuxdeploy
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/16x16/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/32x32/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/48x48/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/64x64/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/128x128/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/256x256/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps
-          mkdir -p artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/16x16/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/32x32/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/48x48/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/64x64/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/128x128/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/256x256/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/512x512/apps
+          mkdir -p artifacts/xenios/usr/share/icons/hicolor/1024x1024/apps
 
-          cp assets/icon/16.png artifacts/xenia_edge/usr/share/icons/hicolor/16x16/apps/xenia_edge.png
-          cp assets/icon/32.png artifacts/xenia_edge/usr/share/icons/hicolor/32x32/apps/xenia_edge.png
-          cp assets/icon/48.png artifacts/xenia_edge/usr/share/icons/hicolor/48x48/apps/xenia_edge.png
-          cp assets/icon/64.png artifacts/xenia_edge/usr/share/icons/hicolor/64x64/apps/xenia_edge.png
-          cp assets/icon/128.png artifacts/xenia_edge/usr/share/icons/hicolor/128x128/apps/xenia_edge.png
-          cp assets/icon/256.png artifacts/xenia_edge/usr/share/icons/hicolor/256x256/apps/xenia_edge.png
-          cp assets/icon/512.png artifacts/xenia_edge/usr/share/icons/hicolor/512x512/apps/xenia_edge.png
-          cp assets/icon/1024.png artifacts/xenia_edge/usr/share/icons/hicolor/1024x1024/apps/xenia_edge.png
+          cp assets/icon/16.png artifacts/xenios/usr/share/icons/hicolor/16x16/apps/xenios.png
+          cp assets/icon/32.png artifacts/xenios/usr/share/icons/hicolor/32x32/apps/xenios.png
+          cp assets/icon/48.png artifacts/xenios/usr/share/icons/hicolor/48x48/apps/xenios.png
+          cp assets/icon/64.png artifacts/xenios/usr/share/icons/hicolor/64x64/apps/xenios.png
+          cp assets/icon/128.png artifacts/xenios/usr/share/icons/hicolor/128x128/apps/xenios.png
+          cp assets/icon/256.png artifacts/xenios/usr/share/icons/hicolor/256x256/apps/xenios.png
+          cp assets/icon/512.png artifacts/xenios/usr/share/icons/hicolor/512x512/apps/xenios.png
+          cp assets/icon/1024.png artifacts/xenios/usr/share/icons/hicolor/1024x1024/apps/xenios.png
 
           # Copy all necessary files (excluding build artifacts) next to the binary in AppDir
-          mkdir -p artifacts/xenia_edge/usr/bin
+          mkdir -p artifacts/xenios/usr/bin
           # Copy directories (optimized_settings, game_patches, etc.)
-          find build/bin/Linux-x86_64/Release -maxdepth 1 -type d ! -name Release -exec cp -r {} artifacts/xenia_edge/usr/bin/ \;
+          find build/bin/Linux-x86_64/Release -maxdepth 1 -type d ! -name Release -exec cp -r {} artifacts/xenios/usr/bin/ \;
           # Copy any additional runtime files if needed (currently just directories are copied)
 
           # Run linuxdeploy with Qt plugin to deploy all Qt dependencies and create AppImage
           export EXTRA_PLATFORM_PLUGINS="libqwayland.so"
-          ~/linuxdeploy/linuxdeploy --appdir artifacts/xenia_edge \
+          ~/linuxdeploy/linuxdeploy --appdir artifacts/xenios \
             --executable $binary \
-            --desktop-file assets/xenia_edge.desktop \
+            --desktop-file assets/xenios.desktop \
             --icon-file assets/icon/256.png \
             --plugin qt \
             --output appimage
@@ -218,16 +219,16 @@ jobs:
 
           # Create final artifacts directory and move the AppImage there
           mkdir -p artifacts/release
-          mv "$appimage_file" artifacts/release/xenia_edge.AppImage
-          chmod +x artifacts/release/xenia_edge.AppImage
+          mv "$appimage_file" artifacts/release/xenios.AppImage
+          chmod +x artifacts/release/xenios.AppImage
 
           # Also copy LICENSE
           cp LICENSE artifacts/release/
-      - name: Upload xenia edge artifacts
+      - name: Upload Xenios Linux artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_edge_linux_x86_64
+          name: xenios_linux_x86_64
           path: artifacts/release
           if-no-files-found: error
 
@@ -329,36 +330,16 @@ jobs:
           ./xenia-build.py fetchdata
 
       - name: Build
-        run: ./xenia-build.py build --config=Release --target=xenia-app
+        run: ./xenia-build.py build --config=Release --target=xenia-app --no_premake
 
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          app_bundle=""
-          for candidate in \
-            build/bin/Mac-ARM64/Release/Xenia-Edge.app \
-            build/bin/Mac-ARM64/Release/Xenia.app \
-            build/bin/Mac-ARM64/Release/xenia_edge.app; do
-            if [ -d "$candidate" ]; then
-              app_bundle="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$app_bundle" ]; then
+          app_bundle="build/bin/Mac-ARM64/Release/XeniOS.app"
+          if [ ! -d "$app_bundle" ]; then
             echo "::error::App bundle not found in build/bin/Mac-ARM64/Release"
             exit 1
           fi
-
-          target_bundle="build/bin/Mac-ARM64/Release/Xenia-Edge.app"
-          if [ "$app_bundle" != "$target_bundle" ]; then
-            rm -rf "$target_bundle"
-            mv "$app_bundle" "$target_bundle"
-            app_bundle="$target_bundle"
-          fi
-
-          mkdir -p "$app_bundle/Contents/Resources"
-          cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
 
           macdeployqt="$HOME/Qt/6.10.1/macos/bin/macdeployqt"
           if [ -x "$macdeployqt" ]; then
@@ -380,7 +361,8 @@ jobs:
               "$app_bundle/Contents/Frameworks/" || true
           fi
 
-          main_exe="$app_bundle/Contents/MacOS/xenia_edge"
+          main_exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist" 2>/dev/null || echo xenios)"
+          main_exe="$app_bundle/Contents/MacOS/$main_exe_name"
           if [ -f "$main_exe" ]; then
             codesign --remove-signature "$main_exe" || true
           fi
@@ -418,14 +400,14 @@ jobs:
           cp LICENSE dmg_contents/
           ln -s /Applications dmg_contents/Applications
 
-          hdiutil create -volname "Xenia-Edge" -srcfolder dmg_contents -ov -format UDZO "artifacts/release/xenia_edge_macos.dmg"
+          hdiutil create -volname "XeniOS" -srcfolder dmg_contents -ov -format UDZO "artifacts/release/xenios_macos_apple_silicon.dmg"
           rm -rf dmg_contents
 
-      - name: Upload xenia edge artifacts
+      - name: Upload macOS Apple Silicon artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_edge_macos_arm64
+          name: xenios_macos_arm64
           path: artifacts/release
           if-no-files-found: error
 
@@ -531,8 +513,6 @@ jobs:
 
   build-macos-x86_64:
     name: Build macOS x86_64
-    # Disabled temporarily. Re-enable by removing the if:false line below.
-    if: ${{ false }}
     needs: lint
     runs-on: macos-15-intel
     steps:
@@ -626,36 +606,16 @@ jobs:
           ./xenia-build.py fetchdata
 
       - name: Build
-        run: ./xenia-build.py build --config=Release --target=xenia-app --arch=x86_64
+        run: ./xenia-build.py build --config=Release --target=xenia-app --arch=x86_64 --no_premake
 
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          app_bundle=""
-          for candidate in \
-            build/bin/Mac-x86_64/Release/Xenia-Edge.app \
-            build/bin/Mac-x86_64/Release/Xenia.app \
-            build/bin/Mac-x86_64/Release/xenia_edge.app; do
-            if [ -d "$candidate" ]; then
-              app_bundle="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$app_bundle" ]; then
+          app_bundle="build/bin/Mac-x86_64/Release/XeniOS.app"
+          if [ ! -d "$app_bundle" ]; then
             echo "::error::App bundle not found in build/bin/Mac-x86_64/Release"
             exit 1
           fi
-
-          target_bundle="build/bin/Mac-x86_64/Release/Xenia-Edge.app"
-          if [ "$app_bundle" != "$target_bundle" ]; then
-            rm -rf "$target_bundle"
-            mv "$app_bundle" "$target_bundle"
-            app_bundle="$target_bundle"
-          fi
-
-          mkdir -p "$app_bundle/Contents/Resources"
-          cp -f assets/icon/xenia.icns "$app_bundle/Contents/Resources/"
 
           macdeployqt="$HOME/Qt/6.10.1/macos/bin/macdeployqt"
           if [ -x "$macdeployqt" ]; then
@@ -677,7 +637,8 @@ jobs:
               "$app_bundle/Contents/Frameworks/" || true
           fi
 
-          main_exe="$app_bundle/Contents/MacOS/xenia_edge"
+          main_exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist" 2>/dev/null || echo xenios)"
+          main_exe="$app_bundle/Contents/MacOS/$main_exe_name"
           if [ -f "$main_exe" ]; then
             codesign --remove-signature "$main_exe" || true
           fi
@@ -715,19 +676,20 @@ jobs:
           cp LICENSE dmg_contents/
           ln -s /Applications dmg_contents/Applications
 
-          hdiutil create -volname "Xenia-Edge" -srcfolder dmg_contents -ov -format UDZO "artifacts/release/xenia_edge_macos_x86_64.dmg"
+          hdiutil create -volname "XeniOS" -srcfolder dmg_contents -ov -format UDZO "artifacts/release/xenios_macos_intel.dmg"
           rm -rf dmg_contents
 
-      - name: Upload xenia edge artifacts
+      - name: Upload macOS Intel artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_edge_macos_x86_64
+          name: xenios_macos_x86_64
           path: artifacts/release
           if-no-files-found: error
 
   build-windows-x86_64:
     name: Build Windows x86_64
+    if: false
     needs: lint
     runs-on: windows-2025
     env:
@@ -845,76 +807,18 @@ jobs:
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
-          $binary = 'build\bin\Windows-x86_64\Release\xenia_edge.exe'
+          $binary = 'build\bin\Windows-x86_64\Release\xenios.exe'
           if ((get-item $binary).Length -le 100000) {
             echo "::error::$binary is too small."
           }
           robocopy . build\bin\Windows-x86_64\Release LICENSE /r:0 /w:0
           # Copy all files and directories (Qt DLLs, plugins, etc.) excluding build artifacts
-          robocopy build\bin\Windows-x86_64\Release artifacts\xenia_edge /MIR /r:0 /w:0 /XF *.lib *.idb *.exp /XD generic iconengines imageformats networkinformation styles tls
+          robocopy build\bin\Windows-x86_64\Release artifacts\xenios /MIR /r:0 /w:0 /XF *.lib *.idb *.exp /XD generic iconengines imageformats networkinformation styles tls
           If ($LastExitCode -le 7) { echo "LastExitCode = $LastExitCode";$LastExitCode = 0 }
-      - name: Upload xenia edge artifacts
+      - name: Upload Xenios Windows artifacts
         if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: xenia_edge_windows_x86_64
-          path: artifacts\xenia_edge
+          name: xenios_windows_x86_64
+          path: artifacts\xenios
           if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: [build-linux-x86_64, build-macos-arm64, build-windows-x86_64]
-    runs-on: ubuntu-latest
-    if: |
-      github.repository == 'has207/xenia-edge' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/edge'
-    steps:
-      - name: Download Linux x86_64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_linux_x86_64
-          path: linux_x86_64_artifacts
-
-      - name: Download macOS ARM64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_macos_arm64
-          path: macos_arm64_artifacts
-
-      - name: Download macOS x86_64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_macos_x86_64
-          path: macos_x86_64_artifacts
-
-      - name: Download Windows x86_64 artifacts
-        uses: actions/download-artifact@main
-        with:
-          name: xenia_edge_windows_x86_64
-          path: windows_x86_64_artifacts
-
-      - name: Create Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          # Prepare release artifacts
-          cd linux_x86_64_artifacts
-          mv xenia_edge.AppImage ../xenia_edge_linux_x86_64.AppImage
-          cd ../macos_arm64_artifacts
-          mv xenia_edge_macos.dmg ../xenia_edge_macos_arm64.dmg
-          cd ../macos_x86_64_artifacts
-          mv xenia_edge_macos_x86_64.dmg ../
-          cd ../windows_x86_64_artifacts
-          7z a ../xenia_edge_windows_x86_64.zip * -xr!'*.pdb' -mx9 -bb3
-          cd ..
-
-          # Create release
-          tag=${GITHUB_SHA::7}
-          gh release create $tag \
-            xenia_edge_linux_x86_64.AppImage \
-            xenia_edge_macos_arm64.dmg \
-            xenia_edge_macos_x86_64.dmg \
-            xenia_edge_windows_x86_64.zip \
-            --target $GITHUB_SHA -t "xenia_edge" --generate-notes

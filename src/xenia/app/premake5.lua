@@ -15,6 +15,9 @@ group("src")
 project("xenia-app")
   uuid("d7e98620-d007-4ad8-9dbd-b47c8853a17f")
   language("C++")
+  xcodebuildresources({
+    "**/AppIcon.icon",
+  })
   links({
     "xenia-apu",
     "xenia-apu-nop",
@@ -94,7 +97,7 @@ project("xenia-app")
   -- `lib` prefix, as Gradle uses LOCAL_MODULE_FILENAME, not a derivative of
   -- LOCAL_MODULE, to specify the targets to build when executing ndk-build.
   filter("platforms:not Android-*")
-    targetname("xenia_edge")
+    targetname("xenios")
 
   filter("architecture:x86_64")
     links({
@@ -224,6 +227,7 @@ project("xenia-app")
         path.getabsolute(path.join(project_root, "xenia_ios.entitlements"))
     files({
       project_root.."/xenia_ios.entitlements",
+      project_root.."/assets/apple/AppIcon.icon",
     })
     links({
       "xenia-gpu-metal",
@@ -255,25 +259,17 @@ project("xenia-app")
       ["IPHONEOS_DEPLOYMENT_TARGET"] = "17.0",
       ["SDKROOT"] = "iphoneos",
       ["TARGETED_DEVICE_FAMILY"] = "1,2",
-      ["PRODUCT_NAME"] = "Xenia-Edge",
-      ["EXECUTABLE_NAME"] = "xenia_edge",
-      ["PRODUCT_BUNDLE_IDENTIFIER"] = "com.xenia.xenia-edge-ios",
+      ["PRODUCT_NAME"] = "XeniOS",
+      ["EXECUTABLE_NAME"] = "xenios",
+      ["PRODUCT_BUNDLE_IDENTIFIER"] = "jp.xenios.xenios.ios",
+      ["ASSETCATALOG_COMPILER_APPICON_NAME"] = "AppIcon",
       ["CODE_SIGN_STYLE"] = "Automatic",
       ["CODE_SIGN_ENTITLEMENTS"] = ios_entitlements_path,
       ["CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION"] = "YES",
     })
-    local ios_app_bundle = "${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}"
-    local ios_icon_src =
-        path.getabsolute(path.join(project_root, "assets", "icon"))
-    local ios_icon_extra_src =
-        path.getabsolute(path.join(project_root, "assets", "icon", "extra"))
     local ios_lldbinit_installer =
-        path.getabsolute(path.join(project_root, "tools", "ios", "install_lldbinit_xenia_jit.sh"))
+        path.getabsolute(path.join(project_root, "tools", "ios", "install_lldbinit_xenios_jit.sh"))
     postbuildcommands({
-      -- Copy iOS icon PNGs from the same icon source folder used by macOS.
-      'find "' .. ios_icon_src .. '" "' .. ios_icon_extra_src
-          .. '" -maxdepth 1 -type f -name "*.png" -exec cp -f {} "'
-          .. ios_app_bundle .. '/" \\;',
       'if [ -z "${XENIA_SKIP_LLDBINIT_INSTALL}" ]; then /bin/bash "'
           .. ios_lldbinit_installer .. '"; fi',
     })
@@ -370,7 +366,7 @@ project("xenia-app")
     local app_contents = app_bundle .. "/Contents"
     local app_frameworks = app_contents .. "/Frameworks"
     local app_macos = app_contents .. "/MacOS"
-    local app_executable = app_macos .. "/xenia_edge"
+    local app_executable = app_macos .. "/xenios"
     local macdeployqt_command =
         'app_arch="$(lipo -archs "' .. app_executable .. '" | awk \'{print $1}\')"; '
             .. 'qt_dir="${QT_DIR:-}"; '
@@ -454,7 +450,7 @@ project("xenia-app")
     files({
       "Info.plist",
       project_root.."/xenia.entitlements",
-      project_root.."/assets/icon/xenia.icns",
+      project_root.."/assets/apple/AppIcon.icon",
     })
     linkoptions({
       "-Wl,-rpath,@executable_path/../Frameworks",
@@ -463,9 +459,10 @@ project("xenia-app")
     xcodebuildsettings({
       ["INFOPLIST_FILE"] = path.getabsolute("Info.plist"),
       ["MACOSX_DEPLOYMENT_TARGET"] = "15.0",
-      ["PRODUCT_NAME"] = "Xenia-Edge",
-      ["EXECUTABLE_NAME"] = "xenia_edge",
-      ["PRODUCT_BUNDLE_IDENTIFIER"] = "com.xenia.xenia-edge",
+      ["PRODUCT_NAME"] = "XeniOS",
+      ["EXECUTABLE_NAME"] = "xenios",
+      ["PRODUCT_BUNDLE_IDENTIFIER"] = "jp.xenios.xenios.macos",
+      ["ASSETCATALOG_COMPILER_APPICON_NAME"] = "AppIcon",
       ["CODE_SIGN_STYLE"] = "Automatic",
       ["CODE_SIGN_ENTITLEMENTS"] = entitlements_path,
       ["CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION"] = "YES",
