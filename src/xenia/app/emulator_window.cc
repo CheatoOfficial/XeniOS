@@ -1901,14 +1901,14 @@ void EmulatorWindow::ToggleControllerVibration() {
 
 void EmulatorWindow::ShowCompatibility() {
   const std::string_view base_url =
-      "https://github.com/xenia-canary/game-compatibility/issues";
+      "https://github.com/xenios-jp/game-compatibility/issues";
   std::string url;
   // Avoid searching for a title ID of "00000000".
   uint32_t title_id = emulator_->title_id();
   if (!title_id) {
     url = base_url;
   } else {
-    url = fmt::format("{}?q=is%3Aissue+is%3Aopen+{:08X}", base_url, title_id);
+    url = fmt::format("{}?q=is%3Aissue+{:08X}", base_url, title_id);
   }
   LaunchWebBrowser(url);
 }
