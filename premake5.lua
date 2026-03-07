@@ -471,6 +471,9 @@ if is_ios_target() then
     })
     buildoptions({
       "-w",
+      -- Prevent #include <dispatch/dispatch.h> (used by metal-cpp) from
+      -- triggering implicit module imports that pull in Foundation (ObjC).
+      "-fno-modules",
     })
     removefatalwarnings("All")
   filter({})
