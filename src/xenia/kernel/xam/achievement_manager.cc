@@ -15,9 +15,6 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/achievement_backends/gpd_achievement_backend.h"
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
-#if XE_PLATFORM_IOS
-#include "xenia/ui/windowed_app_context_ios.h"
-#endif
 #if !XE_PLATFORM_IOS
 #include "xenia/ui/audio_helper.h"
 #endif
