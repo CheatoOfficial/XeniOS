@@ -2257,12 +2257,12 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 
   self.titleLabel = [[UILabel alloc] init];
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.titleLabel.textColor = [XeniaTheme textPrimary];
+  self.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+  self.titleLabel.textColor = [XeniaTheme textSecondary];
   self.titleLabel.textAlignment = NSTextAlignmentLeft;
   self.titleLabel.numberOfLines = 2;
   self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  xe_apply_label_font(self.titleLabel, UIFontTextStyleSubheadline, 14.0,
-                      UIFontWeightSemibold);
+  self.titleLabel.adjustsFontSizeToFitWidth = NO;
   [self.titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
                                                    forAxis:UILayoutConstraintAxisHorizontal];
   [self.titleLabel setContentCompressionResistancePriority:UILayoutPriorityRequired
@@ -2271,11 +2271,11 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 
   self.compatPill = [[XeniaPaddedLabel alloc] init];
   self.compatPill.translatesAutoresizingMaskIntoConstraints = NO;
-  self.compatPill.padding = UIEdgeInsetsMake(2, 8, 2, 8);
+  self.compatPill.padding = UIEdgeInsetsMake(2, 6, 2, 6);
   self.compatPill.textAlignment = NSTextAlignmentCenter;
-  self.compatPill.layer.cornerRadius = 8;
+  self.compatPill.layer.cornerRadius = 6;
   self.compatPill.clipsToBounds = YES;
-  xe_apply_label_font(self.compatPill, UIFontTextStyleCaption1, 12.0, UIFontWeightSemibold);
+  self.compatPill.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
   self.compatPill.hidden = YES;
   [self.compatPill setContentHuggingPriority:UILayoutPriorityRequired
                                      forAxis:UILayoutConstraintAxisHorizontal];
@@ -2293,22 +2293,15 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
     [self.iconView.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor],
     [self.iconView.heightAnchor constraintEqualToAnchor:self.iconView.widthAnchor
                                              multiplier:300.0 / 219.0],
-    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor constant:8.0],
-    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor constant:12.0],
-    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
-                                                   constant:-12.0],
-    [self.titleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.compatPill.topAnchor
-                                                           constant:-6.0],
-    [self.titleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.cardView.bottomAnchor
-                                                           constant:-10.0],
-    [self.compatPill.topAnchor constraintGreaterThanOrEqualToAnchor:self.titleLabel.bottomAnchor
-                                                           constant:6.0],
+    [self.titleLabel.topAnchor constraintEqualToAnchor:self.iconView.bottomAnchor],
+    [self.titleLabel.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor],
+    [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.cardView.leadingAnchor
+                                                 constant:8.0],
+    [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.compatPill.leadingAnchor
+                                                  constant:-4.0],
+    [self.compatPill.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
     [self.compatPill.trailingAnchor constraintEqualToAnchor:self.cardView.trailingAnchor
-                                                   constant:-10.0],
-    [self.compatPill.bottomAnchor constraintEqualToAnchor:self.cardView.bottomAnchor
-                                                 constant:-10.0],
-    [self.compatPill.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.cardView.leadingAnchor
-                                                               constant:12.0],
+                                                   constant:-8.0],
   ]];
 
   return self;
@@ -3643,38 +3636,38 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                                       constant:28.0],
     [hero_content_stack_.trailingAnchor constraintEqualToAnchor:hero_header_card_view_.trailingAnchor
                                                        constant:-28.0],
-  [self layoutHeroHeaderOverlayFrames];
     [hero_content_stack_.bottomAnchor constraintEqualToAnchor:hero_header_card_view_.bottomAnchor
                                                      constant:-26.0],
   ]];
 
   [hero_header_view_ setNeedsLayout];
   [hero_header_view_ layoutIfNeeded];
+  [self layoutHeroHeaderOverlayFrames];
   [self updateHeroHeaderContent];
   [self layoutHeroHeaderIfNeeded];
 }
 
 - (void)loadHeroArtwork {
   if (!title_id_) {
-    [self updateHeroGlowColorFromImage:cached_background];
     return;
   }
 
   UIImage* cached_background = xe_cached_game_background_art(title_id_);
   if (cached_background) {
     [self setHeroBackgroundArtwork:cached_background];
+    [self updateHeroGlowColorFromImage:cached_background];
   }
 
   if (!hero_artwork_) {
-  // If we have artwork but no background, use cover art for the glow.
-  if (!cached_background && hero_artwork_) {
-    [self updateHeroGlowColorFromImage:hero_artwork_];
-  }
-
     UIImage* cached_cover = xe_cached_game_art(title_id_);
     if (cached_cover) {
       [self setHeroArtwork:cached_cover];
     }
+  }
+
+  // If we have artwork but no background, use cover art for the glow.
+  if (!cached_background && hero_artwork_) {
+    [self updateHeroGlowColorFromImage:hero_artwork_];
   }
 
   if ((cached_background || hero_artwork_) && [self isViewLoaded]) {
@@ -3682,28 +3675,28 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   const uint32_t expected_title_id = title_id_;
-      [self updateHeroGlowColorFromImage:image];
   if (!cached_background) {
     xe_fetch_game_background_art(expected_title_id, ^(UIImage* image) {
       if (!image || self->title_id_ != expected_title_id) {
         return;
       }
       [self setHeroBackgroundArtwork:image];
+      [self updateHeroGlowColorFromImage:image];
       if ([self isViewLoaded]) {
         [self updateHeroHeaderContent];
       }
     });
   }
 
-      if (!self->hero_background_artwork_) {
-        [self updateHeroGlowColorFromImage:image];
-      }
   if (!hero_artwork_) {
     xe_fetch_game_art(expected_title_id, ^(UIImage* image) {
       if (!image || self->title_id_ != expected_title_id) {
         return;
       }
       [self setHeroArtwork:image];
+      if (!self->hero_background_artwork_) {
+        [self updateHeroGlowColorFromImage:image];
+      }
       if ([self isViewLoaded]) {
         [self updateHeroHeaderContent];
       }
@@ -3729,6 +3722,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [[NSNotificationCenter defaultCenter] addObserver:self
                                            selector:@selector(onDiscussionDidUpdate:)
                                                name:kXeniaDiscussionDidUpdateNotification
+                                             object:nil];
+  [self buildHeroHeaderIfNeeded];
+  [self loadHeroArtwork];
+  [self fetchDiscussion];
+}
+
 - (void)viewSafeAreaInsetsDidChange {
   [super viewSafeAreaInsetsDidChange];
   // Add bottom safe area inset so the Submit Report card isn't clipped
@@ -3744,10 +3743,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 }
 
-                                             object:nil];
-  [self buildHeroHeaderIfNeeded];
-  [self loadHeroArtwork];
-  [self fetchDiscussion];
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self.navigationController setNavigationBarHidden:YES animated:NO];
+  [self layoutHeroHeaderIfNeeded];
 
   id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
   if (coordinator && coordinator.interactive) {
@@ -3776,13 +3775,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [self.navigationController setNavigationBarHidden:YES animated:NO];
   [self layoutHeroHeaderIfNeeded];
   [self layoutHeroHeaderOverlayFrames];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-  [super viewWillAppear:animated];
-  [self.navigationController setNavigationBarHidden:YES animated:NO];
-  [self layoutHeroHeaderIfNeeded];
-  hero_background_view_.hidden = NO;
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -4540,15 +4532,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 @end
-  UILabel* notes_placeholder_label_;
-  UIBarButtonItem* keyboard_done_button_;
-
 @implementation XeniaCompatReportViewController {
   uint32_t title_id_;
   NSString* game_title_;
   NSInteger selected_status_;
   NSInteger selected_perf_;
   UITextView* notes_text_view_;
+  UILabel* notes_placeholder_label_;
+  UIBarButtonItem* keyboard_done_button_;
   NSMutableArray<UIImage*>* screenshots_;
   BOOL submitting_;
 }
@@ -4561,29 +4552,36 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     selected_status_ = -1;
     selected_perf_ = -1;
     screenshots_ = [[NSMutableArray alloc] init];
-  [[NSNotificationCenter defaultCenter] removeObserver:self];
     submitting_ = NO;
     self.title = @"Submit Report";
-  [notes_placeholder_label_ release];
-  [keyboard_done_button_ release];
   }
   return self;
 }
 
 - (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   [game_title_ release];
   [notes_text_view_ release];
+  [notes_placeholder_label_ release];
+  [keyboard_done_button_ release];
   [screenshots_ release];
   [super dealloc];
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+  self.tableView.estimatedRowHeight = 64.0;
   self.tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
   keyboard_done_button_ =
       [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                     target:self
                                                     action:@selector(dismissKeyboard)];
   keyboard_done_button_.tintColor = [XeniaTheme accent];
-}
-
-- (void)viewDidLoad {
+  if (@available(iOS 15.0, *)) {
+    self.tableView.sectionHeaderTopPadding = 0;
+  }
   [[NSNotificationCenter defaultCenter] addObserver:self
                                            selector:@selector(keyboardWillChangeFrame:)
                                                name:UIKeyboardWillChangeFrameNotification
@@ -4592,13 +4590,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                            selector:@selector(keyboardWillHide:)
                                                name:UIKeyboardWillHideNotification
                                              object:nil];
-  [super viewDidLoad];
-  self.tableView.backgroundColor = [UIColor systemBackgroundColor];
-  self.tableView.rowHeight = UITableViewAutomaticDimension;
-  self.tableView.estimatedRowHeight = 64.0;
-  if (@available(iOS 15.0, *)) {
-    self.tableView.sectionHeaderTopPadding = 0;
-  }
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -4606,6 +4597,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationPortrait;
+}
+
 - (void)scrollNotesEditorIntoViewAnimated:(BOOL)animated {
   NSIndexPath* notes_path = [NSIndexPath indexPathForRow:0 inSection:4];
   if ([self.tableView numberOfSections] <= notes_path.section ||
@@ -4628,8 +4622,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)keyboardWillChangeFrame:(NSNotification*)notification {
   NSDictionary* user_info = notification.userInfo;
-  CGRect keyboard_end =
-      [user_info[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+  CGRect keyboard_end = [user_info[UIKeyboardFrameEndUserInfoKey] CGRectValue];
   CGRect keyboard_in_view = [self.view convertRect:keyboard_end fromView:nil];
   CGFloat overlap =
       MAX(0.0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboard_in_view));
@@ -4834,9 +4827,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   selected_perf_ = sender.tag;
   [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:3]
                 withRowAnimation:UITableViewRowAnimationNone];
-}
-
-  return UIInterfaceOrientationPortrait;
 }
 
 - (void)dismissKeyboard {
@@ -5179,11 +5169,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   if (indexPath.section == 4) {
     UITableViewCell* cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
-      notes_text_view_.delegate = self;
                                                     reuseIdentifier:nil] autorelease];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     if (!notes_text_view_) {
       notes_text_view_ = [[UITextView alloc] init];
+      notes_text_view_.delegate = self;
       notes_text_view_.backgroundColor = [UIColor clearColor];
       notes_text_view_.textColor = [XeniaTheme textPrimary];
       notes_text_view_.textContainerInset = UIEdgeInsetsMake(8, 4, 8, 4);
@@ -5208,6 +5198,13 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       [NSLayoutConstraint activateConstraints:@[
         [notes_text_view_.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:8],
         [notes_text_view_.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor
+                                                      constant:-8],
+        [notes_text_view_.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor
+                                                       constant:8],
+        [notes_text_view_.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor
+                                                        constant:-8],
+      ]];
+    }
     if (notes_placeholder_label_.superview != cell.contentView) {
       UIEdgeInsets insets = notes_text_view_.textContainerInset;
       CGFloat line_padding = notes_text_view_.textContainer.lineFragmentPadding;
@@ -5224,13 +5221,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       ]];
     }
     notes_placeholder_label_.hidden = (notes_text_view_.text.length > 0);
-                                                      constant:-8],
-        [notes_text_view_.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor
-                                                       constant:8],
-        [notes_text_view_.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor
-                                                        constant:-8],
-      ]];
-    }
     return cell;
   }
 
@@ -5820,9 +5810,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 // JIT status widgets.
 @property(nonatomic, strong) UIView* jitWarningCard;
 @property(nonatomic, strong) UIView* jitStatusDot;
+@property(nonatomic, strong) UIView* jitStatusRing;
 @property(nonatomic, strong) UILabel* jitStatusLabel;
+@property(nonatomic, strong) UIView* jitReadyDot;
+@property(nonatomic, strong) UIView* jitReadyRing;
+@property(nonatomic, strong) UILabel* jitReadyLabel;
 @property(nonatomic, strong) NSTimer* jitPollTimer;
 @property(nonatomic, strong) NSTimer* controllerNavTimer;
+@property(nonatomic, strong) UIStackView* topInfoStack;
 @property(nonatomic, assign) BOOL jitAcquired;
 @property(nonatomic, assign) BOOL launcherLandscapeUnlocked;
 - (void)refreshSignedInProfileUI;
@@ -6736,9 +6731,27 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   // ── Nav bar: XeniOS (left) · gear + profile (right) ────────────────────
 
   self.titleLabel = [[UILabel alloc] init];
-  self.titleLabel.text = @"XeniOS";
-  self.titleLabel.textColor = [XeniaTheme textPrimary];
-  self.titleLabel.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+  {
+    UIFont* titleFont = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
+    NSDictionary* whiteAttrs = @{
+      NSFontAttributeName : titleFont,
+      NSForegroundColorAttributeName : [XeniaTheme textPrimary],
+      NSKernAttributeName : @(0.8),
+    };
+    NSDictionary* accentAttrs = @{
+      NSFontAttributeName : titleFont,
+      NSForegroundColorAttributeName : [XeniaTheme accent],
+      NSKernAttributeName : @(0.8),
+    };
+    NSMutableAttributedString* title = [[NSMutableAttributedString alloc]
+        initWithString:@"Xeni" attributes:whiteAttrs];
+    NSAttributedString* title_suffix = [[NSAttributedString alloc]
+        initWithString:@"OS" attributes:accentAttrs];
+    [title appendAttributedString:title_suffix];
+    [title_suffix release];
+    self.titleLabel.attributedText = title;
+    [title release];
+  }
   self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
   [self.launcherOverlay addSubview:self.titleLabel];
 
@@ -6772,45 +6785,68 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                forControlEvents:UIControlEventTouchUpInside];
   [self.launcherOverlay addSubview:self.profileButton];
 
+  // JIT status indicator — dot + ring pulse + label, shown when JIT active.
+  self.jitReadyRing = [[UIView alloc] init];
+  self.jitReadyRing.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitReadyRing.backgroundColor = [UIColor clearColor];
+  self.jitReadyRing.layer.cornerRadius = 8.0;
+  self.jitReadyRing.layer.borderWidth = 1.5;
+  self.jitReadyRing.layer.borderColor = [XeniaTheme accent].CGColor;
+  self.jitReadyRing.alpha = 0;
+  self.jitReadyRing.userInteractionEnabled = NO;
+  [self.launcherOverlay addSubview:self.jitReadyRing];
+
+  self.jitReadyDot = [[UIView alloc] init];
+  self.jitReadyDot.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitReadyDot.backgroundColor = [XeniaTheme accent];
+  self.jitReadyDot.layer.cornerRadius = 4.0;
+  [self.launcherOverlay addSubview:self.jitReadyDot];
+
+  self.jitReadyLabel = [[UILabel alloc] init];
+  self.jitReadyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitReadyLabel.text = @"JIT";
+  self.jitReadyLabel.textColor = [XeniaTheme textSecondary];
+  self.jitReadyLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+  [self.launcherOverlay addSubview:self.jitReadyLabel];
+
   // Thin separator below the nav bar.
   UIView* navSep = [[UIView alloc] init];
   navSep.translatesAutoresizingMaskIntoConstraints = NO;
   navSep.backgroundColor = [XeniaTheme border];
   [self.launcherOverlay addSubview:navSep];
 
-  // ── JIT warning banner (single source of JIT info; collapses via stack) ─
-  //
-  // Contains the status dot + label + guidance text in one compact row.
-  // When JIT is acquired, updateJITAvailabilityUI sets .hidden = YES
-  // and the UIStackView collapses it automatically.
+  // ── Compact JIT notice row shown only when JIT is not enabled ──────────
 
   self.jitWarningCard = [[UIView alloc] init];
   self.jitWarningCard.translatesAutoresizingMaskIntoConstraints = NO;
   self.jitWarningCard.backgroundColor = [XeniaTheme bgSurface];
-  self.jitWarningCard.layer.cornerRadius = XeniaRadiusMd;
+  self.jitWarningCard.layer.cornerRadius = 10.0;
   self.jitWarningCard.layer.borderWidth = 0.5;
   self.jitWarningCard.layer.borderColor = [XeniaTheme border].CGColor;
 
+  self.jitStatusRing = [[UIView alloc] init];
+  self.jitStatusRing.translatesAutoresizingMaskIntoConstraints = NO;
+  self.jitStatusRing.backgroundColor = [UIColor clearColor];
+  self.jitStatusRing.layer.cornerRadius = 7.0;
+  self.jitStatusRing.layer.borderWidth = 1.5;
+  self.jitStatusRing.layer.borderColor = [XeniaTheme statusError].CGColor;
+  self.jitStatusRing.alpha = 0;
+  self.jitStatusRing.userInteractionEnabled = NO;
+  [self.jitWarningCard addSubview:self.jitStatusRing];
+
   self.jitStatusDot = [[UIView alloc] init];
   self.jitStatusDot.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitStatusDot.backgroundColor = [XeniaTheme statusWarning];
-  self.jitStatusDot.layer.cornerRadius = 4;
+  self.jitStatusDot.backgroundColor = [XeniaTheme statusError];
+  self.jitStatusDot.layer.cornerRadius = 3.5;
   [self.jitWarningCard addSubview:self.jitStatusDot];
 
   self.jitStatusLabel = [[UILabel alloc] init];
   self.jitStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitStatusLabel.text = @"JIT Not Detected";
+  self.jitStatusLabel.text = @"Enable JIT via StikDebug. You can open Settings and Create an Account while waiting.";
   self.jitStatusLabel.textColor = [XeniaTheme textPrimary];
-  self.jitStatusLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+  self.jitStatusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+  self.jitStatusLabel.numberOfLines = 0;
   [self.jitWarningCard addSubview:self.jitStatusLabel];
-
-  UILabel* jitGuide = [[UILabel alloc] init];
-  jitGuide.translatesAutoresizingMaskIntoConstraints = NO;
-  jitGuide.text = xe_jit_not_detected_guidance_message();
-  jitGuide.textColor = [XeniaTheme textSecondary];
-  jitGuide.font = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
-  jitGuide.numberOfLines = 0;
-  [self.jitWarningCard addSubview:jitGuide];
 
   // ── Library header: "Library" (left) + "+" (right) ─────────────────────
 
@@ -6841,23 +6877,27 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   // ── Collapsible stack: JIT banner → library header ─────────────────────
 
-  UIStackView* headerStack = [[UIStackView alloc]
+  self.topInfoStack = [[UIStackView alloc]
       initWithArrangedSubviews:@[ self.jitWarningCard, libraryRow ]];
-  headerStack.axis = UILayoutConstraintAxisVertical;
-  headerStack.spacing = 12;
-  headerStack.translatesAutoresizingMaskIntoConstraints = NO;
-  [self.launcherOverlay addSubview:headerStack];
+  self.topInfoStack.axis = UILayoutConstraintAxisVertical;
+  self.topInfoStack.spacing = 12;
+  self.topInfoStack.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.launcherOverlay addSubview:self.topInfoStack];
 
   // ── Games grid ─────────────────────────────────────────────────────────
 
   UICollectionViewFlowLayout* gridLayout = [[UICollectionViewFlowLayout alloc] init];
   gridLayout.minimumInteritemSpacing = 16;
-  gridLayout.minimumLineSpacing = 16;
+  gridLayout.minimumLineSpacing = 20;
   self.importedGamesCollectionView =
       [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:gridLayout];
   self.importedGamesCollectionView.translatesAutoresizingMaskIntoConstraints = NO;
   self.importedGamesCollectionView.dataSource = self;
   self.importedGamesCollectionView.delegate = self;
+  if (@available(iOS 11.0, *)) {
+    self.importedGamesCollectionView.contentInsetAdjustmentBehavior =
+        UIScrollViewContentInsetAdjustmentNever;
+  }
   self.importedGamesCollectionView.backgroundColor = [UIColor clearColor];
   self.importedGamesCollectionView.alwaysBounceVertical = YES;
   [self.importedGamesCollectionView registerClass:[XeniaGameTileCell class]
@@ -6866,6 +6906,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   // Empty-state label.
   UIView* emptyBg = [[UIView alloc] initWithFrame:CGRectZero];
+  emptyBg.frame = self.importedGamesCollectionView.bounds;
+  emptyBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
   self.importedGamesEmptyLabel = [[UILabel alloc] init];
   self.importedGamesEmptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
   self.importedGamesEmptyLabel.text =
@@ -6875,24 +6917,28 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.importedGamesEmptyLabel.textAlignment = NSTextAlignmentCenter;
   self.importedGamesEmptyLabel.numberOfLines = 0;
   [emptyBg addSubview:self.importedGamesEmptyLabel];
+  NSLayoutConstraint* empty_label_leading = [self.importedGamesEmptyLabel.leadingAnchor
+      constraintGreaterThanOrEqualToAnchor:emptyBg.leadingAnchor
+                                  constant:32];
+  empty_label_leading.priority = UILayoutPriorityDefaultHigh;
+  NSLayoutConstraint* empty_label_trailing = [self.importedGamesEmptyLabel.trailingAnchor
+      constraintLessThanOrEqualToAnchor:emptyBg.trailingAnchor
+                               constant:-32];
+  empty_label_trailing.priority = UILayoutPriorityDefaultHigh;
   [NSLayoutConstraint activateConstraints:@[
     [self.importedGamesEmptyLabel.centerXAnchor constraintEqualToAnchor:emptyBg.centerXAnchor],
     [self.importedGamesEmptyLabel.centerYAnchor constraintEqualToAnchor:emptyBg.centerYAnchor],
-    [self.importedGamesEmptyLabel.leadingAnchor
-        constraintGreaterThanOrEqualToAnchor:emptyBg.leadingAnchor
-                                    constant:32],
-    [self.importedGamesEmptyLabel.trailingAnchor
-        constraintLessThanOrEqualToAnchor:emptyBg.trailingAnchor
-                                 constant:-32],
+    empty_label_leading,
+    empty_label_trailing,
   ]];
   self.importedGamesCollectionView.backgroundView = emptyBg;
 
-  // ── Status label (tiny, at bottom — invisible when text is empty) ──────
+  // ── Status label (ephemeral, bottom overlay) ─────────────────────────────
 
   self.statusLabel = [[UILabel alloc] init];
   self.statusLabel.text = @"";
   self.statusLabel.textColor = [XeniaTheme textMuted];
-  self.statusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  self.statusLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightRegular];
   self.statusLabel.textAlignment = NSTextAlignmentCenter;
   self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
   [self.launcherOverlay addSubview:self.statusLabel];
@@ -6905,42 +6951,60 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [NSLayoutConstraint activateConstraints:@[
     // Nav bar.
     [self.titleLabel.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:hPad],
-    [self.titleLabel.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+    [self.titleLabel.topAnchor constraintEqualToAnchor:safe.topAnchor constant:6],
     [self.profileButton.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-8],
     [self.profileButton.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
     [self.settingsButton.trailingAnchor
-        constraintEqualToAnchor:self.profileButton.leadingAnchor],
+        constraintEqualToAnchor:self.profileButton.leadingAnchor
+                       constant:-2],
     [self.settingsButton.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    // JIT ready dot + ring + label sit right after the title.
+    [self.jitReadyDot.leadingAnchor constraintEqualToAnchor:self.titleLabel.trailingAnchor
+                                                   constant:10],
+    [self.jitReadyDot.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    [self.jitReadyDot.widthAnchor constraintEqualToConstant:8],
+    [self.jitReadyDot.heightAnchor constraintEqualToConstant:8],
+    [self.jitReadyRing.centerXAnchor constraintEqualToAnchor:self.jitReadyDot.centerXAnchor],
+    [self.jitReadyRing.centerYAnchor constraintEqualToAnchor:self.jitReadyDot.centerYAnchor],
+    [self.jitReadyRing.widthAnchor constraintEqualToConstant:16],
+    [self.jitReadyRing.heightAnchor constraintEqualToConstant:16],
+    [self.jitReadyLabel.leadingAnchor constraintEqualToAnchor:self.jitReadyDot.trailingAnchor
+                                                     constant:6],
+    [self.jitReadyLabel.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
+    [self.jitReadyLabel.trailingAnchor
+        constraintLessThanOrEqualToAnchor:self.settingsButton.leadingAnchor
+                                 constant:-8],
 
     // Nav separator.
-    [navSep.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:8],
+    [navSep.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:6],
     [navSep.leadingAnchor constraintEqualToAnchor:self.launcherOverlay.leadingAnchor],
     [navSep.trailingAnchor constraintEqualToAnchor:self.launcherOverlay.trailingAnchor],
     [navSep.heightAnchor constraintEqualToConstant:0.5],
 
     // Header stack (JIT banner + library row) below separator.
-    [headerStack.topAnchor constraintEqualToAnchor:navSep.bottomAnchor constant:12],
-    [headerStack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:hPad],
-    [headerStack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-hPad],
+    [self.topInfoStack.topAnchor constraintEqualToAnchor:navSep.bottomAnchor constant:12],
+    [self.topInfoStack.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:hPad],
+    [self.topInfoStack.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-hPad],
 
     // JIT banner internals.
     [self.jitStatusDot.leadingAnchor constraintEqualToAnchor:self.jitWarningCard.leadingAnchor
                                                     constant:14],
-    [self.jitStatusDot.topAnchor constraintEqualToAnchor:self.jitWarningCard.topAnchor
-                                                constant:16],
-    [self.jitStatusDot.widthAnchor constraintEqualToConstant:8],
-    [self.jitStatusDot.heightAnchor constraintEqualToConstant:8],
+    [self.jitStatusDot.centerYAnchor constraintEqualToAnchor:self.jitWarningCard.centerYAnchor],
+    [self.jitStatusDot.widthAnchor constraintEqualToConstant:7],
+    [self.jitStatusDot.heightAnchor constraintEqualToConstant:7],
+    [self.jitStatusRing.centerXAnchor constraintEqualToAnchor:self.jitStatusDot.centerXAnchor],
+    [self.jitStatusRing.centerYAnchor constraintEqualToAnchor:self.jitStatusDot.centerYAnchor],
+    [self.jitStatusRing.widthAnchor constraintEqualToConstant:14],
+    [self.jitStatusRing.heightAnchor constraintEqualToConstant:14],
     [self.jitStatusLabel.leadingAnchor constraintEqualToAnchor:self.jitStatusDot.trailingAnchor
                                                       constant:8],
     [self.jitStatusLabel.trailingAnchor
         constraintEqualToAnchor:self.jitWarningCard.trailingAnchor
                        constant:-14],
-    [self.jitStatusLabel.centerYAnchor constraintEqualToAnchor:self.jitStatusDot.centerYAnchor],
-    [jitGuide.leadingAnchor constraintEqualToAnchor:self.jitStatusLabel.leadingAnchor],
-    [jitGuide.trailingAnchor constraintEqualToAnchor:self.jitStatusLabel.trailingAnchor],
-    [jitGuide.topAnchor constraintEqualToAnchor:self.jitStatusLabel.bottomAnchor constant:2],
-    [jitGuide.bottomAnchor constraintEqualToAnchor:self.jitWarningCard.bottomAnchor
-                                           constant:-14],
+    [self.jitStatusLabel.topAnchor constraintEqualToAnchor:self.jitWarningCard.topAnchor
+                                                  constant:10],
+    [self.jitStatusLabel.bottomAnchor constraintEqualToAnchor:self.jitWarningCard.bottomAnchor
+                                                     constant:-10],
 
     // Library row internals.
     [libraryLabel.leadingAnchor constraintEqualToAnchor:libraryRow.leadingAnchor],
@@ -6950,7 +7014,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [libraryRow.heightAnchor constraintEqualToConstant:34],
 
     // Games grid.
-    [self.importedGamesCollectionView.topAnchor constraintEqualToAnchor:headerStack.bottomAnchor
+    [self.importedGamesCollectionView.topAnchor constraintEqualToAnchor:self.topInfoStack.bottomAnchor
                                                                constant:8],
     [self.importedGamesCollectionView.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor
                                                                    constant:hPad],
@@ -7519,14 +7583,49 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)updateJITStatusIndicator {
-  // The banner is the single JIT indicator — dot color updates but the
-  // banner itself hides entirely when JIT is acquired.
   if (self.jitAcquired) {
     self.jitStatusDot.backgroundColor = [XeniaTheme accent];
     self.jitStatusLabel.text = @"JIT Enabled";
+    // Show nav-bar ready indicator.
+    self.jitReadyDot.hidden = NO;
+    self.jitReadyLabel.hidden = NO;
+    // Pulse animation on the nav-bar ring.
+    if (![self.jitReadyRing.layer animationForKey:@"xenia.jit.ready.pulse"]) {
+      CABasicAnimation* scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+      scale.fromValue = @1.0;
+      scale.toValue = @2.2;
+      CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+      fade.fromValue = @0.7;
+      fade.toValue = @0.0;
+      CAAnimationGroup* group = [CAAnimationGroup animation];
+      group.animations = @[ scale, fade ];
+      group.duration = 1.8;
+      group.repeatCount = HUGE_VALF;
+      group.removedOnCompletion = NO;
+      [self.jitReadyRing.layer addAnimation:group forKey:@"xenia.jit.ready.pulse"];
+    }
   } else {
-    self.jitStatusDot.backgroundColor = [XeniaTheme statusWarning];
-    self.jitStatusLabel.text = @"JIT Not Detected";
+    self.jitStatusDot.backgroundColor = [XeniaTheme statusError];
+    self.jitStatusLabel.text = @"Enable JIT via StikDebug. You can open Settings and Create an Account while waiting.";
+    self.jitReadyDot.hidden = YES;
+    self.jitReadyLabel.hidden = YES;
+    [self.jitReadyRing.layer removeAllAnimations];
+    self.jitReadyRing.alpha = 0;
+    // Pulse animation on the warning card ring.
+    if (![self.jitStatusRing.layer animationForKey:@"xenia.jit.warn.pulse"]) {
+      CABasicAnimation* scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+      scale.fromValue = @1.0;
+      scale.toValue = @2.0;
+      CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+      fade.fromValue = @0.6;
+      fade.toValue = @0.0;
+      CAAnimationGroup* group = [CAAnimationGroup animation];
+      group.animations = @[ scale, fade ];
+      group.duration = 1.6;
+      group.repeatCount = HUGE_VALF;
+      group.removedOnCompletion = NO;
+      [self.jitStatusRing.layer addAnimation:group forKey:@"xenia.jit.warn.pulse"];
+    }
   }
 }
 
@@ -7936,6 +8035,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   XeniaLandscapeNavigationController* navigation_controller =
       [[XeniaLandscapeNavigationController alloc]
           initWithRootViewController:compatibility_controller];
+  navigation_controller.view.backgroundColor = [XeniaTheme bgPrimary];
   if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
     navigation_controller.modalPresentationStyle = UIModalPresentationFormSheet;
     if (@available(iOS 15.0, *)) {
@@ -8154,7 +8254,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   // Cover art is ~219x300 (~1:1.37). Reserve enough room for a readable
   // two-line title strip and a compat pill on its own row.
   CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-  return CGSizeMake(tile_width, image_height + 78.0f);
+  return CGSizeMake(tile_width, image_height + 44.0f);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -8250,7 +8350,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   const BOOL likely_direct_game = IsISOPath(selected_path) || IsDefaultXexPath(selected_path);
   IOSSelectedContentPackage package_info;
   const BOOL has_content_package_info =
-  navigation_controller.view.backgroundColor = [XeniaTheme bgPrimary];
       xe_read_selected_content_package(selected_path, &package_info, nullptr);
   const BOOL is_launchable_package =
       has_content_package_info && (package_info.content_type == xe::XContentType::kXbox360Title ||
