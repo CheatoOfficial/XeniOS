@@ -80,6 +80,17 @@ extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersiz
 
 static NSString* const kXeniaDiscussionDidUpdateNotification =
     @"XeniaDiscussionDidUpdateNotification";
+static NSString* const kXeniOSWebsiteURL = @"https://xenios.jp";
+static NSString* const kXeniOSDiscordURL = @"https://discord.gg/QwcTtNKTGf";
+static NSString* const kXeniOSGitHubURL = @"https://github.com/xenios-jp/XeniOS";
+static NSString* const kXeniOSKoFiURL = @"https://ko-fi.com/xenios";
+
+typedef NS_ENUM(NSInteger, XeniaConfigFooterLinkTag) {
+  kXeniaConfigFooterLinkWebsite = 1,
+  kXeniaConfigFooterLinkGitHub = 2,
+  kXeniaConfigFooterLinkDiscord = 3,
+  kXeniaConfigFooterLinkKoFi = 4,
+};
 static NSString* const kXeniaCompatDataDidUpdateNotification =
     @"XeniaCompatDataDidUpdateNotification";
 
@@ -380,12 +391,76 @@ static constexpr CGFloat XeniaRadiusMd = 8.0;
 static constexpr CGFloat XeniaRadiusLg = 12.0;
 static constexpr CGFloat XeniaRadiusXl = 16.0;
 
+static UIImage* xe_settings_footer_image(NSString* asset_name, NSString* fallback_symbol_name,
+                                         BOOL tintable) {
+  UIImage* image = [UIImage imageNamed:asset_name];
+  BOOL used_fallback = NO;
+  if (!image) {
+    used_fallback = YES;
+    UIImageSymbolConfiguration* config =
+        [UIImageSymbolConfiguration configurationWithPointSize:18.0
+                                                        weight:UIImageSymbolWeightMedium];
+    image = [UIImage systemImageNamed:fallback_symbol_name withConfiguration:config];
+    if (!image) {
+      image = [UIImage systemImageNamed:@"questionmark.circle" withConfiguration:config];
+    }
+  }
+  return [image imageWithRenderingMode:(tintable || used_fallback)
+                                           ? UIImageRenderingModeAlwaysTemplate
+                                           : UIImageRenderingModeAlwaysOriginal];
+}
+
+static UIButton* xe_make_settings_footer_button(NSString* asset_name,
+                                                NSString* fallback_symbol_name,
+                                                NSString* accessibility_label, NSInteger tag,
+                                                BOOL tintable, id target, SEL action) {
+  UIImage* image = xe_settings_footer_image(asset_name, fallback_symbol_name, tintable);
+  UIButton* button = [UIButton buttonWithType:UIButtonTypeCustom];
+  button.translatesAutoresizingMaskIntoConstraints = NO;
+  button.tag = tag;
+  button.backgroundColor = [UIColor clearColor];
+  button.tintColor = [XeniaTheme textPrimary];
+  [button setImage:image forState:UIControlStateNormal];
+  button.contentEdgeInsets = UIEdgeInsetsMake(6.0, 6.0, 6.0, 6.0);
+  button.adjustsImageWhenHighlighted = YES;
+  button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+  button.accessibilityLabel = accessibility_label;
+  button.accessibilityHint = @"Opens in Safari.";
+  button.accessibilityTraits |= UIAccessibilityTraitLink;
+  button.largeContentTitle = accessibility_label;
+  button.showsLargeContentViewer = YES;
+  [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
+  [button.widthAnchor constraintEqualToConstant:44.0].active = YES;
+  [button.heightAnchor constraintEqualToConstant:44.0].active = YES;
+  return button;
+}
+
+static void xe_open_external_url_string(NSString* url_string) {
+  if (!url_string || url_string.length == 0) {
+    return;
+  }
+  NSURL* url = [NSURL URLWithString:url_string];
+  if (!url) {
+    XELOGW("iOS: Failed to create URL from string: {}",
+           url_string ? [url_string UTF8String] : "(null)");
+    return;
+  }
+  [[UIApplication sharedApplication] openURL:url
+      options:@{}
+      completionHandler:^(BOOL success) {
+        if (!success) {
+          XELOGW("iOS: Failed to open external URL: {}", [url_string UTF8String]);
+        }
+      }];
+}
+
 namespace {
 
 enum class IOSConfigControlType {
   kToggle,
   kChoiceInt32,
   kChoiceUInt64,
+  kChoiceString,
   kAction,
 };
 
@@ -406,8 +481,10 @@ struct IOSConfigItem {
   IOSConfigControlType control_type = IOSConfigControlType::kToggle;
   bool bool_value = false;
   int64_t choice_value = 0;
+  std::string string_value;
   IOSConfigAction action = IOSConfigAction::kNone;
   std::vector<IOSConfigChoice> choices;
+  std::vector<std::string> choice_string_values;
 };
 
 struct IOSConfigSection {
@@ -640,6 +717,17 @@ bool SetConfigVarUInt64(const std::string& key, uint64_t value) {
   return true;
 }
 
+bool SetConfigVarString(const std::string& key, const std::string& value) {
+  cvar::IConfigVar* var = GetConfigVar(key);
+  if (!var) {
+    XELOGW("iOS settings: missing config var '{}'", key);
+    return false;
+  }
+  toml::value node(value);
+  var->LoadConfigValue(&node);
+  return true;
+}
+
 void AddBoolSetting(std::vector<IOSConfigItem>& items, const std::string& key,
                     const std::string& title, const std::string& subtitle, bool fallback) {
   if (!HasConfigVar(key)) {
@@ -679,6 +767,51 @@ void AddChoiceSetting(std::vector<IOSConfigItem>& items, IOSConfigControlType co
   if (!found) {
     item.choice_value = item.choices.front().value;
   }
+  items.push_back(std::move(item));
+}
+
+void AddStringChoiceSetting(std::vector<IOSConfigItem>& items, const std::string& key,
+                            const std::string& title, const std::string& subtitle,
+                            const std::string& fallback,
+                            std::vector<std::pair<std::string, std::string>> choices) {
+  if (!HasConfigVar(key) || choices.empty()) {
+    return;
+  }
+  IOSConfigItem item;
+  item.key = key;
+  item.title = title;
+  item.subtitle = subtitle;
+  item.control_type = IOSConfigControlType::kChoiceString;
+  item.string_value = GetConfigVarString(key, fallback);
+
+  for (size_t i = 0; i < choices.size(); ++i) {
+    item.choices.push_back({choices[i].first, static_cast<int64_t>(i)});
+    item.choice_string_values.push_back(choices[i].second);
+  }
+
+  bool found = false;
+  for (size_t i = 0; i < item.choice_string_values.size(); ++i) {
+    if (item.choice_string_values[i] == item.string_value) {
+      item.choice_value = static_cast<int64_t>(i);
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    item.string_value = fallback;
+    for (size_t i = 0; i < item.choice_string_values.size(); ++i) {
+      if (item.choice_string_values[i] == fallback) {
+        item.choice_value = static_cast<int64_t>(i);
+        found = true;
+        break;
+      }
+    }
+  }
+  if (!found) {
+    item.choice_value = 0;
+    item.string_value = item.choice_string_values.front();
+  }
+
   items.push_back(std::move(item));
 }
 
@@ -2546,74 +2679,132 @@ bool BuildDiscoveredGameFromPath(const std::filesystem::path& path, IOSDiscovere
 std::vector<IOSConfigSection> BuildIOSConfigSections() {
   std::vector<IOSConfigSection> sections;
 
-  IOSConfigSection graphics;
-  graphics.title = "Graphics";
-  graphics.footer = "These options affect image scaling and presentation.";
-  AddBoolSetting(graphics.items, "present_letterbox", "Keep Aspect Ratio",
-                 "Adds letterboxing to preserve image proportions.", true);
-  AddChoiceSetting(graphics.items, IOSConfigControlType::kChoiceInt32, "present_safe_area_x",
-                   "Safe Area (Horizontal)", "How much width is kept before cropping.", 100,
-                   {{"90%", 90}, {"95%", 95}, {"100%", 100}});
-  AddChoiceSetting(graphics.items, IOSConfigControlType::kChoiceInt32, "present_safe_area_y",
-                   "Safe Area (Vertical)", "How much height is kept before cropping.", 100,
-                   {{"90%", 90}, {"95%", 95}, {"100%", 100}});
-  AddChoiceSetting(graphics.items, IOSConfigControlType::kChoiceInt32, "anisotropic_override",
-                   "Anisotropic Filtering", "Texture filtering override level.", -1,
-                   {{"Auto", -1}, {"Off", 0}, {"2x", 2}, {"4x", 4}, {"8x", 8}, {"16x", 16}});
-  if (!graphics.items.empty()) {
-    sections.push_back(std::move(graphics));
+  IOSConfigSection display;
+  display.title = "Display";
+  display.footer = "These settings affect frame pacing and the Metal presenter output.";
+  AddBoolSetting(display.items, "metal_presenter_force_10bpc", "Force 10bpc Presenter Output",
+                 "Metal-only. Uses RGB10A2 output, which is the default path and usually "
+                 "reduces gamma-conversion cost on Apple GPUs. Disable only if colors, "
+                 "captures, or display compatibility look wrong.",
+                 true);
+  AddChoiceSetting(display.items, IOSConfigControlType::kChoiceUInt64, "framerate_limit",
+                   "Frame Rate Limit",
+                   "Caps host presentation only; guest timing is separate. Use this to "
+                   "reduce heat and battery drain. 120 FPS only matters on high-refresh "
+                   "displays.",
+                   0,
+                   {{"Unlimited", 0},
+                    {"30 FPS", 30},
+                    {"45 FPS", 45},
+                    {"60 FPS", 60},
+                    {"90 FPS", 90},
+                    {"120 FPS", 120}});
+  AddBoolSetting(display.items, "guest_display_refresh_cap", "Cap Guest Display Refresh",
+                 "Keeps guest vblank at console timing instead of running as fast as "
+                 "possible. Turn this off only for troubleshooting speed or timing-"
+                 "sensitive boot issues.",
+                 true);
+  AddBoolSetting(display.items, "use_50Hz_mode", "Use 50Hz PAL Timing",
+                 "Only matters when guest refresh cap is enabled. Required by some PAL "
+                 "titles; leave this off for most games to keep normal 60 Hz timing.",
+                 false);
+  if (!display.items.empty()) {
+    sections.push_back(std::move(display));
   }
 
   IOSConfigSection performance;
   performance.title = "Performance";
-  performance.footer = "Some changes may require relaunching the current game.";
-  AddChoiceSetting(performance.items, IOSConfigControlType::kChoiceUInt64, "framerate_limit",
-                   "Frame Rate Limit", "Host presentation FPS cap. Guest timing is separate.", 0,
-                   {{"Unlimited", 0}, {"30 FPS", 30}, {"60 FPS", 60}, {"120 FPS", 120}});
-  AddBoolSetting(performance.items, "guest_display_refresh_cap", "Cap Guest Display Refresh",
-                 "Runs guest vblank at PAL/NTSC rate instead of unlimited.", true);
-  AddBoolSetting(performance.items, "async_shader_compilation", "Async Shader Compilation",
-                 "Backend-dependent. Helps where supported; Metal support is currently limited.",
+  performance.footer = "These settings trade stutter, battery usage, and cache size.";
+  AddBoolSetting(performance.items, "store_shaders", "Persistent Shader Cache",
+                 "Keeps translated shaders and pipelines on disk so later boots stutter "
+                 "less. Disable only if you suspect cache corruption after an update.",
                  true);
-  AddBoolSetting(performance.items, "half_pixel_offset", "Half-Pixel Offset",
-                 "Compatibility adjustment for D3D9-style sampling.", true);
-  AddBoolSetting(performance.items, "occlusion_query_enable", "Hardware Occlusion Queries",
-                 "More accurate but can reduce performance.", false);
+  AddBoolSetting(performance.items, "async_shader_compilation", "Async Shader Compilation",
+                 "Compiles Metal shaders and pipelines in background threads to reduce "
+                 "stutter. New effects may appear a moment late; turn this off if you "
+                 "prefer blocking correctness over smoother frame pacing.",
+                 true);
   if (!performance.items.empty()) {
     sections.push_back(std::move(performance));
   }
 
+  IOSConfigSection audio;
+  audio.title = "Audio";
+  audio.footer = "These settings control mute state and XMA decoding behavior.";
+  AddBoolSetting(audio.items, "mute", "Mute Audio",
+                 "Immediately silences all emulator audio. Useful for background testing "
+                 "or silent repro runs.",
+                 false);
+  AddStringChoiceSetting(audio.items, "xma_decoder", "XMA Decoder",
+                         "Select the XMA decoder implementation. New is the current general "
+                         "default; Old and Master are fallback paths for regressions, and Fake "
+                         "disables XMA decode entirely.",
+                         "new",
+                         {{"New (Recommended)", "new"},
+                          {"Old", "old"},
+                          {"Master", "master"},
+                          {"Fake (No XMA Audio)", "fake"}});
+  AddBoolSetting(audio.items, "use_dedicated_xma_thread", "Dedicated XMA Thread",
+                 "Runs XMA decode work on a separate thread. On arm64 this is off by "
+                 "default; enable only if audio stutters or decode work blocks the title, "
+                 "since timing can change.",
+                 false);
+  if (!audio.items.empty()) {
+    sections.push_back(std::move(audio));
+  }
+
   IOSConfigSection compatibility;
   compatibility.title = "Compatibility";
-  compatibility.footer = "Saved to xenios.config.toml in the app Documents folder.";
+  compatibility.footer = "Leave these at their defaults unless a specific title needs them.";
+  AddBoolSetting(compatibility.items, "half_pixel_offset", "Half-Pixel Offset",
+                 "D3D9-style sampling behavior. Keep this on for correct post-processing "
+                 "and UI in most games; disable only if a specific title shows blurred UI "
+                 "or edge artifacts.",
+                 true);
+  AddBoolSetting(compatibility.items, "gpu_3d_to_2d_texture", "Treat 3D Textures as 2D",
+                 "Compatibility workaround for titles that incorrectly sample 3D textures "
+                 "as 2D. Keep this on unless it causes a specific regression.",
+                 true);
   AddBoolSetting(compatibility.items, "gpu_allow_invalid_fetch_constants",
                  "Allow Invalid Fetch Constants",
-                 "Unsafe workaround for games with bad fetch constants.", true);
-  AddBoolSetting(compatibility.items, "gpu_allow_invalid_upload_range",
-                 "Allow Invalid Upload Range", "Allows reads from pages marked no-access.", false);
+                 "Unsafe workaround for titles with broken texture or vertex fetch "
+                 "metadata. This can help a game boot or draw, but it may also introduce "
+                 "corruption or hide a deeper bug.",
+                 true);
+  AddBoolSetting(compatibility.items, "a64_enable_host_guest_stack_synchronization",
+                 "A64 Stack Synchronization",
+                 "ARM64-only compatibility path that keeps host and guest stacks "
+                 "synchronized across calls. Leave this off unless a game specifically "
+                 "needs it to boot or unwind correctly.",
+                 false);
+  AddBoolSetting(compatibility.items, "ios_jit_brk_prepare_fallback",
+                 "External JIT Prepare Fallback",
+                 "iOS ARM64 only. If iOS denies JIT page protection changes, ask an "
+                 "external broker or helper to prepare the region and retry. This is only "
+                 "useful on TXM or broker setups; otherwise it is unnecessary.",
+                 true);
   AddBoolSetting(compatibility.items, "ios_jit_brk_use_universal_0xf00d",
-                 "Universal JIT Breakpoint",
-                 "Use brk #0xF00D (x16 command dispatch) instead of legacy "
-                 "brk #0x69.",
-                 false);
-  AddBoolSetting(compatibility.items, "ios_jit_non_txm_force_mprotect_flip",
-                 "Force Mprotect Flip (Non-TXM)",
-                 "Force RW/RX page flips on non-TXM iOS devices. "
-                 "By default non-TXM still tries dual-map first. "
-                 "Ignored when TXM is active.",
-                 false);
+                 "Universal 0xF00D JIT Breakpoint",
+                 "Use the modern universal BRK command for the external JIT broker. Keep "
+                 "this on for current broker scripts; disable it only if you are using an "
+                 "older legacy 0x69-only setup. This only matters when External JIT "
+                 "Prepare Fallback is enabled.",
+                 true);
   if (!compatibility.items.empty()) {
     sections.push_back(std::move(compatibility));
   }
 
   IOSConfigSection diagnostics;
   diagnostics.title = "Diagnostics";
-  diagnostics.footer = "Logs are stored in Documents/xenia.log and can be viewed without Xcode.";
+  diagnostics.footer = "";
   AddChoiceSetting(diagnostics.items, IOSConfigControlType::kChoiceInt32, "log_level",
-                   "Log Verbosity", "Lower values reduce log noise and file size.", 2,
-                   {{"Errors Only", 0}, {"Warnings", 1}, {"Info", 2}, {"Debug", 3}});
+                   "Log Verbosity",
+                   "Controls how much goes into xenia.log. Higher levels help debug issues "
+                   "but increase log size and background overhead.",
+                   2, {{"Errors Only", 0}, {"Warnings", 1}, {"Info", 2}, {"Debug", 3}});
   AddActionSetting(diagnostics.items, IOSConfigAction::kViewRecentLog, "View Live Log",
-                   "Open a live-updating xenia.log viewer.");
+                   "Open a live-updating xenia.log viewer so you can capture boot failures "
+                   "without Xcode.");
   if (!diagnostics.items.empty()) {
     sections.push_back(std::move(diagnostics));
   }
@@ -2634,6 +2825,17 @@ bool ApplyIOSConfigSections(const std::vector<IOSConfigSection>& sections) {
           break;
         case IOSConfigControlType::kChoiceUInt64:
           ok &= SetConfigVarUInt64(item.key, static_cast<uint64_t>(item.choice_value));
+          break;
+        case IOSConfigControlType::kChoiceString:
+          if (item.choice_value < 0 ||
+              item.choice_value >= static_cast<int64_t>(item.choice_string_values.size())) {
+            XELOGW("iOS settings: invalid string choice index {} for '{}'", item.choice_value,
+                   item.key);
+            ok = false;
+            break;
+          }
+          ok &= SetConfigVarString(
+              item.key, item.choice_string_values[static_cast<size_t>(item.choice_value)]);
           break;
         case IOSConfigControlType::kAction:
           break;
@@ -6566,14 +6768,120 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   UIBarButtonItem* saveButton_;
 }
 
+- (UIView*)restartNoticeHeaderView {
+  UIView* container = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 136)] autorelease];
+  container.backgroundColor = [UIColor clearColor];
+
+  UIView* card = [[[UIView alloc] init] autorelease];
+  card.translatesAutoresizingMaskIntoConstraints = NO;
+  card.backgroundColor = [XeniaTheme bgSurface];
+  card.layer.cornerRadius = 12.0;
+  card.layer.borderWidth = 0.5;
+  card.layer.borderColor = [XeniaTheme border].CGColor;
+  [container addSubview:card];
+
+  UILabel* title = [[[UILabel alloc] init] autorelease];
+  title.translatesAutoresizingMaskIntoConstraints = NO;
+  title.backgroundColor = [UIColor clearColor];
+  title.text = @"Change Settings Before Launch";
+  title.textColor = [XeniaTheme textPrimary];
+  title.numberOfLines = 0;
+  xe_apply_label_font(title, UIFontTextStyleHeadline, 17.0, UIFontWeightSemibold);
+  [card addSubview:title];
+
+  UILabel* body = [[[UILabel alloc] init] autorelease];
+  body.translatesAutoresizingMaskIntoConstraints = NO;
+  body.backgroundColor = [UIColor clearColor];
+  body.text = @"To avoid partial updates, change settings before launching a game. If "
+              @"you save changes while a game is already running, fully relaunch "
+              @"XeniOS before testing them.";
+  body.textColor = [XeniaTheme textSecondary];
+  body.numberOfLines = 0;
+  xe_apply_label_font(body, UIFontTextStyleBody, 17.0, UIFontWeightRegular);
+  [card addSubview:body];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [card.topAnchor constraintEqualToAnchor:container.topAnchor constant:8.0],
+    [card.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:16.0],
+    [card.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-16.0],
+    [card.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-4.0],
+
+    [title.topAnchor constraintEqualToAnchor:card.topAnchor constant:14.0],
+    [title.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14.0],
+    [title.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14.0],
+
+    [body.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:6.0],
+    [body.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:14.0],
+    [body.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-14.0],
+    [body.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-14.0],
+  ]];
+
+  return container;
+}
+
+- (void)updateTableAccessoryLayoutForView:(UIView*)view isHeader:(BOOL)isHeader {
+  if (!view) {
+    return;
+  }
+  CGFloat width = CGRectGetWidth(self.tableView.bounds);
+  if (width <= 0.0) {
+    width = CGRectGetWidth(self.view.bounds);
+  }
+  if (width <= 0.0 && self.navigationController) {
+    width = CGRectGetWidth(self.navigationController.view.bounds);
+  }
+  if (width <= 0.0) {
+    width = CGRectGetWidth(UIScreen.mainScreen.bounds);
+  }
+  if (width <= 0.0) {
+    return;
+  }
+  CGRect frame = view.frame;
+  frame.size.width = width;
+  view.frame = frame;
+  [view setNeedsLayout];
+  [view layoutIfNeeded];
+  CGSize fitting_size =
+      [view systemLayoutSizeFittingSize:CGSizeMake(width, UILayoutFittingCompressedSize.height)
+          withHorizontalFittingPriority:UILayoutPriorityRequired
+                verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+  CGFloat target_height = ceil(fitting_size.height);
+  if (target_height <= 0.0) {
+    return;
+  }
+  if (fabs(CGRectGetHeight(view.frame) - target_height) <= 0.5 &&
+      fabs(CGRectGetWidth(view.frame) - width) <= 0.5) {
+    return;
+  }
+  frame.size.height = target_height;
+  view.frame = frame;
+  if (isHeader) {
+    self.tableView.tableHeaderView = view;
+  } else {
+    self.tableView.tableFooterView = view;
+  }
+}
+
+- (void)updateTableHeaderAndFooterLayout {
+  [self updateTableAccessoryLayoutForView:self.tableView.tableHeaderView isHeader:YES];
+  [self updateTableAccessoryLayoutForView:self.tableView.tableFooterView isHeader:NO];
+}
+
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.title = @"Settings";
   self.tableView.backgroundColor = [UIColor systemBackgroundColor];
   self.tableView.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16);
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+  self.tableView.estimatedRowHeight = 132.0;
+  if (@available(iOS 15.0, *)) {
+    self.tableView.sectionHeaderTopPadding = 0;
+  }
   sections_ = BuildIOSConfigSections();
   hasPendingChanges_ = NO;
+  self.tableView.tableHeaderView = [self restartNoticeHeaderView];
   self.tableView.tableFooterView = [self versionFooterView];
+  [self updateTableHeaderAndFooterLayout];
 
   self.navigationItem.leftBarButtonItem =
       [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
@@ -6587,49 +6895,125 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.navigationItem.rightBarButtonItem = saveButton_;
 }
 
+- (void)footerLinkTapped:(UIButton*)sender {
+  switch ((XeniaConfigFooterLinkTag)sender.tag) {
+    case kXeniaConfigFooterLinkWebsite:
+      xe_open_external_url_string(kXeniOSWebsiteURL);
+      break;
+    case kXeniaConfigFooterLinkGitHub:
+      xe_open_external_url_string(kXeniOSGitHubURL);
+      break;
+    case kXeniaConfigFooterLinkDiscord:
+      xe_open_external_url_string(kXeniOSDiscordURL);
+      break;
+    case kXeniaConfigFooterLinkKoFi:
+      xe_open_external_url_string(kXeniOSKoFiURL);
+      break;
+    default:
+      break;
+  }
+}
+
 - (UIView*)versionFooterView {
   NSString* footer_text = xe_user_facing_build_label(xe_current_compat_report_build_info());
-  if (footer_text.length == 0) {
-    UIView* spacer = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 24)] autorelease];
-    spacer.backgroundColor = [UIColor clearColor];
-    return spacer;
-  }
-
-  UIView* footer = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 72)] autorelease];
+  const BOOL has_footer_text = footer_text.length > 0;
+  UIView* footer =
+      [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, has_footer_text ? 126 : 78)] autorelease];
   footer.backgroundColor = [UIColor clearColor];
 
-  UILabel* label = [[[UILabel alloc] init] autorelease];
-  label.translatesAutoresizingMaskIntoConstraints = NO;
-  label.backgroundColor = [UIColor clearColor];
-  label.text = footer_text;
-  label.textAlignment = NSTextAlignmentCenter;
-  label.textColor = [XeniaTheme textMuted];
-  label.numberOfLines = 2;
-  xe_apply_label_font(label, UIFontTextStyleFootnote, 14.0, UIFontWeightMedium);
+  UILabel* links_label = [[[UILabel alloc] init] autorelease];
+  links_label.translatesAutoresizingMaskIntoConstraints = NO;
+  links_label.backgroundColor = [UIColor clearColor];
+  links_label.text = @"Links";
+  links_label.textAlignment = NSTextAlignmentCenter;
+  links_label.textColor = [XeniaTheme textMuted];
+  links_label.numberOfLines = 1;
+  xe_apply_label_font(links_label, UIFontTextStyleCaption1, 12.0, UIFontWeightSemibold);
+  [footer addSubview:links_label];
 
-  [footer addSubview:label];
-  [NSLayoutConstraint activateConstraints:@[
-    [label.topAnchor constraintEqualToAnchor:footer.topAnchor constant:10],
-    [label.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
-    [label.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
-    [label.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor constant:-18],
+  UIStackView* links_row = [[[UIStackView alloc] initWithArrangedSubviews:@[
+    xe_make_settings_footer_button(@"SettingsLinkWebsite", @"globe", @"Website",
+                                   kXeniaConfigFooterLinkWebsite, NO, self,
+                                   @selector(footerLinkTapped:)),
+    xe_make_settings_footer_button(
+        @"SettingsLinkGitHub", @"chevron.left.forwardslash.chevron.right", @"GitHub",
+        kXeniaConfigFooterLinkGitHub, NO, self, @selector(footerLinkTapped:)),
+    xe_make_settings_footer_button(@"SettingsLinkDiscord", @"bubble.left.and.bubble.right",
+                                   @"Discord", kXeniaConfigFooterLinkDiscord, NO, self,
+                                   @selector(footerLinkTapped:)),
+    xe_make_settings_footer_button(@"SettingsLinkKoFi", @"cup.and.saucer", @"Ko-fi",
+                                   kXeniaConfigFooterLinkKoFi, NO, self,
+                                   @selector(footerLinkTapped:)),
+  ]] autorelease];
+  links_row.translatesAutoresizingMaskIntoConstraints = NO;
+  links_row.axis = UILayoutConstraintAxisHorizontal;
+  links_row.alignment = UIStackViewAlignmentCenter;
+  links_row.distribution = UIStackViewDistributionEqualCentering;
+  links_row.spacing = 22.0;
+  [footer addSubview:links_row];
+
+  UIView* build_separator = nil;
+  UILabel* build_label = nil;
+  if (has_footer_text) {
+    build_separator = [[[UIView alloc] init] autorelease];
+    build_separator.translatesAutoresizingMaskIntoConstraints = NO;
+    build_separator.backgroundColor = [XeniaTheme border];
+    [footer addSubview:build_separator];
+
+    build_label = [[[UILabel alloc] init] autorelease];
+    build_label.translatesAutoresizingMaskIntoConstraints = NO;
+    build_label.backgroundColor = [UIColor clearColor];
+    build_label.text = footer_text;
+    build_label.textAlignment = NSTextAlignmentCenter;
+    build_label.textColor = [XeniaTheme textMuted];
+    build_label.numberOfLines = 1;
+    xe_apply_label_font(build_label, UIFontTextStyleFootnote, 14.0, UIFontWeightMedium);
+    [footer addSubview:build_label];
+  }
+
+  NSMutableArray<NSLayoutConstraint*>* constraints = [NSMutableArray arrayWithArray:@[
+    [links_label.topAnchor constraintEqualToAnchor:footer.topAnchor constant:6],
+    [links_label.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
+    [links_label.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
+    [links_row.topAnchor constraintEqualToAnchor:links_label.bottomAnchor constant:8],
+    [links_row.leadingAnchor constraintGreaterThanOrEqualToAnchor:footer.leadingAnchor constant:24],
+    [links_row.trailingAnchor constraintLessThanOrEqualToAnchor:footer.trailingAnchor constant:-24],
+    [links_row.centerXAnchor constraintEqualToAnchor:footer.centerXAnchor],
   ]];
+
+  if (has_footer_text) {
+    [constraints addObjectsFromArray:@[
+      [build_separator.topAnchor constraintEqualToAnchor:links_row.bottomAnchor constant:16],
+      [build_separator.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
+      [build_separator.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
+      [build_separator.heightAnchor constraintEqualToConstant:0.5],
+      [build_label.topAnchor constraintEqualToAnchor:build_separator.bottomAnchor constant:12],
+      [build_label.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
+      [build_label.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
+      [build_label.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor constant:-8],
+    ]];
+  } else {
+    [constraints addObject:[links_row.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor
+                                                                  constant:-10]];
+  }
+
+  [NSLayoutConstraint activateConstraints:constraints];
   return footer;
 }
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
-  UIView* footer = self.tableView.tableFooterView;
-  if (!footer) {
-    return;
-  }
-  CGRect frame = footer.frame;
-  CGFloat width = CGRectGetWidth(self.tableView.bounds);
-  if (fabs(frame.size.width - width) > 0.5) {
-    frame.size.width = width;
-    footer.frame = frame;
-    self.tableView.tableFooterView = footer;
-  }
+  [self updateTableHeaderAndFooterLayout];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  [self updateTableHeaderAndFooterLayout];
+}
+
+- (void)viewSafeAreaInsetsDidChange {
+  [super viewSafeAreaInsetsDidChange];
+  [self updateTableHeaderAndFooterLayout];
 }
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -6637,7 +7021,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)markPendingChanges {
@@ -6678,7 +7062,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (section < 0 || section >= static_cast<NSInteger>(sections_.size())) {
     return nil;
   }
-  return ToNSString(sections_[section].footer);
+  return sections_[section].footer.empty() ? nil : ToNSString(sections_[section].footer);
 }
 
 - (UITableViewCell*)tableView:(UITableView*)tableView
@@ -6692,45 +7076,51 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   IOSConfigItem* item = [self itemAtIndexPath:indexPath];
   if (!item) {
-    cell.textLabel.text = @"";
-    cell.detailTextLabel.text = @"";
+    cell.contentConfiguration = nil;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.accessoryView = nil;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     return cell;
   }
 
-  cell.textLabel.text = ToNSString(item->title);
-  cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
-  cell.detailTextLabel.numberOfLines = 2;
-  cell.textLabel.numberOfLines = 1;
+  UIListContentConfiguration* content = [UIListContentConfiguration subtitleCellConfiguration];
+  content.text = ToNSString(item->title);
+  content.textProperties.color = [XeniaTheme textPrimary];
+  content.textProperties.numberOfLines = 0;
+  content.textProperties.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+  content.secondaryTextProperties.color = [XeniaTheme textSecondary];
+  content.secondaryTextProperties.numberOfLines = 0;
+  content.secondaryTextProperties.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  content.prefersSideBySideTextAndSecondaryText = NO;
+  content.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(12.0, 0.0, 12.0, 0.0);
 
   if (item->control_type == IOSConfigControlType::kToggle) {
-    cell.textLabel.textColor = [XeniaTheme textPrimary];
-    cell.detailTextLabel.text = ToNSString(item->subtitle);
-    UISwitch* toggle = [[UISwitch alloc] init];
+    content.secondaryText = ToNSString(item->subtitle);
+    UISwitch* toggle = [[[UISwitch alloc] init] autorelease];
     toggle.on = item->bool_value;
     [toggle addTarget:self
                   action:@selector(toggleChanged:)
         forControlEvents:UIControlEventValueChanged];
+    cell.contentConfiguration = content;
     cell.accessoryView = toggle;
     cell.accessoryType = UITableViewCellAccessoryNone;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
   } else if (item->control_type == IOSConfigControlType::kAction) {
-    cell.textLabel.textColor = self.view.tintColor;
-    cell.detailTextLabel.text = ToNSString(item->subtitle);
+    content.textProperties.color = self.view.tintColor;
+    content.secondaryText = ToNSString(item->subtitle);
+    cell.contentConfiguration = content;
     cell.accessoryView = nil;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
   } else {
-    cell.textLabel.textColor = [XeniaTheme textPrimary];
     std::string value_title = ChoiceTitleForItem(*item);
     std::string subtitle = item->subtitle;
     if (!value_title.empty()) {
-      cell.detailTextLabel.text = ToNSString(value_title + " · " + subtitle);
+      content.secondaryText = ToNSString(value_title + " · " + subtitle);
     } else {
-      cell.detailTextLabel.text = ToNSString(subtitle);
+      content.secondaryText = ToNSString(subtitle);
     }
+    cell.contentConfiguration = content;
     cell.accessoryView = nil;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -6781,6 +7171,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       selectedValue:item->choice_value
         onSelection:^(int64_t selected_value) {
           item->choice_value = selected_value;
+          if (item->control_type == IOSConfigControlType::kChoiceString && selected_value >= 0 &&
+              selected_value < static_cast<int64_t>(item->choice_string_values.size())) {
+            item->string_value = item->choice_string_values[static_cast<size_t>(selected_value)];
+          }
           [self markPendingChanges];
           [self.tableView reloadRowsAtIndexPaths:@[ indexPath ]
                                 withRowAnimation:UITableViewRowAnimationNone];
@@ -6817,8 +7211,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   saveButton_.enabled = NO;
 
   NSString* title = saved ? @"Settings Saved" : @"Save Completed With Warnings";
-  NSString* message = saved ? @"Saved to xenios.config.toml."
-                            : @"Some settings could not be applied. Check xenia.log.";
+  NSString* message = saved ? @"Saved to xenios.config.toml.\n\nFor reliable results, change "
+                              @"settings before launching a game. If you saved while a game was "
+                              @"already running, fully relaunch XeniOS before testing."
+                            : @"Some settings could not be applied. Check xenia.log.\n\nAny "
+                              @"settings that were saved should be tested after a full XeniOS "
+                              @"relaunch, or by changing them before launching a game.";
   UIAlertController* alert =
       [UIAlertController alertControllerWithTitle:title
                                           message:message
@@ -9338,19 +9736,24 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)openSettingsTapped:(UIButton*)sender {
+  (void)sender;
   XeniaConfigViewController* settings_vc =
       [[XeniaConfigViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
   XeniaLandscapeNavigationController* nav =
       [[XeniaLandscapeNavigationController alloc] initWithRootViewController:settings_vc];
+  BOOL landscape_presentation =
+      CGRectGetWidth(self.view.bounds) > CGRectGetHeight(self.view.bounds);
   if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
     nav.modalPresentationStyle = UIModalPresentationFormSheet;
     if (@available(iOS 15.0, *)) {
       UISheetPresentationController* sheet = nav.sheetPresentationController;
-      sheet.detents = @[
-        [UISheetPresentationControllerDetent mediumDetent],
-        [UISheetPresentationControllerDetent largeDetent]
-      ];
+      sheet.detents =
+          landscape_presentation ? @[ [UISheetPresentationControllerDetent largeDetent] ] : @[
+            [UISheetPresentationControllerDetent mediumDetent],
+            [UISheetPresentationControllerDetent largeDetent]
+          ];
       sheet.prefersGrabberVisible = YES;
+      sheet.prefersScrollingExpandsWhenScrolledToEdge = YES;
     }
   } else {
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
