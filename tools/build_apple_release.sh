@@ -358,7 +358,7 @@ compile_bundle_icon_assets() {
   local app_bundle="$1"
   local platform="$2"
   local min_version="$3"
-  local icon_catalog="$root/assets/apple/AppIcon.icon"
+  local icon_catalog="$root/assets/apple/AppIcon.xcassets"
 
   [ -d "$icon_catalog" ] || die "missing icon catalog: $icon_catalog"
 

@@ -16,7 +16,7 @@ project("xenia-app")
   uuid("d7e98620-d007-4ad8-9dbd-b47c8853a17f")
   language("C++")
   xcodebuildresources({
-    "**/AppIcon.icon",
+    "**/*.xcassets",
   })
   links({
     "xenia-apu",
@@ -228,7 +228,7 @@ project("xenia-app")
         path.getabsolute(path.join(project_root, "xenia_ios.entitlements"))
     files({
       project_root.."/xenia_ios.entitlements",
-      project_root.."/assets/apple/AppIcon.icon",
+      project_root.."/assets/apple/AppIcon.xcassets",
     })
     links({
       "xenia-gpu-metal",
@@ -452,7 +452,7 @@ project("xenia-app")
     files({
       "Info.plist",
       project_root.."/xenia.entitlements",
-      project_root.."/assets/apple/AppIcon.icon",
+      project_root.."/assets/apple/AppIcon.xcassets",
     })
     linkoptions({
       "-Wl,-rpath,@executable_path/../Frameworks",
