@@ -878,9 +878,13 @@ bool A64CodeCache::Initialize() {
         generated_code_write_base_ = nullptr;
       }
 
-      // Allocate anonymous RW region.
+      // Work around iOS 18 vm_remap/JIT startup failures by over-allocating
+      // the temporary RW mirror used as the remap source.
+      // TODO(reality): Investigate why iOS 18 needs a 2x RW mirror here and
+      // replace this with the minimal documented allocation/remap strategy.
+      constexpr size_t kVmRemapWriteAllocSize = kGeneratedCodeSize * 2;
       generated_code_write_base_ = reinterpret_cast<uint8_t*>(
-          mmap(nullptr, kGeneratedCodeSize, PROT_READ | PROT_WRITE,
+          mmap(nullptr, kVmRemapWriteAllocSize, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
       if (generated_code_write_base_ == MAP_FAILED) {
         generated_code_write_base_ = nullptr;
@@ -923,7 +927,7 @@ bool A64CodeCache::Initialize() {
                    &cur_prot, &max_prot, VM_INHERIT_NONE);
       if (kr != KERN_SUCCESS) {
         XELOGE("vm_remap fallback: vm_remap failed with error {}", kr);
-        munmap(generated_code_write_base_, kGeneratedCodeSize);
+        munmap(generated_code_write_base_, kVmRemapWriteAllocSize);
         generated_code_write_base_ = nullptr;
         return false;
       }
@@ -943,7 +947,7 @@ bool A64CodeCache::Initialize() {
       if (kr_exec != KERN_SUCCESS) {
         XELOGE("vm_remap fallback: vm_protect RX failed (kr={})", kr_exec);
         vm_deallocate(mach_task_self(), remap_addr, kGeneratedCodeSize);
-        munmap(generated_code_write_base_, kGeneratedCodeSize);
+        munmap(generated_code_write_base_, kVmRemapWriteAllocSize);
         generated_code_write_base_ = nullptr;
         return false;
       }
@@ -965,7 +969,7 @@ bool A64CodeCache::Initialize() {
             static_cast<uint32_t>(exec_len), static_cast<uint32_t>(cur_prot),
             static_cast<uint32_t>(max_prot));
         vm_deallocate(mach_task_self(), remap_addr, kGeneratedCodeSize);
-        munmap(generated_code_write_base_, kGeneratedCodeSize);
+        munmap(generated_code_write_base_, kVmRemapWriteAllocSize);
         generated_code_write_base_ = nullptr;
         return false;
       }
