@@ -135,13 +135,42 @@ static BOOL xe_ios_requires_debugger_broker(void) {
   return major >= 26;
 }
 
+static NSString* xe_jit_waiting_status_message(void) {
+  return @"JIT not enabled. Assign the Ametyhst-MeloNX.js script in StikDebug before launching.";
+}
+
 static NSString* xe_jit_not_detected_guidance_message(void) {
-  if (!xe_ios_requires_debugger_broker()) {
-    return @"JIT is not available yet. On iOS 18 and below, use a signature-patched sideload "
-           @"(no debugger needed). You can open Settings while waiting.";
+  return @"JIT not enabled. Assign the Ametyhst-MeloNX.js script in StikDebug before launching.";
+}
+
+static void xe_add_jit_ring_pulse(CALayer* layer, NSString* key, CGFloat end_scale,
+                                  CGFloat peak_opacity, CFTimeInterval duration) {
+  if ([layer animationForKey:key]) {
+    return;
   }
-  return @"Enable JIT first (StikDebug, SideJITServer, or AltJIT). "
-         @"You can open Settings while waiting.";
+
+  CAMediaTimingFunction* ease_out =
+      [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+
+  CAKeyframeAnimation* scale = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+  scale.values = @[ @1.0, @(1.0 + (end_scale - 1.0) * 0.45), @(end_scale) ];
+  scale.keyTimes = @[ @0.0, @0.42, @1.0 ];
+  scale.timingFunctions = @[ ease_out, ease_out ];
+  scale.calculationMode = kCAAnimationCubic;
+
+  CAKeyframeAnimation* fade = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+  fade.values = @[ @0.0, @(peak_opacity), @(peak_opacity * 0.55), @0.0 ];
+  fade.keyTimes = @[ @0.0, @0.2, @0.58, @1.0 ];
+  fade.timingFunctions = @[ ease_out, ease_out, ease_out ];
+  fade.calculationMode = kCAAnimationLinear;
+
+  CAAnimationGroup* group = [CAAnimationGroup animation];
+  group.animations = @[ scale, fade ];
+  group.duration = duration;
+  group.repeatCount = HUGE_VALF;
+  group.removedOnCompletion = NO;
+  group.fillMode = kCAFillModeBoth;
+  [layer addAnimation:group forKey:key];
 }
 
 // ---------------------------------------------------------------------------
@@ -7827,8 +7856,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.jitReadyRing = [[UIView alloc] init];
   self.jitReadyRing.translatesAutoresizingMaskIntoConstraints = NO;
   self.jitReadyRing.backgroundColor = [UIColor clearColor];
-  self.jitReadyRing.layer.cornerRadius = 8.0;
-  self.jitReadyRing.layer.borderWidth = 1.5;
+  self.jitReadyRing.layer.cornerRadius = 7.0;
+  self.jitReadyRing.layer.borderWidth = 1.25;
   self.jitReadyRing.layer.borderColor = [XeniaTheme accent].CGColor;
   self.jitReadyRing.alpha = 0;
   self.jitReadyRing.userInteractionEnabled = NO;
@@ -7842,7 +7871,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   self.jitReadyLabel = [[UILabel alloc] init];
   self.jitReadyLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitReadyLabel.text = @"JIT";
+  self.jitReadyLabel.text = @"JIT Enabled";
   self.jitReadyLabel.textColor = [XeniaTheme textSecondary];
   self.jitReadyLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
   [self.launcherOverlay addSubview:self.jitReadyLabel];
@@ -7865,8 +7894,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.jitStatusRing = [[UIView alloc] init];
   self.jitStatusRing.translatesAutoresizingMaskIntoConstraints = NO;
   self.jitStatusRing.backgroundColor = [UIColor clearColor];
-  self.jitStatusRing.layer.cornerRadius = 7.0;
-  self.jitStatusRing.layer.borderWidth = 1.5;
+  self.jitStatusRing.layer.cornerRadius = 6.0;
+  self.jitStatusRing.layer.borderWidth = 1.25;
   self.jitStatusRing.layer.borderColor = [XeniaTheme statusError].CGColor;
   self.jitStatusRing.alpha = 0;
   self.jitStatusRing.userInteractionEnabled = NO;
@@ -7880,7 +7909,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   self.jitStatusLabel = [[UILabel alloc] init];
   self.jitStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  self.jitStatusLabel.text = @"Enable JIT via StikDebug. You can open Settings and Create an Account while waiting.";
+  self.jitStatusLabel.text = xe_jit_waiting_status_message();
   self.jitStatusLabel.textColor = [XeniaTheme textPrimary];
   self.jitStatusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
   self.jitStatusLabel.numberOfLines = 0;
@@ -8004,8 +8033,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self.jitReadyDot.heightAnchor constraintEqualToConstant:8],
     [self.jitReadyRing.centerXAnchor constraintEqualToAnchor:self.jitReadyDot.centerXAnchor],
     [self.jitReadyRing.centerYAnchor constraintEqualToAnchor:self.jitReadyDot.centerYAnchor],
-    [self.jitReadyRing.widthAnchor constraintEqualToConstant:16],
-    [self.jitReadyRing.heightAnchor constraintEqualToConstant:16],
+    [self.jitReadyRing.widthAnchor constraintEqualToConstant:14],
+    [self.jitReadyRing.heightAnchor constraintEqualToConstant:14],
     [self.jitReadyLabel.leadingAnchor constraintEqualToAnchor:self.jitReadyDot.trailingAnchor
                                                      constant:6],
     [self.jitReadyLabel.centerYAnchor constraintEqualToAnchor:self.titleLabel.centerYAnchor],
@@ -8032,8 +8061,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self.jitStatusDot.heightAnchor constraintEqualToConstant:7],
     [self.jitStatusRing.centerXAnchor constraintEqualToAnchor:self.jitStatusDot.centerXAnchor],
     [self.jitStatusRing.centerYAnchor constraintEqualToAnchor:self.jitStatusDot.centerYAnchor],
-    [self.jitStatusRing.widthAnchor constraintEqualToConstant:14],
-    [self.jitStatusRing.heightAnchor constraintEqualToConstant:14],
+    [self.jitStatusRing.widthAnchor constraintEqualToConstant:12],
+    [self.jitStatusRing.heightAnchor constraintEqualToConstant:12],
     [self.jitStatusLabel.leadingAnchor constraintEqualToAnchor:self.jitStatusDot.trailingAnchor
                                                       constant:8],
     [self.jitStatusLabel.trailingAnchor
@@ -8627,43 +8656,20 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     // Show nav-bar ready indicator.
     self.jitReadyDot.hidden = NO;
     self.jitReadyLabel.hidden = NO;
+    self.jitReadyLabel.text = @"JIT Enabled";
+    [self.jitStatusRing.layer removeAllAnimations];
+    self.jitStatusRing.alpha = 0;
     // Pulse animation on the nav-bar ring.
-    if (![self.jitReadyRing.layer animationForKey:@"xenia.jit.ready.pulse"]) {
-      CABasicAnimation* scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-      scale.fromValue = @1.0;
-      scale.toValue = @2.2;
-      CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-      fade.fromValue = @0.7;
-      fade.toValue = @0.0;
-      CAAnimationGroup* group = [CAAnimationGroup animation];
-      group.animations = @[ scale, fade ];
-      group.duration = 1.8;
-      group.repeatCount = HUGE_VALF;
-      group.removedOnCompletion = NO;
-      [self.jitReadyRing.layer addAnimation:group forKey:@"xenia.jit.ready.pulse"];
-    }
+    xe_add_jit_ring_pulse(self.jitReadyRing.layer, @"xenia.jit.ready.pulse", 1.7, 0.5, 2.0);
   } else {
     self.jitStatusDot.backgroundColor = [XeniaTheme statusError];
-    self.jitStatusLabel.text = @"Enable JIT via StikDebug. You can open Settings and Create an Account while waiting.";
+    self.jitStatusLabel.text = xe_jit_waiting_status_message();
     self.jitReadyDot.hidden = YES;
     self.jitReadyLabel.hidden = YES;
     [self.jitReadyRing.layer removeAllAnimations];
     self.jitReadyRing.alpha = 0;
     // Pulse animation on the warning card ring.
-    if (![self.jitStatusRing.layer animationForKey:@"xenia.jit.warn.pulse"]) {
-      CABasicAnimation* scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-      scale.fromValue = @1.0;
-      scale.toValue = @2.0;
-      CABasicAnimation* fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-      fade.fromValue = @0.6;
-      fade.toValue = @0.0;
-      CAAnimationGroup* group = [CAAnimationGroup animation];
-      group.animations = @[ scale, fade ];
-      group.duration = 1.6;
-      group.repeatCount = HUGE_VALF;
-      group.removedOnCompletion = NO;
-      [self.jitStatusRing.layer addAnimation:group forKey:@"xenia.jit.warn.pulse"];
-    }
+    xe_add_jit_ring_pulse(self.jitStatusRing.layer, @"xenia.jit.warn.pulse", 1.55, 0.42, 1.9);
   }
 }
 
