@@ -54,7 +54,7 @@ DEFINE_int32(metal_presenter_gamma_debug, 0,
              "GPU");
 DEFINE_bool(metal_presenter_log_gamma_ramp, false,
             "Log a few entries from the gamma ramp upload (debug).", "GPU");
-DEFINE_bool(metal_presenter_use_metalfx, true,
+DEFINE_bool(metal_presenter_use_metalfx, false,
             "Use MetalFX spatial scaling when upscaling guest output.", "GPU");
 DEFINE_int32(metal_presenter_metalfx_color_processing, 0,
              "MetalFX color processing mode: 0=perceptual, 1=linear.", "GPU");
