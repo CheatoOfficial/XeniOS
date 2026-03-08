@@ -62,7 +62,7 @@ DEFINE_bool(
     "GPU");
 DEFINE_bool(metal_transfer_fast_divmod, true,
             "Use fast exact div/mod in Metal transfer shaders", "GPU");
-DEFINE_bool(metal_transfer_tile_instancing, true,
+DEFINE_bool(metal_transfer_tile_instancing, false,
             "Use per-tile instanced draws for Metal transfer shaders", "GPU");
 DEFINE_bool(
     metal_transfer_msaa_sample_id, true,
