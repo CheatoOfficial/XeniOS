@@ -381,7 +381,10 @@ jobs:
           ./xenia-build.py fetchdata
 
       - name: Build
-        run: ./xenia-build.py build --config=Release --target=xenia-app --no_premake
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 15.0
+        run: ./xenia-build.py build --config=Release --target=xenia-app --no_premake -- \
+          MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -411,6 +414,8 @@ jobs:
             cp -f third_party/DirectXShaderCompiler/build_dxilconv_macos/lib/libdxilconv.dylib \
               "$app_bundle/Contents/Frameworks/" || true
           fi
+
+          ./tools/build_apple_release.sh --platform macos --stamp-bundle "$app_bundle"
 
           main_exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist" 2>/dev/null || echo xenios)"
           main_exe="$app_bundle/Contents/MacOS/$main_exe_name"
@@ -618,6 +623,8 @@ jobs:
           ./xenia-build.py premake --target_os=ios
 
       - name: Build
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: 16.0
         run: |
           # Build the full iOS app target (no code signing on CI).
           # Use --no_premake since premake was already run in the Setup step.
@@ -627,7 +634,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM= \
             PROVISIONING_PROFILE_SPECIFIER= \
-            CODE_SIGN_IDENTITY=
+            CODE_SIGN_IDENTITY= \
+            IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET}
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -637,6 +645,8 @@ jobs:
             echo "::error::iOS app bundle not found in build/bin/iOS-ARM64/Release"
             exit 1
           fi
+
+          ./tools/build_apple_release.sh --platform ios --stamp-bundle "$app_bundle"
 
           xattr -cr "$app_bundle"
           if ! codesign --force --sign - --timestamp=none --entitlements xenia_ios.entitlements "$app_bundle"; then
@@ -841,7 +851,10 @@ jobs:
           ./xenia-build.py fetchdata
 
       - name: Build
-        run: ./xenia-build.py build --config=Release --target=xenia-app --arch=x86_64 --no_premake
+        env:
+          MACOSX_DEPLOYMENT_TARGET: 15.0
+        run: ./xenia-build.py build --config=Release --target=xenia-app --arch=x86_64 --no_premake -- \
+          MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}
 
       - name: Prepare artifacts
         id: prepare_artifacts
@@ -871,6 +884,8 @@ jobs:
             cp -f third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib/libdxilconv.dylib \
               "$app_bundle/Contents/Frameworks/" || true
           fi
+
+          ./tools/build_apple_release.sh --platform macos --stamp-bundle "$app_bundle"
 
           main_exe_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Contents/Info.plist" 2>/dev/null || echo xenios)"
           main_exe="$app_bundle/Contents/MacOS/$main_exe_name"

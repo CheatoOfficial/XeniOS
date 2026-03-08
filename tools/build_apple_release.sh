@@ -13,14 +13,16 @@ Builds and packages Apple release artifacts:
 Options:
   --out DIR            Output directory (default: scratch/artifacts)
   --config NAME        checked|debug|release|valgrind (default: release)
-  --version VERSION    Marketing version override (defaults to repo VERSION file)
-  --build-number NUM   Build number override (defaults to CI run number / commit count)
+  --version VERSION    Marketing version override (defaults to latest vX.Y.Z tag, then 1.0.0)
+  --build-number NUM   Build number override (defaults to git commit count)
   --channel NAME       release|preview (default: release)
-  --stage NAME         alpha|beta|rc|stable (defaults to repo VERSION_STAGE file)
+  --stage NAME         alpha|beta|rc|stable (default: stable)
   --attestation-key VALUE
                        HMAC key used to attest official CI builds
   --attestation-key-file FILE
                        File containing the HMAC key used for attestation
+  --stamp-bundle PATH  Stamp version/attestation metadata into an existing .app bundle and exit
+  --platform NAME      Platform for --stamp-bundle (ios|macos)
   --ios-min VERSION    iOS minimum version (default: 16.0)
   --macos-min VERSION  macOS minimum version (default: 15.0)
   --mac-sign IDENTITY  macOS codesign identity (default: ad-hoc '-')
@@ -35,9 +37,10 @@ Options:
 Notes:
 - iOS packaging creates an ad-hoc-signed .ipa suitable for re-signing.
 - This script expects Xcode command line tools (xcodebuild, codesign, hdiutil).
-- Repo marketing version defaults to ./VERSION.
-- Public release stage defaults to ./VERSION_STAGE.
-- Official build numbers default to GITHUB_RUN_NUMBER(.GITHUB_RUN_ATTEMPT).
+- Marketing version defaults to the latest reachable vX.Y.Z git tag.
+- If no matching tag is available, the marketing version falls back to 1.0.0.
+- Public release stage defaults to stable.
+- Official build numbers default to git rev-list --count HEAD.
 EOF
 }
 
@@ -75,16 +78,16 @@ trim_string() {
   printf '%s' "${1:-}" | tr '\r\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
 }
 
-version_file_path() {
-  printf '%s/VERSION' "$1"
-}
-
-stage_file_path() {
-  printf '%s/VERSION_STAGE' "$1"
+default_marketing_version() {
+  printf '%s' "1.0.0"
 }
 
 validate_marketing_version() {
   [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]
+}
+
+validate_build_number() {
+  [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]
 }
 
 validate_release_stage() {
@@ -96,42 +99,31 @@ validate_release_stage() {
   return 1
 }
 
-read_repo_marketing_version() {
+read_latest_marketing_version_from_git() {
   local root="$1"
-  local version_file
-  version_file="$(version_file_path "$root")"
-  [ -f "$version_file" ] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
 
-  local line=""
-  while IFS= read -r raw || [ -n "$raw" ]; do
-    raw="${raw%%#*}"
-    line="$(trim_string "$raw")"
-    if [ -n "$line" ]; then
-      printf '%s' "$line"
-      return 0
+  local tag=""
+  local patterns=(
+    "v[0-9]*.[0-9]*.[0-9]*"
+    "[0-9]*.[0-9]*.[0-9]*"
+    "v[0-9]*.[0-9]*"
+    "[0-9]*.[0-9]*"
+  )
+  local pattern=""
+  for pattern in "${patterns[@]}"; do
+    tag="$(git -C "$root" describe --tags --abbrev=0 --match "$pattern" 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+      break
     fi
-  done < "$version_file"
+  done
+  [ -n "$tag" ] || return 1
 
-  return 1
-}
-
-read_repo_release_stage() {
-  local root="$1"
-  local stage_file
-  stage_file="$(stage_file_path "$root")"
-  [ -f "$stage_file" ] || return 1
-
-  local line=""
-  while IFS= read -r raw || [ -n "$raw" ]; do
-    raw="${raw%%#*}"
-    line="$(trim_string "$raw" | tr '[:upper:]' '[:lower:]')"
-    if [ -n "$line" ]; then
-      printf '%s' "$line"
-      return 0
-    fi
-  done < "$stage_file"
-
-  return 1
+  tag="$(trim_string "$tag")"
+  tag="${tag#v}"
+  validate_marketing_version "$tag" || return 1
+  printf '%s' "$tag"
 }
 
 resolve_release_version() {
@@ -143,27 +135,19 @@ resolve_release_version() {
     return 0
   fi
 
-  if version="$(read_repo_marketing_version "$root")"; then
-    validate_marketing_version "$version" || die "invalid marketing version in $(version_file_path "$root"): $version"
+  if version="$(read_latest_marketing_version_from_git "$root")"; then
     printf '%s' "$version"
     return 0
   fi
 
-  return 1
+  default_marketing_version
 }
 
 resolve_release_stage() {
-  local root="$1"
-  local stage="${2:-}"
+  local stage="${1:-}"
   if [ -n "$stage" ]; then
     stage="$(trim_string "$stage" | tr '[:upper:]' '[:lower:]')"
     validate_release_stage "$stage" || die "invalid release stage: $stage"
-    printf '%s' "$stage"
-    return 0
-  fi
-
-  if stage="$(read_repo_release_stage "$root")"; then
-    validate_release_stage "$stage" || die "invalid release stage in $(stage_file_path "$root"): $stage"
     printf '%s' "$stage"
     return 0
   fi
@@ -174,23 +158,18 @@ resolve_release_stage() {
 resolve_release_build_number() {
   local build_number="${1:-}"
   if [ -n "$build_number" ]; then
+    validate_build_number "$build_number" || die "invalid build number: $build_number"
     printf '%s' "$build_number"
     return 0
   fi
 
-  if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
-    local run_number attempt
-    run_number="$(trim_string "${GITHUB_RUN_NUMBER}")"
-    attempt="$(trim_string "${GITHUB_RUN_ATTEMPT:-1}")"
-    if [ -n "$attempt" ] && [ "$attempt" != "1" ]; then
-      printf '%s.%s' "$run_number" "$attempt"
-    else
-      printf '%s' "$run_number"
-    fi
-    return 0
+  build_number="$(git rev-list --count HEAD)"
+  local run_attempt="${GITHUB_RUN_ATTEMPT:-1}"
+  if [ -n "$run_attempt" ] && [ "$run_attempt" != "1" ]; then
+    build_number="${build_number}.${run_attempt}"
   fi
-
-  git rev-list --count HEAD
+  validate_build_number "$build_number" || die "invalid derived build number: $build_number"
+  printf '%s' "$build_number"
 }
 
 find_first_app() {
@@ -284,13 +263,20 @@ make_build_id() {
   local channel="$2"
   local version="$3"
   local build_number="$4"
-  local p c v b
+  local stage="${5:-}"
+  local p c v b s
   p="$(sanitize_build_fragment "$platform")"
   c="$(sanitize_build_fragment "$channel")"
   v="$(sanitize_build_fragment "$version")"
   b="$(sanitize_build_fragment "$build_number")"
   if [ -z "$p" ] || [ -z "$c" ] || [ -z "$v" ] || [ -z "$b" ]; then
     return 1
+  fi
+  if [ -n "$stage" ] && [ "$stage" != "stable" ]; then
+    s="$(sanitize_build_fragment "$stage")"
+    [ -n "$s" ] || return 1
+    printf '%s-%s-%s-%s-%s' "$p" "$c" "$v" "$b" "$s"
+    return 0
   fi
   printf '%s-%s-%s-%s' "$p" "$c" "$v" "$b"
 }
@@ -468,7 +454,7 @@ stamp_bundle_attestation() {
   fi
 
   local build_id
-  build_id="$(make_build_id "$platform" "$channel" "$version" "$build_number")" || \
+  build_id="$(make_build_id "$platform" "$channel" "$version" "$build_number" "$stage")" || \
     die "official build attestation requires version and build number"
   local payload
   payload="$(build_attestation_payload "$platform" "$channel" "$build_id" "$version" \
@@ -638,8 +624,12 @@ print_metadata_summary() {
   local attestation_key="$8"
 
   local ios_build_id macos_build_id
-  ios_build_id="$(make_build_id "ios" "$channel" "$version" "$build_number" || true)"
-  macos_build_id="$(make_build_id "macos" "$channel" "$version" "$build_number" || true)"
+  ios_build_id="$(make_build_id "ios" "$channel" "$version" "$build_number" "$stage" || true)"
+  macos_build_id="$(make_build_id "macos" "$channel" "$version" "$build_number" "$stage" || true)"
+  local version_build_label="$version"
+  if [ -n "$build_number" ]; then
+    version_build_label="${version}-${build_number}"
+  fi
 
   echo "channel=$channel"
   echo "stage=$stage"
@@ -649,17 +639,24 @@ print_metadata_summary() {
   echo "issued_at=$issued_at"
   if [ "$stage" = "stable" ]; then
     if [ "$channel" = "preview" ]; then
-      echo "display_label=Preview $version"
+      echo "display_label=Preview $version_build_label"
     else
-      echo "display_label=Version $version"
+      echo "display_label=$version_build_label"
     fi
   else
     local stage_title
-    stage_title="$(printf '%s' "$stage" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    case "$stage" in
+      rc)
+        stage_title="RC"
+        ;;
+      *)
+        stage_title="$(printf '%s' "$stage" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+        ;;
+    esac
     if [ "$channel" = "preview" ]; then
-      echo "display_label=$stage_title Preview $version"
+      echo "display_label=$stage_title Preview $version_build_label"
     else
-      echo "display_label=$stage_title $version"
+      echo "display_label=$stage_title $version_build_label"
     fi
   fi
   echo "ios_build_id=$ios_build_id"
@@ -688,6 +685,8 @@ release_version="${XENIOS_BUILD_VERSION:-}"
 release_build_number="${XENIOS_BUILD_NUMBER:-}"
 build_channel="${XENIOS_BUILD_CHANNEL:-release}"
 release_stage="${XENIOS_BUILD_STAGE:-}"
+stamp_bundle=""
+stamp_platform=""
 ios_min="16.0"
 macos_min="15.0"
 mac_sign_identity="-"
@@ -713,6 +712,10 @@ while [ $# -gt 0 ]; do
     --attestation-key-file)
       [ -n "${2:-}" ] || die "missing value for --attestation-key-file"
       attestation_key="$(tr -d '\r\n' < "${2}")"; shift 2;;
+    --stamp-bundle)
+      stamp_bundle="${2:-}"; shift 2;;
+    --platform)
+      stamp_platform="${2:-}"; shift 2;;
     --attestation-key-id)
       attestation_key_id="${2:-}"; shift 2;;
     --print-metadata)
@@ -749,12 +752,12 @@ case "$build_channel" in
     ;;
 esac
 
-release_version="$(resolve_release_version "$root" "$release_version" || true)"
-release_stage="$(resolve_release_stage "$root" "$release_stage")"
+release_version="$(resolve_release_version "$root" "$release_version")"
+release_stage="$(resolve_release_stage "$release_stage")"
 release_build_number="$(resolve_release_build_number "$release_build_number")"
 
 if [ -n "$attestation_key" ]; then
-  [ -n "$release_version" ] || die "official attestation requires a marketing version (set ./VERSION or pass --version)"
+  [ -n "$release_version" ] || die "official attestation requires a marketing version (tag the repo or pass --version)"
   [ -n "$release_build_number" ] || die "official attestation requires a build number"
 fi
 
@@ -767,6 +770,23 @@ issued_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 if [ "$print_metadata_only" -eq 1 ]; then
   print_metadata_summary "$build_channel" "$release_stage" "$release_version" \
     "$release_build_number" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
+  exit 0
+fi
+
+if [ -n "$stamp_bundle" ]; then
+  case "$stamp_platform" in
+    ios|macos)
+      ;;
+    *)
+      die "--platform must be ios or macos when using --stamp-bundle"
+      ;;
+  esac
+
+  need_file_exec /usr/libexec/PlistBuddy
+  stamp_bundle_version_metadata "$stamp_bundle" "$release_version" "$release_build_number"
+  stamp_bundle_stage_metadata "$stamp_bundle" "$release_stage"
+  stamp_bundle_attestation "$stamp_bundle" "$stamp_platform" "$build_channel" "$release_version" \
+    "$release_build_number" "$release_stage" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
   exit 0
 fi
 

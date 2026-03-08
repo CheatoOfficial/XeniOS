@@ -1,11 +1,38 @@
 name: Apple Publish
 
 "on":
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Publish channel"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - "release"
+          - "preview"
+      stage:
+        description: "Release stage"
+        required: true
+        default: "stable"
+        type: choice
+        options:
+          - "stable"
+          - "alpha"
+          - "beta"
+          - "rc"
+      version:
+        description: "Marketing version override (optional)"
+        required: false
+        type: string
+      build_number:
+        description: "Build number override (optional)"
+        required: false
+        type: string
   push:
     branches:
       - "preview"
-      - "release"
-      - "release/**"
+      - "xenios"
     tags:
       - "v*"
       - "release-*"
@@ -54,14 +81,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == "refs/heads/preview" ]]; then
+
+          is_preview_ref() {
+            [[ "${1}" == "refs/heads/preview" ]]
+          }
+
+          is_release_ref() {
+            [[ "${1}" == "refs/heads/xenios" || "${1}" == refs/tags/v* || "${1}" == refs/tags/release-* ]]
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            channel="${{ inputs.channel }}"
+            if [[ "${channel}" == "preview" ]]; then
+              is_preview_ref "${GITHUB_REF}" || {
+                echo "::error::Manual preview publishes must run from refs/heads/preview (got ${GITHUB_REF})"
+                exit 1
+              }
+            elif [[ "${channel}" == "release" ]]; then
+              is_release_ref "${GITHUB_REF}" || {
+                echo "::error::Manual release publishes must run from refs/heads/xenios or release tags (got ${GITHUB_REF})"
+                exit 1
+              }
+            fi
+          elif is_preview_ref "${GITHUB_REF}"; then
             channel="preview"
-          elif [[ "${GITHUB_REF}" == refs/heads/release* || "${GITHUB_REF}" == refs/tags/* ]]; then
+          elif is_release_ref "${GITHUB_REF}"; then
             channel="release"
           else
             echo "::error::Unsupported ref ${GITHUB_REF} for trusted Apple publish"
             exit 1
           fi
+          case "${channel}" in
+            release|preview)
+              ;;
+            *)
+              echo "::error::Unsupported channel ${channel}"
+              exit 1
+              ;;
+          esac
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Qt 6.10.1
@@ -117,6 +174,9 @@ jobs:
         env:
           XENIOS_BUILD_ATTESTATION_KEY: "${{ secrets.XENIOS_BUILD_ATTESTATION_KEY }}"
           XENIOS_BUILD_ATTESTATION_KEY_ID: "${{ secrets.XENIOS_BUILD_ATTESTATION_KEY_ID }}"
+          VERSION_OVERRIDE: "${{ inputs.version }}"
+          BUILD_NUMBER_OVERRIDE: "${{ inputs.build_number }}"
+          STAGE_OVERRIDE: "${{ inputs.stage }}"
         run: |
           set -euo pipefail
           if [ -z "${XENIOS_BUILD_ATTESTATION_KEY}" ]; then
@@ -124,10 +184,19 @@ jobs:
             exit 1
           fi
 
+          args=(--channel "${{ steps.channel.outputs.channel }}")
+          if [ -n "${VERSION_OVERRIDE}" ]; then
+            args+=(--version "${VERSION_OVERRIDE}")
+          fi
+          if [ -n "${BUILD_NUMBER_OVERRIDE}" ]; then
+            args+=(--build-number "${BUILD_NUMBER_OVERRIDE}")
+          fi
+          if [ -n "${STAGE_OVERRIDE}" ]; then
+            args+=(--stage "${STAGE_OVERRIDE}")
+          fi
+
           IFS=' ' read -r -a extra_args <<< "${{ matrix.script_args }}"
-          ./tools/build_apple_release.sh \
-            --channel "${{ steps.channel.outputs.channel }}" \
-            "${extra_args[@]}"
+          ./tools/build_apple_release.sh "${args[@]}" "${extra_args[@]}"
 
           test -f "${{ matrix.artifact_path }}"
 
@@ -156,14 +225,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == "refs/heads/preview" ]]; then
+
+          is_preview_ref() {
+            [[ "${1}" == "refs/heads/preview" ]]
+          }
+
+          is_release_ref() {
+            [[ "${1}" == "refs/heads/xenios" || "${1}" == refs/tags/v* || "${1}" == refs/tags/release-* ]]
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            channel="${{ inputs.channel }}"
+            if [[ "${channel}" == "preview" ]]; then
+              is_preview_ref "${GITHUB_REF}" || {
+                echo "::error::Manual preview publishes must run from refs/heads/preview (got ${GITHUB_REF})"
+                exit 1
+              }
+            elif [[ "${channel}" == "release" ]]; then
+              is_release_ref "${GITHUB_REF}" || {
+                echo "::error::Manual release publishes must run from refs/heads/xenios or release tags (got ${GITHUB_REF})"
+                exit 1
+              }
+            fi
+          elif is_preview_ref "${GITHUB_REF}"; then
             channel="preview"
-          elif [[ "${GITHUB_REF}" == refs/heads/release* || "${GITHUB_REF}" == refs/tags/* ]]; then
+          elif is_release_ref "${GITHUB_REF}"; then
             channel="release"
           else
             echo "::error::Unsupported ref ${GITHUB_REF} for trusted Apple publish"
             exit 1
           fi
+          case "${channel}" in
+            release|preview)
+              ;;
+            *)
+              echo "::error::Unsupported channel ${channel}"
+              exit 1
+              ;;
+          esac
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
 
       - name: Download iOS artifact
@@ -189,9 +288,23 @@ jobs:
         shell: bash
         env:
           CHANNEL: "${{ steps.channel.outputs.channel }}"
+          VERSION_OVERRIDE: "${{ inputs.version }}"
+          BUILD_NUMBER_OVERRIDE: "${{ inputs.build_number }}"
+          STAGE_OVERRIDE: "${{ inputs.stage }}"
         run: |
           set -euo pipefail
-          ./tools/build_apple_release.sh --channel "${CHANNEL}" --print-metadata > build-metadata.env
+          args=(--channel "${CHANNEL}")
+          if [ -n "${VERSION_OVERRIDE}" ]; then
+            args+=(--version "${VERSION_OVERRIDE}")
+          fi
+          if [ -n "${BUILD_NUMBER_OVERRIDE}" ]; then
+            args+=(--build-number "${BUILD_NUMBER_OVERRIDE}")
+          fi
+          if [ -n "${STAGE_OVERRIDE}" ]; then
+            args+=(--stage "${STAGE_OVERRIDE}")
+          fi
+          args+=(--print-metadata)
+          ./tools/build_apple_release.sh "${args[@]}" > build-metadata.env
 
           while IFS='=' read -r key value; do
             case "$key" in
@@ -206,18 +319,23 @@ jobs:
         shell: bash
         env:
           CHANNEL: "${{ steps.metadata.outputs.channel }}"
+          STAGE: "${{ steps.metadata.outputs.stage }}"
           VERSION: "${{ steps.metadata.outputs.version }}"
           BUILD_NUMBER: "${{ steps.metadata.outputs.build_number }}"
         run: |
           set -euo pipefail
 
+          stage_suffix=""
+          if [[ -n "${STAGE}" && "${STAGE}" != "stable" ]]; then
+            stage_suffix="-${STAGE}"
+          fi
+
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             release_tag="${GITHUB_REF_NAME}"
           elif [[ "${CHANNEL}" == "preview" ]]; then
-            release_tag="preview-v${VERSION}-build-${BUILD_NUMBER}"
+            release_tag="preview-v${VERSION}-build-${BUILD_NUMBER}${stage_suffix}"
           else
-            safe_ref="$(printf '%s' "${GITHUB_REF_NAME}" | tr '/ ' '--' | tr -cd 'A-Za-z0-9._-')"
-            release_tag="${safe_ref:-release}-build-${BUILD_NUMBER}"
+            release_tag="release-v${VERSION}-build-${BUILD_NUMBER}${stage_suffix}"
           fi
 
           if [[ "${CHANNEL}" == "preview" ]]; then
