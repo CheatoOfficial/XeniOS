@@ -11,8 +11,13 @@
 #define FFMPEG_LICENSE "LGPL version 2.1 or later"
 #define CONFIG_THIS_YEAR 2021
 #define av_restrict restrict
+#if defined(__APPLE__)
+#define EXTERN_PREFIX "_"
+#define EXTERN_ASM _
+#else
 #define EXTERN_PREFIX ""
 #define EXTERN_ASM
+#endif
 #define BUILDSUF ""
 #define HAVE_MMX2 HAVE_MMXEXT
 #define SWS_MAX_FILTER_SIZE 256
@@ -201,6 +206,9 @@
 #define HAVE_MIPSDSP 0
 
 /* CPU features used in C expressions cross-platform (e.g. mem.c ALIGN) */
+#ifndef HAVE_MMXEXT
+#define HAVE_MMXEXT 0
+#endif
 #ifndef HAVE_AVX
 #define HAVE_AVX 0
 #endif
@@ -324,11 +332,27 @@
 /*  Common to all platforms                                           */
 /* ------------------------------------------------------------------ */
 
+#ifndef HAVE_SIMD_ALIGN_16
+#define HAVE_SIMD_ALIGN_16 0
+#endif
+#ifndef HAVE_SIMD_ALIGN_32
+#define HAVE_SIMD_ALIGN_32 0
+#endif
+#ifndef HAVE_SIMD_ALIGN_64
+#define HAVE_SIMD_ALIGN_64 0
+#endif
+
 #define HAVE_FAST_UNALIGNED 1
 #define HAVE_THREADS 1
 #define HAVE_ACCESS 1
 #define HAVE_ISATTY 1
+#if defined(__APPLE__)
+#define HAVE_MALLOC_H 0
+#undef HAVE_SECTION_DATA_REL_RO
+#define HAVE_SECTION_DATA_REL_RO 0
+#else
 #define HAVE_MALLOC_H 1
+#endif
 #define HAVE_PRAGMA_DEPRECATED 1
 
 /* Math functions */

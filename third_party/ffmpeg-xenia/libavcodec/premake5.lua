@@ -122,18 +122,16 @@ project("libavcodec")
 
   -- libavcodec/aarch64/Makefile:
   --   OBJS:
-  filter({"platforms:Android-ARM64"})
+  filter({"platforms:Android-ARM64 or platforms:Mac-ARM64 or platforms:iOS-ARM64"})
   files({
     "../../FFmpeg/libavcodec/aarch64/idctdsp_init_aarch64.c",
     "../../FFmpeg/libavcodec/aarch64/mpegaudiodsp_init.c",
   })
   filter({})
   --   NEON-OBJS:
-  filter({"platforms:Android-ARM64"})
+  filter({"platforms:Android-ARM64 or platforms:Mac-ARM64 or platforms:iOS-ARM64"})
   files({
-    "../../FFmpeg/libavcodec/aarch64/fft_neon.S",
     "../../FFmpeg/libavcodec/aarch64/simple_idct_neon.S",
-    "../../FFmpeg/libavcodec/aarch64/mdct_neon.S",
     "../../FFmpeg/libavcodec/aarch64/mpegaudiodsp_neon.S",
   })
   filter({})

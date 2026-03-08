@@ -34,6 +34,10 @@ function ffmpeg_common()
     includedirs({
       "../../FFmpeg/compat/atomics/gcc",
     })
+  filter({"platforms:Mac-* or platforms:iOS-*"})
+    links({
+      "iconv",
+    })
   filter({})
 end
 

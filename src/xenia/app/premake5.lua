@@ -195,6 +195,7 @@ project("xenia-app")
       "MetalKit.framework",
       "QuartzCore.framework",
       "SDL2",
+      "iconv",
     })
     linkoptions({
       "-ldxilconv",
@@ -235,6 +236,7 @@ project("xenia-app")
       "spirv-cross",
       "metal-cpp",
       "SDL2",
+      "iconv",
       "CoreFoundation.framework",
       "Foundation.framework",
       "Metal.framework",

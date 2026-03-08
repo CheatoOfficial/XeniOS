@@ -790,9 +790,7 @@ workspace("xenia")
       filter("platforms:Mac-x86_64")
         files({
           ffmpeg_dir .. "/libavcodec/x86/constants.c",
-          ffmpeg_dir .. "/libavcodec/x86/dct_init.c",
           ffmpeg_dir .. "/libavcodec/x86/fdctdsp_init.c",
-          ffmpeg_dir .. "/libavcodec/x86/fft_init.c",
           ffmpeg_dir .. "/libavcodec/x86/idctdsp_init.c",
           ffmpeg_dir .. "/libavcodec/x86/mpegaudiodsp.c",
           ffmpeg_dir .. "/libavcodec/x86/fdct.c",
