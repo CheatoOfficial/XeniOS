@@ -24,6 +24,7 @@
 #include "xenia/kernel/util/kernel_fwd.h"
 #include "xenia/kernel/util/native_list.h"
 #include "xenia/kernel/util/object_table.h"
+#include "xenia/kernel/util/xmp_volume_patch.h"
 #include "xenia/kernel/xam/achievement_manager.h"
 #include "xenia/kernel/xam/app_manager.h"
 #include "xenia/kernel/xam/content_manager.h"
@@ -197,6 +198,9 @@ class KernelState {
     return xam_state()->content_manager();
   }
 
+  XmpVolumePatch* xmp_volume_patch() const { return xmp_volume_patch_.get(); }
+  void InitXmpVolumePatch();
+
   std::bitset<4> GetConnectedUsers() const;
 
   // Access must be guarded by the global critical region.
@@ -356,6 +360,7 @@ class KernelState {
   vfs::VirtualFileSystem* file_system_;
   std::unique_ptr<xam::XamState> xam_state_;
   std::unique_ptr<SystemManagementController> smc_;
+  std::unique_ptr<XmpVolumePatch> xmp_volume_patch_;
 
   KernelVersion kernel_version_;
 

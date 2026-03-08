@@ -522,6 +522,9 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
         xboxkrnl::XboxkrnlModule::kExLoadedCommandLineSize);
   }
 
+  // Initialize file I/O hooks for XMP volume title-specific patches.
+  InitXmpVolumePatch();
+
   // Spin up deferred dispatch worker.
   // TODO(benvanik): move someplace more appropriate (out of ctor, but around
   // here).
@@ -850,6 +853,10 @@ void KernelState::UnloadUserModule(const object_ref<UserModule>& module,
                            }) == user_modules_.end());
 
   object_table()->ReleaseHandleInLock(module->handle());
+}
+
+void KernelState::InitXmpVolumePatch() {
+  xmp_volume_patch_ = XmpVolumePatch::CreateForTitle(title_id(), this);
 }
 
 void KernelState::TerminateTitle() {
