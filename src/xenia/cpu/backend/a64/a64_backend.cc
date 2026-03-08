@@ -49,7 +49,7 @@ DECLARE_bool(record_mmio_access_exceptions);
 DECLARE_bool(log_mmio_recording);
 
 #if XE_PLATFORM_IOS
-constexpr bool kA64HostGuestStackSyncDefault = true;
+constexpr bool kA64HostGuestStackSyncDefault = false;
 constexpr int64_t kA64MaxStackpointsDefault = 16384;
 #else
 constexpr bool kA64HostGuestStackSyncDefault = true;
