@@ -147,11 +147,11 @@ static BOOL xe_ios_requires_debugger_broker(void) {
 }
 
 static NSString* xe_jit_waiting_status_message(void) {
-  return @"JIT not enabled. Assign the Ametyhst-MeloNX.js script in StikDebug before launching.";
+  return @"JIT is not active. In StikDebug, assign Amethyst-MeloNX.js or universal.js.";
 }
 
 static NSString* xe_jit_not_detected_guidance_message(void) {
-  return @"JIT not enabled. Assign the Ametyhst-MeloNX.js script in StikDebug before launching.";
+  return @"JIT is not active. In StikDebug, assign Amethyst-MeloNX.js or universal.js.";
 }
 
 static void xe_add_jit_ring_pulse(CALayer* layer, NSString* key, CGFloat end_scale,
@@ -245,9 +245,76 @@ static void xe_request_landscape_orientation(UIViewController* view_controller) 
                          UIInterfaceOrientationLandscapeRight);
 }
 
-static void xe_request_portrait_orientation(UIViewController* view_controller) {
-  xe_request_orientation(view_controller, UIInterfaceOrientationMaskPortrait,
-                         UIInterfaceOrientationPortrait);
+static UIInterfaceOrientation xe_interface_orientation_from_device_orientation(
+    UIDeviceOrientation orientation) {
+  switch (orientation) {
+    case UIDeviceOrientationLandscapeLeft:
+      return UIInterfaceOrientationLandscapeRight;
+    case UIDeviceOrientationLandscapeRight:
+      return UIInterfaceOrientationLandscapeLeft;
+    case UIDeviceOrientationPortrait:
+      return UIInterfaceOrientationPortrait;
+    default:
+      return UIInterfaceOrientationUnknown;
+  }
+}
+
+static UIInterfaceOrientationMask xe_interface_orientation_mask(
+    UIInterfaceOrientation orientation) {
+  switch (orientation) {
+    case UIInterfaceOrientationLandscapeLeft:
+    case UIInterfaceOrientationLandscapeRight:
+      return UIInterfaceOrientationMaskLandscape;
+    case UIInterfaceOrientationPortrait:
+    default:
+      return UIInterfaceOrientationMaskPortrait;
+  }
+}
+
+static UIInterfaceOrientation xe_current_interface_orientation(UIView* view) {
+#if !TARGET_OS_TV
+  UIWindowScene* scene = view.window.windowScene;
+  if (!scene) {
+    for (UIScene* connected_scene in [UIApplication sharedApplication].connectedScenes) {
+      if ([connected_scene isKindOfClass:[UIWindowScene class]]) {
+        scene = (UIWindowScene*)connected_scene;
+        break;
+      }
+    }
+  }
+  if (scene && scene.interfaceOrientation != UIInterfaceOrientationUnknown) {
+    return scene.interfaceOrientation;
+  }
+#endif
+  UIInterfaceOrientation device_orientation =
+      xe_interface_orientation_from_device_orientation([UIDevice currentDevice].orientation);
+  if (device_orientation != UIInterfaceOrientationUnknown) {
+    return device_orientation;
+  }
+  return UIInterfaceOrientationPortrait;
+}
+
+static void xe_request_current_orientation(UIViewController* view_controller) {
+  if (!view_controller) {
+    return;
+  }
+  UIInterfaceOrientation orientation = UIInterfaceOrientationUnknown;
+#if !TARGET_OS_TV
+  UIWindowScene* scene = view_controller.view.window.windowScene;
+  if (scene && scene.interfaceOrientation != UIInterfaceOrientationUnknown) {
+    orientation = scene.interfaceOrientation;
+  }
+#endif
+  if (orientation == UIInterfaceOrientationUnknown) {
+    orientation =
+        xe_interface_orientation_from_device_orientation([UIDevice currentDevice].orientation);
+  }
+  if (orientation == UIInterfaceOrientationUnknown) {
+    [view_controller setNeedsUpdateOfSupportedInterfaceOrientations];
+    [UIViewController attemptRotationToDeviceOrientation];
+    return;
+  }
+  xe_request_orientation(view_controller, xe_interface_orientation_mask(orientation), orientation);
 }
 
 static NSURL* xe_first_open_url_context_url(
@@ -3223,6 +3290,10 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
     return nil;
   }
 
+  self.backgroundColor = [UIColor clearColor];
+  self.layer.cornerRadius = XeniaRadiusLg;
+  self.layer.masksToBounds = NO;
+  self.layer.shadowOffset = CGSizeMake(0.0f, 6.0f);
   self.contentView.backgroundColor = [UIColor clearColor];
 
   self.cardView = [[UIView alloc] init];
@@ -3293,12 +3364,19 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
   return self;
 }
 
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  self.layer.shadowPath =
+      [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:XeniaRadiusLg].CGPath;
+}
+
 - (void)prepareForReuse {
   [super prepareForReuse];
   self.iconView.image = nil;
   self.titleLabel.text = @"";
   self.compatPill.text = @"";
   self.compatPill.hidden = YES;
+  self.cardView.layer.borderWidth = 0.5f;
   self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
   self.controllerFocused = NO;
 }
@@ -3313,13 +3391,20 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 
 - (void)updateControllerFocusAppearance {
   if (self.controllerFocused) {
+    self.cardView.layer.borderWidth = 1.5f;
     self.cardView.layer.borderColor = [XeniaTheme accent].CGColor;
     self.titleLabel.textColor = [XeniaTheme textPrimary];
-    self.transform = CGAffineTransformMakeScale(1.02, 1.02);
+    self.layer.shadowColor = [XeniaTheme accent].CGColor;
+    self.layer.shadowOpacity = 0.24f;
+    self.layer.shadowRadius = 10.0f;
+    self.layer.zPosition = 1.0f;
   } else {
+    self.cardView.layer.borderWidth = 0.5f;
     self.cardView.layer.borderColor = [XeniaTheme border].CGColor;
     self.titleLabel.textColor = [XeniaTheme textPrimary];
-    self.transform = CGAffineTransformIdentity;
+    self.layer.shadowOpacity = 0.0f;
+    self.layer.shadowRadius = 0.0f;
+    self.layer.zPosition = 0.0f;
   }
 }
 
@@ -3417,7 +3502,7 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 @end
@@ -3459,7 +3544,7 @@ static XEHeroGlowPalette xe_extract_hero_glow_palette(UIImage* image) {
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)doneTapped:(id)sender {
@@ -3675,7 +3760,7 @@ titleForFooterInSection:(NSInteger)section {
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)doneTapped:(id)__unused sender {
@@ -4770,7 +4855,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)doneTapped:(id)__unused sender {
@@ -5750,7 +5835,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)scrollNotesEditorIntoViewAnimated:(BOOL)animated {
@@ -6587,7 +6672,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (void)reloadLogTapped:(id)sender {
@@ -6753,7 +6838,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (BOOL)shouldAutorotate {
@@ -7269,7 +7354,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 @property(nonatomic, strong) NSTimer* controllerNavTimer;
 @property(nonatomic, strong) UIStackView* topInfoStack;
 @property(nonatomic, assign) BOOL jitAcquired;
-@property(nonatomic, assign) BOOL launcherLandscapeUnlocked;
 - (void)refreshSignedInProfileUI;
 - (void)presentSystemSigninPromptForUserIndex:(uint32_t)user_index
                                    usersNeeded:(uint32_t)users_needed
@@ -7317,7 +7401,6 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [super viewDidLoad];
   self.view.backgroundColor = [UIColor blackColor];
   self.jitAcquired = NO;
-  self.launcherLandscapeUnlocked = NO;
   self.gameRunning = NO;
   self.gameStopInProgress = NO;
   focused_game_index_ = -1;
@@ -7373,11 +7456,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)viewDidAppear:(BOOL)animated {
   [super viewDidAppear:animated];
   [self startCompatFetchIfNeeded];
-  xe_request_portrait_orientation(self);
-  if (!self.launcherLandscapeUnlocked) {
-    self.launcherLandscapeUnlocked = YES;
-    [self setNeedsUpdateOfSupportedInterfaceOrientations];
-  }
+  xe_request_current_orientation(self);
 }
 
 - (void)startCompatFetchIfNeeded {
@@ -7567,13 +7646,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self setFocusedGameIndex:0 scroll:NO];
   }
 
-  if (launcher_library_focus_active_ != library_focused &&
-      focused_game_index_ >= 0 &&
+  BOOL previous_library_focus_active = launcher_library_focus_active_;
+  launcher_library_focus_active_ = library_focused;
+
+  if (previous_library_focus_active != launcher_library_focus_active_ && focused_game_index_ >= 0 &&
       focused_game_index_ < static_cast<NSInteger>(discovered_games_.size())) {
     NSIndexPath* focused_path = [NSIndexPath indexPathForItem:focused_game_index_ inSection:0];
     [self.importedGamesCollectionView reloadItemsAtIndexPaths:@[ focused_path ]];
   }
-  launcher_library_focus_active_ = library_focused;
 }
 
 - (void)applyInGameMenuFocusVisuals {
@@ -7593,22 +7673,58 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [self setButton:self.inGameExitButton controllerFocused:current_focus == kInGameFocusExit];
 }
 
+- (BOOL)launcherGridUsesCompactLandscapeLayoutForContentSize:(CGSize)content_size {
+  return content_size.width > content_size.height && content_size.height < 430.0f;
+}
+
 - (NSInteger)launcherGridColumnCountForContentSize:(CGSize)content_size {
   CGFloat content_width = content_size.width;
+  BOOL compact_landscape = [self launcherGridUsesCompactLandscapeLayoutForContentSize:content_size];
+  CGFloat grid_spacing = compact_landscape ? 12.0f : 16.0f;
+  CGFloat minimum_tile_width = compact_landscape ? 170.0f : 190.0f;
+  NSInteger minimum_columns = compact_landscape ? 4 : 2;
+  NSInteger maximum_columns = compact_landscape ? 5 : 6;
 
-  NSInteger columns = 2;
-  if (content_width >= 1100.0f) {
-    columns = 5;
-  } else if (content_width >= 900.0f) {
-    columns = 4;
-  } else if (content_width >= 680.0f) {
-    columns = 3;
-  }
+  NSInteger columns = static_cast<NSInteger>(
+      floor((content_width + grid_spacing) / (minimum_tile_width + grid_spacing)));
+  columns = MAX(columns, minimum_columns);
+  columns = MIN(columns, maximum_columns);
   return columns;
 }
 
 - (NSInteger)launcherGridColumnCount {
   return [self launcherGridColumnCountForContentSize:self.importedGamesCollectionView.bounds.size];
+}
+
+- (CGFloat)launcherGridInteritemSpacingForCollectionView:(UICollectionView*)collectionView {
+  return [self launcherGridUsesCompactLandscapeLayoutForContentSize:collectionView.bounds.size]
+             ? 12.0f
+             : 16.0f;
+}
+
+- (CGFloat)launcherGridLineSpacingForCollectionView:(UICollectionView*)collectionView {
+  return [self launcherGridUsesCompactLandscapeLayoutForContentSize:collectionView.bounds.size]
+             ? 14.0f
+             : 20.0f;
+}
+
+- (CGFloat)launcherGridTitleHeightForCollectionView:(UICollectionView*)collectionView {
+  return [self launcherGridUsesCompactLandscapeLayoutForContentSize:collectionView.bounds.size]
+             ? 36.0f
+             : 44.0f;
+}
+
+- (CGFloat)launcherGridTileWidthForCollectionView:(UICollectionView*)collectionView
+                                          columns:(NSInteger)columns
+                                 interitemSpacing:(CGFloat)spacing {
+  CGFloat content_width = collectionView.bounds.size.width;
+  CGFloat total_spacing = spacing * MAX(columns - 1, 0);
+  CGFloat available_width = MAX(content_width - total_spacing, 0.0f);
+  CGFloat tile_width = available_width / MAX(columns, 1);
+  CGFloat screen_scale =
+      collectionView.window.screen ? collectionView.window.screen.scale : UIScreen.mainScreen.scale;
+  tile_width = floor(tile_width * screen_scale) / screen_scale;
+  return MAX(tile_width, 100.0f);
 }
 
 - (NSInteger)launcherPageStep {
@@ -8309,7 +8425,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.jitStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
   self.jitStatusLabel.text = xe_jit_waiting_status_message();
   self.jitStatusLabel.textColor = [XeniaTheme textPrimary];
-  self.jitStatusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+  xe_apply_label_font(self.jitStatusLabel, UIFontTextStyleSubheadline, 13.0, UIFontWeightMedium);
   self.jitStatusLabel.numberOfLines = 0;
   [self.jitWarningCard addSubview:self.jitStatusLabel];
 
@@ -8354,6 +8470,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   UICollectionViewFlowLayout* gridLayout = [[UICollectionViewFlowLayout alloc] init];
   gridLayout.minimumInteritemSpacing = 16;
   gridLayout.minimumLineSpacing = 20;
+  gridLayout.sectionInset = UIEdgeInsetsZero;
   self.importedGamesCollectionView =
       [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:gridLayout];
   self.importedGamesCollectionView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -8707,7 +8824,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.gameRunning = NO;
   self.launcherOverlay.hidden = NO;
   self.launcherOverlay.alpha = 1.0;
-  xe_request_portrait_orientation(self);
+  xe_request_current_orientation(self);
   self.statusLabel.text = @"Stopping game...";
 
   xe::ui::IOSWindowedAppContext* app_context = self.appContext;
@@ -9685,20 +9802,61 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (CGSize)collectionView:(UICollectionView*)collectionView
                     layout:(UICollectionViewLayout* __unused)collectionViewLayout
     sizeForItemAtIndexPath:(NSIndexPath* __unused)indexPath {
-  CGFloat content_width = collectionView.bounds.size.width;
   NSInteger columns = [self launcherGridColumnCountForContentSize:collectionView.bounds.size];
-  CGFloat spacing = 16.0f;
-  if ([collectionView.collectionViewLayout isKindOfClass:[UICollectionViewFlowLayout class]]) {
-    spacing = [(UICollectionViewFlowLayout*)collectionView.collectionViewLayout
-        minimumInteritemSpacing];
-  }
-  CGFloat total_spacing = spacing * (columns - 1);
-  CGFloat tile_width = floor((content_width - total_spacing) / columns);
-  tile_width = MAX(tile_width, 100.0f);
+  CGFloat spacing = [self launcherGridInteritemSpacingForCollectionView:collectionView];
+  CGFloat tile_width = [self launcherGridTileWidthForCollectionView:collectionView
+                                                            columns:columns
+                                                   interitemSpacing:spacing];
   // Cover art is ~219x300 (~1:1.37). Reserve enough room for a readable
   // two-line title strip and a compat pill on its own row.
-  CGFloat image_height = floor(tile_width * 300.0f / 219.0f);
-  return CGSizeMake(tile_width, image_height + 44.0f);
+  CGFloat image_height = ceil(tile_width * 300.0f / 219.0f);
+  return CGSizeMake(tile_width,
+                    image_height + [self launcherGridTitleHeightForCollectionView:collectionView]);
+}
+
+- (CGFloat)collectionView:(UICollectionView*)collectionView
+                                      layout:(UICollectionViewLayout* __unused)collectionViewLayout
+    minimumInteritemSpacingForSectionAtIndex:(NSInteger)__unused section {
+  return [self launcherGridInteritemSpacingForCollectionView:collectionView];
+}
+
+- (CGFloat)collectionView:(UICollectionView*)collectionView
+                                 layout:(UICollectionViewLayout* __unused)collectionViewLayout
+    minimumLineSpacingForSectionAtIndex:(NSInteger)__unused section {
+  return [self launcherGridLineSpacingForCollectionView:collectionView];
+}
+
+- (UIEdgeInsets)collectionView:(UICollectionView*)collectionView
+                        layout:(UICollectionViewLayout* __unused)collectionViewLayout
+        insetForSectionAtIndex:(NSInteger)section {
+  NSInteger columns = [self launcherGridColumnCountForContentSize:collectionView.bounds.size];
+  CGFloat interitem_spacing = [self launcherGridInteritemSpacingForCollectionView:collectionView];
+  CGFloat tile_width = [self launcherGridTileWidthForCollectionView:collectionView
+                                                            columns:columns
+                                                   interitemSpacing:interitem_spacing];
+  CGFloat consumed_width = tile_width * columns + interitem_spacing * MAX(columns - 1, 0);
+  CGFloat remainder = MAX(collectionView.bounds.size.width - consumed_width, 0.0f);
+  CGFloat screen_scale =
+      collectionView.window.screen ? collectionView.window.screen.scale : UIScreen.mainScreen.scale;
+  CGFloat left_inset = floor((remainder * 0.5f) * screen_scale) / screen_scale;
+  CGFloat right_inset = MAX(remainder - left_inset, 0.0f);
+
+  NSInteger item_count = [collectionView numberOfItemsInSection:section];
+  CGFloat top_inset = 0.0f;
+  CGFloat bottom_inset = 0.0f;
+  if (item_count > 0) {
+    NSInteger rows = (item_count + columns - 1) / columns;
+    CGFloat line_spacing = [self launcherGridLineSpacingForCollectionView:collectionView];
+    CGFloat image_height = ceil(tile_width * 300.0f / 219.0f);
+    CGFloat tile_height =
+        image_height + [self launcherGridTitleHeightForCollectionView:collectionView];
+    CGFloat consumed_height = tile_height * rows + line_spacing * MAX(rows - 1, 0);
+    CGFloat vertical_remainder = MAX(collectionView.bounds.size.height - consumed_height, 0.0f);
+    top_inset = floor((vertical_remainder * 0.5f) * screen_scale) / screen_scale;
+    bottom_inset = MAX(vertical_remainder - top_inset, 0.0f);
+  }
+
+  return UIEdgeInsetsMake(top_inset, left_inset, bottom_inset, right_inset);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -9859,14 +10017,11 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (self.launcherOverlay.hidden) {
     return UIInterfaceOrientationMaskLandscape;
   }
-  if (!self.launcherLandscapeUnlocked) {
-    return UIInterfaceOrientationMaskPortrait;
-  }
   return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-  return UIInterfaceOrientationPortrait;
+  return xe_current_interface_orientation(self.view);
 }
 
 - (BOOL)shouldAutorotate {
@@ -9895,7 +10050,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   [self updateJITAvailabilityUI];
   [self rebuildLauncherFocusGraph];
   [self applyLauncherFocusVisuals];
-  xe_request_portrait_orientation(self);
+  xe_request_current_orientation(self);
   [UIView animateWithDuration:0.3
                    animations:^{
                      self.launcherOverlay.alpha = 1.0;
@@ -9987,7 +10142,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   XeniaViewController* vc = [[XeniaViewController alloc] init];
   self.window.rootViewController = vc;
   [self.window makeKeyAndVisible];
-  xe_request_portrait_orientation(vc);
+  xe_request_current_orientation(vc);
 
   // Force layout so the Metal view is created.
   [vc.view layoutIfNeeded];
@@ -10152,7 +10307,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (root) {
     return [root supportedInterfaceOrientations];
   }
-  return UIInterfaceOrientationMaskPortrait;
+  return UIInterfaceOrientationMaskAllButUpsideDown;
 }
 
 - (void)applicationWillTerminate:(UIApplication*)application {
