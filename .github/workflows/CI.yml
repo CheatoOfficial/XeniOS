@@ -148,8 +148,14 @@ jobs:
 
           # Always run premake to regenerate cmake files (lua files may have changed)
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
+            mkdir -p tools/build/bin
             ./xenia-build.py premake
-            cp third_party/premake-core/bin/release/premake5 tools/build/bin
+            if [ -x third_party/premake-core/bin/release/premake5 ]; then
+              cp third_party/premake-core/bin/release/premake5 tools/build/bin/
+              chmod +x tools/build/bin/premake5
+            elif [ ! -x tools/build/bin/premake5 ]; then
+              echo "::warning::premake5 bootstrap output not found; skipping premake cache population"
+            fi
           else
             ./xenia-build.py premake
           fi
@@ -359,8 +365,14 @@ jobs:
           git checkout -- third_party/*.lua
 
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
+            mkdir -p tools/build/bin
             ./xenia-build.py premake
-            cp third_party/premake-core/bin/release/premake5 tools/build/bin
+            if [ -x third_party/premake-core/bin/release/premake5 ]; then
+              cp third_party/premake-core/bin/release/premake5 tools/build/bin/
+              chmod +x tools/build/bin/premake5
+            elif [ ! -x tools/build/bin/premake5 ]; then
+              echo "::warning::premake5 bootstrap output not found; skipping premake cache population"
+            fi
           else
             ./xenia-build.py premake
           fi
@@ -813,8 +825,14 @@ jobs:
           git checkout -- third_party/*.lua
 
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
+            mkdir -p tools/build/bin
             ./xenia-build.py premake -- --mac-x86_64
-            cp third_party/premake-core/bin/release/premake5 tools/build/bin
+            if [ -x third_party/premake-core/bin/release/premake5 ]; then
+              cp third_party/premake-core/bin/release/premake5 tools/build/bin/
+              chmod +x tools/build/bin/premake5
+            elif [ ! -x tools/build/bin/premake5 ]; then
+              echo "::warning::premake5 bootstrap output not found; skipping premake cache population"
+            fi
           else
             ./xenia-build.py premake -- --mac-x86_64
           fi
