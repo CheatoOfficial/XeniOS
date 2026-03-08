@@ -5613,7 +5613,6 @@ bool MetalCommandProcessor::IssueCopy() {
   bool readback_scaled_gpu = false;
   bool use_gpu_downscale = false;
   bool readback_scheduled = false;
-  ReadbackBuffer* readback_buffer = nullptr;
   uint32_t write_index = 0;
   uint32_t read_index = 0;
   bool use_delayed_sync = false;

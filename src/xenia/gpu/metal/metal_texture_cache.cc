@@ -1063,14 +1063,12 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     }
     if (needs_base_scaled_range &&
         !IsScaledResolveRangeResident(base_guest_address,
-                                      texture.GetGuestBaseSize(),
-                                      load_shader_info.source_bpe_log2)) {
+                                      texture.GetGuestBaseSize(), 4)) {
       use_upload_batch = false;
     }
     if (use_upload_batch && needs_mips_scaled_range &&
         !IsScaledResolveRangeResident(mips_guest_address,
-                                      texture.GetGuestMipsSize(),
-                                      load_shader_info.source_bpe_log2)) {
+                                      texture.GetGuestMipsSize(), 4)) {
       use_upload_batch = false;
     }
   }
@@ -1144,7 +1142,7 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
                                          ? texture.GetGuestBaseSize()
                                          : texture.GetGuestMipsSize();
       if (!MakeScaledResolveRangeCurrent(guest_address, guest_size_unscaled,
-                                         load_shader_info.source_bpe_log2) ||
+                                         4) ||
           !GetCurrentScaledResolveBuffer(source_buffer, source_buffer_offset,
                                          source_buffer_length)) {
         handle_upload_failure(false);

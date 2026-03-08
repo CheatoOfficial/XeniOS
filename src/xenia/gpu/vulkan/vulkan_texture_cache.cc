@@ -1335,12 +1335,10 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     write_descriptor_set_dest.pTexelBufferView = nullptr;
   }
   // TODO(Triang3l): Use a single 512 MB shared memory binding if possible.
-  // Align to the greater of the source element size and 16 bytes because
-  // shaders may read multiple blocks at once, while still preserving Xenios's
-  // scaled-resolve buffer binding path.
-  uint32_t source_length_alignment =
-      std::max(uint32_t(16),
-               uint32_t(UINT32_C(1) << load_shader_info.source_bpe_log2));
+  // ByteAddressBuffer-based load shaders keep the scaled-resolve binding
+  // aligned to 16 bytes even though LoadShaderInfo no longer exposes the guest
+  // source element size.
+  uint32_t source_length_alignment = 16;
   VkDescriptorSet descriptor_set_source_base = VK_NULL_HANDLE;
   VkDescriptorSet descriptor_set_source_mips = VK_NULL_HANDLE;
   VkDescriptorBufferInfo write_descriptor_set_source_base_buffer_info;
