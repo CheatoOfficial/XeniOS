@@ -1363,6 +1363,9 @@ class PremakeCommand(Command):
         # Update premake. If no binary found, it will be built from source.
         print("Running premake...\n")
         configure_qt_for_macos_target(extra_premake_args=pass_args)
+        if not generate_moc_files():
+            print(f"{bcolors.FAIL}ERROR: MOC generation failed{bcolors.ENDC}")
+            return 1
         ret = run_platform_premake(target_os_override=args["target_os"],
                                    cc=args["cc"], devenv=args["devenv"],
                                    extra_premake_args=pass_args)

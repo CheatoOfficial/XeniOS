@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache@main
         with:
           path: tools/build/bin/premake5
-          key: ${{ runner.os }}-premake5-${{ hashFiles('third_party/premake-core/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-premake5-desktop-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build
@@ -235,7 +235,7 @@ jobs:
   build-macos-arm64:
     name: Build macOS ARM64
     needs: lint
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@main
         with:
@@ -246,25 +246,25 @@ jobs:
         uses: actions/cache@main
         with:
           path: tools/build/bin/premake5
-          key: ${{ runner.os }}-premake5-${{ hashFiles('third_party/premake-core/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-premake5-desktop-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build
         uses: actions/cache@v3
         with:
           path: build/DerivedData
-          key: ${{ runner.os }}-ARM64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-arm64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua', 'assets/apple/**') }}
           restore-keys: |
-            ${{ runner.os }}-ARM64-deriveddata-
+            ${{ runner.os }}-${{ runner.arch }}-macos26-arm64-deriveddata-
 
       - name: Cache Qt6
         id: cache-qt-macos
         uses: actions/cache@v3
         with:
           path: ~/Qt
-          key: ${{ runner.os }}-qt6-6.10.1
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-qt6-6.10.1
           restore-keys: |
-            ${{ runner.os }}-qt6-
+            ${{ runner.os }}-${{ runner.arch }}-macos26-qt6-
 
       - name: Cache submodules
         id: cache-submodules-macos
@@ -273,9 +273,9 @@ jobs:
           path: |
             third_party
             .git/modules/third_party
-          key: ${{ runner.os }}-${{ runner.arch }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-desktop-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-submodules-
+            ${{ runner.os }}-${{ runner.arch }}-desktop-submodules-
 
       - name: Setup
         run: |
@@ -289,6 +289,45 @@ jobs:
               sleep 5
             done
           }
+
+          xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' ! -iname '*beta*' | sort -V | tail -n 1)"
+          if [ -z "$xcode_app" ]; then
+            xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -n 1)"
+          fi
+          if [ -z "$xcode_app" ]; then
+            echo "::error::Xcode 26 not found on runner"
+            ls -1 /Applications | sed 's/^/  /'
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$xcode_app/Contents/Developer" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="$xcode_app/Contents/Developer"
+          xcodebuild -version
+
+          ensure_metal_toolchain() {
+            if xcrun --find metal >/dev/null 2>&1 && xcrun --find metallib >/dev/null 2>&1; then
+              xcrun --find metal
+              xcrun --find metallib
+              return 0
+            fi
+
+            echo "::notice::Installing Xcode MetalToolchain component"
+            xcodebuild -showComponent MetalToolchain || true
+            if ! retry xcodebuild -downloadComponent MetalToolchain; then
+              retry sudo env DEVELOPER_DIR="$DEVELOPER_DIR" \
+                xcodebuild -downloadComponent MetalToolchain
+            fi
+            xcodebuild -showComponent MetalToolchain || true
+
+            if ! xcrun --find metal >/dev/null 2>&1 || ! xcrun --find metallib >/dev/null 2>&1; then
+              echo "::error::Metal toolchain is still unavailable after installation"
+              return 1
+            fi
+
+            xcrun --find metal
+            xcrun --find metallib
+          }
+
+          ensure_metal_toolchain
 
           git config --global http.lowSpeedLimit 1000
           git config --global http.lowSpeedTime 60
@@ -414,7 +453,7 @@ jobs:
   build-ios-arm64:
     name: Build iOS ARM64
     needs: lint
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@main
         with:
@@ -425,16 +464,16 @@ jobs:
         uses: actions/cache@main
         with:
           path: tools/build/bin/premake5
-          key: ${{ runner.os }}-premake5-ios-${{ hashFiles('.gitmodules') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-premake5-ios-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build-ios
         uses: actions/cache@v3
         with:
           path: build/DerivedData
-          key: ${{ runner.os }}-ios-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-ios-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua', 'assets/apple/**') }}
           restore-keys: |
-            ${{ runner.os }}-ios-deriveddata-
+            ${{ runner.os }}-${{ runner.arch }}-macos26-ios-deriveddata-
 
       - name: Cache submodules
         id: cache-submodules-ios
@@ -459,6 +498,67 @@ jobs:
               sleep 5
             done
           }
+
+          xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' ! -iname '*beta*' | sort -V | tail -n 1)"
+          if [ -z "$xcode_app" ]; then
+            xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -n 1)"
+          fi
+          if [ -z "$xcode_app" ]; then
+            echo "::error::Xcode 26 not found on runner"
+            ls -1 /Applications | sed 's/^/  /'
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$xcode_app/Contents/Developer" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="$xcode_app/Contents/Developer"
+          xcodebuild -version
+
+          ensure_metal_toolchain() {
+            if xcrun --find metal >/dev/null 2>&1 && xcrun --find metallib >/dev/null 2>&1; then
+              xcrun --find metal
+              xcrun --find metallib
+              return 0
+            fi
+
+            echo "::notice::Installing Xcode MetalToolchain component"
+            xcodebuild -showComponent MetalToolchain || true
+            if ! retry xcodebuild -downloadComponent MetalToolchain; then
+              retry sudo env DEVELOPER_DIR="$DEVELOPER_DIR" \
+                xcodebuild -downloadComponent MetalToolchain
+            fi
+            xcodebuild -showComponent MetalToolchain || true
+
+            if ! xcrun --find metal >/dev/null 2>&1 || ! xcrun --find metallib >/dev/null 2>&1; then
+              echo "::error::Metal toolchain is still unavailable after installation"
+              return 1
+            fi
+
+            xcrun --find metal
+            xcrun --find metallib
+          }
+
+          ensure_metal_toolchain
+
+          ensure_ios_platform() {
+            if xcodebuild -showsdks | grep -qE '^[[:space:]]+iOS '; then
+              xcodebuild -showsdks | sed -n '/^iOS SDKs:/,/^iOS Simulator SDKs:/p'
+              return 0
+            fi
+
+            echo "::notice::Installing Xcode iOS platform"
+            if ! retry xcodebuild -downloadPlatform iOS; then
+              retry sudo env DEVELOPER_DIR="$DEVELOPER_DIR" \
+                xcodebuild -downloadPlatform iOS
+            fi
+
+            if ! xcodebuild -showsdks | grep -qE '^[[:space:]]+iOS '; then
+              echo "::error::iOS SDK is still unavailable after platform installation"
+              return 1
+            fi
+
+            xcodebuild -showsdks | sed -n '/^iOS SDKs:/,/^iOS Simulator SDKs:/p'
+          }
+
+          ensure_ios_platform
 
           git config --global http.lowSpeedLimit 1000
           git config --global http.lowSpeedTime 60
@@ -509,12 +609,51 @@ jobs:
         run: |
           # Build the full iOS app target (no code signing on CI).
           # Use --no_premake since premake was already run in the Setup step.
-          ./xenia-build.py build --config=Release --target_os=ios --no_premake -- CODE_SIGNING_ALLOWED=NO
+          ./xenia-build.py build --config=Release --target_os=ios --no_premake -- \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            CODE_SIGN_IDENTITY=
+
+      - name: Prepare artifacts
+        id: prepare_artifacts
+        run: |
+          app_bundle="$(find build/bin/iOS-ARM64/Release -maxdepth 1 -name '*.app' -type d | head -n 1)"
+          if [ -z "$app_bundle" ]; then
+            echo "::error::iOS app bundle not found in build/bin/iOS-ARM64/Release"
+            exit 1
+          fi
+
+          xattr -cr "$app_bundle"
+          if ! codesign --force --sign - --timestamp=none --entitlements xenia_ios.entitlements "$app_bundle"; then
+            echo "::warning::Ad-hoc signing failed; packaging unsigned app bundle"
+          fi
+
+          mkdir -p artifacts/release
+          ipa_out="$PWD/artifacts/release/xenios_ios_iphone_ipad.ipa"
+          tmp="$(mktemp -d "${TMPDIR:-/tmp}/xenios_ci_ipa.XXXXXX")"
+          mkdir -p "$tmp/Payload"
+          ditto "$app_bundle" "$tmp/Payload/$(basename "$app_bundle")"
+          (
+            cd "$tmp"
+            ditto -c -k --sequesterRsrc --keepParent Payload "$ipa_out"
+          )
+          rm -rf "$tmp"
+
+      - name: Upload iOS ARM64 artifacts
+        if: steps.prepare_artifacts.outcome == 'success'
+        uses: actions/upload-artifact@main
+        with:
+          name: xenios_ios_arm64
+          path: artifacts/release
+          if-no-files-found: error
 
   build-macos-x86_64:
     name: Build macOS x86_64
     needs: lint
-    runs-on: macos-15-intel
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@main
         with:
@@ -525,25 +664,25 @@ jobs:
         uses: actions/cache@main
         with:
           path: tools/build/bin/premake5
-          key: ${{ runner.os }}-${{ runner.arch }}-premake5-${{ hashFiles('third_party/premake-core/**') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-premake5-desktop-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build
         uses: actions/cache@v3
         with:
           path: build/DerivedData
-          key: ${{ runner.os }}-x86_64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-x86_64-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua', 'assets/apple/**') }}
           restore-keys: |
-            ${{ runner.os }}-x86_64-deriveddata-
+            ${{ runner.os }}-${{ runner.arch }}-macos26-x86_64-deriveddata-
 
       - name: Cache Qt6
         id: cache-qt-macos
         uses: actions/cache@v3
         with:
           path: ~/Qt
-          key: ${{ runner.os }}-${{ runner.arch }}-qt6-6.10.1
+          key: ${{ runner.os }}-${{ runner.arch }}-macos26-qt6-6.10.1
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-qt6-
+            ${{ runner.os }}-${{ runner.arch }}-macos26-qt6-
 
       - name: Cache submodules
         id: cache-submodules-macos
@@ -552,9 +691,9 @@ jobs:
           path: |
             third_party
             .git/modules/third_party
-          key: ${{ runner.os }}-${{ runner.arch }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-desktop-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-submodules-
+            ${{ runner.os }}-${{ runner.arch }}-desktop-submodules-
 
       - name: Setup
         run: |
@@ -569,12 +708,54 @@ jobs:
             done
           }
 
+          xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' ! -iname '*beta*' | sort -V | tail -n 1)"
+          if [ -z "$xcode_app" ]; then
+            xcode_app="$(find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' | sort -V | tail -n 1)"
+          fi
+          if [ -z "$xcode_app" ]; then
+            echo "::error::Xcode 26 not found on runner"
+            ls -1 /Applications | sed 's/^/  /'
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$xcode_app/Contents/Developer" >> "$GITHUB_ENV"
+          export DEVELOPER_DIR="$xcode_app/Contents/Developer"
+          xcodebuild -version
+
+          ensure_metal_toolchain() {
+            if xcrun --find metal >/dev/null 2>&1 && xcrun --find metallib >/dev/null 2>&1; then
+              xcrun --find metal
+              xcrun --find metallib
+              return 0
+            fi
+
+            echo "::notice::Installing Xcode MetalToolchain component"
+            xcodebuild -showComponent MetalToolchain || true
+            if ! retry xcodebuild -downloadComponent MetalToolchain; then
+              retry sudo env DEVELOPER_DIR="$DEVELOPER_DIR" \
+                xcodebuild -downloadComponent MetalToolchain
+            fi
+            xcodebuild -showComponent MetalToolchain || true
+
+            if ! xcrun --find metal >/dev/null 2>&1 || ! xcrun --find metallib >/dev/null 2>&1; then
+              echo "::error::Metal toolchain is still unavailable after installation"
+              return 1
+            fi
+
+            xcrun --find metal
+            xcrun --find metallib
+          }
+
+          ensure_metal_toolchain
+
           git config --global http.lowSpeedLimit 1000
           git config --global http.lowSpeedTime 60
           git config --global http.postBuffer 524288000
 
           # Install dependencies via Homebrew
           brew install sdl2 ninja pipx
+          sdl2_prefix="$(brew --prefix sdl2)"
+          echo "SDL2_DIR=$sdl2_prefix" >> "$GITHUB_ENV"
+          export SDL2_DIR="$sdl2_prefix"
 
           # Install Qt 6.10.1 via aqtinstall
           if [ '${{ steps.cache-qt-macos.outputs.cache-hit }}' != 'true' ]; then
@@ -590,16 +771,52 @@ jobs:
           echo "CMAKE_PREFIX_PATH=$HOME/Qt/6.10.1/macos" >> $GITHUB_ENV
           echo "QT_DIR=$HOME/Qt/6.10.1/macos" >> $GITHUB_ENV
 
+          if [ "$(uname -m)" != "x86_64" ]; then
+            echo "::error::macOS x86_64 packaging job requires an Intel runner"
+            exit 1
+          fi
+
+          qtcore_binary="$HOME/Qt/6.10.1/macos/lib/QtCore.framework/QtCore"
+          sdl2_binary="$SDL2_DIR/lib/libSDL2-2.0.0.dylib"
+          for binary in "$qtcore_binary" "$sdl2_binary"; do
+            if [ ! -f "$binary" ]; then
+              echo "::error::Required dependency not found: $binary"
+              exit 1
+            fi
+            if ! lipo -archs "$binary" | tr ' ' '\n' | grep -qx 'x86_64'; then
+              echo "::error::Dependency does not contain an x86_64 slice: $binary"
+              lipo -archs "$binary" || true
+              exit 1
+            fi
+            minos="$(otool -l "$binary" | awk '
+              $1 == "cmd" && $2 == "LC_BUILD_VERSION" { in_build = 1; next }
+              in_build && $1 == "platform" { platform = $2; next }
+              in_build && $1 == "minos" && platform == "1" { print $2; exit }
+            ')"
+            if [ -n "$minos" ]; then
+              case "$minos" in
+                10.*|11.*|12.*|13.*|14.*|15.*) ;;
+                *)
+                  echo "::error::Dependency requires macOS $minos, expected macOS 15.x compatibility: $binary"
+                  exit 1
+                  ;;
+              esac
+            fi
+          done
+
           # Always update submodules so .git/modules is present even on cache hit
           retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands')
           # DirectXShaderCompiler has nested submodules needed for dxilconv
           retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 external/SPIRV-Headers external/SPIRV-Tools
+          # Restore non-submodule files in third_party/ that the submodule
+          # cache may have overwritten with stale versions.
+          git checkout -- third_party/*.lua
 
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
-            ./xenia-build.py premake
+            ./xenia-build.py premake -- --mac-x86_64
             cp third_party/premake-core/bin/release/premake5 tools/build/bin
           else
-            ./xenia-build.py premake
+            ./xenia-build.py premake -- --mac-x86_64
           fi
 
           # Fetch data repos (game-patches, optimized-settings)
