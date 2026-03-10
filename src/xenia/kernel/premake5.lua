@@ -51,3 +51,7 @@ project("xenia-kernel")
   files({
     "debug_visualizers.natvis",
   })
+
+if enableTests then
+  include("testing")
+end
