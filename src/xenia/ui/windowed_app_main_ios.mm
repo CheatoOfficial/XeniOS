@@ -1325,9 +1325,6 @@ bool IsLikelyGodPath(const std::filesystem::path& path) {
   return false;
 }
 
-bool LooksLikeHexIdentifier(const std::string& value, size_t min_length = 8,
-                            size_t max_length = 32);
-
 bool LooksLikeHexContentFilename(const std::filesystem::path& path) {
   const std::string filename = path.filename().string();
   return LooksLikeHexIdentifier(filename, 24, 40);
@@ -1351,7 +1348,7 @@ bool HasContentSidecarDataDirectory(const std::filesystem::path& path) {
 }
 
 std::string LibraryFallbackTitleFromPath(const std::filesystem::path& path) {
-  if (IsDefaultXexPath(path)) {
+  if (IsDefaultXexPath(path) || IsDefaultXbePath(path)) {
     std::filesystem::path parent = path.parent_path();
     while (!parent.empty()) {
       std::string candidate = parent.filename().string();
@@ -1450,45 +1447,6 @@ static NSURL* xe_stikdebug_enable_jit_url_for_bundle_identifier(NSString* bundle
   components.queryItems = @[ [NSURLQueryItem queryItemWithName:@"bundle-id"
                                                          value:bundle_identifier] ];
   return components.URL;
-}
-
-std::string LibraryFallbackTitleFromPath(const std::filesystem::path& path) {
-  if (IsDefaultXexPath(path) || IsDefaultXbePath(path)) {
-    std::filesystem::path parent = path.parent_path();
-    while (!parent.empty()) {
-      std::string candidate = parent.filename().string();
-      std::string candidate_lower = ToLowerAsciiCopy(candidate);
-      if (!candidate.empty() && !LooksLikeHexIdentifier(candidate) &&
-          candidate_lower != "content" && candidate_lower != "games" &&
-          candidate_lower != "files" && candidate_lower != "default") {
-        return candidate;
-      }
-      std::filesystem::path next = parent.parent_path();
-      if (next == parent) {
-        break;
-      }
-      parent = next;
-    }
-  }
-
-  std::string stem = path.stem().string();
-  if (!stem.empty()) {
-    return stem;
-  }
-  return path.filename().string();
-}
-
-void SortDiscoveredGames(std::vector<IOSDiscoveredGame>* games) {
-  if (!games) {
-    return;
-  }
-  std::sort(games->begin(), games->end(),
-            [](const IOSDiscoveredGame& a, const IOSDiscoveredGame& b) {
-              if (a.title == b.title) {
-                return a.path.filename().string() < b.path.filename().string();
-              }
-              return a.title < b.title;
-            });
 }
 
 enum class IOSInstalledContentKind {
@@ -1723,15 +1681,6 @@ static NSString* xe_normalize_game_title_for_ui(NSString* title) {
 std::string NormalizeGameTitleForUI(const std::string& title) {
   NSString* normalized = xe_normalize_game_title_for_ui(ToNSString(title));
   return normalized ? std::string([normalized UTF8String]) : title;
-}
-
-bool LooksLikeHexIdentifier(const std::string& value, size_t min_length = 8,
-                            size_t max_length = 32) {
-  if (value.size() < min_length || value.size() > max_length) {
-    return false;
-  }
-  return std::all_of(value.begin(), value.end(),
-                     [](unsigned char c) { return std::isxdigit(c) != 0; });
 }
 
 static UIColor* xe_compat_status_color(NSString* status) {
