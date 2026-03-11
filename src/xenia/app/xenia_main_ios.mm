@@ -341,8 +341,7 @@ bool EmulatorAppIOS::OnInitialize() {
           }
         }
         if (should_queue_launch) {
-          XELOGI("iOS: Emulator thread is running; queued launch '{}'",
-                 game_path);
+          XELOGI("iOS: Emulator thread is running; queued launch '{}'", game_path.string());
           RequestGameStop("Queued launch");
           return;
         }
@@ -648,6 +647,24 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
                                     bool require_cpu_backend) {
   xe::threading::set_name("Emulator Thread");
   const bool launched_with_game = !game_path.empty();
+
+  struct ScopeExit {
+    std::function<void()> fn;
+    ~ScopeExit() {
+      if (fn) {
+        fn();
+      }
+    }
+  } notify_exit{[this, launched_with_game]() {
+    if (!launched_with_game) {
+      return;
+    }
+    app_context().CallInUIThread([this]() {
+      auto& ios_context = static_cast<ui::IOSWindowedAppContext&>(app_context());
+      ios_context.NotifyGameExited();
+    });
+  }};
+
   const bool need_profile_mode_transition =
       !emulator_initialized_.load(std::memory_order_acquire) ||
       (require_cpu_backend && !emulator_cpu_initialized_.load(std::memory_order_acquire));
@@ -723,23 +740,6 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
       });
     }
   }
-
-  struct ScopeExit {
-    std::function<void()> fn;
-    ~ScopeExit() {
-      if (fn) {
-        fn();
-      }
-    }
-  } notify_exit{[this, launched_with_game]() {
-    if (!launched_with_game) {
-      return;
-    }
-    app_context().CallInUIThread([this]() {
-      auto& ios_context = static_cast<ui::IOSWindowedAppContext&>(app_context());
-      ios_context.NotifyGameExited();
-    });
-  }};
 
   // Load game-specific config if available.
   if (!game_path.empty()) {
