@@ -1325,6 +1325,9 @@ bool IsLikelyGodPath(const std::filesystem::path& path) {
   return false;
 }
 
+bool LooksLikeHexIdentifier(const std::string& value, size_t min_length = 8,
+                            size_t max_length = 32);
+
 bool LooksLikeHexContentFilename(const std::filesystem::path& path) {
   const std::string filename = path.filename().string();
   return LooksLikeHexIdentifier(filename, 24, 40);
@@ -1345,6 +1348,45 @@ bool HasContentSidecarDataDirectory(const std::filesystem::path& path) {
   sidecar_path += ".data";
   std::error_code ec;
   return std::filesystem::is_directory(sidecar_path, ec) && !ec;
+}
+
+std::string LibraryFallbackTitleFromPath(const std::filesystem::path& path) {
+  if (IsDefaultXexPath(path)) {
+    std::filesystem::path parent = path.parent_path();
+    while (!parent.empty()) {
+      std::string candidate = parent.filename().string();
+      std::string candidate_lower = ToLowerAsciiCopy(candidate);
+      if (!candidate.empty() && !LooksLikeHexIdentifier(candidate) &&
+          candidate_lower != "content" && candidate_lower != "games" &&
+          candidate_lower != "files" && candidate_lower != "default") {
+        return candidate;
+      }
+      std::filesystem::path next = parent.parent_path();
+      if (next == parent) {
+        break;
+      }
+      parent = next;
+    }
+  }
+
+  std::string stem = path.stem().string();
+  if (!stem.empty()) {
+    return stem;
+  }
+  return path.filename().string();
+}
+
+void SortDiscoveredGames(std::vector<IOSDiscoveredGame>* games) {
+  if (!games) {
+    return;
+  }
+  std::sort(games->begin(), games->end(),
+            [](const IOSDiscoveredGame& a, const IOSDiscoveredGame& b) {
+              if (a.title == b.title) {
+                return a.path.filename().string() < b.path.filename().string();
+              }
+              return a.title < b.title;
+            });
 }
 
 std::string FormatTitleID(uint32_t title_id) {
@@ -1681,6 +1723,15 @@ static NSString* xe_normalize_game_title_for_ui(NSString* title) {
 std::string NormalizeGameTitleForUI(const std::string& title) {
   NSString* normalized = xe_normalize_game_title_for_ui(ToNSString(title));
   return normalized ? std::string([normalized UTF8String]) : title;
+}
+
+bool LooksLikeHexIdentifier(const std::string& value, size_t min_length = 8,
+                            size_t max_length = 32) {
+  if (value.size() < min_length || value.size() > max_length) {
+    return false;
+  }
+  return std::all_of(value.begin(), value.end(),
+                     [](unsigned char c) { return std::isxdigit(c) != 0; });
 }
 
 static UIColor* xe_compat_status_color(NSString* status) {
@@ -7724,8 +7775,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (UIView*)versionFooterView {
   NSString* footer_text = xe_user_facing_build_label(xe_current_compat_report_build_info());
   const BOOL has_footer_text = footer_text.length > 0;
+  NSString* memorial_text = @"XeniOS is one of several apps with dedication keeping the memory of "
+                            @"\"Lily\" alive 11/03/2023";
   UIView* footer =
-      [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, has_footer_text ? 126 : 78)] autorelease];
+      [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, has_footer_text ? 176 : 78)] autorelease];
   footer.backgroundColor = [UIColor clearColor];
 
   UILabel* links_label = [[[UILabel alloc] init] autorelease];
@@ -7761,6 +7814,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   UIView* build_separator = nil;
   UILabel* build_label = nil;
+  UILabel* memorial_label = nil;
   if (has_footer_text) {
     build_separator = [[[UIView alloc] init] autorelease];
     build_separator.translatesAutoresizingMaskIntoConstraints = NO;
@@ -7776,6 +7830,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     build_label.numberOfLines = 1;
     xe_apply_label_font(build_label, UIFontTextStyleFootnote, 14.0, UIFontWeightMedium);
     [footer addSubview:build_label];
+
+    memorial_label = [[[UILabel alloc] init] autorelease];
+    memorial_label.translatesAutoresizingMaskIntoConstraints = NO;
+    memorial_label.backgroundColor = [UIColor clearColor];
+    memorial_label.text = memorial_text;
+    memorial_label.textAlignment = NSTextAlignmentCenter;
+    memorial_label.textColor = [XeniaTheme textSecondary];
+    memorial_label.numberOfLines = 0;
+    xe_apply_label_font(memorial_label, UIFontTextStyleCaption1, 12.0, UIFontWeightRegular);
+    [footer addSubview:memorial_label];
   }
 
   NSMutableArray<NSLayoutConstraint*>* constraints = [NSMutableArray arrayWithArray:@[
@@ -7797,7 +7861,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       [build_label.topAnchor constraintEqualToAnchor:build_separator.bottomAnchor constant:12],
       [build_label.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
       [build_label.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
-      [build_label.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor constant:-8],
+      [memorial_label.topAnchor constraintEqualToAnchor:build_label.bottomAnchor constant:8],
+      [memorial_label.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:24],
+      [memorial_label.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-24],
+      [memorial_label.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor constant:-8],
     ]];
   } else {
     [constraints addObject:[links_row.bottomAnchor constraintEqualToAnchor:footer.bottomAnchor
@@ -8195,10 +8262,29 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     if (self->compat_data_ && [self->compat_data_ isEqualToDictionary:data]) {
       return;
     }
+    std::filesystem::path focused_path;
+    const BOOL has_focused_path =
+        self->focused_game_index_ >= 0 &&
+        self->focused_game_index_ < static_cast<NSInteger>(self->discovered_games_.size());
+    if (has_focused_path) {
+      focused_path = self->discovered_games_[static_cast<size_t>(self->focused_game_index_)].path;
+    }
     [self->compat_data_ release];
     self->compat_data_ = [data retain];
     [self applyCompatDataToDiscoveredGames];
+    SortDiscoveredGames(&self->discovered_games_);
+    if (has_focused_path) {
+      auto focused_it = std::find_if(
+          self->discovered_games_.begin(), self->discovered_games_.end(),
+          [&focused_path](const IOSDiscoveredGame& game) { return game.path == focused_path; });
+      if (focused_it != self->discovered_games_.end()) {
+        self->focused_game_index_ =
+            static_cast<NSInteger>(std::distance(self->discovered_games_.begin(), focused_it));
+      }
+    }
     [self.importedGamesCollectionView reloadData];
+    [self rebuildLauncherFocusGraph];
+    [self applyLauncherFocusVisuals];
   });
 }
 
@@ -8207,10 +8293,29 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   if (!cached_compat_data) {
     return;
   }
+  std::filesystem::path focused_path;
+  const BOOL has_focused_path =
+      focused_game_index_ >= 0 &&
+      focused_game_index_ < static_cast<NSInteger>(discovered_games_.size());
+  if (has_focused_path) {
+    focused_path = discovered_games_[static_cast<size_t>(focused_game_index_)].path;
+  }
   [compat_data_ release];
   compat_data_ = [cached_compat_data retain];
   [self applyCompatDataToDiscoveredGames];
+  SortDiscoveredGames(&discovered_games_);
+  if (has_focused_path) {
+    auto focused_it = std::find_if(
+        discovered_games_.begin(), discovered_games_.end(),
+        [&focused_path](const IOSDiscoveredGame& game) { return game.path == focused_path; });
+    if (focused_it != discovered_games_.end()) {
+      focused_game_index_ =
+          static_cast<NSInteger>(std::distance(discovered_games_.begin(), focused_it));
+    }
+  }
   [self.importedGamesCollectionView reloadData];
+  [self rebuildLauncherFocusGraph];
+  [self applyLauncherFocusVisuals];
 }
 
 - (void)setButton:(UIButton*)button controllerFocused:(BOOL)focused {
@@ -8223,6 +8328,18 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   button.layer.shadowColor = [XeniaTheme accent].CGColor;
   button.layer.shadowOpacity = focused ? 0.35f : 0.0f;
   button.layer.shadowRadius = focused ? 6.0f : 0.0f;
+  button.layer.shadowOffset = CGSizeZero;
+}
+
+- (void)clearButtonFocusChrome:(UIButton*)button {
+  if (!button) {
+    return;
+  }
+  button.layer.cornerRadius = XeniaRadiusMd;
+  button.layer.borderWidth = 0.0f;
+  button.layer.borderColor = [UIColor clearColor].CGColor;
+  button.layer.shadowOpacity = 0.0f;
+  button.layer.shadowRadius = 0.0f;
   button.layer.shadowOffset = CGSizeZero;
 }
 
@@ -8346,9 +8463,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (void)applyLauncherFocusVisuals {
   if (!controller_navigation_was_enabled_) {
     launcher_library_focus_active_ = NO;
-    [self setButton:self.settingsButton controllerFocused:NO];
-    [self setButton:self.profileButton controllerFocused:NO];
-    [self setButton:self.openGameButton controllerFocused:NO];
+    [self clearButtonFocusChrome:self.settingsButton];
+    [self clearButtonFocusChrome:self.profileButton];
+    [self clearButtonFocusChrome:self.openGameButton];
     if (focused_game_index_ >= 0 && focused_game_index_ < static_cast<NSInteger>(discovered_games_.size())) {
       NSIndexPath* focused_path = [NSIndexPath indexPathForItem:focused_game_index_ inSection:0];
       [self.importedGamesCollectionView reloadItemsAtIndexPaths:@[ focused_path ]];
@@ -8362,9 +8479,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   BOOL import_focused = current_focus == kLauncherFocusImport;
   BOOL library_focused = current_focus == kLauncherFocusLibrary;
 
-  [self setButton:self.settingsButton controllerFocused:settings_focused];
-  [self setButton:self.profileButton controllerFocused:profile_focused];
-  [self setButton:self.openGameButton controllerFocused:import_focused];
+  (void)settings_focused;
+  (void)profile_focused;
+  (void)import_focused;
+  [self clearButtonFocusChrome:self.settingsButton];
+  [self clearButtonFocusChrome:self.profileButton];
+  [self clearButtonFocusChrome:self.openGameButton];
 
   if (library_focused && focused_game_index_ < 0 && !discovered_games_.empty()) {
     [self setFocusedGameIndex:0 scroll:NO];
@@ -10105,13 +10225,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   [self applyCompatDataToDiscoveredGames];
 
-  std::sort(discovered_games_.begin(), discovered_games_.end(),
-            [](const IOSDiscoveredGame& a, const IOSDiscoveredGame& b) {
-              if (a.title == b.title) {
-                return a.path.filename().string() < b.path.filename().string();
-              }
-              return a.title < b.title;
-            });
+  SortDiscoveredGames(&discovered_games_);
 
   [self.importedGamesCollectionView reloadData];
   self.importedGamesEmptyLabel.hidden = !discovered_games_.empty();
@@ -10139,6 +10253,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     NSDictionary* info = [compat_data_ objectForKey:key];
     if (!info) {
       continue;
+    }
+    NSString* title = xe_string_from_object(info[@"title"]);
+    if (title.length > 0) {
+      game.title = NormalizeGameTitleForUI(std::string([title UTF8String]));
     }
     NSDictionary* summary = xe_preferred_summary_from_compat_info(info);
     NSDictionary* source = summary ?: info;
@@ -10862,6 +10980,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 - (UIEdgeInsets)collectionView:(UICollectionView*)collectionView
                         layout:(UICollectionViewLayout* __unused)collectionViewLayout
         insetForSectionAtIndex:(NSInteger)section {
+  (void)section;
   NSInteger columns = [self launcherGridColumnCountForContentSize:collectionView.bounds.size];
   CGFloat interitem_spacing = [self launcherGridInteritemSpacingForCollectionView:collectionView];
   CGFloat tile_width = [self launcherGridTileWidthForCollectionView:collectionView
@@ -10873,23 +10992,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       collectionView.window.screen ? collectionView.window.screen.scale : UIScreen.mainScreen.scale;
   CGFloat left_inset = floor((remainder * 0.5f) * screen_scale) / screen_scale;
   CGFloat right_inset = MAX(remainder - left_inset, 0.0f);
-
-  NSInteger item_count = [collectionView numberOfItemsInSection:section];
-  CGFloat top_inset = 0.0f;
-  CGFloat bottom_inset = 0.0f;
-  if (item_count > 0) {
-    NSInteger rows = (item_count + columns - 1) / columns;
-    CGFloat line_spacing = [self launcherGridLineSpacingForCollectionView:collectionView];
-    CGFloat image_height = ceil(tile_width * 300.0f / 219.0f);
-    CGFloat tile_height =
-        image_height + [self launcherGridTitleHeightForCollectionView:collectionView];
-    CGFloat consumed_height = tile_height * rows + line_spacing * MAX(rows - 1, 0);
-    CGFloat vertical_remainder = MAX(collectionView.bounds.size.height - consumed_height, 0.0f);
-    top_inset = floor((vertical_remainder * 0.5f) * screen_scale) / screen_scale;
-    bottom_inset = MAX(vertical_remainder - top_inset, 0.0f);
-  }
-
-  return UIEdgeInsetsMake(top_inset, left_inset, bottom_inset, right_inset);
+  return UIEdgeInsetsMake(0.0f, left_inset, 0.0f, right_inset);
 }
 
 - (void)viewDidLayoutSubviews {
