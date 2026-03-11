@@ -31,6 +31,10 @@ struct X_INPUT_STATE;
 }
 namespace ui {
 
+enum class IOSGameSystem : uint8_t {
+  kXbox360 = 0,
+};
+
 struct IOSProfileSummary {
   uint64_t xuid = 0;
   std::string gamertag;
