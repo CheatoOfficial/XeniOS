@@ -3526,6 +3526,11 @@ std::vector<IOSConfigSection> BuildIOSConfigSections() {
                  "metadata. This can help a game boot or draw, but it may also introduce "
                  "corruption or hide a deeper bug.",
                  true);
+  AddBoolSetting(compatibility.items, "mount_cache", "Mount Cache",
+                 "Mounts the Xbox cache partition for titles that expect it. Keep "
+                 "this on for normal behavior, but disabling it may fix cutscene "
+                 "loop issues in games like Halo 3, ODST, Reach, etc.",
+                 true);
   AddBoolSetting(compatibility.items, "a64_enable_host_guest_stack_synchronization",
                  "A64 Stack Synchronization",
                  "ARM64-only compatibility path that keeps host and guest stacks "
