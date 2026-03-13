@@ -679,7 +679,7 @@ def generate_version_h():
         branch_name = "tarball"
         commit = ":(-dont-do-this"
         commit_short = ":("
-        marketing_version = "1.0.0"
+        marketing_version = "1.0.1"
         build_number = "0"
 
     # header
@@ -814,7 +814,7 @@ def git_get_marketing_version():
         parts = version.split(".")
         if 2 <= len(parts) <= 3 and all(part.isdigit() for part in parts):
             return version
-    return "1.0.0"
+    return "1.0.1"
 
 
 def git_get_build_number():
