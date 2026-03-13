@@ -8488,40 +8488,18 @@ fragment TransferDepthOut transfer_ps(
         color.rgb = XeLinearToPWLGamma3(color.rgb);
 #endif
       }
-      uint packed_component_offset = 0u;
-      if (XE_TRANSFER_DEST_IS_DEPTH != 0u) {
-        packed_component_offset = 1u;
-#if !XE_TRANSFER_OUTPUT_STENCIL_BIT
-        packed_only_depth = true;
-#endif
-      }
-      packed = XePackUnorm(color[packed_component_offset], 255.0f);
-      if (XE_TRANSFER_DEST_IS_DEPTH == 0u) {
-        packed |= XePackUnorm(color[packed_component_offset + 1],
-                              255.0f) << 8u;
-        packed |= XePackUnorm(color[packed_component_offset + 2],
-                              255.0f) << 16u;
-        packed |= XePackUnorm(color[packed_component_offset + 3],
-                              255.0f) << 24u;
-      }
+      // Match D3D12: color -> depth transfers derive guest depth from bits
+      // 8:31 of the packed 32bpp color word rather than treating depth as a
+      // standalone component.
+      packed = XePackColorRGBA8(color);
     } break;
     case XE_FMT_2_10_10_10:
     case XE_FMT_2_10_10_10_AS_10_10_10_10: {
-      packed = XePackUnorm(source_color0[0], 1023.0f);
-      if (XE_TRANSFER_DEST_IS_DEPTH == 0u) {
-        packed |= XePackUnorm(source_color0[1], 1023.0f) << 10u;
-        packed |= XePackUnorm(source_color0[2], 1023.0f) << 20u;
-        packed |= XePackUnorm(source_color0[3], 3.0f) << 30u;
-      }
+      packed = XePackColorRGB10A2(source_color0);
     } break;
     case XE_FMT_2_10_10_10_FLOAT:
     case XE_FMT_2_10_10_10_FLOAT_AS_16_16_16_16: {
-      packed = XeUnclampedFloat32To7e3(source_color0[0]);
-      if (XE_TRANSFER_DEST_IS_DEPTH == 0u) {
-        packed |= XeUnclampedFloat32To7e3(source_color0[1]) << 10u;
-        packed |= XeUnclampedFloat32To7e3(source_color0[2]) << 20u;
-        packed |= XePackUnorm(source_color0[3], 3.0f) << 30u;
-      }
+      packed = XePackColorRGB10A2Float(source_color0);
     } break;
     case XE_FMT_32_FLOAT:
     case XE_FMT_32_32_FLOAT:
