@@ -53,6 +53,8 @@
 #include "xenia/base/string.h"
 #include "xenia/config.h"
 #include "xenia/hid/input.h"
+#include "xenia/hid/sdl/sdl_hid.h"
+#include "xenia/ui/touch_controls_ios.h"
 #include "xenia/ui/apple_ui_flags.h"
 #include "xenia/ui/apple_ui_navigation.h"
 #include "xenia/ui/surface_ios.h"
@@ -592,6 +594,8 @@ static NSString* const kXeniaPendingExternalLaunchTimestampPreferenceKey =
     @"ios_pending_external_launch_timestamp";
 static NSString* const kXeniaLastAutoStikDebugAttemptTimestampPreferenceKey =
     @"ios_last_auto_stikdebug_attempt_timestamp";
+static NSString* const kXeniaTouchControlsOpacityPreferenceKey =
+    @"ios_touch_controls_opacity";
 
 constexpr NSTimeInterval kXeniaPendingExternalLaunchTTLSeconds = 120.0;
 constexpr NSTimeInterval kXeniaAutoStikDebugCooldownSeconds = 10.0;
@@ -8075,14 +8079,19 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 @property(nonatomic, strong) UILabel* statusLabel;
 @property(nonatomic, strong) UILabel* signedInProfileLabel;
 @property(nonatomic, strong) UICollectionView* importedGamesCollectionView;
+@property(nonatomic, strong) XeniaTouchControlsView* touchControlsOverlay;
 @property(nonatomic, strong) UILabel* importedGamesEmptyLabel;
 @property(nonatomic, strong) UIView* inGameMenuOverlay;
 @property(nonatomic, strong) UIButton* inGameResumeButton;
 @property(nonatomic, strong) UIButton* inGameSettingsButton;
 @property(nonatomic, strong) UIButton* inGameLiveLogButton;
 @property(nonatomic, strong) UIButton* inGameExitButton;
+@property(nonatomic, strong) UISlider* inGameTouchOpacitySlider;
+@property(nonatomic, strong) UILabel* inGameTouchOpacityValueLabel;
+@property(nonatomic, strong) UITapGestureRecognizer* inGameMenuTapRecognizer;
 @property(nonatomic, assign) BOOL gameRunning;
 @property(nonatomic, assign) BOOL gameStopInProgress;
+@property(nonatomic, assign) CGFloat touchControlsOpacity;
 @property(nonatomic, assign) xe::ui::IOSWindowedAppContext* appContext;
 
 // JIT status widgets.
@@ -8107,7 +8116,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                   completion:(void (^)(BOOL cancelled,
                                                        NSString* text))completion;
 - (void)setupInGameMenuOverlay;
+- (void)setupTouchControlsOverlay;
+- (void)updateTouchControlsVisibility;
+- (void)syncTouchControlsState;
+- (void)toggleInGameMenu;
 - (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer;
+- (void)inGameTouchOpacityChanged:(UISlider*)sender;
 - (void)resumeGameTapped:(UIButton*)sender;
 - (void)inGameSettingsTapped:(UIButton*)sender;
 - (void)inGameLiveLogTapped:(UIButton*)sender;
@@ -8148,6 +8162,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.jitAcquired = NO;
   self.gameRunning = NO;
   self.gameStopInProgress = NO;
+  self.touchControlsOpacity =
+      std::clamp(static_cast<CGFloat>(GetUserDefaultDouble(
+                     kXeniaTouchControlsOpacityPreferenceKey, 0.82)),
+                 static_cast<CGFloat>(0.10), static_cast<CGFloat>(1.00));
   focused_game_index_ = -1;
   launcher_library_focus_active_ = NO;
   controller_navigation_was_enabled_ = NO;
@@ -8166,13 +8184,14 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   // Create the launcher overlay UI immediately. When JIT is missing, keep
   // settings/navigation available but gate game launch with status.
   [self setupLauncherOverlay];
+  [self setupTouchControlsOverlay];
   [self setupInGameMenuOverlay];
-  UITapGestureRecognizer* tap = [[UITapGestureRecognizer alloc]
+  self.inGameMenuTapRecognizer = [[[UITapGestureRecognizer alloc]
       initWithTarget:self
-              action:@selector(toggleInGameMenuTapped:)];
-  tap.numberOfTapsRequired = 1;
-  tap.cancelsTouchesInView = NO;
-  [self.view addGestureRecognizer:tap];
+              action:@selector(toggleInGameMenuTapped:)] autorelease];
+  self.inGameMenuTapRecognizer.numberOfTapsRequired = 1;
+  self.inGameMenuTapRecognizer.cancelsTouchesInView = NO;
+  [self.view addGestureRecognizer:self.inGameMenuTapRecognizer];
   [self updateJITStatusIndicator];
   [self updateJITAvailabilityUI];
   [self refreshSignedInProfileUI];
@@ -8966,6 +8985,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self applyLauncherFocusVisuals];
   }
 
+  [self updateTouchControlsVisibility];
+
   xe::hid::X_INPUT_STATE state = {};
   bool has_state = false;
   if (self.appContext) {
@@ -9051,6 +9072,61 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return YES;
   }
   return NO;
+}
+
+
+- (void)setupTouchControlsOverlay {
+  self.touchControlsOverlay = [[[XeniaTouchControlsView alloc] initWithFrame:self.view.bounds] autorelease];
+  self.touchControlsOverlay.autoresizingMask =
+      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  self.touchControlsOverlay.hidden = YES;
+  self.touchControlsOverlay.userInteractionEnabled = YES;
+  __unsafe_unretained XeniaViewController* unsafe_self = self;
+  self.touchControlsOverlay.stateDidChangeHandler = ^{
+    [unsafe_self syncTouchControlsState];
+  };
+  self.touchControlsOverlay.menuButtonTappedHandler = ^{
+    [unsafe_self toggleInGameMenu];
+  };
+  self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+  [self.view insertSubview:self.touchControlsOverlay aboveSubview:self.metalView];
+}
+
+- (void)syncTouchControlsState {
+  if (!self.touchControlsOverlay || self.touchControlsOverlay.hidden) {
+    xe::hid::sdl::ClearVirtualControllerState(0);
+    return;
+  }
+  xe::hid::sdl::SetVirtualControllerState(
+      0, [self.touchControlsOverlay currentControllerState]);
+}
+
+- (void)updateTouchControlsVisibility {
+  BOOL should_show = self.gameRunning && self.launcherOverlay.hidden &&
+                     !xe::hid::sdl::AnyPhysicalControllerConnected() &&
+                     self.presentedViewController == nil;
+  if (!self.touchControlsOverlay) {
+    return;
+  }
+  if (self.inGameMenuTapRecognizer) {
+    self.inGameMenuTapRecognizer.enabled = !should_show;
+  }
+  if (self.inGameTouchOpacitySlider) {
+    self.inGameTouchOpacitySlider.enabled = should_show;
+    self.inGameTouchOpacitySlider.alpha = should_show ? 1.0 : 0.45;
+    self.inGameTouchOpacityValueLabel.alpha = should_show ? 1.0 : 0.45;
+  }
+  if (should_show) {
+    self.touchControlsOverlay.hidden = NO;
+    self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+    [self syncTouchControlsState];
+  } else {
+    if (!self.touchControlsOverlay.hidden) {
+      [self.touchControlsOverlay resetControllerState];
+    }
+    self.touchControlsOverlay.hidden = YES;
+    xe::hid::sdl::ClearVirtualControllerState(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -9439,11 +9515,41 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   UILabel* subtitle = [[UILabel alloc] init];
   subtitle.translatesAutoresizingMaskIntoConstraints = NO;
-  subtitle.text = @"Tap anywhere to close";
+  subtitle.text = @"Use Resume to close";
   subtitle.textColor = [XeniaTheme textMuted];
   subtitle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
   subtitle.textAlignment = NSTextAlignmentCenter;
   [panel addSubview:subtitle];
+
+  UILabel* opacity_label = [[UILabel alloc] init];
+  opacity_label.translatesAutoresizingMaskIntoConstraints = NO;
+  opacity_label.text = @"Touch Controls Opacity";
+  opacity_label.textColor = [XeniaTheme textPrimary];
+  opacity_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [panel addSubview:opacity_label];
+
+  self.inGameTouchOpacityValueLabel = [[[UILabel alloc] init] autorelease];
+  self.inGameTouchOpacityValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.inGameTouchOpacityValueLabel.textColor = [XeniaTheme textMuted];
+  self.inGameTouchOpacityValueLabel.font =
+      [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+  self.inGameTouchOpacityValueLabel.textAlignment = NSTextAlignmentRight;
+  self.inGameTouchOpacityValueLabel.text =
+      [NSString stringWithFormat:@"%d%%", (int)lroundf(self.touchControlsOpacity * 100.0f)];
+  [panel addSubview:self.inGameTouchOpacityValueLabel];
+
+  self.inGameTouchOpacitySlider = [[[UISlider alloc] init] autorelease];
+  self.inGameTouchOpacitySlider.translatesAutoresizingMaskIntoConstraints = NO;
+  self.inGameTouchOpacitySlider.minimumValue = 0.10f;
+  self.inGameTouchOpacitySlider.maximumValue = 1.00f;
+  self.inGameTouchOpacitySlider.continuous = YES;
+  self.inGameTouchOpacitySlider.value = self.touchControlsOpacity;
+  self.inGameTouchOpacitySlider.minimumTrackTintColor = [XeniaTheme accent];
+  self.inGameTouchOpacitySlider.maximumTrackTintColor = [XeniaTheme border];
+  [self.inGameTouchOpacitySlider addTarget:self
+                                    action:@selector(inGameTouchOpacityChanged:)
+                          forControlEvents:UIControlEventValueChanged];
+  [panel addSubview:self.inGameTouchOpacitySlider];
 
   UIButtonConfiguration* resume_config = [UIButtonConfiguration filledButtonConfiguration];
   resume_config.title = @"Resume";
@@ -9520,7 +9626,21 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
     [subtitle.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
 
-    [self.inGameResumeButton.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
+    [opacity_label.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
+    [opacity_label.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:16],
+
+    [self.inGameTouchOpacityValueLabel.centerYAnchor constraintEqualToAnchor:opacity_label.centerYAnchor],
+    [self.inGameTouchOpacityValueLabel.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor
+                                                                     constant:-16],
+    [self.inGameTouchOpacityValueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:opacity_label.trailingAnchor
+                                                                                 constant:12],
+
+    [self.inGameTouchOpacitySlider.topAnchor constraintEqualToAnchor:opacity_label.bottomAnchor constant:8],
+    [self.inGameTouchOpacitySlider.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
+    [self.inGameTouchOpacitySlider.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
+
+    [self.inGameResumeButton.topAnchor constraintEqualToAnchor:self.inGameTouchOpacitySlider.bottomAnchor
+                                                      constant:16],
     [self.inGameResumeButton.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
     [self.inGameResumeButton.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
 
@@ -9545,10 +9665,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   ]];
 }
 
-- (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer {
-  if (recognizer.state != UIGestureRecognizerStateRecognized) {
-    return;
-  }
+- (void)toggleInGameMenu {
   if (self.launcherOverlay.hidden == NO || !self.gameRunning || self.presentedViewController) {
     return;
   }
@@ -9566,6 +9683,27 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                      }];
   } else {
     [self hideInGameMenuOverlay];
+  }
+}
+
+- (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer {
+  if (recognizer.state != UIGestureRecognizerStateRecognized) {
+    return;
+  }
+  if (self.touchControlsOverlay && !self.touchControlsOverlay.hidden) {
+    return;
+  }
+  [self toggleInGameMenu];
+}
+
+- (void)inGameTouchOpacityChanged:(UISlider*)sender {
+  self.touchControlsOpacity = sender.value;
+  [GetUserDefaults() setDouble:self.touchControlsOpacity
+                        forKey:kXeniaTouchControlsOpacityPreferenceKey];
+  self.inGameTouchOpacityValueLabel.text =
+      [NSString stringWithFormat:@"%d%%", (int)lroundf(self.touchControlsOpacity * 100.0f)];
+  if (self.touchControlsOverlay) {
+    self.touchControlsOverlay.alpha = self.touchControlsOpacity;
   }
 }
 
@@ -9627,6 +9765,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.gameRunning = NO;
   self.launcherOverlay.hidden = NO;
   self.launcherOverlay.alpha = 1.0;
+  [self updateTouchControlsVisibility];
   xe_request_current_orientation(self);
   self.statusLabel.text = @"Stopping game...";
 
@@ -10603,6 +10742,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       }
       completion:^(__unused BOOL finished) {
         self.launcherOverlay.hidden = YES;
+        [self updateTouchControlsVisibility];
       }];
 
   if (self.appContext) {
@@ -10611,6 +10751,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     self.statusLabel.text = @"Unable to launch game (app context unavailable).";
     self.launcherOverlay.hidden = NO;
     self.launcherOverlay.alpha = 1.0;
+    [self updateTouchControlsVisibility];
   }
 }
 
@@ -11133,6 +11274,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.gameStopInProgress = NO;
   [self hideInGameMenuOverlay];
   self.launcherOverlay.hidden = NO;
+  [self updateTouchControlsVisibility];
   self.statusLabel.text = @"";
   [self refreshImportedGames];
   [self refreshSignedInProfileUI];
@@ -11148,10 +11290,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)dealloc {
+  xe::hid::sdl::ClearVirtualControllerState(0);
   [self.jitPollTimer invalidate];
   [self.controllerNavTimer invalidate];
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [compat_data_ release];
+  [super dealloc];
 }
 
 @end
