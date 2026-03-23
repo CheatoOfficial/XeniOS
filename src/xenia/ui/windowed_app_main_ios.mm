@@ -53,6 +53,8 @@
 #include "xenia/base/string.h"
 #include "xenia/config.h"
 #include "xenia/hid/input.h"
+#include "xenia/hid/sdl/sdl_hid.h"
+#include "xenia/ui/touch_controls_ios.h"
 #include "xenia/ui/apple_ui_flags.h"
 #include "xenia/ui/apple_ui_navigation.h"
 #include "xenia/ui/surface_ios.h"
@@ -579,10 +581,11 @@ static constexpr IOSFocusNodeId kLauncherFocusSettings = 1;
 static constexpr IOSFocusNodeId kLauncherFocusProfile = 2;
 static constexpr IOSFocusNodeId kLauncherFocusImport = 3;
 static constexpr IOSFocusNodeId kLauncherFocusLibrary = 4;
-static constexpr IOSFocusNodeId kInGameFocusResume = 101;
-static constexpr IOSFocusNodeId kInGameFocusSettings = 102;
-static constexpr IOSFocusNodeId kInGameFocusLog = 103;
-static constexpr IOSFocusNodeId kInGameFocusExit = 104;
+static constexpr IOSFocusNodeId kInGameFocusCustomize = 101;
+static constexpr IOSFocusNodeId kInGameFocusResume = 102;
+static constexpr IOSFocusNodeId kInGameFocusSettings = 103;
+static constexpr IOSFocusNodeId kInGameFocusLog = 104;
+static constexpr IOSFocusNodeId kInGameFocusExit = 105;
 
 static NSString* const kXeniaAutoOpenStikDebugOnLaunchPreferenceKey =
     @"ios_auto_open_stikdebug_on_launch";
@@ -592,6 +595,16 @@ static NSString* const kXeniaPendingExternalLaunchTimestampPreferenceKey =
     @"ios_pending_external_launch_timestamp";
 static NSString* const kXeniaLastAutoStikDebugAttemptTimestampPreferenceKey =
     @"ios_last_auto_stikdebug_attempt_timestamp";
+static NSString* const kXeniaTouchControlsOpacityPreferenceKey =
+    @"ios_touch_controls_opacity";
+static NSString* const kXeniaTouchControlsLayoutPreferenceKey =
+    @"ios_touch_controls_layout";
+static NSString* const kXeniaTouchControlsProfilesPreferenceKey =
+    @"ios_touch_controls_profiles";
+
+static constexpr NSInteger kXeniaTouchLayoutMenuControlIdentifier = 100;
+static constexpr NSInteger kXeniaTouchLayoutLeftStickControlIdentifier = 101;
+static constexpr NSInteger kXeniaTouchLayoutRightStickControlIdentifier = 102;
 
 constexpr NSTimeInterval kXeniaPendingExternalLaunchTTLSeconds = 120.0;
 constexpr NSTimeInterval kXeniaAutoStikDebugCooldownSeconds = 10.0;
@@ -8059,6 +8072,44 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 @end
 
+@interface XeniaPassthroughOverlayView : UIView
+@property(nonatomic, assign) UIView* interactiveView;
+@end
+
+@implementation XeniaPassthroughOverlayView
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent*)event {
+  (void)event;
+  if (!self.interactiveView || self.interactiveView.hidden || self.interactiveView.alpha <= 0.01f) {
+    return NO;
+  }
+  CGPoint local_point = [self convertPoint:point toView:self.interactiveView];
+  return [self.interactiveView pointInside:local_point withEvent:event];
+}
+@end
+
+static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
+  switch (control_identifier) {
+    case 1: return @"LT";
+    case 2: return @"LB";
+    case 3: return @"RB";
+    case 4: return @"RT";
+    case 5: return @"D-Pad Up";
+    case 6: return @"D-Pad Down";
+    case 7: return @"D-Pad Left";
+    case 8: return @"D-Pad Right";
+    case 9: return @"X";
+    case 10: return @"Y";
+    case 11: return @"A";
+    case 12: return @"B";
+    case 13: return @"Back";
+    case 14: return @"Start";
+    case kXeniaTouchLayoutMenuControlIdentifier: return @"Menu";
+    case kXeniaTouchLayoutLeftStickControlIdentifier: return @"Left Stick";
+    case kXeniaTouchLayoutRightStickControlIdentifier: return @"Right Stick";
+    default: return @"None";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // XeniaViewController - manages the Metal view and game launcher UI.
 // ---------------------------------------------------------------------------
@@ -8075,14 +8126,37 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 @property(nonatomic, strong) UILabel* statusLabel;
 @property(nonatomic, strong) UILabel* signedInProfileLabel;
 @property(nonatomic, strong) UICollectionView* importedGamesCollectionView;
+@property(nonatomic, strong) XeniaTouchControlsView* touchControlsOverlay;
 @property(nonatomic, strong) UILabel* importedGamesEmptyLabel;
 @property(nonatomic, strong) UIView* inGameMenuOverlay;
+@property(nonatomic, strong) UIButton* inGameCustomizeControlsButton;
 @property(nonatomic, strong) UIButton* inGameResumeButton;
 @property(nonatomic, strong) UIButton* inGameSettingsButton;
 @property(nonatomic, strong) UIButton* inGameLiveLogButton;
 @property(nonatomic, strong) UIButton* inGameExitButton;
+@property(nonatomic, strong) UITapGestureRecognizer* inGameMenuTapRecognizer;
+@property(nonatomic, strong) XeniaPassthroughOverlayView* touchControlsEditorOverlay;
+@property(nonatomic, strong) UIView* touchControlsEditorPanel;
+@property(nonatomic, strong) NSLayoutConstraint* touchControlsEditorPanelTopConstraint;
+@property(nonatomic, strong) NSLayoutConstraint* touchControlsEditorPanelCenterXConstraint;
+@property(nonatomic, strong) UILabel* touchControlsEditorSelectionLabel;
+@property(nonatomic, strong) UISlider* touchControlsEditorScaleSlider;
+@property(nonatomic, strong) UILabel* touchControlsEditorScaleValueLabel;
+@property(nonatomic, strong) UISlider* touchControlsEditorOpacitySlider;
+@property(nonatomic, strong) UILabel* touchControlsEditorOpacityValueLabel;
+@property(nonatomic, strong) UITextField* touchControlsEditorTitleField;
+@property(nonatomic, strong) UIColorWell* touchControlsEditorColorWell;
+@property(nonatomic, strong) UISegmentedControl* touchControlsEditorShapeControl;
+@property(nonatomic, strong) UISegmentedControl* touchControlsEditorInputModeControl;
+@property(nonatomic, strong) NSDictionary* touchControlsEditingBaselineLayout;
+@property(nonatomic, assign) CGFloat touchControlsEditingBaselineOpacity;
+@property(nonatomic, assign) BOOL touchControlsEditorForcingOverlayVisible;
+@property(nonatomic, assign) BOOL touchControlsEditorHidLauncherOverlay;
+@property(nonatomic, copy) NSString* touchControlsEditingProfileKey;
+@property(nonatomic, copy) NSString* touchControlsEditingProfileTitle;
 @property(nonatomic, assign) BOOL gameRunning;
 @property(nonatomic, assign) BOOL gameStopInProgress;
+@property(nonatomic, assign) CGFloat touchControlsOpacity;
 @property(nonatomic, assign) xe::ui::IOSWindowedAppContext* appContext;
 
 // JIT status widgets.
@@ -8107,8 +8181,39 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
                                   completion:(void (^)(BOOL cancelled,
                                                        NSString* text))completion;
 - (void)setupInGameMenuOverlay;
+- (void)setupTouchControlsOverlay;
+- (void)setupTouchControlsEditorOverlay;
+- (void)updateTouchControlsVisibility;
+- (void)syncTouchControlsState;
+- (void)toggleInGameMenu;
 - (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer;
+- (void)showTouchControlsEditor;
+- (void)closeTouchControlsEditorTapped:(UIButton*)sender;
+- (void)confirmCloseTouchControlsEditorIfNeeded;
+- (void)dismissTouchControlsEditorDiscardChanges:(BOOL)discard_changes;
+- (void)touchControlsEditorSaveTapped:(UIButton*)sender;
+- (void)touchControlsEditorResetTapped:(UIButton*)sender;
+- (void)touchControlsEditorScaleChanged:(UISlider*)sender;
+- (void)touchControlsEditorOpacityChanged:(UISlider*)sender;
+- (void)touchControlsEditorTitleChanged:(UITextField*)sender;
+- (void)touchControlsEditorColorChanged:(UIColorWell*)sender;
+- (void)touchControlsEditorShapeChanged:(UISegmentedControl*)sender;
+- (void)touchControlsEditorInputModeChanged:(UISegmentedControl*)sender;
+- (void)handleTouchControlsEditorHeaderPan:(UIPanGestureRecognizer*)recognizer;
+- (void)persistCurrentTouchControlsProfile;
+- (void)touchControlsEditorSelectionChanged:(NSInteger)controlIdentifier;
+- (void)refreshTouchControlsEditorUI;
+- (void)updateTouchControlsEditorScaleUIForSelection:(BOOL)has_selection scale:(CGFloat)scale_value;
+- (void)updateTouchControlsEditorOpacityUI;
+- (BOOL)touchControlsEditorHasUnsavedChanges;
+- (NSString*)touchControlsProfileKeyForGame:(const IOSDiscoveredGame&)game;
+- (NSDictionary*)touchControlsProfilesDictionary;
+- (NSDictionary*)touchControlsProfileForKey:(NSString*)profile_key;
+- (void)applyTouchControlsProfileForGame:(const IOSDiscoveredGame&)game;
+- (void)showTouchControlsEditorForGameAtIndex:(size_t)game_index;
+- (void)applyCurrentTouchControlsProfileToAllGames:(UIButton*)sender;
 - (void)resumeGameTapped:(UIButton*)sender;
+- (void)customizeControlsTapped:(UIButton*)sender;
 - (void)inGameSettingsTapped:(UIButton*)sender;
 - (void)inGameLiveLogTapped:(UIButton*)sender;
 - (void)exitGameTapped:(UIButton*)sender;
@@ -8140,6 +8245,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   CGSize last_collection_layout_size_;
   BOOL compat_fetch_started_;
   std::filesystem::path pending_external_launch_path_;
+  std::filesystem::path active_touch_controls_game_path_;
 }
 
 - (void)viewDidLoad {
@@ -8148,6 +8254,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.jitAcquired = NO;
   self.gameRunning = NO;
   self.gameStopInProgress = NO;
+  self.touchControlsOpacity =
+      std::clamp(static_cast<CGFloat>(GetUserDefaultDouble(
+                     kXeniaTouchControlsOpacityPreferenceKey, 0.82)),
+                 static_cast<CGFloat>(0.05), static_cast<CGFloat>(1.00));
   focused_game_index_ = -1;
   launcher_library_focus_active_ = NO;
   controller_navigation_was_enabled_ = NO;
@@ -8166,13 +8276,21 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   // Create the launcher overlay UI immediately. When JIT is missing, keep
   // settings/navigation available but gate game launch with status.
   [self setupLauncherOverlay];
+  [self setupTouchControlsOverlay];
+  NSDictionary* saved_touch_layout =
+      [[GetUserDefaults() objectForKey:kXeniaTouchControlsLayoutPreferenceKey] isKindOfClass:[NSDictionary class]]
+          ? [GetUserDefaults() objectForKey:kXeniaTouchControlsLayoutPreferenceKey]
+          : nil;
+  if (saved_touch_layout) {
+    [self.touchControlsOverlay applyLayoutConfiguration:saved_touch_layout];
+  }
   [self setupInGameMenuOverlay];
-  UITapGestureRecognizer* tap = [[UITapGestureRecognizer alloc]
+  self.inGameMenuTapRecognizer = [[[UITapGestureRecognizer alloc]
       initWithTarget:self
-              action:@selector(toggleInGameMenuTapped:)];
-  tap.numberOfTapsRequired = 1;
-  tap.cancelsTouchesInView = NO;
-  [self.view addGestureRecognizer:tap];
+              action:@selector(toggleInGameMenuTapped:)] autorelease];
+  self.inGameMenuTapRecognizer.numberOfTapsRequired = 1;
+  self.inGameMenuTapRecognizer.cancelsTouchesInView = NO;
+  [self.view addGestureRecognizer:self.inGameMenuTapRecognizer];
   [self updateJITStatusIndicator];
   [self updateJITAvailabilityUI];
   [self refreshSignedInProfileUI];
@@ -8378,8 +8496,15 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   IOSFocusNodeId previous_focus = in_game_focus_graph_.current();
   in_game_focus_graph_.Clear();
 
+  xe::ui::apple::FocusNode customize;
+  customize.id = kInGameFocusCustomize;
+  customize.down = kInGameFocusResume;
+  customize.enabled = self.inGameCustomizeControlsButton && self.inGameCustomizeControlsButton.enabled &&
+                      !self.inGameCustomizeControlsButton.hidden;
+
   xe::ui::apple::FocusNode resume;
   resume.id = kInGameFocusResume;
+  resume.up = kInGameFocusCustomize;
   resume.down = kInGameFocusSettings;
   resume.enabled = self.inGameResumeButton && self.inGameResumeButton.enabled &&
                    !self.inGameResumeButton.hidden;
@@ -8404,6 +8529,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   exit.enabled = self.inGameExitButton && self.inGameExitButton.enabled &&
                  !self.inGameExitButton.hidden;
 
+  in_game_focus_graph_.AddOrUpdateNode(customize);
   in_game_focus_graph_.AddOrUpdateNode(resume);
   in_game_focus_graph_.AddOrUpdateNode(settings);
   in_game_focus_graph_.AddOrUpdateNode(log);
@@ -8456,6 +8582,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)applyInGameMenuFocusVisuals {
   if (!self.inGameMenuOverlay || self.inGameMenuOverlay.hidden || !controller_navigation_was_enabled_) {
+    [self setButton:self.inGameCustomizeControlsButton controllerFocused:NO];
     [self setButton:self.inGameResumeButton controllerFocused:NO];
     [self setButton:self.inGameSettingsButton controllerFocused:NO];
     [self setButton:self.inGameLiveLogButton controllerFocused:NO];
@@ -8464,6 +8591,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   }
 
   IOSFocusNodeId current_focus = in_game_focus_graph_.current();
+  [self setButton:self.inGameCustomizeControlsButton
+  controllerFocused:current_focus == kInGameFocusCustomize];
   [self setButton:self.inGameResumeButton controllerFocused:current_focus == kInGameFocusResume];
   [self setButton:self.inGameSettingsButton
   controllerFocused:current_focus == kInGameFocusSettings];
@@ -8849,7 +8978,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       self.inGameMenuOverlay.alpha = 0.0;
       self.inGameMenuOverlay.hidden = NO;
       [self rebuildInGameFocusGraph];
-      in_game_focus_graph_.SetCurrent(kInGameFocusResume);
+      in_game_focus_graph_.SetCurrent(kInGameFocusCustomize);
       [self applyInGameMenuFocusVisuals];
       [UIView animateWithDuration:0.18
                        animations:^{
@@ -8872,7 +9001,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   [self rebuildInGameFocusGraph];
   if (in_game_focus_graph_.current() == xe::ui::apple::kInvalidFocusNodeId) {
-    in_game_focus_graph_.SetCurrent(kInGameFocusResume);
+    in_game_focus_graph_.SetCurrent(kInGameFocusCustomize);
   }
 
   BOOL handled = NO;
@@ -8902,7 +9031,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     handled = YES;
   }
 
-  if (actions.section_prev && in_game_focus_graph_.SetCurrent(kInGameFocusResume)) {
+  if (actions.section_prev && in_game_focus_graph_.SetCurrent(kInGameFocusCustomize)) {
     focus_changed = YES;
     handled = YES;
   }
@@ -8922,6 +9051,9 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   if (actions.accept) {
     switch (in_game_focus_graph_.current()) {
+      case kInGameFocusCustomize:
+        [self.inGameCustomizeControlsButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+        break;
       case kInGameFocusResume:
         [self.inGameResumeButton sendActionsForControlEvents:UIControlEventTouchUpInside];
         break;
@@ -8965,6 +9097,8 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [self rebuildLauncherFocusGraph];
     [self applyLauncherFocusVisuals];
   }
+
+  [self updateTouchControlsVisibility];
 
   xe::hid::X_INPUT_STATE state = {};
   bool has_state = false;
@@ -9051,6 +9185,833 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     return YES;
   }
   return NO;
+}
+
+
+- (void)setupTouchControlsOverlay {
+  self.touchControlsOverlay = [[[XeniaTouchControlsView alloc] initWithFrame:self.view.bounds] autorelease];
+  self.touchControlsOverlay.autoresizingMask =
+      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  self.touchControlsOverlay.hidden = YES;
+  self.touchControlsOverlay.userInteractionEnabled = YES;
+  __unsafe_unretained XeniaViewController* unsafe_self = self;
+  self.touchControlsOverlay.stateDidChangeHandler = ^{
+    [unsafe_self syncTouchControlsState];
+  };
+  self.touchControlsOverlay.menuButtonTappedHandler = ^{
+    [unsafe_self toggleInGameMenu];
+  };
+  self.touchControlsOverlay.layoutEditingSelectionDidChangeHandler = ^(NSInteger controlIdentifier) {
+    [unsafe_self touchControlsEditorSelectionChanged:controlIdentifier];
+  };
+  self.touchControlsOverlay.layoutEditingDidChangeHandler = nil;
+  self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+  [self.view insertSubview:self.touchControlsOverlay aboveSubview:self.metalView];
+}
+
+- (void)setupTouchControlsEditorOverlay {
+  self.touchControlsEditorOverlay =
+      [[[XeniaPassthroughOverlayView alloc] initWithFrame:self.view.bounds] autorelease];
+  self.touchControlsEditorOverlay.autoresizingMask =
+      UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  self.touchControlsEditorOverlay.hidden = YES;
+  self.touchControlsEditorOverlay.backgroundColor = [UIColor clearColor];
+  [self.view addSubview:self.touchControlsEditorOverlay];
+
+  self.touchControlsEditorPanel = [[[UIView alloc] init] autorelease];
+  self.touchControlsEditorPanel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorPanel.backgroundColor =
+      [[XeniaTheme bgSurface] colorWithAlphaComponent:0.94f];
+  self.touchControlsEditorPanel.layer.cornerRadius = XeniaRadiusXl;
+  self.touchControlsEditorPanel.layer.borderWidth = 1.0f;
+  self.touchControlsEditorPanel.layer.borderColor = [XeniaTheme border].CGColor;
+  [self.touchControlsEditorOverlay addSubview:self.touchControlsEditorPanel];
+  self.touchControlsEditorOverlay.interactiveView = self.touchControlsEditorPanel;
+
+  UIView* header_drag_area = [[[UIView alloc] init] autorelease];
+  header_drag_area.translatesAutoresizingMaskIntoConstraints = NO;
+  header_drag_area.backgroundColor = [UIColor clearColor];
+  [self.touchControlsEditorPanel addSubview:header_drag_area];
+  UIPanGestureRecognizer* header_pan =
+      [[[UIPanGestureRecognizer alloc] initWithTarget:self
+                                               action:@selector(handleTouchControlsEditorHeaderPan:)] autorelease];
+  [header_drag_area addGestureRecognizer:header_pan];
+
+  UILabel* title = [[[UILabel alloc] init] autorelease];
+  title.translatesAutoresizingMaskIntoConstraints = NO;
+  title.text = @"Customize Controls";
+  title.textColor = [XeniaTheme textPrimary];
+  [self.touchControlsEditorPanel addSubview:title];
+
+  UIButton* close_button = [UIButton buttonWithType:UIButtonTypeSystem];
+  close_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [close_button setImage:[UIImage systemImageNamed:@"xmark"] forState:UIControlStateNormal];
+  close_button.tintColor = [XeniaTheme textMuted];
+  [close_button addTarget:self
+                   action:@selector(closeTouchControlsEditorTapped:)
+         forControlEvents:UIControlEventTouchUpInside];
+  [self.touchControlsEditorPanel addSubview:close_button];
+
+  UIScrollView* editor_scroll = [[[UIScrollView alloc] init] autorelease];
+  editor_scroll.translatesAutoresizingMaskIntoConstraints = NO;
+  editor_scroll.alwaysBounceVertical = YES;
+  editor_scroll.showsVerticalScrollIndicator = YES;
+  editor_scroll.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+  [self.touchControlsEditorPanel addSubview:editor_scroll];
+
+  UIView* editor_content = [[[UIView alloc] init] autorelease];
+  editor_content.translatesAutoresizingMaskIntoConstraints = NO;
+  [editor_scroll addSubview:editor_content];
+
+  self.touchControlsEditorSelectionLabel = [[[UILabel alloc] init] autorelease];
+  self.touchControlsEditorSelectionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorSelectionLabel.textColor = [XeniaTheme textMuted];
+  self.touchControlsEditorSelectionLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  self.touchControlsEditorSelectionLabel.numberOfLines = 2;
+  [editor_content addSubview:self.touchControlsEditorSelectionLabel];
+
+  UILabel* scale_label = [[[UILabel alloc] init] autorelease];
+  scale_label.translatesAutoresizingMaskIntoConstraints = NO;
+  scale_label.text = @"Scale";
+  scale_label.textColor = [XeniaTheme textPrimary];
+  scale_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:scale_label];
+
+  self.touchControlsEditorScaleValueLabel = [[[UILabel alloc] init] autorelease];
+  self.touchControlsEditorScaleValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorScaleValueLabel.textAlignment = NSTextAlignmentRight;
+  self.touchControlsEditorScaleValueLabel.textColor = [XeniaTheme textMuted];
+  self.touchControlsEditorScaleValueLabel.font =
+      [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+  [editor_content addSubview:self.touchControlsEditorScaleValueLabel];
+
+  self.touchControlsEditorScaleSlider = [[[UISlider alloc] init] autorelease];
+  self.touchControlsEditorScaleSlider.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorScaleSlider.minimumValue = 0.6f;
+  self.touchControlsEditorScaleSlider.maximumValue = 5.0f;
+  self.touchControlsEditorScaleSlider.continuous = YES;
+  self.touchControlsEditorScaleSlider.minimumTrackTintColor = [XeniaTheme accent];
+  self.touchControlsEditorScaleSlider.maximumTrackTintColor = [XeniaTheme border];
+  [self.touchControlsEditorScaleSlider addTarget:self
+                                          action:@selector(touchControlsEditorScaleChanged:)
+                                forControlEvents:UIControlEventValueChanged];
+  [editor_content addSubview:self.touchControlsEditorScaleSlider];
+
+  UILabel* opacity_label = [[[UILabel alloc] init] autorelease];
+  opacity_label.translatesAutoresizingMaskIntoConstraints = NO;
+  opacity_label.text = @"Opacity";
+  opacity_label.textColor = [XeniaTheme textPrimary];
+  opacity_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:opacity_label];
+
+  self.touchControlsEditorOpacityValueLabel = [[[UILabel alloc] init] autorelease];
+  self.touchControlsEditorOpacityValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorOpacityValueLabel.textAlignment = NSTextAlignmentRight;
+  self.touchControlsEditorOpacityValueLabel.textColor = [XeniaTheme textMuted];
+  self.touchControlsEditorOpacityValueLabel.font =
+      [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+  [editor_content addSubview:self.touchControlsEditorOpacityValueLabel];
+
+  self.touchControlsEditorOpacitySlider = [[[UISlider alloc] init] autorelease];
+  self.touchControlsEditorOpacitySlider.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorOpacitySlider.minimumValue = 0.05f;
+  self.touchControlsEditorOpacitySlider.maximumValue = 1.00f;
+  self.touchControlsEditorOpacitySlider.continuous = YES;
+  self.touchControlsEditorOpacitySlider.minimumTrackTintColor = [XeniaTheme accent];
+  self.touchControlsEditorOpacitySlider.maximumTrackTintColor = [XeniaTheme border];
+  [self.touchControlsEditorOpacitySlider addTarget:self
+                                            action:@selector(touchControlsEditorOpacityChanged:)
+                                  forControlEvents:UIControlEventValueChanged];
+  [editor_content addSubview:self.touchControlsEditorOpacitySlider];
+
+  UILabel* title_label = [[[UILabel alloc] init] autorelease];
+  title_label.translatesAutoresizingMaskIntoConstraints = NO;
+  title_label.text = @"Label";
+  title_label.textColor = [XeniaTheme textPrimary];
+  title_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:title_label];
+
+  self.touchControlsEditorTitleField = [[[UITextField alloc] init] autorelease];
+  self.touchControlsEditorTitleField.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorTitleField.borderStyle = UITextBorderStyleRoundedRect;
+  self.touchControlsEditorTitleField.backgroundColor = [XeniaTheme bgSurface2];
+  self.touchControlsEditorTitleField.textColor = [XeniaTheme textPrimary];
+  self.touchControlsEditorTitleField.tintColor = [XeniaTheme accent];
+  self.touchControlsEditorTitleField.clearButtonMode = UITextFieldViewModeWhileEditing;
+  self.touchControlsEditorTitleField.autocorrectionType = UITextAutocorrectionTypeNo;
+  self.touchControlsEditorTitleField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+  self.touchControlsEditorTitleField.spellCheckingType = UITextSpellCheckingTypeNo;
+  self.touchControlsEditorTitleField.placeholder = @"Enter label";
+  [self.touchControlsEditorTitleField addTarget:self
+                                         action:@selector(touchControlsEditorTitleChanged:)
+                               forControlEvents:UIControlEventEditingChanged];
+  [editor_content addSubview:self.touchControlsEditorTitleField];
+
+  UILabel* color_label = [[[UILabel alloc] init] autorelease];
+  color_label.translatesAutoresizingMaskIntoConstraints = NO;
+  color_label.text = @"Button Color";
+  color_label.textColor = [XeniaTheme textPrimary];
+  color_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:color_label];
+
+  self.touchControlsEditorColorWell = [[[UIColorWell alloc] init] autorelease];
+  self.touchControlsEditorColorWell.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorColorWell.supportsAlpha = YES;
+  [self.touchControlsEditorColorWell addTarget:self
+                                        action:@selector(touchControlsEditorColorChanged:)
+                              forControlEvents:UIControlEventValueChanged];
+  [editor_content addSubview:self.touchControlsEditorColorWell];
+
+  UILabel* shape_label = [[[UILabel alloc] init] autorelease];
+  shape_label.translatesAutoresizingMaskIntoConstraints = NO;
+  shape_label.text = @"Shape";
+  shape_label.textColor = [XeniaTheme textPrimary];
+  shape_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:shape_label];
+
+  self.touchControlsEditorShapeControl =
+      [[[UISegmentedControl alloc] initWithItems:@[ @"Circle", @"Round Rect", @"Round Square" ]] autorelease];
+  self.touchControlsEditorShapeControl.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorShapeControl.selectedSegmentIndex = 0;
+  self.touchControlsEditorShapeControl.selectedSegmentTintColor = [XeniaTheme accent];
+  [self.touchControlsEditorShapeControl setTitleTextAttributes:@{
+    NSForegroundColorAttributeName : [XeniaTheme textPrimary]
+  } forState:UIControlStateNormal];
+  [self.touchControlsEditorShapeControl addTarget:self
+                                           action:@selector(touchControlsEditorShapeChanged:)
+                                 forControlEvents:UIControlEventValueChanged];
+  [editor_content addSubview:self.touchControlsEditorShapeControl];
+
+  UILabel* input_mode_label = [[[UILabel alloc] init] autorelease];
+  input_mode_label.translatesAutoresizingMaskIntoConstraints = NO;
+  input_mode_label.text = @"Stick Input";
+  input_mode_label.textColor = [XeniaTheme textPrimary];
+  input_mode_label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+  [editor_content addSubview:input_mode_label];
+
+  self.touchControlsEditorInputModeControl =
+      [[[UISegmentedControl alloc] initWithItems:@[ @"Joystick", @"Touchpad" ]] autorelease];
+  self.touchControlsEditorInputModeControl.translatesAutoresizingMaskIntoConstraints = NO;
+  self.touchControlsEditorInputModeControl.selectedSegmentIndex = 0;
+  self.touchControlsEditorInputModeControl.selectedSegmentTintColor = [XeniaTheme accent];
+  [self.touchControlsEditorInputModeControl setTitleTextAttributes:@{
+    NSForegroundColorAttributeName : [XeniaTheme textPrimary]
+  } forState:UIControlStateNormal];
+  [self.touchControlsEditorInputModeControl addTarget:self
+                                               action:@selector(touchControlsEditorInputModeChanged:)
+                                     forControlEvents:UIControlEventValueChanged];
+  [editor_content addSubview:self.touchControlsEditorInputModeControl];
+
+  UILabel* input_mode_note = [[[UILabel alloc] init] autorelease];
+  input_mode_note.translatesAutoresizingMaskIntoConstraints = NO;
+  input_mode_note.text =
+      @"Adjust touchpad camera speed with the game's in-game look or camera sensitivity setting.";
+  input_mode_note.textColor = [XeniaTheme textMuted];
+  input_mode_note.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+  input_mode_note.numberOfLines = 0;
+  [editor_content addSubview:input_mode_note];
+
+  UIButtonConfiguration* save_config = [UIButtonConfiguration filledButtonConfiguration];
+  save_config.title = @"Save";
+  save_config.baseBackgroundColor = [XeniaTheme accent];
+  save_config.baseForegroundColor = [XeniaTheme accentFg];
+  save_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  self.touchControlsEditorPanel.layer.masksToBounds = NO;
+  UIButton* save_button = [UIButton buttonWithConfiguration:save_config primaryAction:nil];
+  save_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [save_button addTarget:self
+                  action:@selector(touchControlsEditorSaveTapped:)
+        forControlEvents:UIControlEventTouchUpInside];
+  [editor_content addSubview:save_button];
+
+  UIButtonConfiguration* apply_all_config = [UIButtonConfiguration tintedButtonConfiguration];
+  apply_all_config.title = @"Apply To All Games";
+  apply_all_config.baseForegroundColor = [XeniaTheme textPrimary];
+  apply_all_config.baseBackgroundColor = [XeniaTheme bgSurface2];
+  apply_all_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  UIButton* apply_all_button = [UIButton buttonWithConfiguration:apply_all_config primaryAction:nil];
+  apply_all_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [apply_all_button addTarget:self
+                       action:@selector(applyCurrentTouchControlsProfileToAllGames:)
+             forControlEvents:UIControlEventTouchUpInside];
+  [editor_content addSubview:apply_all_button];
+
+  UIButtonConfiguration* reset_config = [UIButtonConfiguration tintedButtonConfiguration];
+  reset_config.title = @"Reset Layout";
+  reset_config.baseForegroundColor = [XeniaTheme textPrimary];
+  reset_config.baseBackgroundColor = [XeniaTheme bgSurface2];
+  reset_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  UIButton* reset_button = [UIButton buttonWithConfiguration:reset_config primaryAction:nil];
+  reset_button.translatesAutoresizingMaskIntoConstraints = NO;
+  [reset_button addTarget:self
+                   action:@selector(touchControlsEditorResetTapped:)
+         forControlEvents:UIControlEventTouchUpInside];
+  [editor_content addSubview:reset_button];
+
+  UILabel* helper = [[[UILabel alloc] init] autorelease];
+  helper.translatesAutoresizingMaskIntoConstraints = NO;
+  helper.text = @"Tap to select, drag to move, and use two fingers to rotate the selected control.";
+  helper.textColor = [XeniaTheme textMuted];
+  helper.font = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+  helper.numberOfLines = 0;
+  [editor_content addSubview:helper];
+
+  self.touchControlsEditorPanelTopConstraint =
+      [self.touchControlsEditorPanel.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor
+                                                              constant:16];
+  self.touchControlsEditorPanelCenterXConstraint =
+      [self.touchControlsEditorPanel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor];
+  BOOL is_pad_layout = UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
+  CGFloat panel_width = is_pad_layout ? 390.0f : 340.0f;
+  CGFloat safe_height = CGRectGetHeight(self.view.safeAreaLayoutGuide.layoutFrame);
+  if (safe_height <= 0.0f) {
+    safe_height = CGRectGetHeight(self.view.bounds);
+  }
+  CGFloat panel_height = std::max<CGFloat>(250.0f, safe_height - 24.0f);
+  title.font = [UIFont systemFontOfSize:(is_pad_layout ? 22.0f : 20.0f)
+                                 weight:UIFontWeightSemibold];
+  self.touchControlsEditorPanel.transform = CGAffineTransformIdentity;
+
+  [NSLayoutConstraint activateConstraints:@[
+    self.touchControlsEditorPanelTopConstraint,
+    self.touchControlsEditorPanelCenterXConstraint,
+    [self.touchControlsEditorPanel.widthAnchor constraintEqualToConstant:panel_width],
+    [self.touchControlsEditorPanel.heightAnchor constraintEqualToConstant:panel_height],
+    [self.touchControlsEditorPanel.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor
+                                                                             constant:16],
+    [self.touchControlsEditorPanel.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor
+                                                                            constant:-16],
+
+    [header_drag_area.topAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.topAnchor],
+    [header_drag_area.leadingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.leadingAnchor],
+    [header_drag_area.trailingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.trailingAnchor],
+    [header_drag_area.heightAnchor constraintEqualToConstant:58],
+
+    [title.topAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.topAnchor constant:18],
+    [title.leadingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.leadingAnchor constant:18],
+    [title.trailingAnchor constraintLessThanOrEqualToAnchor:close_button.leadingAnchor constant:-12],
+
+    [close_button.centerYAnchor constraintEqualToAnchor:title.centerYAnchor],
+    [close_button.trailingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.trailingAnchor constant:-14],
+    [close_button.widthAnchor constraintEqualToConstant:32],
+    [close_button.heightAnchor constraintEqualToConstant:32],
+
+    [editor_scroll.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:10],
+    [editor_scroll.leadingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.leadingAnchor],
+    [editor_scroll.trailingAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.trailingAnchor],
+    [editor_scroll.bottomAnchor constraintEqualToAnchor:self.touchControlsEditorPanel.bottomAnchor],
+
+    [editor_content.topAnchor constraintEqualToAnchor:editor_scroll.contentLayoutGuide.topAnchor],
+    [editor_content.leadingAnchor constraintEqualToAnchor:editor_scroll.contentLayoutGuide.leadingAnchor],
+    [editor_content.trailingAnchor constraintEqualToAnchor:editor_scroll.contentLayoutGuide.trailingAnchor],
+    [editor_content.bottomAnchor constraintEqualToAnchor:editor_scroll.contentLayoutGuide.bottomAnchor],
+    [editor_content.widthAnchor constraintEqualToAnchor:editor_scroll.frameLayoutGuide.widthAnchor],
+
+    [self.touchControlsEditorSelectionLabel.topAnchor constraintEqualToAnchor:editor_content.topAnchor],
+    [self.touchControlsEditorSelectionLabel.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [self.touchControlsEditorSelectionLabel.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                          constant:-18],
+
+    [scale_label.topAnchor constraintEqualToAnchor:self.touchControlsEditorSelectionLabel.bottomAnchor constant:16],
+    [scale_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [self.touchControlsEditorScaleValueLabel.centerYAnchor constraintEqualToAnchor:scale_label.centerYAnchor],
+    [self.touchControlsEditorScaleValueLabel.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                           constant:-18],
+
+    [self.touchControlsEditorScaleSlider.topAnchor constraintEqualToAnchor:scale_label.bottomAnchor constant:8],
+    [self.touchControlsEditorScaleSlider.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor
+                                                                      constant:14],
+    [self.touchControlsEditorScaleSlider.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                       constant:-14],
+
+    [opacity_label.topAnchor constraintEqualToAnchor:self.touchControlsEditorScaleSlider.bottomAnchor constant:14],
+    [opacity_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [self.touchControlsEditorOpacityValueLabel.centerYAnchor constraintEqualToAnchor:opacity_label.centerYAnchor],
+    [self.touchControlsEditorOpacityValueLabel.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                             constant:-18],
+
+    [self.touchControlsEditorOpacitySlider.topAnchor constraintEqualToAnchor:opacity_label.bottomAnchor constant:8],
+    [self.touchControlsEditorOpacitySlider.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor
+                                                                        constant:14],
+    [self.touchControlsEditorOpacitySlider.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                         constant:-14],
+
+    [title_label.topAnchor constraintEqualToAnchor:self.touchControlsEditorOpacitySlider.bottomAnchor constant:14],
+    [title_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [title_label.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor constant:-18],
+
+    [self.touchControlsEditorTitleField.topAnchor constraintEqualToAnchor:title_label.bottomAnchor constant:8],
+    [self.touchControlsEditorTitleField.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor
+                                                                     constant:14],
+    [self.touchControlsEditorTitleField.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                      constant:-14],
+    [self.touchControlsEditorTitleField.heightAnchor constraintEqualToConstant:38],
+
+    [color_label.topAnchor constraintEqualToAnchor:self.touchControlsEditorTitleField.bottomAnchor constant:14],
+    [color_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+
+    [self.touchControlsEditorColorWell.centerYAnchor constraintEqualToAnchor:color_label.centerYAnchor],
+    [self.touchControlsEditorColorWell.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                    constant:-18],
+    [self.touchControlsEditorColorWell.widthAnchor constraintEqualToConstant:34],
+    [self.touchControlsEditorColorWell.heightAnchor constraintEqualToConstant:34],
+
+    [shape_label.topAnchor constraintEqualToAnchor:color_label.bottomAnchor constant:14],
+    [shape_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+
+    [self.touchControlsEditorShapeControl.topAnchor constraintEqualToAnchor:shape_label.bottomAnchor constant:8],
+    [self.touchControlsEditorShapeControl.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor
+                                                                       constant:14],
+    [self.touchControlsEditorShapeControl.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                        constant:-14],
+
+    [input_mode_label.topAnchor constraintEqualToAnchor:self.touchControlsEditorShapeControl.bottomAnchor constant:14],
+    [input_mode_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+
+    [self.touchControlsEditorInputModeControl.topAnchor constraintEqualToAnchor:input_mode_label.bottomAnchor constant:8],
+    [self.touchControlsEditorInputModeControl.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor
+                                                                           constant:14],
+    [self.touchControlsEditorInputModeControl.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
+                                                                            constant:-14],
+
+    [input_mode_note.topAnchor constraintEqualToAnchor:self.touchControlsEditorInputModeControl.bottomAnchor constant:10],
+    [input_mode_note.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [input_mode_note.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor constant:-18],
+
+    [helper.topAnchor constraintEqualToAnchor:input_mode_note.bottomAnchor constant:16],
+    [helper.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
+    [helper.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor constant:-18],
+
+    [save_button.topAnchor constraintEqualToAnchor:helper.bottomAnchor constant:16],
+    [save_button.leadingAnchor constraintEqualToAnchor:editor_content.leadingAnchor constant:14],
+    [save_button.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor constant:-14],
+
+    [apply_all_button.topAnchor constraintEqualToAnchor:save_button.bottomAnchor constant:10],
+    [apply_all_button.leadingAnchor constraintEqualToAnchor:save_button.leadingAnchor],
+    [apply_all_button.trailingAnchor constraintEqualToAnchor:save_button.trailingAnchor],
+
+    [reset_button.topAnchor constraintEqualToAnchor:apply_all_button.bottomAnchor constant:10],
+    [reset_button.leadingAnchor constraintEqualToAnchor:save_button.leadingAnchor],
+    [reset_button.trailingAnchor constraintEqualToAnchor:save_button.trailingAnchor],
+    [reset_button.bottomAnchor constraintEqualToAnchor:editor_content.bottomAnchor constant:-14],
+  ]];
+}
+
+- (NSString*)touchControlsProfileKeyForGame:(const IOSDiscoveredGame&)game {
+  return ToNSString(game.path.lexically_normal().string());
+}
+
+- (NSDictionary*)touchControlsProfilesDictionary {
+  return [[GetUserDefaults() objectForKey:kXeniaTouchControlsProfilesPreferenceKey]
+             isKindOfClass:[NSDictionary class]]
+             ? [GetUserDefaults() objectForKey:kXeniaTouchControlsProfilesPreferenceKey]
+             : @{};
+}
+
+- (NSDictionary*)touchControlsProfileForKey:(NSString*)profile_key {
+  if (profile_key.length == 0) {
+    return nil;
+  }
+  NSDictionary* profiles = [self touchControlsProfilesDictionary];
+  return [profiles[profile_key] isKindOfClass:[NSDictionary class]] ? profiles[profile_key] : nil;
+}
+
+- (void)applyTouchControlsProfileForGame:(const IOSDiscoveredGame&)game {
+  NSString* profile_key = [self touchControlsProfileKeyForGame:game];
+  NSDictionary* profile = [self touchControlsProfileForKey:profile_key];
+  if (!profile) {
+    profile = [self touchControlsProfileForKey:@"__all_games__"];
+  }
+  NSDictionary* layout = [profile[@"layout"] isKindOfClass:[NSDictionary class]] ? profile[@"layout"] : nil;
+  if (layout) {
+    [self.touchControlsOverlay applyLayoutConfiguration:layout];
+  } else {
+    NSDictionary* global_layout =
+        [[GetUserDefaults() objectForKey:kXeniaTouchControlsLayoutPreferenceKey] isKindOfClass:[NSDictionary class]]
+            ? [GetUserDefaults() objectForKey:kXeniaTouchControlsLayoutPreferenceKey]
+            : nil;
+    [self.touchControlsOverlay applyLayoutConfiguration:global_layout];
+  }
+  NSNumber* opacity_number = [profile[@"opacity"] isKindOfClass:[NSNumber class]] ? profile[@"opacity"] : nil;
+  self.touchControlsOpacity =
+      std::clamp(static_cast<CGFloat>(opacity_number ? opacity_number.doubleValue
+                                                     : GetUserDefaultDouble(kXeniaTouchControlsOpacityPreferenceKey,
+                                                                            0.82)),
+                 static_cast<CGFloat>(0.05), static_cast<CGFloat>(1.00));
+  self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+}
+
+- (void)showTouchControlsEditorForGameAtIndex:(size_t)game_index {
+  if (game_index >= discovered_games_.size()) {
+    return;
+  }
+  const IOSDiscoveredGame& game = discovered_games_[game_index];
+  self.touchControlsEditingProfileKey = [self touchControlsProfileKeyForGame:game];
+  self.touchControlsEditingProfileTitle =
+      game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
+  [self applyTouchControlsProfileForGame:game];
+  [self showTouchControlsEditor];
+}
+
+- (BOOL)touchControlsEditorHasUnsavedChanges {
+  BOOL opacity_changed = fabs(self.touchControlsOpacity - self.touchControlsEditingBaselineOpacity) > 0.0005f;
+  NSDictionary* current_layout = [self.touchControlsOverlay layoutConfiguration];
+  BOOL layout_changed = ![current_layout isEqualToDictionary:self.touchControlsEditingBaselineLayout ?: @{}];
+  return opacity_changed || layout_changed;
+}
+
+- (void)refreshTouchControlsEditorUI {
+  if (!self.touchControlsEditorOverlay || self.touchControlsEditorOverlay.hidden) {
+    return;
+  }
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  NSString* selected_title = XeniaTouchControlEditorTitle(control_identifier);
+  NSString* profile_title =
+      self.touchControlsEditingProfileTitle.length > 0 ? self.touchControlsEditingProfileTitle : @"All Games";
+  self.touchControlsEditorSelectionLabel.text =
+      control_identifier >= 0
+          ? [NSString stringWithFormat:@"Profile: %@\nSelected: %@", profile_title, selected_title]
+          : [NSString stringWithFormat:@"Profile: %@\nSelected: None", profile_title];
+  BOOL has_selection = control_identifier >= 0;
+  self.touchControlsEditorScaleSlider.enabled = has_selection;
+  self.touchControlsEditorScaleSlider.alpha = has_selection ? 1.0f : 0.45f;
+  CGFloat scale_value = has_selection ? [self.touchControlsOverlay scaleForControlIdentifier:control_identifier] : 1.0f;
+  [self updateTouchControlsEditorScaleUIForSelection:has_selection scale:scale_value];
+  [self updateTouchControlsEditorOpacityUI];
+  self.touchControlsEditorTitleField.enabled = has_selection;
+  self.touchControlsEditorTitleField.alpha = has_selection ? 1.0f : 0.45f;
+  NSString* title_value = has_selection ? [self.touchControlsOverlay titleForControlIdentifier:control_identifier] : @"";
+  if (!self.touchControlsEditorTitleField.isFirstResponder ||
+      ![self.touchControlsEditorTitleField.text isEqualToString:title_value]) {
+    self.touchControlsEditorTitleField.text = title_value;
+  }
+  self.touchControlsEditorTitleField.placeholder = has_selection ? @"Enter label" : @"Select a control";
+  self.touchControlsEditorColorWell.enabled = has_selection;
+  self.touchControlsEditorColorWell.alpha = has_selection ? 1.0f : 0.45f;
+  UIColor* selected_color =
+      has_selection ? [self.touchControlsOverlay colorForControlIdentifier:control_identifier]
+                    : [XeniaTheme border];
+  if (![self.touchControlsEditorColorWell.selectedColor isEqual:selected_color]) {
+    self.touchControlsEditorColorWell.selectedColor = selected_color;
+  }
+  self.touchControlsEditorShapeControl.enabled = has_selection;
+  self.touchControlsEditorShapeControl.alpha = has_selection ? 1.0f : 0.45f;
+  NSInteger shape_value =
+      has_selection ? [self.touchControlsOverlay shapeForControlIdentifier:control_identifier]
+                    : XeniaTouchControlShapeCircle;
+  if (self.touchControlsEditorShapeControl.selectedSegmentIndex != shape_value) {
+    self.touchControlsEditorShapeControl.selectedSegmentIndex = shape_value;
+  }
+  BOOL is_touchpad_eligible_stick = control_identifier == kXeniaTouchLayoutRightStickControlIdentifier;
+  self.touchControlsEditorInputModeControl.enabled = has_selection && is_touchpad_eligible_stick;
+  self.touchControlsEditorInputModeControl.alpha = (has_selection && is_touchpad_eligible_stick) ? 1.0f : 0.45f;
+  NSInteger input_mode =
+      (has_selection && is_touchpad_eligible_stick)
+          ? [self.touchControlsOverlay inputModeForControlIdentifier:control_identifier]
+          : XeniaTouchStickInputModeJoystick;
+  if (self.touchControlsEditorInputModeControl.selectedSegmentIndex != input_mode) {
+    self.touchControlsEditorInputModeControl.selectedSegmentIndex = input_mode;
+  }
+}
+
+- (void)updateTouchControlsEditorScaleUIForSelection:(BOOL)has_selection scale:(CGFloat)scale_value {
+  if (fabs(self.touchControlsEditorScaleSlider.value - scale_value) > 0.0005f) {
+    self.touchControlsEditorScaleSlider.value = scale_value;
+  }
+  self.touchControlsEditorScaleValueLabel.text =
+      has_selection ? [NSString stringWithFormat:@"%d%%", (int)lroundf(scale_value * 100.0f)]
+                    : @"--";
+}
+
+- (void)updateTouchControlsEditorOpacityUI {
+  if (fabs(self.touchControlsEditorOpacitySlider.value - self.touchControlsOpacity) > 0.0005f) {
+    self.touchControlsEditorOpacitySlider.value = self.touchControlsOpacity;
+  }
+  self.touchControlsEditorOpacityValueLabel.text =
+      [NSString stringWithFormat:@"%d%%", (int)lroundf(self.touchControlsOpacity * 100.0f)];
+}
+
+- (void)touchControlsEditorSelectionChanged:(NSInteger)__unused controlIdentifier {
+  [self refreshTouchControlsEditorUI];
+}
+
+- (void)showTouchControlsEditor {
+  if (!self.touchControlsOverlay) {
+    return;
+  }
+  if (!self.touchControlsEditorOverlay) {
+    [self setupTouchControlsEditorOverlay];
+  }
+  if (self.touchControlsEditingProfileKey.length == 0) {
+    self.touchControlsEditingProfileKey = @"__all_games__";
+  }
+  if (self.touchControlsEditingProfileTitle.length == 0) {
+    self.touchControlsEditingProfileTitle = @"All Games";
+  }
+  self.touchControlsEditingBaselineLayout =
+      [[[self.touchControlsOverlay layoutConfiguration] copy] autorelease];
+  self.touchControlsEditingBaselineOpacity = self.touchControlsOpacity;
+  self.touchControlsEditorForcingOverlayVisible = YES;
+  self.touchControlsEditorHidLauncherOverlay = NO;
+  if (!self.gameRunning && self.launcherOverlay && !self.launcherOverlay.hidden) {
+    self.touchControlsEditorHidLauncherOverlay = YES;
+    self.launcherOverlay.hidden = YES;
+    self.launcherOverlay.alpha = 0.0f;
+  }
+  self.touchControlsOverlay.layoutEditingEnabled = YES;
+  [self updateTouchControlsVisibility];
+  [self.view bringSubviewToFront:self.touchControlsOverlay];
+  self.touchControlsEditorOverlay.hidden = NO;
+  self.touchControlsEditorOverlay.alpha = 0.0f;
+  [self.view bringSubviewToFront:self.touchControlsEditorOverlay];
+  [self refreshTouchControlsEditorUI];
+  [UIView animateWithDuration:0.18
+                   animations:^{
+                     self.touchControlsEditorOverlay.alpha = 1.0f;
+                   }];
+}
+
+- (void)closeTouchControlsEditorTapped:(UIButton*)__unused sender {
+  [self confirmCloseTouchControlsEditorIfNeeded];
+}
+
+- (void)confirmCloseTouchControlsEditorIfNeeded {
+  if (![self touchControlsEditorHasUnsavedChanges]) {
+    [self dismissTouchControlsEditorDiscardChanges:YES];
+    return;
+  }
+  UIAlertController* alert = [UIAlertController
+      alertControllerWithTitle:@"Discard unsaved changes?"
+                       message:@"You have unsaved touch control changes. Close this editor and lose them?"
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Keep Editing"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Discard Changes"
+                                            style:UIAlertActionStyleDestructive
+                                          handler:^(__unused UIAlertAction* action) {
+                                            [self dismissTouchControlsEditorDiscardChanges:YES];
+                                          }]];
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)dismissTouchControlsEditorDiscardChanges:(BOOL)discard_changes {
+  if (discard_changes && self.touchControlsEditingBaselineLayout) {
+    [self.touchControlsOverlay applyLayoutConfiguration:self.touchControlsEditingBaselineLayout];
+    self.touchControlsOpacity = self.touchControlsEditingBaselineOpacity;
+    self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+  }
+  self.touchControlsOverlay.layoutEditingEnabled = NO;
+  self.touchControlsEditorForcingOverlayVisible = NO;
+  [UIView animateWithDuration:0.15
+      animations:^{
+        self.touchControlsEditorOverlay.alpha = 0.0f;
+      }
+      completion:^(__unused BOOL finished) {
+        self.touchControlsEditorOverlay.hidden = YES;
+        self.touchControlsEditorOverlay.alpha = 1.0f;
+        if (self.touchControlsEditorHidLauncherOverlay && self.launcherOverlay) {
+          self.launcherOverlay.hidden = NO;
+          self.launcherOverlay.alpha = 1.0f;
+          [self.view bringSubviewToFront:self.launcherOverlay];
+          self.touchControlsEditorHidLauncherOverlay = NO;
+        }
+        [self updateTouchControlsVisibility];
+      }];
+}
+
+- (void)touchControlsEditorSaveTapped:(UIButton*)__unused sender {
+  [self persistCurrentTouchControlsProfile];
+  [self dismissTouchControlsEditorDiscardChanges:NO];
+}
+
+- (void)applyCurrentTouchControlsProfileToAllGames:(UIButton*)__unused sender {
+  UIAlertController* alert = [UIAlertController
+      alertControllerWithTitle:@"Apply controls to all games?"
+                       message:@"This will save the current touch control layout and opacity, then apply them to every game profile."
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Apply To All Games"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(__unused UIAlertAction* action) {
+  NSDictionary* layout = [self.touchControlsOverlay layoutConfiguration];
+  if (!layout) {
+    return;
+  }
+  NSMutableDictionary* profiles = [[self touchControlsProfilesDictionary] mutableCopy];
+  NSDictionary* profile = @{
+    @"layout" : layout,
+    @"opacity" : @(self.touchControlsOpacity),
+  };
+  profiles[@"__all_games__"] = profile;
+  for (const IOSDiscoveredGame& game : discovered_games_) {
+    NSString* profile_key = [self touchControlsProfileKeyForGame:game];
+    if (profile_key.length > 0) {
+      profiles[profile_key] = profile;
+    }
+  }
+  [GetUserDefaults() setObject:profiles forKey:kXeniaTouchControlsProfilesPreferenceKey];
+  [GetUserDefaults() setObject:layout forKey:kXeniaTouchControlsLayoutPreferenceKey];
+  [GetUserDefaults() setDouble:self.touchControlsOpacity forKey:kXeniaTouchControlsOpacityPreferenceKey];
+  self.touchControlsEditingBaselineLayout = [[layout copy] autorelease];
+  self.touchControlsEditingBaselineOpacity = self.touchControlsOpacity;
+  [profiles release];
+                                          }]];
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)touchControlsEditorResetTapped:(UIButton*)__unused sender {
+  UIAlertController* alert = [UIAlertController
+      alertControllerWithTitle:@"Reset touch controls?"
+                       message:@"This will restore the default touch control layout for this profile and save it immediately."
+                preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Reset Layout"
+                                            style:UIAlertActionStyleDestructive
+                                          handler:^(__unused UIAlertAction* action) {
+                                            [self.touchControlsOverlay resetLayoutConfigurationToDefaults];
+                                            [self persistCurrentTouchControlsProfile];
+                                            [self refreshTouchControlsEditorUI];
+                                          }]];
+  [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)touchControlsEditorScaleChanged:(UISlider*)sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setScale:sender.value forControlIdentifier:control_identifier];
+  [self updateTouchControlsEditorScaleUIForSelection:YES
+                                               scale:[self.touchControlsOverlay scaleForControlIdentifier:control_identifier]];
+}
+
+- (void)touchControlsEditorOpacityChanged:(UISlider*)sender {
+  self.touchControlsOpacity = sender.value;
+  self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+  [self updateTouchControlsEditorOpacityUI];
+}
+
+- (void)touchControlsEditorTitleChanged:(UITextField*)sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setTitle:sender.text forControlIdentifier:control_identifier];
+}
+
+- (void)touchControlsEditorColorChanged:(UIColorWell*)sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setColor:sender.selectedColor forControlIdentifier:control_identifier];
+}
+
+- (void)touchControlsEditorShapeChanged:(UISegmentedControl*)sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setShape:sender.selectedSegmentIndex
+                  forControlIdentifier:control_identifier];
+}
+
+- (void)touchControlsEditorInputModeChanged:(UISegmentedControl*)sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier != kXeniaTouchLayoutRightStickControlIdentifier) {
+    return;
+  }
+  [self.touchControlsOverlay setInputMode:sender.selectedSegmentIndex
+                     forControlIdentifier:control_identifier];
+  [self refreshTouchControlsEditorUI];
+}
+
+- (void)handleTouchControlsEditorHeaderPan:(UIPanGestureRecognizer*)recognizer {
+  if (!self.touchControlsEditorPanelTopConstraint || !self.touchControlsEditorPanelCenterXConstraint) {
+    return;
+  }
+  CGPoint translation = [recognizer translationInView:self.view];
+  if (recognizer.state == UIGestureRecognizerStateChanged ||
+      recognizer.state == UIGestureRecognizerStateEnded) {
+    CGFloat min_top = 8.0f;
+    CGFloat max_top = MAX(CGRectGetHeight(self.view.bounds) -
+                              self.view.safeAreaInsets.bottom - 120.0f,
+                          min_top);
+    CGFloat min_center_offset = -CGRectGetWidth(self.view.bounds) * 0.28f;
+    CGFloat max_center_offset = CGRectGetWidth(self.view.bounds) * 0.28f;
+    self.touchControlsEditorPanelTopConstraint.constant =
+        std::clamp(self.touchControlsEditorPanelTopConstraint.constant + translation.y,
+                   min_top, max_top);
+    self.touchControlsEditorPanelCenterXConstraint.constant =
+        std::clamp(self.touchControlsEditorPanelCenterXConstraint.constant + translation.x,
+                   min_center_offset, max_center_offset);
+    [recognizer setTranslation:CGPointZero inView:self.view];
+  }
+}
+
+- (void)persistCurrentTouchControlsProfile {
+  NSDictionary* layout = [self.touchControlsOverlay layoutConfiguration];
+  if (!layout) {
+    return;
+  }
+  NSMutableDictionary* profiles = [[self touchControlsProfilesDictionary] mutableCopy];
+  NSString* profile_key = self.touchControlsEditingProfileKey.length > 0
+                              ? self.touchControlsEditingProfileKey
+                              : @"__all_games__";
+  profiles[profile_key] = @{
+    @"layout" : layout,
+    @"opacity" : @(self.touchControlsOpacity),
+  };
+  [GetUserDefaults() setObject:profiles forKey:kXeniaTouchControlsProfilesPreferenceKey];
+  if ([profile_key isEqualToString:@"__all_games__"]) {
+    [GetUserDefaults() setObject:layout forKey:kXeniaTouchControlsLayoutPreferenceKey];
+    [GetUserDefaults() setDouble:self.touchControlsOpacity
+                          forKey:kXeniaTouchControlsOpacityPreferenceKey];
+  }
+  self.touchControlsEditingBaselineLayout = [[layout copy] autorelease];
+  self.touchControlsEditingBaselineOpacity = self.touchControlsOpacity;
+  [profiles release];
+}
+
+- (void)syncTouchControlsState {
+  if (!self.touchControlsOverlay || self.touchControlsOverlay.hidden) {
+    xe::hid::sdl::ClearVirtualControllerState(0);
+    return;
+  }
+  xe::hid::sdl::SetVirtualControllerState(
+      0, [self.touchControlsOverlay currentControllerState]);
+}
+
+- (void)updateTouchControlsVisibility {
+  BOOL should_show = self.touchControlsEditorForcingOverlayVisible ||
+                     (self.gameRunning && self.launcherOverlay.hidden &&
+                     !xe::hid::sdl::AnyPhysicalControllerConnected() &&
+                     self.presentedViewController == nil);
+  if (!self.touchControlsOverlay) {
+    return;
+  }
+  if (self.inGameMenuTapRecognizer) {
+    self.inGameMenuTapRecognizer.enabled = !should_show;
+  }
+  if (should_show) {
+    self.touchControlsOverlay.hidden = NO;
+    self.touchControlsOverlay.alpha = self.touchControlsOpacity;
+    [self syncTouchControlsState];
+    if (self.inGameMenuOverlay && !self.inGameMenuOverlay.hidden) {
+      [self.view bringSubviewToFront:self.inGameMenuOverlay];
+    }
+  } else {
+    if (!self.touchControlsOverlay.hidden) {
+      [self.touchControlsOverlay resetControllerState];
+    }
+    self.touchControlsOverlay.hidden = YES;
+    xe::hid::sdl::ClearVirtualControllerState(0);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -9439,11 +10400,27 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   UILabel* subtitle = [[UILabel alloc] init];
   subtitle.translatesAutoresizingMaskIntoConstraints = NO;
-  subtitle.text = @"Tap anywhere to close";
+  subtitle.text = @"Use Resume to close";
   subtitle.textColor = [XeniaTheme textMuted];
   subtitle.font = [UIFont systemFontOfSize:15 weight:UIFontWeightRegular];
   subtitle.textAlignment = NSTextAlignmentCenter;
   [panel addSubview:subtitle];
+
+  UIButtonConfiguration* customize_config = [UIButtonConfiguration tintedButtonConfiguration];
+  customize_config.title = @"Customize Controls";
+  customize_config.image = [UIImage systemImageNamed:@"hand.tap"];
+  customize_config.imagePadding = 6;
+  customize_config.baseForegroundColor = [XeniaTheme textPrimary];
+  customize_config.baseBackgroundColor = [XeniaTheme bgSurface2];
+  customize_config.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+  customize_config.contentInsets = NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
+  self.inGameCustomizeControlsButton =
+      [UIButton buttonWithConfiguration:customize_config primaryAction:nil];
+  self.inGameCustomizeControlsButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.inGameCustomizeControlsButton addTarget:self
+                                         action:@selector(customizeControlsTapped:)
+                               forControlEvents:UIControlEventTouchUpInside];
+  [panel addSubview:self.inGameCustomizeControlsButton];
 
   UIButtonConfiguration* resume_config = [UIButtonConfiguration filledButtonConfiguration];
   resume_config.title = @"Resume";
@@ -9520,7 +10497,13 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
     [subtitle.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
 
-    [self.inGameResumeButton.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
+    [self.inGameCustomizeControlsButton.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor
+                                                                 constant:16],
+    [self.inGameCustomizeControlsButton.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
+    [self.inGameCustomizeControlsButton.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
+
+    [self.inGameResumeButton.topAnchor constraintEqualToAnchor:self.inGameCustomizeControlsButton.bottomAnchor
+                                                      constant:10],
     [self.inGameResumeButton.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
     [self.inGameResumeButton.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
 
@@ -9545,10 +10528,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   ]];
 }
 
-- (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer {
-  if (recognizer.state != UIGestureRecognizerStateRecognized) {
-    return;
-  }
+- (void)toggleInGameMenu {
   if (self.launcherOverlay.hidden == NO || !self.gameRunning || self.presentedViewController) {
     return;
   }
@@ -9556,9 +10536,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   BOOL should_show = self.inGameMenuOverlay.hidden;
   if (should_show) {
     [self rebuildInGameFocusGraph];
-    in_game_focus_graph_.SetCurrent(kInGameFocusResume);
+    in_game_focus_graph_.SetCurrent(kInGameFocusCustomize);
     self.inGameMenuOverlay.alpha = 0.0;
     self.inGameMenuOverlay.hidden = NO;
+    [self.view bringSubviewToFront:self.inGameMenuOverlay];
     [self applyInGameMenuFocusVisuals];
     [UIView animateWithDuration:0.18
                      animations:^{
@@ -9567,6 +10548,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   } else {
     [self hideInGameMenuOverlay];
   }
+}
+
+- (void)toggleInGameMenuTapped:(UITapGestureRecognizer*)recognizer {
+  if (recognizer.state != UIGestureRecognizerStateRecognized) {
+    return;
+  }
+  if (self.touchControlsOverlay && !self.touchControlsOverlay.hidden) {
+    return;
+  }
+  [self toggleInGameMenu];
 }
 
 - (void)hideInGameMenuOverlay {
@@ -9586,6 +10577,21 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
 - (void)resumeGameTapped:(UIButton*)sender {
   [self hideInGameMenuOverlay];
+}
+
+- (void)customizeControlsTapped:(UIButton*)__unused sender {
+  [self hideInGameMenuOverlay];
+  if (!active_touch_controls_game_path_.empty()) {
+    for (size_t i = 0; i < discovered_games_.size(); ++i) {
+      if (discovered_games_[i].path == active_touch_controls_game_path_) {
+        [self showTouchControlsEditorForGameAtIndex:i];
+        return;
+      }
+    }
+  }
+  self.touchControlsEditingProfileKey = @"__all_games__";
+  self.touchControlsEditingProfileTitle = @"All Games";
+  [self showTouchControlsEditor];
 }
 
 - (void)inGameSettingsTapped:(UIButton*)sender {
@@ -9625,8 +10631,10 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   self.gameStopInProgress = YES;
   self.gameRunning = NO;
+  active_touch_controls_game_path_.clear();
   self.launcherOverlay.hidden = NO;
   self.launcherOverlay.alpha = 1.0;
+  [self updateTouchControlsVisibility];
   xe_request_current_orientation(self);
   self.statusLabel.text = @"Stopping game...";
 
@@ -10595,6 +11603,16 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 
   self.statusLabel.text = [NSString stringWithFormat:@"Loading: %@", game_label];
   self.gameRunning = YES;
+  active_touch_controls_game_path_ = game_path;
+  for (const IOSDiscoveredGame& game : discovered_games_) {
+    if (game.path == game_path) {
+      [self applyTouchControlsProfileForGame:game];
+      self.touchControlsEditingProfileKey = [self touchControlsProfileKeyForGame:game];
+      self.touchControlsEditingProfileTitle =
+          game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
+      break;
+    }
+  }
 
   xe_request_landscape_orientation(self);
   [UIView animateWithDuration:0.3
@@ -10603,6 +11621,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
       }
       completion:^(__unused BOOL finished) {
         self.launcherOverlay.hidden = YES;
+        [self updateTouchControlsVisibility];
       }];
 
   if (self.appContext) {
@@ -10611,6 +11630,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
     self.statusLabel.text = @"Unable to launch game (app context unavailable).";
     self.launcherOverlay.hidden = NO;
     self.launcherOverlay.alpha = 1.0;
+    [self updateTouchControlsVisibility];
   }
 }
 
@@ -11133,6 +12153,7 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
   self.gameStopInProgress = NO;
   [self hideInGameMenuOverlay];
   self.launcherOverlay.hidden = NO;
+  [self updateTouchControlsVisibility];
   self.statusLabel.text = @"";
   [self refreshImportedGames];
   [self refreshSignedInProfileUI];
@@ -11148,10 +12169,12 @@ static constexpr NSInteger kXeniaDiscussionPreviewCount = 3;
 }
 
 - (void)dealloc {
+  xe::hid::sdl::ClearVirtualControllerState(0);
   [self.jitPollTimer invalidate];
   [self.controllerNavTimer invalidate];
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [compat_data_ release];
+  [super dealloc];
 }
 
 @end
