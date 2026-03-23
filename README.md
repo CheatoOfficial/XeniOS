@@ -2,7 +2,7 @@
     <img height="256px" src="assets/apple/xenios-readme-icon.png" alt="XeniOS app icon" />
 </p>
 
-<h1 align="center">XeniOS - Xbox 360 Emulator with advanced controller support</h1>
+<h1 align="center">XeniOS - Xbox 360 Emulator with advanced touch controller support</h1>
 
 Adds a alternative advanced touch interface with full customizability in mind
 
