@@ -2,13 +2,15 @@
     <img height="256px" src="assets/apple/xenios-readme-icon.png" alt="XeniOS app icon" />
 </p>
 
-<h1 align="center">XeniOS - Xbox 360 Emulator</h1>
+<h1 align="center">XeniOS - Xbox 360 Emulator with advanced controller support</h1>
 
-XeniOS is an experimental Apple-focused fork of Xenia, currently based on
-[Xenia Edge](https://github.com/has207/xenia-edge). It exists as a fast-moving
-place to develop, test, and ship iOS and macOS work while also carrying
-platform changes that benefit ARM64 Windows, Linux, and Android. Relevant
-improvements are intended to flow back upstream over time.
+Adds a alternative advanced touch interface with full customizability in mind
+
+-New customize controller section in the in game menu
+-Can move, rotate, change size, color, text, shape of any button.
+-You can enable touchpad mode which makes entire right side of screen a touchpad (in beta lol). You can adjust the sensitivity of it using most games built in setting for camera sensitivity.
+-Increased joystick range.
+-Some performance optimizations for all the touch stuff/ui
 
 <p align="center">
   <a href="https://xenios.jp">Website</a> ◦
