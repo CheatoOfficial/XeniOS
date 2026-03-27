@@ -9769,13 +9769,10 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   if (self.touchControlsEditorShapeControl.selectedSegmentIndex != shape_value) {
     self.touchControlsEditorShapeControl.selectedSegmentIndex = shape_value;
   }
-  BOOL is_touchpad_eligible_stick = control_identifier == kXeniaTouchLayoutRightStickControlIdentifier;
-  self.touchControlsEditorInputModeControl.enabled = has_selection;
-  self.touchControlsEditorInputModeControl.alpha = has_selection ? 1.0f : 0.45f;
+  self.touchControlsEditorInputModeControl.enabled = YES;
+  self.touchControlsEditorInputModeControl.alpha = 1.0f;
   NSInteger input_mode =
-      (has_selection && is_touchpad_eligible_stick)
-          ? [self.touchControlsOverlay inputModeForControlIdentifier:control_identifier]
-          : XeniaTouchStickInputModeJoystick;
+      [self.touchControlsOverlay inputModeForControlIdentifier:kXeniaTouchLayoutRightStickControlIdentifier];
   if (self.touchControlsEditorInputModeControl.selectedSegmentIndex != input_mode) {
     self.touchControlsEditorInputModeControl.selectedSegmentIndex = input_mode;
   }
@@ -10008,12 +10005,8 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
 }
 
 - (void)touchControlsEditorInputModeChanged:(UISegmentedControl*)sender {
-  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
-  if (control_identifier != kXeniaTouchLayoutRightStickControlIdentifier) {
-    return;
-  }
   [self.touchControlsOverlay setInputMode:sender.selectedSegmentIndex
-                     forControlIdentifier:control_identifier];
+                     forControlIdentifier:kXeniaTouchLayoutRightStickControlIdentifier];
   [self refreshTouchControlsEditorUI];
 }
 
