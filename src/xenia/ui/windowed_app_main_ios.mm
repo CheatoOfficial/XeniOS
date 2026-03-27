@@ -9770,8 +9770,8 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
     self.touchControlsEditorShapeControl.selectedSegmentIndex = shape_value;
   }
   BOOL is_touchpad_eligible_stick = control_identifier == kXeniaTouchLayoutRightStickControlIdentifier;
-  self.touchControlsEditorInputModeControl.enabled = has_selection && is_touchpad_eligible_stick;
-  self.touchControlsEditorInputModeControl.alpha = (has_selection && is_touchpad_eligible_stick) ? 1.0f : 0.45f;
+  self.touchControlsEditorInputModeControl.enabled = has_selection;
+  self.touchControlsEditorInputModeControl.alpha = has_selection ? 1.0f : 0.45f;
   NSInteger input_mode =
       (has_selection && is_touchpad_eligible_stick)
           ? [self.touchControlsOverlay inputModeForControlIdentifier:control_identifier]
