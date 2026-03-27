@@ -13,6 +13,7 @@ Adds a alternative advanced touch interface with full customizability in mind
 -Some performance optimizations for all the touch stuff/ui
 
 TO BUILD:
+
 git submodule update --init --recursive
 
 ./tools/build_apple_release.sh --skip-macos-arm64 --skip-macos-x86_64 --ios-min 16.0
