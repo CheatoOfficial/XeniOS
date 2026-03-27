@@ -8,8 +8,9 @@ Adds a alternative advanced touch interface with full customizability in mind
 
 -New customize controller section in the in game menu
 -Can move, rotate, change size, color, text, shape of any button.
+-U can remove the buttons color and hide buttons
+-U can fully delete text/symbols on a button
 -You can enable touchpad mode which makes entire right side of screen a touchpad (in beta lol). You can adjust the sensitivity of it using most games built in setting for camera sensitivity.
--Increased joystick range.
 -Some performance optimizations for all the touch stuff/ui
 
 
