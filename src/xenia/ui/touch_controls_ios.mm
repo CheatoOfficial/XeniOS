@@ -149,7 +149,7 @@ static CGPoint XeniaTouchLocation(UITouch* touch, UIView* view) {
   return [touch preciseLocationInView:view];
 }
 
-static constexpr CGFloat kXeniaRightTouchpadSensitivity = 720.0f;
+static constexpr CGFloat kXeniaRightTouchpadSensitivity = 2000.0f;
 
 static NSDictionary* XeniaDisabledLayerActions(void) {
   static NSDictionary* actions = nil;
@@ -659,6 +659,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   CGFloat button_scales_[15];
   CGFloat button_rotations_[15];
   NSInteger button_shapes_[15];
+  BOOL button_hidden_[15];
   NSString* button_titles_[15];
   UIColor* button_colors_[15];
   CGPoint thumb_offset_units_[2];
@@ -666,12 +667,14 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   CGFloat thumb_rotations_[2];
   NSInteger thumb_shapes_[2];
   NSInteger thumb_input_modes_[2];
+  BOOL thumb_hidden_[2];
   NSString* thumb_titles_[2];
   UIColor* thumb_colors_[2];
   CGPoint menu_offset_units_;
   CGFloat menu_scale_;
   CGFloat menu_rotation_;
   NSInteger menu_shape_;
+  BOOL menu_hidden_;
   NSString* menu_title_;
   UIColor* menu_color_;
   BOOL layoutEditingEnabled_;
@@ -762,9 +765,11 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     memset(thumb_vectors_, 0, sizeof(thumb_vectors_));
     memset(button_titles_, 0, sizeof(button_titles_));
     memset(button_colors_, 0, sizeof(button_colors_));
+    memset(button_hidden_, 0, sizeof(button_hidden_));
     memset(button_offset_units_, 0, sizeof(button_offset_units_));
     memset(thumb_titles_, 0, sizeof(thumb_titles_));
     memset(thumb_colors_, 0, sizeof(thumb_colors_));
+    memset(thumb_hidden_, 0, sizeof(thumb_hidden_));
     memset(thumb_offset_units_, 0, sizeof(thumb_offset_units_));
     memset(button_rotations_, 0, sizeof(button_rotations_));
     memset(thumb_rotations_, 0, sizeof(thumb_rotations_));
@@ -797,6 +802,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     menu_scale_ = 1.0f;
     menu_rotation_ = 0.0f;
     menu_shape_ = XeniaDefaultShapeForControlIdentifier(kXeniaTouchControlIdentifierMenu);
+    menu_hidden_ = NO;
     menu_title_ = nil;
     menu_color_ = nil;
     layoutEditingEnabled_ = NO;
@@ -997,11 +1003,16 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   gameplay_controls_image_ = [XeniaRenderImage(size, ^(CGRect __unused rect) {
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     for (NSInteger tag = 1; tag <= 14; ++tag) {
+      if (button_hidden_[tag]) {
+        continue;
+      }
       UIImage* image = button_images_[tag][[self isButtonPressed:tag] ? 1 : 0];
       XeniaDrawImageInRect(ctx, image, button_frames_[tag], button_rotations_[tag]);
     }
-    UIImage* menu_image = menu_images_[menu_pressed_ ? 1 : 0];
-    XeniaDrawImageInRect(ctx, menu_image, menu_frame_, menu_rotation_);
+    if (!menu_hidden_) {
+      UIImage* menu_image = menu_images_[menu_pressed_ ? 1 : 0];
+      XeniaDrawImageInRect(ctx, menu_image, menu_frame_, menu_rotation_);
+    }
   }) retain];
   gameplay_controls_image_size_ = size;
 }
@@ -1031,7 +1042,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   [CATransaction setDisableActions:YES];
   layer.bounds = CGRectMake(0.0f, 0.0f, CGRectGetWidth(frame), CGRectGetHeight(frame));
   layer.position = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
-  layer.hidden = CGRectIsEmpty(frame) || image == nil || self.hidden;
+  layer.hidden = button_hidden_[tag] || CGRectIsEmpty(frame) || image == nil || self.hidden;
   layer.contents = (id)image.CGImage;
   layer.affineTransform = CGAffineTransformMakeRotation(button_rotations_[tag]);
   [CATransaction commit];
@@ -1048,7 +1059,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   [CATransaction setDisableActions:YES];
   menu_layer_.bounds = CGRectMake(0.0f, 0.0f, CGRectGetWidth(frame), CGRectGetHeight(frame));
   menu_layer_.position = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
-  menu_layer_.hidden = CGRectIsEmpty(frame) || image == nil || self.hidden;
+  menu_layer_.hidden = menu_hidden_ || CGRectIsEmpty(frame) || image == nil || self.hidden;
   menu_layer_.contents = (id)image.CGImage;
   menu_layer_.affineTransform = CGAffineTransformMakeRotation(menu_rotation_);
   [CATransaction commit];
@@ -1086,6 +1097,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   [CATransaction setDisableActions:YES];
   UIImage* knob_image = knob_images_[index];
   BOOL should_show_knob = !self.hidden && knob_image != nil &&
+                          !thumb_hidden_[index] &&
                           thumb_input_modes_[index] != XeniaTouchStickInputModeTouchpad;
   thumb_layers_[index].bounds =
       should_show_knob ? CGRectMake(0.0f, 0.0f, CGRectGetWidth(frame), CGRectGetHeight(frame)) : CGRectZero;
@@ -1441,6 +1453,52 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
          XeniaDefaultColorForControlIdentifier(controlIdentifier, NO);
 }
 
+- (BOOL)isHiddenForControlIdentifier:(NSInteger)controlIdentifier {
+  if (controlIdentifier >= 1 && controlIdentifier <= 14) {
+    return button_hidden_[controlIdentifier];
+  }
+  if (controlIdentifier == kXeniaTouchControlIdentifierMenu) {
+    return menu_hidden_;
+  }
+  if (controlIdentifier == kXeniaTouchControlIdentifierLeftStick) {
+    return thumb_hidden_[0];
+  }
+  if (controlIdentifier == kXeniaTouchControlIdentifierRightStick) {
+    return thumb_hidden_[1];
+  }
+  return NO;
+}
+
+- (void)setHidden:(BOOL)hidden forControlIdentifier:(NSInteger)controlIdentifier {
+  if (controlIdentifier >= 1 && controlIdentifier <= 14) {
+    if (button_hidden_[controlIdentifier] == hidden) {
+      return;
+    }
+    button_hidden_[controlIdentifier] = hidden;
+    [self invalidateButtonAssetsForTag:controlIdentifier];
+    [self invalidateGameplayControlsComposite];
+  } else if (controlIdentifier == kXeniaTouchControlIdentifierMenu) {
+    if (menu_hidden_ == hidden) {
+      return;
+    }
+    menu_hidden_ = hidden;
+    [self invalidateMenuAssets];
+    [self invalidateGameplayControlsComposite];
+  } else if (controlIdentifier == kXeniaTouchControlIdentifierLeftStick ||
+             controlIdentifier == kXeniaTouchControlIdentifierRightStick) {
+    NSInteger index = controlIdentifier == kXeniaTouchControlIdentifierLeftStick ? 0 : 1;
+    if (thumb_hidden_[index] == hidden) {
+      return;
+    }
+    thumb_hidden_[index] = hidden;
+    [self invalidateKnobAssets];
+  } else {
+    return;
+  }
+  [self setNeedsLayout];
+  [self queueLayoutEditingRefresh];
+}
+
 - (void)setTitle:(NSString*)title forControlIdentifier:(NSInteger)controlIdentifier {
   NSString* trimmed =
       [[title ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
@@ -1579,6 +1637,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
       @"scale" : XeniaNumberOrNil(button_scales_[tag]),
       @"rotation" : XeniaNumberOrNil(button_rotations_[tag]),
       @"shape" : @(button_shapes_[tag]),
+      @"hidden" : @(button_hidden_[tag]),
     }];
     if (button_titles_[tag].length > 0) {
       button_config[@"title"] = button_titles_[tag];
@@ -1595,6 +1654,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     @"scale" : XeniaNumberOrNil(menu_scale_),
     @"rotation" : XeniaNumberOrNil(menu_rotation_),
     @"shape" : @(menu_shape_),
+    @"hidden" : @(menu_hidden_),
   }];
   if (menu_title_.length > 0) {
     menu_config[@"title"] = menu_title_;
@@ -1610,6 +1670,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     @"rotation" : XeniaNumberOrNil(thumb_rotations_[0]),
     @"shape" : @(thumb_shapes_[0]),
     @"mode" : @(XeniaTouchStickInputModeJoystick),
+    @"hidden" : @(thumb_hidden_[0]),
   }];
   if (thumb_titles_[0].length > 0) {
     left_stick[@"title"] = thumb_titles_[0];
@@ -1625,6 +1686,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     @"rotation" : XeniaNumberOrNil(thumb_rotations_[1]),
     @"shape" : @(thumb_shapes_[1]),
     @"mode" : @(thumb_input_modes_[1]),
+    @"hidden" : @(thumb_hidden_[1]),
   }];
   if (thumb_titles_[1].length > 0) {
     right_stick[@"title"] = thumb_titles_[1];
@@ -1671,6 +1733,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
                                                       XeniaTouchControlShapeCircle,
                                                       XeniaTouchControlShapeRoundedSquare)
                                          : XeniaDefaultShapeForControlIdentifier(tag);
+      NSNumber* hidden_number =
+          [button_config[@"hidden"] isKindOfClass:[NSNumber class]] ? button_config[@"hidden"] : nil;
+      button_hidden_[tag] = hidden_number ? hidden_number.boolValue : NO;
       NSString* title = [button_config[@"title"] isKindOfClass:[NSString class]] ? button_config[@"title"] : nil;
       [button_titles_[tag] release];
       button_titles_[tag] = title.length > 0 ? [title copy] : nil;
@@ -1694,6 +1759,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     menu_shape_ = shape_number ? XeniaClamp(shape_number.integerValue, XeniaTouchControlShapeCircle,
                                             XeniaTouchControlShapeRoundedSquare)
                                : XeniaDefaultShapeForControlIdentifier(kXeniaTouchControlIdentifierMenu);
+    NSNumber* hidden_number =
+        [menu_config[@"hidden"] isKindOfClass:[NSNumber class]] ? menu_config[@"hidden"] : nil;
+    menu_hidden_ = hidden_number ? hidden_number.boolValue : NO;
     NSString* title = [menu_config[@"title"] isKindOfClass:[NSString class]] ? menu_config[@"title"] : nil;
     [menu_title_ release];
     menu_title_ = title.length > 0 ? [title copy] : nil;
@@ -1725,6 +1793,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
                                           : XeniaDefaultShapeForControlIdentifier(
                                                 index == 0 ? kXeniaTouchControlIdentifierLeftStick
                                                            : kXeniaTouchControlIdentifierRightStick);
+      NSNumber* hidden_number =
+          [stick_config[@"hidden"] isKindOfClass:[NSNumber class]] ? stick_config[@"hidden"] : nil;
+      thumb_hidden_[index] = hidden_number ? hidden_number.boolValue : NO;
       NSNumber* mode_number =
           [stick_config[@"mode"] isKindOfClass:[NSNumber class]] ? stick_config[@"mode"] : nil;
       thumb_input_modes_[index] =
@@ -1755,17 +1826,21 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   for (NSInteger tag = 1; tag <= 14; ++tag) {
     button_scales_[tag] = 1.0f;
     button_shapes_[tag] = XeniaDefaultShapeForControlIdentifier(tag);
+    button_hidden_[tag] = NO;
   }
   thumb_scales_[0] = 1.0f;
   thumb_scales_[1] = 1.0f;
   thumb_shapes_[0] = XeniaDefaultShapeForControlIdentifier(kXeniaTouchControlIdentifierLeftStick);
   thumb_shapes_[1] = XeniaDefaultShapeForControlIdentifier(kXeniaTouchControlIdentifierRightStick);
+  thumb_hidden_[0] = NO;
+  thumb_hidden_[1] = NO;
   thumb_input_modes_[0] = XeniaTouchStickInputModeJoystick;
   thumb_input_modes_[1] = XeniaTouchStickInputModeJoystick;
   menu_offset_units_ = CGPointZero;
   menu_scale_ = 1.0f;
   menu_rotation_ = 0.0f;
   menu_shape_ = XeniaDefaultShapeForControlIdentifier(kXeniaTouchControlIdentifierMenu);
+  menu_hidden_ = NO;
   for (NSInteger tag = 1; tag <= 14; ++tag) {
     [button_titles_[tag] release];
     button_titles_[tag] = nil;
@@ -2280,6 +2355,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
 
 - (NSInteger)buttonTagForTouchPoint:(CGPoint)point {
   for (NSInteger tag = 1; tag <= 14; ++tag) {
+    if (button_hidden_[tag] && !layoutEditingEnabled_) {
+      continue;
+    }
     if (CGRectContainsPoint(button_frames_[tag], point)) {
       return tag;
     }
@@ -2289,6 +2367,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
 
 - (NSInteger)thumbIndexForTouchPoint:(CGPoint)point {
   for (NSInteger index = 0; index < 2; ++index) {
+    if (thumb_hidden_[index] && !layoutEditingEnabled_) {
+      continue;
+    }
     CGRect hit_rect = CGRectZero;
     if (layoutEditingEnabled_ && thumb_input_modes_[index] != XeniaTouchStickInputModeTouchpad) {
       hit_rect = CGRectInset(thumb_frames_[index], -12.0f, -12.0f);
@@ -2303,6 +2384,9 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
 }
 
 - (BOOL)isPointInsideMenu:(CGPoint)point {
+  if (menu_hidden_ && !layoutEditingEnabled_) {
+    return NO;
+  }
   return CGRectContainsPoint(menu_frame_, point);
 }
 

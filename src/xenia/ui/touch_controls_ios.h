@@ -43,6 +43,8 @@ typedef NS_ENUM(NSInteger, XeniaTouchStickInputMode) {
 - (nullable UIColor*)colorForControlIdentifier:(NSInteger)controlIdentifier;
 - (nullable UIColor*)storedColorForControlIdentifier:(NSInteger)controlIdentifier;
 - (void)setColor:(nullable UIColor*)color forControlIdentifier:(NSInteger)controlIdentifier;
+- (BOOL)isHiddenForControlIdentifier:(NSInteger)controlIdentifier;
+- (void)setHidden:(BOOL)hidden forControlIdentifier:(NSInteger)controlIdentifier;
 - (NSInteger)shapeForControlIdentifier:(NSInteger)controlIdentifier;
 - (void)setShape:(NSInteger)shape forControlIdentifier:(NSInteger)controlIdentifier;
 - (NSInteger)inputModeForControlIdentifier:(NSInteger)controlIdentifier;
