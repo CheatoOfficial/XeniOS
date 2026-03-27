@@ -354,23 +354,49 @@ static UIColor* XeniaDefaultColorForControlIdentifier(NSInteger controlIdentifie
   return pressed ? XeniaTouchPressedColor() : XeniaTouchInnerColor();
 }
 
-static void XeniaDrawTextInRect(NSString* text, CGRect rect, UIFont* font, UIColor* color) {
+static void XeniaDrawTextInRect(NSString* text, CGRect rect, UIFont* font, UIColor* color,
+                                CGFloat kern = 0.0f) {
   if (!text.length) {
     return;
   }
   NSMutableParagraphStyle* style = [[[NSMutableParagraphStyle alloc] init] autorelease];
   style.alignment = NSTextAlignmentCenter;
-  NSDictionary* attributes = @{
+  NSMutableDictionary* attributes = [@{
     NSFontAttributeName : font,
     NSForegroundColorAttributeName : color,
     NSParagraphStyleAttributeName : style,
-  };
-  CGSize text_size = [text sizeWithAttributes:attributes];
+  } mutableCopy];
+  if (fabs(kern) > 0.001f) {
+    attributes[NSKernAttributeName] = @(kern);
+  }
+  CGRect text_bounds = [text boundingRectWithSize:CGSizeMake(CGRectGetWidth(rect), CGFLOAT_MAX)
+                                          options:NSStringDrawingUsesLineFragmentOrigin |
+                                                  NSStringDrawingUsesFontLeading
+                                       attributes:attributes
+                                          context:nil];
   CGRect text_rect = CGRectMake(CGRectGetMinX(rect),
-                                CGRectGetMidY(rect) - text_size.height * 0.5f,
+                                CGRectGetMidY(rect) - CGRectGetHeight(text_bounds) * 0.5f,
                                 CGRectGetWidth(rect),
-                                text_size.height);
+                                CGRectGetHeight(text_bounds));
   [text drawInRect:CGRectIntegral(text_rect) withAttributes:attributes];
+  [attributes release];
+}
+
+static UIFont* XeniaStickLabelFont(CGRect rect, NSString* title) {
+  CGFloat side = MIN(CGRectGetWidth(rect), CGRectGetHeight(rect));
+  CGFloat font_size = side * 0.28f;
+  if (title.length >= 2) {
+    font_size = side * 0.25f;
+  }
+  return XeniaFont(MAX(14.0f, MIN(font_size, 19.0f)), UIFontWeightSemibold);
+}
+
+static CGFloat XeniaStickLabelKern(CGRect rect, NSString* title) {
+  if (title.length < 2) {
+    return 0.0f;
+  }
+  CGFloat side = MIN(CGRectGetWidth(rect), CGRectGetHeight(rect));
+  return MAX(0.4f, MIN(side * 0.012f, 1.0f));
 }
 
 static void XeniaDrawCircleButton(CGRect rect, UIColor* fill, NSString* title, UIFont* font) {
@@ -419,8 +445,9 @@ static void XeniaDrawThumbKnob(CGRect rect, NSString* title) {
   CGContextSetStrokeColorWithColor(ctx, XeniaTouchOuterColor().CGColor);
   CGContextSetLineWidth(ctx, 6.0f);
   CGContextStrokeEllipseInRect(ctx, CGRectInset(rect, 3.0f, 3.0f));
-  XeniaDrawTextInRect(title, rect, XeniaFont(19.0f, UIFontWeightSemibold),
-                      [UIColor colorWithWhite:0.14f alpha:1.0f]);
+  XeniaDrawTextInRect(title, rect, XeniaStickLabelFont(rect, title),
+                      [UIColor colorWithWhite:0.14f alpha:1.0f],
+                      XeniaStickLabelKern(rect, title));
 }
 
 static UIImage* XeniaRenderImage(CGSize size, void (^draw_block)(CGRect rect)) {
@@ -468,8 +495,9 @@ static UIImage* XeniaCreateThumbImage(CGSize size, NSString* title, UIColor* fil
     CGContextSetStrokeColorWithColor(ctx, XeniaTouchOuterColor().CGColor);
     CGContextSetLineWidth(ctx, 6.0f);
     CGContextStrokeEllipseInRect(ctx, CGRectInset(rect, 3.0f, 3.0f));
-    XeniaDrawTextInRect(title, rect, XeniaFont(19.0f, UIFontWeightSemibold),
-                        [UIColor colorWithWhite:0.14f alpha:1.0f]);
+    XeniaDrawTextInRect(title, rect, XeniaStickLabelFont(rect, title),
+                        [UIColor colorWithWhite:0.14f alpha:1.0f],
+                        XeniaStickLabelKern(rect, title));
   });
 }
 
@@ -526,7 +554,9 @@ static UIImage* XeniaCreateControlImage(CGSize size, NSInteger controlIdentifier
                      ? XeniaFont(26.0f, UIFontWeightBold)
                      : (controlIdentifier == kXeniaTouchControlIdentifierLeftStick ||
                                 controlIdentifier == kXeniaTouchControlIdentifierRightStick
-                            ? XeniaFont(19.0f, UIFontWeightSemibold)
+                            ? XeniaStickLabelFont(CGRectMake(0.0f, 0.0f, size.width, size.height),
+                                                  title ?: XeniaDefaultTitleForControlIdentifier(
+                                                               controlIdentifier))
                             : XeniaButtonFontForTag(controlIdentifier));
   UIColor* resolved_fill = fill ?: XeniaDefaultColorForControlIdentifier(controlIdentifier, pressed);
   NSString* resolved_title = title ?: XeniaDefaultTitleForControlIdentifier(controlIdentifier);
