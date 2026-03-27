@@ -16,9 +16,9 @@ Adds a alternative advanced touch interface with full customizability in mind
 TO BUILD:
 
 git submodule update --init --recursive
-<img width="1210" height="834" alt="IMG_1028" src="https://github.com/user-attachments/assets/fe15455e-3b56-43fd-a88c-440fd5f0f7d3" />
 
 ./tools/build_apple_release.sh --skip-macos-arm64 --skip-macos-x86_64 --ios-min 16.0
+<img width="1210" height="834" alt="IMG_1028" src="https://github.com/user-attachments/assets/fe15455e-3b56-43fd-a88c-440fd5f0f7d3" />
 
 <p align="center">
   <a href="https://xenios.jp">Website</a> ◦
