@@ -9492,7 +9492,13 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   self.touchControlsEditorPanelCenterXConstraint =
       [self.touchControlsEditorPanel.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor];
   BOOL is_pad_layout = UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad;
-  CGFloat panel_width = is_pad_layout ? 390.0f : 340.0f;
+  CGFloat safe_width = CGRectGetWidth(self.view.safeAreaLayoutGuide.layoutFrame);
+  if (safe_width <= 0.0f) {
+    safe_width = CGRectGetWidth(self.view.bounds);
+  }
+  CGFloat panel_width = is_pad_layout ? 390.0f
+                                      : std::min<CGFloat>(std::max<CGFloat>(360.0f, safe_width - 20.0f),
+                                                          430.0f);
   CGFloat safe_height = CGRectGetHeight(self.view.safeAreaLayoutGuide.layoutFrame);
   if (safe_height <= 0.0f) {
     safe_height = CGRectGetHeight(self.view.bounds);
