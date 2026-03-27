@@ -86,6 +86,21 @@ static UIColor* XeniaDarkenedColor(UIColor* color, CGFloat amount) {
                          alpha:alpha];
 }
 
+static BOOL XeniaColorHasVisibleFill(UIColor* color) {
+  if (!color) {
+    return NO;
+  }
+  CGFloat alpha = 0.0f;
+  if ([color getRed:nil green:nil blue:nil alpha:&alpha]) {
+    return alpha > 0.001f;
+  }
+  if ([color getWhite:nil alpha:&alpha]) {
+    return alpha > 0.001f;
+  }
+  CGColorRef cg_color = color.CGColor;
+  return cg_color ? CGColorGetAlpha(cg_color) > 0.001f : NO;
+}
+
 static NSDictionary* XeniaColorConfiguration(UIColor* color) {
   if (!color) {
     return nil;
@@ -401,8 +416,10 @@ static CGFloat XeniaStickLabelKern(CGRect rect, NSString* title) {
 
 static void XeniaDrawCircleButton(CGRect rect, UIColor* fill, NSString* title, UIFont* font) {
   CGContextRef ctx = UIGraphicsGetCurrentContext();
-  CGContextSetFillColorWithColor(ctx, fill.CGColor);
-  CGContextFillEllipseInRect(ctx, rect);
+  if (XeniaColorHasVisibleFill(fill)) {
+    CGContextSetFillColorWithColor(ctx, fill.CGColor);
+    CGContextFillEllipseInRect(ctx, rect);
+  }
   CGContextSetStrokeColorWithColor(ctx, XeniaTouchOuterColor().CGColor);
   CGContextSetLineWidth(ctx, 7.0f);
   CGContextStrokeEllipseInRect(ctx, CGRectInset(rect, 3.5f, 3.5f));
@@ -417,8 +434,10 @@ static void XeniaDrawRoundedButton(CGRect rect, UIColor* fill, NSString* title, 
   UIBezierPath* fill_path = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:radius];
   UIBezierPath* stroke_path =
       [UIBezierPath bezierPathWithRoundedRect:stroke_rect cornerRadius:stroke_radius];
-  [fill setFill];
-  [fill_path fill];
+  if (XeniaColorHasVisibleFill(fill)) {
+    [fill setFill];
+    [fill_path fill];
+  }
   stroke_path.lineWidth = kStrokeWidth;
   stroke_path.lineJoinStyle = kCGLineJoinRound;
   [XeniaTouchOuterColor() setStroke];
@@ -490,8 +509,11 @@ static UIImage* XeniaCreateMenuImage(CGSize size, BOOL pressed, NSString* title,
 static UIImage* XeniaCreateThumbImage(CGSize size, NSString* title, UIColor* fill) {
   return XeniaRenderImage(size, ^(CGRect rect) {
     CGContextRef ctx = UIGraphicsGetCurrentContext();
-    CGContextSetFillColorWithColor(ctx, (fill ?: XeniaTouchCenterColor()).CGColor);
-    CGContextFillEllipseInRect(ctx, rect);
+    UIColor* resolved_fill = fill ?: XeniaTouchCenterColor();
+    if (XeniaColorHasVisibleFill(resolved_fill)) {
+      CGContextSetFillColorWithColor(ctx, resolved_fill.CGColor);
+      CGContextFillEllipseInRect(ctx, rect);
+    }
     CGContextSetStrokeColorWithColor(ctx, XeniaTouchOuterColor().CGColor);
     CGContextSetLineWidth(ctx, 6.0f);
     CGContextStrokeEllipseInRect(ctx, CGRectInset(rect, 3.0f, 3.0f));

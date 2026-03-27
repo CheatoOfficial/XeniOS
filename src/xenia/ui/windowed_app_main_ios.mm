@@ -8146,6 +8146,8 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
 @property(nonatomic, strong) UILabel* touchControlsEditorOpacityValueLabel;
 @property(nonatomic, strong) UITextField* touchControlsEditorTitleField;
 @property(nonatomic, strong) UIColorWell* touchControlsEditorColorWell;
+@property(nonatomic, strong) UIButton* touchControlsEditorDefaultColorButton;
+@property(nonatomic, strong) UIButton* touchControlsEditorTransparentColorButton;
 @property(nonatomic, strong) UISegmentedControl* touchControlsEditorShapeControl;
 @property(nonatomic, strong) UISegmentedControl* touchControlsEditorInputModeControl;
 @property(nonatomic, strong) NSDictionary* touchControlsEditingBaselineLayout;
@@ -8197,6 +8199,8 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
 - (void)touchControlsEditorOpacityChanged:(UISlider*)sender;
 - (void)touchControlsEditorTitleChanged:(UITextField*)sender;
 - (void)touchControlsEditorColorChanged:(UIColorWell*)sender;
+- (void)touchControlsEditorDefaultColorTapped:(UIButton*)sender;
+- (void)touchControlsEditorTransparentColorTapped:(UIButton*)sender;
 - (void)touchControlsEditorShapeChanged:(UISegmentedControl*)sender;
 - (void)touchControlsEditorInputModeChanged:(UISegmentedControl*)sender;
 - (void)handleTouchControlsEditorHeaderPan:(UIPanGestureRecognizer*)recognizer;
@@ -9362,6 +9366,32 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
                               forControlEvents:UIControlEventValueChanged];
   [editor_content addSubview:self.touchControlsEditorColorWell];
 
+  UIButtonConfiguration* default_color_config = [UIButtonConfiguration tintedButtonConfiguration];
+  default_color_config.title = @"Default";
+  default_color_config.baseForegroundColor = [XeniaTheme textPrimary];
+  default_color_config.baseBackgroundColor = [XeniaTheme bgSurface2];
+  default_color_config.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+  self.touchControlsEditorDefaultColorButton =
+      [UIButton buttonWithConfiguration:default_color_config primaryAction:nil];
+  self.touchControlsEditorDefaultColorButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.touchControlsEditorDefaultColorButton addTarget:self
+                                                 action:@selector(touchControlsEditorDefaultColorTapped:)
+                                       forControlEvents:UIControlEventTouchUpInside];
+  [editor_content addSubview:self.touchControlsEditorDefaultColorButton];
+
+  UIButtonConfiguration* transparent_color_config = [UIButtonConfiguration tintedButtonConfiguration];
+  transparent_color_config.title = @"Transparent";
+  transparent_color_config.baseForegroundColor = [XeniaTheme textPrimary];
+  transparent_color_config.baseBackgroundColor = [XeniaTheme bgSurface2];
+  transparent_color_config.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+  self.touchControlsEditorTransparentColorButton =
+      [UIButton buttonWithConfiguration:transparent_color_config primaryAction:nil];
+  self.touchControlsEditorTransparentColorButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [self.touchControlsEditorTransparentColorButton addTarget:self
+                                                     action:@selector(touchControlsEditorTransparentColorTapped:)
+                                           forControlEvents:UIControlEventTouchUpInside];
+  [editor_content addSubview:self.touchControlsEditorTransparentColorButton];
+
   UILabel* shape_label = [[[UILabel alloc] init] autorelease];
   shape_label.translatesAutoresizingMaskIntoConstraints = NO;
   shape_label.text = @"Shape";
@@ -9552,9 +9582,17 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
 
     [self.touchControlsEditorColorWell.centerYAnchor constraintEqualToAnchor:color_label.centerYAnchor],
     [self.touchControlsEditorColorWell.trailingAnchor constraintEqualToAnchor:editor_content.trailingAnchor
-                                                                    constant:-18],
+                                                                     constant:-18],
     [self.touchControlsEditorColorWell.widthAnchor constraintEqualToConstant:34],
     [self.touchControlsEditorColorWell.heightAnchor constraintEqualToConstant:34],
+
+    [self.touchControlsEditorTransparentColorButton.centerYAnchor constraintEqualToAnchor:color_label.centerYAnchor],
+    [self.touchControlsEditorTransparentColorButton.trailingAnchor constraintEqualToAnchor:self.touchControlsEditorColorWell.leadingAnchor
+                                                                                  constant:-8],
+
+    [self.touchControlsEditorDefaultColorButton.centerYAnchor constraintEqualToAnchor:color_label.centerYAnchor],
+    [self.touchControlsEditorDefaultColorButton.trailingAnchor constraintEqualToAnchor:self.touchControlsEditorTransparentColorButton.leadingAnchor
+                                                                              constant:-8],
 
     [shape_label.topAnchor constraintEqualToAnchor:color_label.bottomAnchor constant:14],
     [shape_label.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
@@ -9688,12 +9726,35 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   self.touchControlsEditorTitleField.placeholder = has_selection ? @"Enter label" : @"Select a control";
   self.touchControlsEditorColorWell.enabled = has_selection;
   self.touchControlsEditorColorWell.alpha = has_selection ? 1.0f : 0.45f;
+  self.touchControlsEditorDefaultColorButton.enabled = has_selection;
+  self.touchControlsEditorDefaultColorButton.alpha = has_selection ? 1.0f : 0.45f;
+  self.touchControlsEditorTransparentColorButton.enabled = has_selection;
+  self.touchControlsEditorTransparentColorButton.alpha = has_selection ? 1.0f : 0.45f;
   UIColor* selected_color =
       has_selection ? [self.touchControlsOverlay colorForControlIdentifier:control_identifier]
                     : [XeniaTheme border];
   if (![self.touchControlsEditorColorWell.selectedColor isEqual:selected_color]) {
     self.touchControlsEditorColorWell.selectedColor = selected_color;
   }
+  UIColor* custom_color =
+      has_selection ? [self.touchControlsOverlay storedColorForControlIdentifier:control_identifier] : nil;
+  BOOL using_default_color = has_selection && custom_color == nil;
+  BOOL using_transparent_color = has_selection && custom_color != nil && CGColorGetAlpha(custom_color.CGColor) <= 0.001f;
+  UIButtonConfiguration* default_config = [self.touchControlsEditorDefaultColorButton.configuration copy];
+  default_config.baseBackgroundColor =
+      using_default_color ? [XeniaTheme accent] : [XeniaTheme bgSurface2];
+  default_config.baseForegroundColor =
+      using_default_color ? [XeniaTheme accentFg] : [XeniaTheme textPrimary];
+  self.touchControlsEditorDefaultColorButton.configuration = default_config;
+  [default_config release];
+  UIButtonConfiguration* transparent_config =
+      [self.touchControlsEditorTransparentColorButton.configuration copy];
+  transparent_config.baseBackgroundColor =
+      using_transparent_color ? [XeniaTheme accent] : [XeniaTheme bgSurface2];
+  transparent_config.baseForegroundColor =
+      using_transparent_color ? [XeniaTheme accentFg] : [XeniaTheme textPrimary];
+  self.touchControlsEditorTransparentColorButton.configuration = transparent_config;
+  [transparent_config release];
   self.touchControlsEditorShapeControl.enabled = has_selection;
   self.touchControlsEditorShapeControl.alpha = has_selection ? 1.0f : 0.45f;
   NSInteger shape_value =
@@ -9910,6 +9971,25 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
     return;
   }
   [self.touchControlsOverlay setColor:sender.selectedColor forControlIdentifier:control_identifier];
+  [self refreshTouchControlsEditorUI];
+}
+
+- (void)touchControlsEditorDefaultColorTapped:(UIButton*)__unused sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setColor:nil forControlIdentifier:control_identifier];
+  [self refreshTouchControlsEditorUI];
+}
+
+- (void)touchControlsEditorTransparentColorTapped:(UIButton*)__unused sender {
+  NSInteger control_identifier = self.touchControlsOverlay.selectedControlIdentifier;
+  if (control_identifier < 0) {
+    return;
+  }
+  [self.touchControlsOverlay setColor:[UIColor clearColor] forControlIdentifier:control_identifier];
+  [self refreshTouchControlsEditorUI];
 }
 
 - (void)touchControlsEditorShapeChanged:(UISegmentedControl*)sender {
