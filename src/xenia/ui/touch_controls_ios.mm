@@ -1360,16 +1360,20 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
 
 - (NSString*)titleForControlIdentifier:(NSInteger)controlIdentifier {
   if (controlIdentifier >= 1 && controlIdentifier <= 14) {
-    return button_titles_[controlIdentifier] ?: XeniaDefaultTitleForControlIdentifier(controlIdentifier);
+    return button_titles_[controlIdentifier] != nil ? button_titles_[controlIdentifier]
+                                                    : XeniaDefaultTitleForControlIdentifier(controlIdentifier);
   }
   if (controlIdentifier == kXeniaTouchControlIdentifierMenu) {
-    return menu_title_ ?: XeniaDefaultTitleForControlIdentifier(controlIdentifier);
+    return menu_title_ != nil ? menu_title_
+                              : XeniaDefaultTitleForControlIdentifier(controlIdentifier);
   }
   if (controlIdentifier == kXeniaTouchControlIdentifierLeftStick) {
-    return thumb_titles_[0] ?: XeniaDefaultTitleForControlIdentifier(controlIdentifier);
+    return thumb_titles_[0] != nil ? thumb_titles_[0]
+                                   : XeniaDefaultTitleForControlIdentifier(controlIdentifier);
   }
   if (controlIdentifier == kXeniaTouchControlIdentifierRightStick) {
-    return thumb_titles_[1] ?: XeniaDefaultTitleForControlIdentifier(controlIdentifier);
+    return thumb_titles_[1] != nil ? thumb_titles_[1]
+                                   : XeniaDefaultTitleForControlIdentifier(controlIdentifier);
   }
   return @"";
 }
@@ -1502,11 +1506,10 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
 - (void)setTitle:(NSString*)title forControlIdentifier:(NSInteger)controlIdentifier {
   NSString* trimmed =
       [[title ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
-  NSString* normalized = trimmed.length > 0 ? [trimmed copy] : nil;
+  NSString* normalized = [trimmed copy];
   [trimmed release];
   if (controlIdentifier >= 1 && controlIdentifier <= 14) {
-    if ((button_titles_[controlIdentifier] == nil && normalized == nil) ||
-        [button_titles_[controlIdentifier] isEqualToString:normalized]) {
+    if ([button_titles_[controlIdentifier] isEqualToString:normalized]) {
       [normalized release];
       return;
     }
@@ -1516,7 +1519,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
     [self invalidateGameplayControlsComposite];
     [self setNeedsLayout];
   } else if (controlIdentifier == kXeniaTouchControlIdentifierMenu) {
-    if ((menu_title_ == nil && normalized == nil) || [menu_title_ isEqualToString:normalized]) {
+    if ([menu_title_ isEqualToString:normalized]) {
       [normalized release];
       return;
     }
@@ -1528,8 +1531,7 @@ static void XeniaDrawImageInRect(CGContextRef ctx, UIImage* image, CGRect rect, 
   } else if (controlIdentifier == kXeniaTouchControlIdentifierLeftStick ||
              controlIdentifier == kXeniaTouchControlIdentifierRightStick) {
     NSInteger index = controlIdentifier == kXeniaTouchControlIdentifierLeftStick ? 0 : 1;
-    if ((thumb_titles_[index] == nil && normalized == nil) ||
-        [thumb_titles_[index] isEqualToString:normalized]) {
+    if ([thumb_titles_[index] isEqualToString:normalized]) {
       [normalized release];
       return;
     }
