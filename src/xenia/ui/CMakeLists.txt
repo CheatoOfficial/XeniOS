@@ -1,11 +1,13 @@
 add_library(xenia-ui STATIC)
 xe_platform_sources(xenia-ui ${CMAKE_CURRENT_SOURCE_DIR})
 # Demo files are standalone executables in XENIA_BUILD_MISC; moc_*.cc are
-# owned by AUTOMOC and land in the build tree. Neither should reach this
-# target's source list from the repo glob.
+# owned by AUTOMOC and land in the build tree; windowed_app_main_* files are
+# added explicitly per-target. None should reach this target's source list
+# from the repo glob.
 file(GLOB _ui_exclude
   "${CMAKE_CURRENT_SOURCE_DIR}/*_demo.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/moc_*.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/windowed_app_main_*.cc"
 )
 get_target_property(_ui_srcs xenia-ui SOURCES)
 if(_ui_exclude AND _ui_srcs)
