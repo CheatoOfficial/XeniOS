@@ -158,13 +158,14 @@ project("xenia-app")
       }
     end
 
-  -- Copy optimized-settings JSON files next to executable
+  -- Copy optimized-settings files (TOML or JSON) next to executable
   filter("platforms:Windows")
     -- Use absolute path to avoid issues with relative paths
     local optimized_settings_src = path.translate(path.getabsolute(path.join(project_root, ".data_repos", "optimized-settings", "settings")), "\\")
     postbuildcommands {
       'if not exist "$(TargetDir)optimized_settings" mkdir "$(TargetDir)optimized_settings"',
-      'xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\"'
+      'if exist "' .. optimized_settings_src .. '\\*.json" xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.json" "$(TargetDir)optimized_settings\\"',
+      'if exist "' .. optimized_settings_src .. '\\*.toml" xcopy /I /Y /Q "' .. optimized_settings_src .. '\\*.toml" "$(TargetDir)optimized_settings\\"'
     }
 
   -- Copy game-patches TOML files next to executable
@@ -188,7 +189,8 @@ project("xenia-app")
     local optimized_settings_dst = path.getabsolute(path.join(project_root, "build", "bin", "Linux")) .. "/%{cfg.buildcfg}/optimized_settings"
     postbuildcommands {
       '{MKDIR} ' .. optimized_settings_dst,
-      '{COPY} ' .. optimized_settings_src .. '/*.json ' .. optimized_settings_dst
+      '{COPY} ' .. optimized_settings_src .. '/*.json ' .. optimized_settings_dst .. ' 2>/dev/null || true',
+      '{COPY} ' .. optimized_settings_src .. '/*.toml ' .. optimized_settings_dst .. ' 2>/dev/null || true'
     }
 
   filter("platforms:Linux")
