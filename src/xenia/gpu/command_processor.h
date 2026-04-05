@@ -334,7 +334,6 @@ class CommandProcessor {
   struct ZPDReport {
     // Raw host count across all segments, normalized at retirement.
     uint64_t accumulated_samples = 0;
-    uint64_t last_segment_end_submission = 0;
     uint64_t slot_sequence_id = 0;
     uint32_t slot_base = 0;
     uint32_t begin_record = 0;
@@ -354,18 +353,9 @@ class CommandProcessor {
     uint32_t slot_base = 0;
     uint32_t begin_record = 0;
     uint32_t end_record = 0;
-    uint32_t query_index = UINT32_MAX;
-    uint32_t query_generation = 0;
     bool segment_active = false;
     bool segment_pending_begin = false;
     bool logical_active = false;
-  };
-
-  struct PendingQueryResolve {
-    uint64_t submission = 0;
-    uint32_t query_index = UINT32_MAX;
-    uint32_t query_generation = 0;
-    ReportHandle report_handle = kInvalidReportHandle;
   };
 
   // Logged by the backend every 100 frames if ZPD logging cvar is true.
@@ -390,46 +380,20 @@ class CommandProcessor {
   virtual bool IsZPDQueryPoolReady() const { return false; }
   virtual bool CanOpenZPDQuery() const { return true; }
 
-  virtual QueryOpenResult OpenZPDQuery(uint32_t& out_host_index,
-                                       uint32_t& out_host_generation,
+  // Backend acquires a pool slot, records BeginQuery, tracks it internally.
+  virtual QueryOpenResult OpenZPDQuery(ReportHandle report_handle,
                                        bool can_close_submission) {
     return QueryOpenResult::kFailed;
   }
+  // Backend records EndQuery, queues a resolve for the active slot.
+  virtual bool CloseZPDQuery(ReportHandle report_handle) { return false; }
+  // Backend discards the active query without resolving.
+  virtual bool DiscardZPDQuery() { return false; }
 
-  virtual bool CloseZPDQuery(uint32_t host_index, uint32_t host_generation,
-                             uint64_t& out_submission) {
-    return false;
-  }
-
-  // Closes a query without queuing a resolve and returns the slot to the pool.
-  // Used for forced closes when a new BEGIN collides with an active segment.
-  virtual bool DiscardZPDQuery(uint32_t host_index, uint32_t host_generation) {
-    return false;
-  }
-
-  virtual uint64_t GetZPDQueryResult(uint32_t host_index) { return 0; }
-  virtual void ReleaseZPDQuery(uint32_t host_index, uint32_t host_generation) {}
-
-  virtual bool IsZPDQueryResultValid(uint32_t host_index,
-                                     uint32_t host_generation) const {
-    return true;
-  }
-
-  struct ZPDSubmissionState {
-    uint64_t current_submission = 0;
-    uint64_t completed_submission = 0;
-  };
-
-  class ZPDSubmissionBridge {
-   public:
-    virtual ~ZPDSubmissionBridge() = default;
-    virtual ZPDSubmissionState GetState() const = 0;
-    virtual void PrepareReadback(uint64_t completed_submission) {}
-    virtual bool EnsureProgress() = 0;
-    virtual void AwaitSubmission(uint64_t submission) = 0;
-  };
-
-  virtual ZPDSubmissionBridge* GetZPDSubmissionBridge() { return nullptr; }
+  // Backend drains completed resolves and calls OnZPDQueryResolved for each.
+  virtual void PumpQueryResolves() {}
+  // Backend waits for all pending segments of report_handle to resolve.
+  virtual bool AwaitQueryResolve(ReportHandle report_handle) { return false; }
 
   bool BeginZPDReport(uint32_t report_address);
   bool EndZPDReport(uint32_t report_address, bool guest_forced_end);
@@ -439,16 +403,11 @@ class CommandProcessor {
   // The logical report stays open and a new segment will open at the next
   // opportunity.
   void CloseQuerySegment();
-  // Reads results from completed submissions, accumulates the raw sample
-  // deltas into logical reports, retires any that are done.
-  void DrainQueryResolves(uint64_t completed_submission);
 
-  // Non-blocking retirement pump. Returns if nothing is ready.
-  void PumpQueryResolves();
-
-  // Blocks on the fence for report_handle's last segment, then pumps.
-  // Can't be called from EVENT_WRITE_ZPD or the retirement callback.
-  bool AwaitQueryResolve(ReportHandle report_handle);
+  // Called by backends when a host query resolve completes.  Accumulates
+  // the raw sample count, and if all segments are done, commits the report
+  // to guest memory.
+  void OnZPDQueryResolved(ReportHandle report_handle, uint64_t raw_samples);
 
   // Writes guest report with begin_value read from guest memory.
   // Orphan END path only when no controller snapshot is available.
@@ -484,7 +443,6 @@ class CommandProcessor {
     fake_zpd_sample_count_ = 0;
     zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
-    zpd_resolves_in_flight_.clear();
   }
 
 #include "pm4_command_processor_declare.h"
@@ -527,7 +485,6 @@ class CommandProcessor {
   std::unordered_map<uint32_t, uint32_t> zpd_slot_values_;
   std::unordered_map<ReportHandle, ZPDReport> logical_zpd_reports_;
   ActiveZPDSegment zpd_active_segment_{};
-  std::deque<PendingQueryResolve> zpd_resolves_in_flight_;
 
   // Cached delta per END.
   // Fast mode uses this for speculative writeback and orphaned END replay.

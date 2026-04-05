@@ -511,8 +511,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // BeginQuery/EndQuery must be in the same command list, segments split at
   // EndSubmission, resume at BeginSubmission. Discarded queries still need
   // EndQuery or the heap slot breaks on some drivers. RecordZPDResolveBatch
-  // emits coalesced ResolveQueryData at submit. First query at a fresh slot
-  // always produce 0 if the pool was exhausted when it was issued.
+  // emits coalesced ResolveQueryData at submit.
   void EnsureZPDQueryResources() override;
   void ShutdownZPDQueryResources() override {
     zpd_resolves_in_flight_.clear();
@@ -526,46 +525,28 @@ class D3D12CommandProcessor final : public CommandProcessor {
   }
   bool CanOpenZPDQuery() const override;
 
-  QueryOpenResult OpenZPDQuery(uint32_t& out_host_index,
-                               uint32_t& out_host_generation,
+  QueryOpenResult OpenZPDQuery(ReportHandle report_handle,
                                bool can_close_submission) override;
-  bool CloseZPDQuery(uint32_t host_index, uint32_t host_generation,
-                     uint64_t& out_submission) override;
-  bool DiscardZPDQuery(uint32_t host_index, uint32_t host_generation) override;
-  uint64_t GetZPDQueryResult(uint32_t host_index) override {
-    return zpd_host_query_pool_->GetQueryReadbackValue(host_index);
-  }
-  void ReleaseZPDQuery(uint32_t host_index, uint32_t host_generation) override {
-    zpd_host_query_pool_->ReleaseQueryIndex(host_index, host_generation);
-  }
-  bool IsZPDQueryResultValid(uint32_t host_index,
-                             uint32_t host_generation) const override {
-    return zpd_host_query_pool_->GenerationMatches(host_index, host_generation);
-  }
+  bool CloseZPDQuery(ReportHandle report_handle) override;
+  bool DiscardZPDQuery() override;
+  void PumpQueryResolves() override;
+  bool AwaitQueryResolve(ReportHandle report_handle) override;
 
-  // Record the pending resolve batch on the current command list.
   void RecordZPDResolveBatch();
-
-  CommandProcessor::ZPDSubmissionBridge* GetZPDSubmissionBridge() override;
-
-  class ZPDSubmissionBridge final
-      : public CommandProcessor::ZPDSubmissionBridge {
-   public:
-    explicit ZPDSubmissionBridge(D3D12CommandProcessor& command_processor)
-        : command_processor_(command_processor) {}
-    CommandProcessor::ZPDSubmissionState GetState() const override;
-    bool EnsureProgress() override;
-    void AwaitSubmission(uint64_t submission) override;
-
-   private:
-    D3D12CommandProcessor& command_processor_;
-  };
 
   bool device_removed_ = false;
 
   bool cache_clear_requested_ = false;
 
-  ZPDSubmissionBridge zpd_submission_bridge_{*this};
+  struct PendingQueryResolve {
+    uint64_t submission = 0;
+    uint32_t query_index = UINT32_MAX;
+    uint32_t query_generation = 0;
+    ReportHandle report_handle = kInvalidReportHandle;
+  };
+  uint32_t zpd_active_query_index_ = UINT32_MAX;
+  uint32_t zpd_active_query_generation_ = 0;
+  std::deque<PendingQueryResolve> zpd_resolves_in_flight_;
 
   std::unique_ptr<ui::d3d12::D3D12GPUCompletionTimeline> completion_timeline_;
   bool submission_open_ = false;

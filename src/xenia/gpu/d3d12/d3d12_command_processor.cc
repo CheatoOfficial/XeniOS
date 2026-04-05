@@ -3808,9 +3808,8 @@ void D3D12CommandProcessor::CheckSubmissionCompletion(
 
   texture_cache_->CompletedSubmissionUpdated(completed_submission);
 
-  // Pull completed query resolves so logical ZPD reports can be completed and
-  // retire without extra waits.
-  DrainQueryResolves(completed_submission);
+  // Pull completed query resolves so logical ZPD reports can retire.
+  PumpQueryResolves();
 }
 
 bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
@@ -5756,12 +5755,11 @@ void D3D12CommandProcessor::EnsureZPDQueryResources() {
 bool D3D12CommandProcessor::CanOpenZPDQuery() const { return submission_open_; }
 
 CommandProcessor::QueryOpenResult D3D12CommandProcessor::OpenZPDQuery(
-    uint32_t& out_host_index, uint32_t& out_host_generation,
-    bool can_close_submission) {
+    ReportHandle report_handle, bool can_close_submission) {
   bool is_pool_exhausted = !zpd_host_query_pool_->has_free_indices();
 
   if (is_pool_exhausted) {
-    DrainQueryResolves(GetCompletedSubmission());
+    PumpQueryResolves();
     is_pool_exhausted = !zpd_host_query_pool_->has_free_indices();
   }
 
@@ -5785,7 +5783,6 @@ CommandProcessor::QueryOpenResult D3D12CommandProcessor::OpenZPDQuery(
             return QueryOpenResult::kFailed;
           }
         }
-
         return QueryOpenResult::kDeferred;
       }
 
@@ -5796,7 +5793,7 @@ CommandProcessor::QueryOpenResult D3D12CommandProcessor::OpenZPDQuery(
 
       completion_timeline_->AwaitSubmissionAndUpdateCompleted(wait_for);
       waited_for_submission = true;
-      DrainQueryResolves(GetCompletedSubmission());
+      PumpQueryResolves();
       is_pool_exhausted = !zpd_host_query_pool_->has_free_indices();
     }
   }
@@ -5806,68 +5803,127 @@ CommandProcessor::QueryOpenResult D3D12CommandProcessor::OpenZPDQuery(
                                  : QueryOpenResult::kDeferred;
   }
 
-  if (!zpd_host_query_pool_->AcquireQueryIndex(out_host_index,
-                                               out_host_generation)) {
+  if (!zpd_host_query_pool_->AcquireQueryIndex(zpd_active_query_index_,
+                                               zpd_active_query_generation_)) {
     return QueryOpenResult::kFailed;
   }
 
-  zpd_host_query_pool_->BeginQuery(deferred_command_list_, out_host_index);
+  zpd_host_query_pool_->BeginQuery(deferred_command_list_,
+                                   zpd_active_query_index_);
   return QueryOpenResult::kOpened;
 }
 
-bool D3D12CommandProcessor::CloseZPDQuery(uint32_t host_index,
-                                          uint32_t /*unused*/,
-                                          uint64_t& out_submission) {
-  zpd_host_query_pool_->EndQuery(deferred_command_list_, host_index);
-  zpd_host_query_pool_->QueueQueryResolve(host_index);
-  out_submission = GetCurrentSubmission();
+bool D3D12CommandProcessor::CloseZPDQuery(ReportHandle report_handle) {
+  zpd_host_query_pool_->EndQuery(deferred_command_list_,
+                                 zpd_active_query_index_);
+  zpd_host_query_pool_->QueueQueryResolve(zpd_active_query_index_);
+
+  PendingQueryResolve resolve;
+  resolve.submission = GetCurrentSubmission();
+  resolve.query_index = zpd_active_query_index_;
+  resolve.query_generation = zpd_active_query_generation_;
+  resolve.report_handle = report_handle;
+  zpd_resolves_in_flight_.push_back(resolve);
+
+  zpd_active_query_index_ = UINT32_MAX;
+  zpd_active_query_generation_ = 0;
   return true;
 }
 
-bool D3D12CommandProcessor::DiscardZPDQuery(uint32_t host_index,
-                                            uint32_t host_generation) {
+bool D3D12CommandProcessor::DiscardZPDQuery() {
   // D3D12 requires a paired EndQuery before the slot can be released.
   // EndSubmission flushes it so the slot can be freed without a resolve.
-  zpd_host_query_pool_->EndQuery(deferred_command_list_, host_index);
+  zpd_host_query_pool_->EndQuery(deferred_command_list_,
+                                 zpd_active_query_index_);
   if (!EndSubmission(false)) {
     return false;
   }
-  zpd_host_query_pool_->ReleaseQueryIndex(host_index, host_generation);
+  zpd_host_query_pool_->ReleaseQueryIndex(zpd_active_query_index_,
+                                          zpd_active_query_generation_);
+  zpd_active_query_index_ = UINT32_MAX;
+  zpd_active_query_generation_ = 0;
   return true;
 }
 
-CommandProcessor::ZPDSubmissionBridge*
-D3D12CommandProcessor::GetZPDSubmissionBridge() {
-  return &zpd_submission_bridge_;
+void D3D12CommandProcessor::PumpQueryResolves() {
+  if (GetZPDMode() == ZPDMode::kFake || !zpd_host_query_pool_) {
+    return;
+  }
+
+  uint64_t completed = GetCompletedSubmission();
+  if (completed == 0) {
+    return;
+  }
+
+  while (!zpd_resolves_in_flight_.empty()) {
+    if (zpd_resolves_in_flight_.front().submission > completed) {
+      break;
+    }
+    PendingQueryResolve resolve = zpd_resolves_in_flight_.front();
+    zpd_resolves_in_flight_.pop_front();
+
+    if (zpd_host_query_pool_->GenerationMatches(resolve.query_index,
+                                                resolve.query_generation)) {
+      uint64_t raw_samples =
+          zpd_host_query_pool_->GetQueryReadbackValue(resolve.query_index);
+      zpd_host_query_pool_->ReleaseQueryIndex(resolve.query_index,
+                                              resolve.query_generation);
+      OnZPDQueryResolved(resolve.report_handle, raw_samples);
+    }
+  }
 }
 
-CommandProcessor::ZPDSubmissionState
-D3D12CommandProcessor::ZPDSubmissionBridge::GetState() const {
-  return {command_processor_.GetCurrentSubmission(),
-          command_processor_.GetCompletedSubmission()};
-}
-
-bool D3D12CommandProcessor::ZPDSubmissionBridge::EnsureProgress() {
-  if (!command_processor_.submission_open_) {
+bool D3D12CommandProcessor::AwaitQueryResolve(ReportHandle report_handle) {
+  if (GetZPDMode() == ZPDMode::kFake) {
     return false;
   }
-
-  if (!command_processor_.CanEndSubmissionImmediately()) {
-    if (cvars::occlusion_query_log) {
-      XELOGI(
-          "ZPD: Awaiting pending D3D12 pipeline for active query retirement");
-    }
-    command_processor_.pipeline_cache_->AwaitPipelineCompletion();
+  if (zpd_batch_fake_) {
+    return true;
   }
 
-  return command_processor_.CanEndSubmissionImmediately() &&
-         command_processor_.EndSubmission(false);
-}
+  PumpQueryResolves();
 
-void D3D12CommandProcessor::ZPDSubmissionBridge::AwaitSubmission(
-    uint64_t submission) {
-  command_processor_.completion_timeline_->AwaitSubmissionAndUpdateCompleted(
-      submission);
+  // Find the latest submission that has a resolve for this handle.
+  uint64_t wait_for = 0;
+  for (const auto& resolve : zpd_resolves_in_flight_) {
+    if (resolve.report_handle == report_handle) {
+      wait_for = resolve.submission;
+    }
+  }
+
+  if (wait_for == 0) {
+    // No in-flight resolves — check if the report is already done.
+    auto it = logical_zpd_reports_.find(report_handle);
+    return it == logical_zpd_reports_.end() ||
+           (it->second.pending_segments == 0 && it->second.ended);
+  }
+
+  // Ensure the submission is flushed.
+  if (wait_for >= GetCurrentSubmission()) {
+    if (!submission_open_) {
+      return false;
+    }
+    if (!CanEndSubmissionImmediately()) {
+      if (cvars::occlusion_query_log) {
+        XELOGI(
+            "ZPD: Awaiting pending D3D12 pipeline for active query retirement");
+      }
+      pipeline_cache_->AwaitPipelineCompletion();
+    }
+    if (!CanEndSubmissionImmediately() || !EndSubmission(false)) {
+      return false;
+    }
+  }
+
+  if (wait_for > GetCompletedSubmission()) {
+    completion_timeline_->AwaitSubmissionAndUpdateCompleted(wait_for);
+  }
+
+  PumpQueryResolves();
+
+  auto it = logical_zpd_reports_.find(report_handle);
+  return it == logical_zpd_reports_.end() ||
+         (it->second.pending_segments == 0 && it->second.ended);
 }
 
 void D3D12CommandProcessor::RecordZPDResolveBatch() {

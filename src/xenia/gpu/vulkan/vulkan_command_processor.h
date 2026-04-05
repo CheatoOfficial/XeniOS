@@ -467,9 +467,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // vkCmdBeginQuery is only valid inside a render pass, so segments split at
   // pass end and resume at the next pass begin. If BEGIN fires outside a pass,
   // segment_pending_begin waits for the next. Outside a render pass,
-  // DiscardZPDQuery can skip EndQuery and just reset the slot via
-  // vkResetQueryPool. Inside a pass, EndQuery is required.
-  // Strict ZPD retirement may need to end the pass before blocking.
+  // DiscardZPDQuery defers the slot release until the submission completes.
   void EnsureZPDQueryResources() override;
   void ShutdownZPDQueryResources() override {
     zpd_resolves_in_flight_.clear();
@@ -484,39 +482,12 @@ class VulkanCommandProcessor final : public CommandProcessor {
   }
   bool CanOpenZPDQuery() const override;
 
-  QueryOpenResult OpenZPDQuery(uint32_t& out_host_index,
-                               uint32_t& out_host_generation,
+  QueryOpenResult OpenZPDQuery(ReportHandle report_handle,
                                bool can_close_submission) override;
-  bool CloseZPDQuery(uint32_t host_index, uint32_t host_generation,
-                     uint64_t& out_submission) override;
-  bool DiscardZPDQuery(uint32_t host_index, uint32_t host_generation) override;
-  uint64_t GetZPDQueryResult(uint32_t host_index) override {
-    return zpd_host_query_pool_->GetQueryReadbackValue(host_index);
-  }
-  void ReleaseZPDQuery(uint32_t host_index, uint32_t host_generation) override {
-    zpd_host_query_pool_->ReleaseQueryIndex(host_index, host_generation);
-  }
-  bool IsZPDQueryResultValid(uint32_t host_index,
-                             uint32_t host_generation) const override {
-    return zpd_host_query_pool_->GenerationMatches(host_index, host_generation);
-  }
-
-  CommandProcessor::ZPDSubmissionBridge* GetZPDSubmissionBridge() override;
-
-  class ZPDSubmissionBridge final
-      : public CommandProcessor::ZPDSubmissionBridge {
-   public:
-    explicit ZPDSubmissionBridge(VulkanCommandProcessor& command_processor)
-        : command_processor_(command_processor) {}
-
-    CommandProcessor::ZPDSubmissionState GetState() const override;
-    void PrepareReadback(uint64_t completed_submission) override;
-    bool EnsureProgress() override;
-    void AwaitSubmission(uint64_t submission) override;
-
-   private:
-    VulkanCommandProcessor& command_processor_;
-  };
+  bool CloseZPDQuery(ReportHandle report_handle) override;
+  bool DiscardZPDQuery() override;
+  void PumpQueryResolves() override;
+  bool AwaitQueryResolve(ReportHandle report_handle) override;
 
   void UpdateDynamicState(const draw_util::ViewportInfo& viewport_info,
                           bool primitive_polygonal,
@@ -558,7 +529,15 @@ class VulkanCommandProcessor final : public CommandProcessor {
 
   std::vector<VkSemaphore> semaphores_free_;
 
-  ZPDSubmissionBridge zpd_submission_bridge_{*this};
+  struct PendingQueryResolve {
+    uint64_t submission = 0;
+    uint32_t query_index = UINT32_MAX;
+    uint32_t query_generation = 0;
+    ReportHandle report_handle = kInvalidReportHandle;
+  };
+  uint32_t zpd_active_query_index_ = UINT32_MAX;
+  uint32_t zpd_active_query_generation_ = 0;
+  std::deque<PendingQueryResolve> zpd_resolves_in_flight_;
 
   ui::vulkan::VulkanGPUCompletionTimeline completion_timeline_;
   bool submission_open_ = false;

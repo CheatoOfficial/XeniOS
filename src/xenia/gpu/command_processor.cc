@@ -1047,13 +1047,11 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
       }
 
       if (zpd_active_segment_.segment_active) {
-        uint32_t discard_index = zpd_active_segment_.query_index;
-        uint32_t discard_generation = zpd_active_segment_.query_generation;
         // Deactivate the segment before DiscardZPDQuery so that
         // EndSubmission -> CloseQuerySegment does not re-enter and
         // issue a second EndQuery on the same slot.
         zpd_active_segment_.segment_active = false;
-        if (DiscardZPDQuery(discard_index, discard_generation)) {
+        if (DiscardZPDQuery()) {
           zpd_stats_.segments_ended++;
         } else {
           zpd_stats_.failed++;
@@ -1086,7 +1084,6 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
   logical.end_record = end_record;
   logical.begin_value = zpd_slot_values_[slot_base];
   logical.accumulated_samples = 0;
-  logical.last_segment_end_submission = 0;
   logical.pending_segments = 0;
   logical.cached_delta = 0;
   logical.ended = false;
@@ -1099,8 +1096,6 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
   zpd_active_segment_.slot_base = slot_base;
   zpd_active_segment_.begin_record = begin_record;
   zpd_active_segment_.end_record = end_record;
-  zpd_active_segment_.query_index = UINT32_MAX;
-  zpd_active_segment_.query_generation = 0;
   zpd_active_segment_.segment_active = false;
   // Opens lazily. OpenQuerySegment will open it at the next valid opportunity.
   zpd_active_segment_.segment_pending_begin = true;
@@ -1236,10 +1231,8 @@ void CommandProcessor::OpenQuerySegment(bool can_close_submission) {
   // Frees any slots from completed submissions before asking for new ones.
   PumpQueryResolves();
 
-  uint32_t query_index = UINT32_MAX;
-  uint32_t query_generation = 0;
   QueryOpenResult open_result =
-      OpenZPDQuery(query_index, query_generation, can_close_submission);
+      OpenZPDQuery(zpd_active_segment_.report_handle, can_close_submission);
   switch (open_result) {
     case QueryOpenResult::kOpened:
       break;
@@ -1267,8 +1260,6 @@ void CommandProcessor::OpenQuerySegment(bool can_close_submission) {
       return;
   }
 
-  zpd_active_segment_.query_index = query_index;
-  zpd_active_segment_.query_generation = query_generation;
   zpd_active_segment_.segment_active = true;
   zpd_active_segment_.segment_pending_begin = false;
   zpd_stats_.segments_begun++;
@@ -1282,31 +1273,17 @@ void CommandProcessor::CloseQuerySegment() {
     return;
   }
 
-  uint64_t submission = 0;
-  uint32_t query_index = zpd_active_segment_.query_index;
-  uint32_t query_generation = zpd_active_segment_.query_generation;
-  if (!CloseZPDQuery(query_index, query_generation, submission)) {
+  if (!CloseZPDQuery(zpd_active_segment_.report_handle)) {
     zpd_active_segment_.segment_active = false;
     zpd_active_segment_.segment_pending_begin =
         zpd_active_segment_.logical_active && !zpd_batch_fake_;
-    zpd_active_segment_.query_index = UINT32_MAX;
-    zpd_active_segment_.query_generation = 0;
     zpd_stats_.failed++;
     return;
   }
 
-  PendingQueryResolve resolve;
-  resolve.submission = submission;
-  resolve.query_index = query_index;
-  resolve.query_generation = query_generation;
-  resolve.report_handle = zpd_active_segment_.report_handle;
-
-  zpd_resolves_in_flight_.push_back(resolve);
-
-  auto it = logical_zpd_reports_.find(resolve.report_handle);
+  auto it = logical_zpd_reports_.find(zpd_active_segment_.report_handle);
   if (it != logical_zpd_reports_.end()) {
     it->second.pending_segments++;
-    it->second.last_segment_end_submission = resolve.submission;
   }
 
   zpd_active_segment_.segment_active = false;
@@ -1317,152 +1294,47 @@ void CommandProcessor::CloseQuerySegment() {
 
   zpd_active_segment_.segment_pending_begin =
       zpd_active_segment_.logical_active && !zpd_batch_fake_;
-  zpd_active_segment_.query_index = UINT32_MAX;
-  zpd_active_segment_.query_generation = 0;
   zpd_stats_.segments_ended++;
 }
 
-void CommandProcessor::DrainQueryResolves(uint64_t completed_submission) {
-  if (GetZPDMode() == ZPDMode::kFake) {
-    return;
-  }
-
-  ZPDSubmissionBridge* submission_bridge = GetZPDSubmissionBridge();
-  bool any_resolved = false;
-
-  if (submission_bridge != nullptr) {
-    submission_bridge->PrepareReadback(completed_submission);
-  }
-
-  while (!zpd_resolves_in_flight_.empty()) {
-    if (zpd_resolves_in_flight_.front().submission > completed_submission) {
-      break;
-    }
-    PendingQueryResolve resolve = zpd_resolves_in_flight_.front();
-    zpd_resolves_in_flight_.pop_front();
-    uint64_t raw_samples = GetZPDQueryResult(resolve.query_index);
-    bool is_valid =
-        IsZPDQueryResultValid(resolve.query_index, resolve.query_generation);
-
-    if (is_valid) {
-      ReleaseZPDQuery(resolve.query_index, resolve.query_generation);
-
-      auto it = logical_zpd_reports_.find(resolve.report_handle);
-      if (it != logical_zpd_reports_.end()) {
-        ZPDReport& logical = it->second;
-
-        if (logical.pending_segments) {
-          logical.pending_segments--;
-        }
-
-        if (zpd_batch_fake_) {
-          if (logical.pending_segments == 0) {
-            logical_zpd_reports_.erase(it);
-          }
-        } else {
-          logical.accumulated_samples += raw_samples;
-          if (logical.ended && logical.pending_segments == 0) {
-            uint32_t final_value =
-                NormalizeSampleCount(logical.accumulated_samples);
-
-            logical.cached_delta = final_value;
-            if (logical.end_record) {
-              if (fast_zpd_report_cached_values_.size() >=
-                      kFastZPDCacheMaxEntries &&
-                  !fast_zpd_report_cached_values_.count(logical.end_record)) {
-                fast_zpd_report_cached_values_.clear();
-              }
-              fast_zpd_report_cached_values_[logical.end_record] = final_value;
-            }
-            if (IsZPDReportCurrent(logical)) {
-              CommitZPDReport(logical, final_value);
-            }
-            logical_zpd_reports_.erase(it);
-          }
-        }
-      }
-    }
-  }
-}
-
-void CommandProcessor::PumpQueryResolves() {
-  if (GetZPDMode() == ZPDMode::kFake) {
-    return;
-  }
-
-  ZPDSubmissionBridge* submission_bridge = GetZPDSubmissionBridge();
-  if (submission_bridge == nullptr) {
-    return;
-  }
-
-  ZPDSubmissionState submission_state = submission_bridge->GetState();
-  if (submission_state.completed_submission == 0) {
-    return;
-  }
-
-  DrainQueryResolves(submission_state.completed_submission);
-}
-
-bool CommandProcessor::AwaitQueryResolve(
-    CommandProcessor::ReportHandle report_handle) {
-  if (GetZPDMode() == ZPDMode::kFake) {
-    return false;
-  }
-  // Stop stalling here if the batched fake ripcord has been pulled.
-  if (zpd_batch_fake_) {
-    return true;
-  }
-
-  ZPDSubmissionBridge* submission_bridge = GetZPDSubmissionBridge();
-  if (submission_bridge == nullptr) {
-    return false;
-  }
-
+void CommandProcessor::OnZPDQueryResolved(ReportHandle report_handle,
+                                          uint64_t raw_samples) {
   auto it = logical_zpd_reports_.find(report_handle);
   if (it == logical_zpd_reports_.end()) {
-    return false;
+    return;
   }
 
-  uint64_t wait_for_submission = it->second.last_segment_end_submission;
-  if (wait_for_submission == 0) {
-    if (it->second.pending_segments == 0 && it->second.ended) {
-      // Already fully resolved — commit if the slot is still current.
-      if (IsZPDReportCurrent(it->second)) {
-        CommitZPDReport(it->second,
-                        NormalizeSampleCount(it->second.accumulated_samples));
-      }
+  ZPDReport& logical = it->second;
+
+  if (logical.pending_segments) {
+    logical.pending_segments--;
+  }
+
+  if (zpd_batch_fake_) {
+    if (logical.pending_segments == 0) {
       logical_zpd_reports_.erase(it);
-      return true;
     }
-    return false;
+    return;
   }
 
-  ZPDSubmissionState submission_state = submission_bridge->GetState();
+  logical.accumulated_samples += raw_samples;
 
-  uint64_t current_submission = submission_state.current_submission;
-  if (current_submission != 0 && wait_for_submission >= current_submission) {
-    if (submission_bridge->EnsureProgress()) {
-      submission_state = submission_bridge->GetState();
-      current_submission = submission_state.current_submission;
+  if (logical.ended && logical.pending_segments == 0) {
+    uint32_t final_value = NormalizeSampleCount(logical.accumulated_samples);
+
+    logical.cached_delta = final_value;
+    if (logical.end_record) {
+      if (fast_zpd_report_cached_values_.size() >= kFastZPDCacheMaxEntries &&
+          !fast_zpd_report_cached_values_.count(logical.end_record)) {
+        fast_zpd_report_cached_values_.clear();
+      }
+      fast_zpd_report_cached_values_[logical.end_record] = final_value;
     }
-  }
-
-  uint64_t completed_before = submission_state.completed_submission;
-  if (wait_for_submission > completed_before &&
-      wait_for_submission < current_submission) {
-    submission_bridge->AwaitSubmission(wait_for_submission);
-    uint64_t completed_after =
-        submission_bridge->GetState().completed_submission;
-    if (completed_after > completed_before) {
-      DrainQueryResolves(completed_after);
+    if (IsZPDReportCurrent(logical)) {
+      CommitZPDReport(logical, final_value);
     }
+    logical_zpd_reports_.erase(it);
   }
-
-  it = logical_zpd_reports_.find(report_handle);
-  if (it == logical_zpd_reports_.end()) {
-    return true;
-  }
-  return it->second.pending_segments == 0 && it->second.ended;
 }
 
 void CommandProcessor::PumpPendingRetire() {
