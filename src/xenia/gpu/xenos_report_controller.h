@@ -42,11 +42,9 @@ class XenosReportController {
     uint32_t begin_value = 0;
   };
 
-  using CommitGuestReportCallback = void (*)(ReportHandle report_handle,
-                                             uint32_t slot_base,
-                                             uint32_t begin_value,
-                                             uint32_t delta_value,
-                                             void* callback_context);
+  using CommitGuestReportCallback = void (*)(
+      ReportHandle report_handle, uint32_t slot_base, uint32_t begin_record,
+      uint32_t begin_value, uint32_t delta_value, void* callback_context);
 
   explicit XenosReportController(
       CommitGuestReportCallback commit_guest_report_callback,
@@ -56,7 +54,7 @@ class XenosReportController {
 
   // Bumps the slot sequence (invalidates pending writes from prior lifetime)
   // and snapshots begin_value from slot_values_.
-  BeginReportResult BeginReport(uint32_t report_address);
+  BeginReportResult BeginReport(uint32_t report_address, uint32_t begin_record);
 
   // Queues a pending write. Deque order preserves FIFO within the slot.
   void QueueReportWrite(uint32_t report_address, ReportHandle report_handle);
@@ -82,12 +80,14 @@ class XenosReportController {
   struct PendingGuestCommit {
     ReportHandle report_handle = kInvalidReportHandle;
     uint32_t slot_base = 0;
+    uint32_t begin_record = 0;
     uint32_t begin_value = 0;
     uint32_t delta_value = 0;
   };
 
   struct LogicalReportState {
     uint32_t slot_base = 0;
+    uint32_t begin_record = 0;
     uint64_t slot_sequence_id = 0;
     // Snapshotted at BEGIN, not at retirement. Guest will have reused by then.
     uint32_t begin_value = 0;

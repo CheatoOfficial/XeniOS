@@ -462,7 +462,8 @@ class CommandProcessor {
 
   static void ZPDReportCallback(
       XenosReportController::ReportHandle report_handle, uint32_t slot_base,
-      uint32_t begin_value, uint32_t delta_value, void* callback_context);
+      uint32_t begin_record, uint32_t begin_value, uint32_t delta_value,
+      void* callback_context);
 
   void ResetZPDState() {
     zpd_active_segment_ = {};

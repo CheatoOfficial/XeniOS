@@ -1073,7 +1073,7 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
   uint32_t begin_record = XenosZPDReport::GetBeginRecordBase(slot_base);
   uint32_t end_record = XenosZPDReport::GetEndRecordBase(slot_base);
   XenosReportController::BeginReportResult begin_report_result =
-      zpd_report_controller_->BeginReport(report_address);
+      zpd_report_controller_->BeginReport(report_address, begin_record);
   XenosReportController::ReportHandle report_handle =
       begin_report_result.report_handle;
   if (report_handle == XenosReportController::kInvalidReportHandle) {
@@ -1532,25 +1532,15 @@ void CommandProcessor::WriteZPDReport(uint32_t begin_record,
 
 void CommandProcessor::ZPDReportCallback(
     XenosReportController::ReportHandle report_handle, uint32_t slot_base,
-    uint32_t begin_value, uint32_t delta_value, void* callback_context) {
+    uint32_t begin_record, uint32_t begin_value, uint32_t delta_value,
+    void* callback_context) {
   CommandProcessor* processor =
       reinterpret_cast<CommandProcessor*>(callback_context);
 
-  // The controller passes slot_base. The END record lives at slot_base
-  // so slot_base is already the correct target address. GetRecordBase is a
-  // no-op here but keeps the call explicit.
   uint32_t end_record = XenosZPDReport::GetEndRecordBase(slot_base);
-  uint32_t begin_record = XenosZPDReport::GetBeginRecordBase(slot_base);
-  auto existing_report = processor->logical_zpd_reports_.find(report_handle);
-  if (existing_report != processor->logical_zpd_reports_.end()) {
-    begin_record = existing_report->second.begin_record;
-    processor->logical_zpd_reports_.erase(existing_report);
-  } else if (cvars::occlusion_query_log) {
-    XELOGI(
-        "ZPD: ZPDReportCallback missing logical report "
-        "handle={} end_record=0x{:08X}",
-        report_handle, end_record);
-  }
+
+  // begin_record comes from the controller.  Erase the CP-side entry.
+  processor->logical_zpd_reports_.erase(report_handle);
 
   processor->WriteZPDReport(begin_record, end_record, begin_value, delta_value,
                             begin_record != 0);

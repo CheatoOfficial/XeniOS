@@ -19,7 +19,7 @@ namespace xe {
 namespace gpu {
 
 XenosReportController::BeginReportResult XenosReportController::BeginReport(
-    uint32_t report_address) {
+    uint32_t report_address, uint32_t begin_record) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   uint32_t slot_base = XenosZPDReport::GetSlotBase(report_address);
@@ -39,6 +39,7 @@ XenosReportController::BeginReportResult XenosReportController::BeginReport(
   LogicalReportState& report_state = logical_reports_[report_handle];
 
   report_state.slot_base = slot_base;
+  report_state.begin_record = begin_record;
   report_state.slot_sequence_id = slot_sequence_id;
   report_state.begin_value = slot_values_[slot_base];
   report_state.resolved = false;
@@ -96,8 +97,8 @@ uint32_t XenosReportController::RetireReports() {
   if (commit_guest_report_callback_) {
     for (const PendingGuestCommit& commit : pending_guest_commits) {
       commit_guest_report_callback_(commit.report_handle, commit.slot_base,
-                                    commit.begin_value, commit.delta_value,
-                                    callback_context_);
+                                    commit.begin_record, commit.begin_value,
+                                    commit.delta_value, callback_context_);
     }
   }
 
@@ -182,7 +183,8 @@ void XenosReportController::ProcessReportWritesLocked(
         } else {
           pending_guest_commits.push_back(
               {queued_write.report_handle, queued_write.slot_base,
-               report_state.begin_value, report_state.delta_value});
+               report_state.begin_record, report_state.begin_value,
+               report_state.delta_value});
 
           // Advance running total so next BeginReport picks up the right
           // begin_value.
