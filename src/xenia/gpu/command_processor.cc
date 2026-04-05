@@ -54,14 +54,15 @@ DEFINE_bool(clear_memory_page_state, true,
             "GPU");
 
 DEFINE_string(
-    occlusion_query, "fake",
+    occlusion_query, "fast",
     "Controls hardware occlusion query behavior for EVENT_WRITE_ZPD.\n"
     "Used for effects like lens flares, object culling, and auto-exposure.\n"
     "ROV render path currently supports fake mode only.\n"
     " fake: Write a fake result without asking the GPU. Safe for most games,\n"
-    "       though some effects may look slightly wrong. (default)\n"
+    "       though some effects may look slightly wrong.\n"
     " fast: Ask the GPU but don't wait for the answer. Writes a cached\n"
     "       result immediately and updates it when the GPU catches up.\n"
+    "       (default)\n"
     " strict: Ask the GPU and wait for the real result before continuing.\n"
     "         Most accurate, but may be somewhat less performant.",
     "GPU");
