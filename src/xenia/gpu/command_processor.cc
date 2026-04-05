@@ -582,15 +582,10 @@ bool CommandProcessor::Restore(ByteStream* stream) {
 
 bool CommandProcessor::SetupContext() {
   ResetZPDState();
-  zpd_report_controller_ = std::make_unique<XenosReportController>(
-      &CommandProcessor::ZPDReportCallback, this);
   return true;
 }
 
-void CommandProcessor::ShutdownContext() {
-  ResetZPDState();
-  zpd_report_controller_.reset();
-}
+void CommandProcessor::ShutdownContext() { ResetZPDState(); }
 
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
   read_ptr_index_ = 0;
@@ -1072,18 +1067,24 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
   uint32_t slot_base = XenosZPDReport::GetSlotBase(report_address);
   uint32_t begin_record = XenosZPDReport::GetBeginRecordBase(slot_base);
   uint32_t end_record = XenosZPDReport::GetEndRecordBase(slot_base);
-  XenosReportController::BeginReportResult begin_report_result =
-      zpd_report_controller_->BeginReport(report_address, begin_record);
-  XenosReportController::ReportHandle report_handle =
-      begin_report_result.report_handle;
-  if (report_handle == XenosReportController::kInvalidReportHandle) {
+  if (!slot_base) {
     return false;
   }
 
+  // Bump slot sequence — invalidates pending writes from prior lifetime.
+  uint64_t slot_sequence_id = ++zpd_slot_sequences_[slot_base];
+
+  ReportHandle report_handle = zpd_next_report_handle_++;
+  if (report_handle == kInvalidReportHandle) {
+    report_handle = zpd_next_report_handle_++;
+  }
+
   ZPDReport& logical = logical_zpd_reports_[report_handle];
+  logical.slot_base = slot_base;
+  logical.slot_sequence_id = slot_sequence_id;
   logical.begin_record = begin_record;
   logical.end_record = end_record;
-  logical.begin_value = begin_report_result.begin_value;
+  logical.begin_value = zpd_slot_values_[slot_base];
   logical.accumulated_samples = 0;
   logical.last_segment_end_submission = 0;
   logical.pending_segments = 0;
@@ -1118,7 +1119,7 @@ bool CommandProcessor::EndZPDReport(uint32_t report_address,
     return false;
   }
 
-  XenosReportController::ReportHandle report_handle =
+  CommandProcessor::ReportHandle report_handle =
       zpd_active_segment_.report_handle;
   uint32_t stored_end_record = zpd_active_segment_.end_record;
   uint32_t report_record_base = XenosZPDReport::GetRecordBase(report_address);
@@ -1186,10 +1187,9 @@ bool CommandProcessor::EndZPDReport(uint32_t report_address,
     }
   }
 
-  zpd_report_controller_->QueueReportWrite(report_record_base, report_handle);
   if (resolved_immediately) {
-    zpd_report_controller_->SetReportResolved(report_handle, final_value);
-    zpd_report_controller_->RetireReports();
+    CommitZPDReport(logical, final_value);
+    logical_zpd_reports_.erase(it);
   }
 
   bool has_cross_slot_end =
@@ -1208,8 +1208,7 @@ bool CommandProcessor::EndZPDReport(uint32_t report_address,
   } else if (!resolved_immediately) {
     PumpQueryResolves();
 
-    if (zpd_report_controller_->HasQueuedWriteForAddress(report_record_base) &&
-        zpd_pending_retire_handle_ != report_handle) {
+    if (zpd_pending_retire_handle_ != report_handle) {
       zpd_pending_retire_handle_ = report_handle;
       zpd_pending_retire_stalls_ = 0;
     }
@@ -1375,17 +1374,14 @@ void CommandProcessor::DrainQueryResolves(uint64_t completed_submission) {
               }
               fast_zpd_report_cached_values_[logical.end_record] = final_value;
             }
-            zpd_report_controller_->SetReportResolved(resolve.report_handle,
-                                                      final_value);
-            any_resolved = true;
+            if (IsZPDReportCurrent(logical)) {
+              CommitZPDReport(logical, final_value);
+            }
+            logical_zpd_reports_.erase(it);
           }
         }
       }
     }
-  }
-
-  if (any_resolved) {
-    zpd_report_controller_->RetireReports();
   }
 }
 
@@ -1408,7 +1404,7 @@ void CommandProcessor::PumpQueryResolves() {
 }
 
 bool CommandProcessor::AwaitQueryResolve(
-    XenosReportController::ReportHandle report_handle) {
+    CommandProcessor::ReportHandle report_handle) {
   if (GetZPDMode() == ZPDMode::kFake) {
     return false;
   }
@@ -1430,7 +1426,12 @@ bool CommandProcessor::AwaitQueryResolve(
   uint64_t wait_for_submission = it->second.last_segment_end_submission;
   if (wait_for_submission == 0) {
     if (it->second.pending_segments == 0 && it->second.ended) {
-      zpd_report_controller_->RetireReports();
+      // Already fully resolved — commit if the slot is still current.
+      if (IsZPDReportCurrent(it->second)) {
+        CommitZPDReport(it->second,
+                        NormalizeSampleCount(it->second.accumulated_samples));
+      }
+      logical_zpd_reports_.erase(it);
       return true;
     }
     return false;
@@ -1466,16 +1467,15 @@ bool CommandProcessor::AwaitQueryResolve(
 
 void CommandProcessor::PumpPendingRetire() {
   if (zpd_batch_fake_) {
-    zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+    zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
     return;
   }
 
-  XenosReportController::ReportHandle handle_to_await =
-      zpd_pending_retire_handle_;
+  CommandProcessor::ReportHandle handle_to_await = zpd_pending_retire_handle_;
 
   if (AwaitQueryResolve(handle_to_await)) {
-    zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+    zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
     return;
   }
@@ -1484,7 +1484,7 @@ void CommandProcessor::PumpPendingRetire() {
   if (logical_report == logical_zpd_reports_.end()) {
     // If the report is already gone it retired through another path.
     // Clear so we don't spin on a handle that no longer exists.
-    zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+    zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
     return;
   }
@@ -1498,14 +1498,13 @@ void CommandProcessor::PumpPendingRetire() {
           "handle={}, abandoning",
           handle_to_await);
     }
-    // Notify the controller so it can retire the report and clean up its
-    // internal maps.  Use the cached delta to avoid a sudden occlusion flash.
-    if (zpd_report_controller_) {
-      zpd_report_controller_->SetReportResolved(
-          handle_to_await, logical_report->second.cached_delta);
+    // Write the cached delta to guest memory to avoid a sudden occlusion flash.
+    if (IsZPDReportCurrent(logical_report->second)) {
+      CommitZPDReport(logical_report->second,
+                      logical_report->second.cached_delta);
     }
     logical_zpd_reports_.erase(logical_report);
-    zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+    zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
   }
 }
@@ -1530,20 +1529,25 @@ void CommandProcessor::WriteZPDReport(uint32_t begin_record,
                                    write_begin_record);
 }
 
-void CommandProcessor::ZPDReportCallback(
-    XenosReportController::ReportHandle report_handle, uint32_t slot_base,
-    uint32_t begin_record, uint32_t begin_value, uint32_t delta_value,
-    void* callback_context) {
-  CommandProcessor* processor =
-      reinterpret_cast<CommandProcessor*>(callback_context);
+void CommandProcessor::CommitZPDReport(ZPDReport& report,
+                                       uint32_t delta_value) {
+  uint32_t end_record = XenosZPDReport::GetEndRecordBase(report.slot_base);
+  WriteZPDReport(report.begin_record, end_record, report.begin_value,
+                 delta_value, report.begin_record != 0);
 
-  uint32_t end_record = XenosZPDReport::GetEndRecordBase(slot_base);
+  // Advance running total so the next BeginReport on this slot picks up
+  // the correct begin_value.
+  uint64_t end_value = static_cast<uint64_t>(report.begin_value) +
+                       static_cast<uint64_t>(delta_value);
+  zpd_slot_values_[report.slot_base] =
+      end_value > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(end_value);
+}
 
-  // begin_record comes from the controller.  Erase the CP-side entry.
-  processor->logical_zpd_reports_.erase(report_handle);
-
-  processor->WriteZPDReport(begin_record, end_record, begin_value, delta_value,
-                            begin_record != 0);
+bool CommandProcessor::IsZPDReportCurrent(const ZPDReport& report) const {
+  auto seq_it = zpd_slot_sequences_.find(report.slot_base);
+  uint64_t current_seq =
+      seq_it != zpd_slot_sequences_.end() ? seq_it->second : 0;
+  return current_seq == report.slot_sequence_id;
 }
 
 uint32_t CommandProcessor::NormalizeSampleCount(uint64_t samples) const {

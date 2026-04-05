@@ -26,7 +26,6 @@
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/trace_writer.h"
 #include "xenia/gpu/xenos.h"
-#include "xenia/gpu/xenos_report_controller.h"
 #include "xenia/gpu/xenos_zpd_report.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/memory.h"
@@ -117,6 +116,10 @@ enum class GammaRampType {
 };
 
 class CommandProcessor {
+ public:
+  using ReportHandle = uint32_t;
+  static constexpr ReportHandle kInvalidReportHandle = 0;
+
  protected:
   RingBuffer
       reader_;  // chrispy: instead of having ringbuffer on stack, have it near
@@ -332,9 +335,11 @@ class CommandProcessor {
     // Raw host count across all segments, normalized at retirement.
     uint64_t accumulated_samples = 0;
     uint64_t last_segment_end_submission = 0;
+    uint64_t slot_sequence_id = 0;
+    uint32_t slot_base = 0;
     uint32_t begin_record = 0;
     uint32_t end_record = 0;
-    // Snapshotted from controller at BEGIN.
+    // Snapshotted at BEGIN from zpd_slot_values_.
     uint32_t begin_value = 0;
     uint32_t pending_segments = 0;
     // Last known delta. Carried forward on forced close so slot doesn't
@@ -345,8 +350,7 @@ class CommandProcessor {
 
   // TODO(boma): Replace with a map keyed by slot_base for concurrent slots.
   struct ActiveZPDSegment {
-    XenosReportController::ReportHandle report_handle =
-        XenosReportController::kInvalidReportHandle;
+    ReportHandle report_handle = kInvalidReportHandle;
     uint32_t slot_base = 0;
     uint32_t begin_record = 0;
     uint32_t end_record = 0;
@@ -361,8 +365,7 @@ class CommandProcessor {
     uint64_t submission = 0;
     uint32_t query_index = UINT32_MAX;
     uint32_t query_generation = 0;
-    XenosReportController::ReportHandle report_handle =
-        XenosReportController::kInvalidReportHandle;
+    ReportHandle report_handle = kInvalidReportHandle;
   };
 
   // Logged by the backend every 100 frames if ZPD logging cvar is true.
@@ -445,7 +448,7 @@ class CommandProcessor {
 
   // Blocks on the fence for report_handle's last segment, then pumps.
   // Can't be called from EVENT_WRITE_ZPD or the retirement callback.
-  bool AwaitQueryResolve(XenosReportController::ReportHandle report_handle);
+  bool AwaitQueryResolve(ReportHandle report_handle);
 
   // Writes guest report with begin_value read from guest memory.
   // Orphan END path only when no controller snapshot is available.
@@ -460,13 +463,17 @@ class CommandProcessor {
   // Divides host count by draw resolution scale.
   uint32_t NormalizeSampleCount(uint64_t samples) const;
 
-  static void ZPDReportCallback(
-      XenosReportController::ReportHandle report_handle, uint32_t slot_base,
-      uint32_t begin_record, uint32_t begin_value, uint32_t delta_value,
-      void* callback_context);
+  // Writes the final report to guest memory and advances the slot running
+  // total.  Called when a report fully resolves or is abandoned.
+  void CommitZPDReport(ZPDReport& report, uint32_t delta_value);
+  // Checks that the report's slot sequence is still current (not reused).
+  bool IsZPDReportCurrent(const ZPDReport& report) const;
 
   void ResetZPDState() {
     zpd_active_segment_ = {};
+    zpd_next_report_handle_ = 1;
+    zpd_slot_sequences_.clear();
+    zpd_slot_values_.clear();
     logical_zpd_reports_.clear();
     fast_zpd_report_cached_values_.clear();
     zpd_batch_fake_ = false;
@@ -475,7 +482,7 @@ class CommandProcessor {
     zpd_batch_last_record_ = 0;
     zpd_batch_run_ = 0;
     fake_zpd_sample_count_ = 0;
-    zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+    zpd_pending_retire_handle_ = kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
     zpd_resolves_in_flight_.clear();
   }
@@ -515,9 +522,10 @@ class CommandProcessor {
   GraphicsSystem* graphics_system_ = nullptr;
   RegisterFile* XE_RESTRICT register_file_ = nullptr;
 
-  std::unique_ptr<XenosReportController> zpd_report_controller_;
-  std::unordered_map<XenosReportController::ReportHandle, ZPDReport>
-      logical_zpd_reports_;
+  ReportHandle zpd_next_report_handle_ = 1;
+  std::unordered_map<uint32_t, uint64_t> zpd_slot_sequences_;
+  std::unordered_map<uint32_t, uint32_t> zpd_slot_values_;
+  std::unordered_map<ReportHandle, ZPDReport> logical_zpd_reports_;
   ActiveZPDSegment zpd_active_segment_{};
   std::deque<PendingQueryResolve> zpd_resolves_in_flight_;
 
@@ -534,8 +542,7 @@ class CommandProcessor {
   uint32_t zpd_batch_run_ = 0;
 
   // Strict mode defers guest completion until the queued END has retired.
-  XenosReportController::ReportHandle zpd_pending_retire_handle_ =
-      XenosReportController::kInvalidReportHandle;
+  ReportHandle zpd_pending_retire_handle_ = kInvalidReportHandle;
   uint32_t zpd_pending_retire_stalls_ = 0;
 
   // Set by the backend when resolution scale changes.

@@ -32,7 +32,6 @@
 #include "xenia/gpu/vulkan/vulkan_shared_memory.h"
 #include "xenia/gpu/vulkan/vulkan_zpd_query_pool.h"
 #include "xenia/gpu/xenos.h"
-#include "xenia/gpu/xenos_report_controller.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/user_module.h"
 #include "xenia/ui/vulkan/vulkan_presenter.h"
@@ -5097,20 +5096,15 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
     // Log guest ZPD report stats every 100 frames.
     if (GetZPDMode() != ZPDMode::kFake && cvars::occlusion_query_log &&
         zpd_host_query_pool_ && zpd_host_query_pool_->capacity() &&
-        zpd_report_controller_ &&
         frame_current_ - zpd_stats_.last_log_frame >= 100) {
-      XenosReportController::Stats report_stats =
-          zpd_report_controller_->stats();
       XELOGI(
           "Occlusion Query Stats (last 100 frames): "
           "LogicalBegun={}, LogicalEnded={}, SegBegun={}, SegEnded={}, "
-          "WritesRetired={}, PoolExhausted={}, Failed={}",
+          "PoolExhausted={}, Failed={}",
           zpd_stats_.logical_begun, zpd_stats_.logical_ended,
           zpd_stats_.segments_begun, zpd_stats_.segments_ended,
-          report_stats.writes_retired, zpd_stats_.pool_exhausted,
-          zpd_stats_.failed);
+          zpd_stats_.pool_exhausted, zpd_stats_.failed);
 
-      zpd_report_controller_->ResetStats();
       zpd_stats_.Reset(frame_current_);
     }
 

@@ -1257,7 +1257,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
       // Don't try to mix real and fake results.
       zpd_batch_fake_ = true;
       zpd_batch_fake_count_ = 0;
-      zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
+      zpd_pending_retire_handle_ = CommandProcessor::kInvalidReportHandle;
       zpd_pending_retire_stalls_ = 0;
       XELOGI(
           "ZPD: Batched occlusion query pattern detected, falling back to "
@@ -1271,8 +1271,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
     zpd_batch_run_ = 0;
   }
 
-  if (COMMAND_PROCESSOR::GetZPDMode() != ZPDMode::kFake &&
-      zpd_report_controller_) {
+  if (COMMAND_PROCESSOR::GetZPDMode() != ZPDMode::kFake) {
     if (logical_active && is_end_record) {
       if (slot_base == zpd_active_segment_.slot_base) {
         COMMAND_PROCESSOR::EndZPDReport(report_address, false);
@@ -1302,7 +1301,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
                                           cached_delta, false);
       } else {
         // In strict mode, just pump in case a previous report has resolved.
-        zpd_report_controller_->RetireReports();
+        COMMAND_PROCESSOR::PumpQueryResolves();
       }
       return true;
     }
