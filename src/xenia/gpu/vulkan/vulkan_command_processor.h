@@ -156,6 +156,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
 
   void RestoreEdramSnapshot(const void* snapshot) override;
 
+  void PrepareForWait() override;
+  void ReturnFromWait() override;
+
   ui::vulkan::VulkanDevice* GetVulkanDevice() const {
     return static_cast<const ui::vulkan::VulkanProvider*>(
                graphics_system_->provider())
@@ -469,7 +472,11 @@ class VulkanCommandProcessor final : public CommandProcessor {
   // Strict ZPD retirement may need to end the pass before blocking.
   void EnsureZPDQueryResources() override;
   void ShutdownZPDQueryResources() override {
-    zpd_host_query_pool_->Shutdown();
+    zpd_resolves_in_flight_.clear();
+    zpd_deferred_releases_.clear();
+    if (zpd_host_query_pool_) {
+      zpd_host_query_pool_->Shutdown();
+    }
   }
 
   bool IsZPDQueryPoolReady() const override {
@@ -651,6 +658,16 @@ class VulkanCommandProcessor final : public CommandProcessor {
   std::unique_ptr<VulkanRenderTargetCache> render_target_cache_;
 
   std::unique_ptr<VulkanZPDQueryPool> zpd_host_query_pool_;
+
+  // Deferred query slot releases for discards that happen outside a render
+  // pass, where vkCmdEndQuery cannot be issued.  The slot is held until the
+  // submission containing the stale BeginQuery completes on the GPU.
+  struct DeferredQueryRelease {
+    uint64_t submission;
+    uint32_t query_index;
+    uint32_t query_generation;
+  };
+  std::deque<DeferredQueryRelease> zpd_deferred_releases_;
 
   std::unique_ptr<VulkanPipelineCache> pipeline_cache_;
 

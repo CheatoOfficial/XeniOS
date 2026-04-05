@@ -19,13 +19,6 @@
 namespace xe {
 namespace gpu {
 namespace d3d12 {
-namespace {
-
-struct ResolveRange {
-  uint32_t start;
-  uint32_t count;
-};
-}  // namespace
 
 bool D3D12ZPDQueryPool::EnsureInitialized(
     const ui::d3d12::D3D12Provider& provider, uint32_t requested_capacity,
@@ -87,6 +80,7 @@ bool D3D12ZPDQueryPool::EnsureInitialized(
   capacity_ = requested_capacity;
 
   resolve_batch_pending_.assign(requested_capacity, 0);
+  resolve_batch_indices_.clear();
   resolve_batch_index_count_ = 0;
 
   free_indices_.clear();
@@ -101,6 +95,7 @@ bool D3D12ZPDQueryPool::EnsureInitialized(
 
 void D3D12ZPDQueryPool::Shutdown() {
   resolve_batch_pending_.clear();
+  resolve_batch_indices_.clear();
   resolve_batch_index_count_ = 0;
   free_indices_.clear();
   index_generations_.clear();
@@ -108,7 +103,9 @@ void D3D12ZPDQueryPool::Shutdown() {
   capacity_ = 0;
 
   if (readback_mapping_ && readback_buffer_) {
-    readback_buffer_->Unmap(0, nullptr);
+    // CPU never writes to this READBACK buffer — empty written range.
+    D3D12_RANGE written_range = {0, 0};
+    readback_buffer_->Unmap(0, &written_range);
   }
   readback_mapping_ = nullptr;
 
@@ -146,6 +143,8 @@ void D3D12ZPDQueryPool::ReleaseQueryIndex(uint32_t query_index,
     return;
   }
 
+  // Bump generation so a second release with the same generation is rejected.
+  ++index_generations_[query_index];
   free_indices_.push_back(query_index);
 }
 
@@ -184,6 +183,7 @@ void D3D12ZPDQueryPool::QueueQueryResolve(uint32_t query_index) {
   // the batch drains at EndSubmission.
   if (!resolve_batch_pending_[query_index]) {
     resolve_batch_pending_[query_index] = 1;
+    resolve_batch_indices_.push_back(query_index);
     ++resolve_batch_index_count_;
   }
 }
@@ -199,22 +199,22 @@ void D3D12ZPDQueryPool::FlushResolveBatch(
   }
 
   if (!is_initialized()) {
-    std::fill(resolve_batch_pending_.begin(), resolve_batch_pending_.end(), 0);
+    for (uint32_t index : resolve_batch_indices_) {
+      resolve_batch_pending_[index] = 0;
+    }
+    resolve_batch_indices_.clear();
     resolve_batch_index_count_ = 0;
     return;
   }
 
-  std::vector<ResolveRange> ranges;
+  // Sort so we can coalesce contiguous indices into ranges, cutting down on
+  // ResolveQueryData calls which have considerable overhead.
+  std::sort(resolve_batch_indices_.begin(), resolve_batch_indices_.end());
 
-  // Coalesce into contiguous ranges to cut down on ResolveQueryData calls,
-  // which have considerable overhead.
+  resolve_batch_ranges_.clear();
   uint32_t range_start = 0;
   uint32_t range_count = 0;
-  for (uint32_t index = 0; index < capacity_; ++index) {
-    if (!resolve_batch_pending_[index]) {
-      continue;
-    }
-
+  for (uint32_t index : resolve_batch_indices_) {
     if (range_count == 0) {
       range_start = index;
       range_count = 1;
@@ -226,24 +226,23 @@ void D3D12ZPDQueryPool::FlushResolveBatch(
       continue;
     }
 
-    ranges.push_back({range_start, range_count});
+    resolve_batch_ranges_.push_back({range_start, range_count});
     range_start = index;
     range_count = 1;
   }
 
   if (range_count != 0) {
-    ranges.push_back({range_start, range_count});
+    resolve_batch_ranges_.push_back({range_start, range_count});
   }
 
   // Reset the batch. ENDs from later in this submission belong to the next.
-  std::fill(resolve_batch_pending_.begin(), resolve_batch_pending_.end(), 0);
+  for (uint32_t index : resolve_batch_indices_) {
+    resolve_batch_pending_[index] = 0;
+  }
+  resolve_batch_indices_.clear();
   resolve_batch_index_count_ = 0;
 
-  if (ranges.empty()) {
-    return;
-  }
-
-  for (const ResolveRange& range : ranges) {
+  for (const ResolveRange& range : resolve_batch_ranges_) {
     deferred_command_list.D3DResolveQueryData(
         query_heap_.Get(), D3D12_QUERY_TYPE_OCCLUSION, range.start, range.count,
         readback_buffer_.Get(), range.start * sizeof(uint64_t));

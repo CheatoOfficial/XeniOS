@@ -70,7 +70,7 @@ struct XenosZPDReport {
 
   // Boundary detection only looks at ZPass_A first, then ZFail_A.
   // Some titles (4D5307E8) have unique, non-zero values in the B fields, which
-  // aren't understand well enough to count them yet.
+  // aren't understood well enough to count them yet.
   // Proper support might need separate queries for both A & B.
   static bool HasPendingSentinel(
       const xenos::xe_gpu_depth_sample_counts* report) {

@@ -147,6 +147,18 @@ void D3D12CommandProcessor::RestoreEdramSnapshot(const void* snapshot) {
   render_target_cache_->RestoreEdramSnapshot(snapshot);
 }
 
+void D3D12CommandProcessor::PrepareForWait() {
+  // Refresh completion data so PumpPendingRetire in the base class sees the
+  // latest GPU progress.
+  CheckSubmissionCompletion(0);
+  CommandProcessor::PrepareForWait();
+}
+
+void D3D12CommandProcessor::ReturnFromWait() {
+  CheckSubmissionCompletion(0);
+  CommandProcessor::ReturnFromWait();
+}
+
 bool D3D12CommandProcessor::PushTransitionBarrier(
     ID3D12Resource* resource, D3D12_RESOURCE_STATES old_state,
     D3D12_RESOURCE_STATES new_state, UINT subresource) {
@@ -5735,7 +5747,7 @@ ID3D12Resource* D3D12CommandProcessor::RequestReadbackBuffer(uint32_t size) {
 }
 
 void D3D12CommandProcessor::EnsureZPDQueryResources() {
-  if (GetZPDMode() == ZPDMode::kFake) {
+  if (GetZPDMode() == ZPDMode::kFake || !zpd_host_query_pool_) {
     return;
   }
 
@@ -5846,10 +5858,6 @@ bool D3D12CommandProcessor::ZPDSubmissionBridge::EnsureProgress() {
     return false;
   }
 
-  if (!command_processor_.CanEndSubmissionImmediately() &&
-      !command_processor_.pipeline_cache_->IsCreatingPipelines()) {
-    return false;
-  }
   if (!command_processor_.CanEndSubmissionImmediately()) {
     if (cvars::occlusion_query_log) {
       XELOGI(

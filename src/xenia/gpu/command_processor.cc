@@ -368,6 +368,13 @@ void CommandProcessor::SetZPDMode(ZPDMode mode) {
   if (cached_zpd_mode_ == mode) {
     return;
   }
+  // Close any active query segment before the mode changes so that a
+  // BeginQuery recorded under the old mode gets a matching EndQuery.
+  // Without this, switching to kFake mid-frame would cause EndRenderPass
+  // to skip CloseQuerySegment, leaving the query dangling.
+  if (zpd_active_segment_.segment_active) {
+    CloseQuerySegment();
+  }
   cached_zpd_mode_ = mode;
   const char* mode_str = "fake";
   switch (mode) {
@@ -1045,8 +1052,13 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
       }
 
       if (zpd_active_segment_.segment_active) {
-        if (DiscardZPDQuery(zpd_active_segment_.query_index,
-                            zpd_active_segment_.query_generation)) {
+        uint32_t discard_index = zpd_active_segment_.query_index;
+        uint32_t discard_generation = zpd_active_segment_.query_generation;
+        // Deactivate the segment before DiscardZPDQuery so that
+        // EndSubmission -> CloseQuerySegment does not re-enter and
+        // issue a second EndQuery on the same slot.
+        zpd_active_segment_.segment_active = false;
+        if (DiscardZPDQuery(discard_index, discard_generation)) {
           zpd_stats_.segments_ended++;
         } else {
           zpd_stats_.failed++;
@@ -1158,6 +1170,10 @@ bool CommandProcessor::EndZPDReport(uint32_t report_address,
                        ? logical.cached_delta
                        : final_value;
     logical.cached_delta = cached_delta;
+    if (fast_zpd_report_cached_values_.size() >= kFastZPDCacheMaxEntries &&
+        !fast_zpd_report_cached_values_.count(report_record_base)) {
+      fast_zpd_report_cached_values_.clear();
+    }
     fast_zpd_report_cached_values_[report_record_base] = cached_delta;
     final_value = cached_delta;
   } else {
@@ -1313,7 +1329,6 @@ void CommandProcessor::DrainQueryResolves(uint64_t completed_submission) {
   }
 
   ZPDSubmissionBridge* submission_bridge = GetZPDSubmissionBridge();
-  std::vector<PendingQueryResolve> ready_resolves;
   bool any_resolved = false;
 
   if (submission_bridge != nullptr) {
@@ -1321,15 +1336,11 @@ void CommandProcessor::DrainQueryResolves(uint64_t completed_submission) {
   }
 
   while (!zpd_resolves_in_flight_.empty()) {
-    PendingQueryResolve resolve = zpd_resolves_in_flight_.front();
-    if (resolve.submission > completed_submission) {
+    if (zpd_resolves_in_flight_.front().submission > completed_submission) {
       break;
     }
+    PendingQueryResolve resolve = zpd_resolves_in_flight_.front();
     zpd_resolves_in_flight_.pop_front();
-    ready_resolves.push_back(resolve);
-  }
-
-  for (const PendingQueryResolve& resolve : ready_resolves) {
     uint64_t raw_samples = GetZPDQueryResult(resolve.query_index);
     bool is_valid =
         IsZPDQueryResultValid(resolve.query_index, resolve.query_generation);
@@ -1357,6 +1368,11 @@ void CommandProcessor::DrainQueryResolves(uint64_t completed_submission) {
 
             logical.cached_delta = final_value;
             if (logical.end_record) {
+              if (fast_zpd_report_cached_values_.size() >=
+                      kFastZPDCacheMaxEntries &&
+                  !fast_zpd_report_cached_values_.count(logical.end_record)) {
+                fast_zpd_report_cached_values_.clear();
+              }
               fast_zpd_report_cached_values_[logical.end_record] = final_value;
             }
             zpd_report_controller_->SetReportResolved(resolve.report_handle,
@@ -1482,6 +1498,12 @@ void CommandProcessor::PumpPendingRetire() {
           "handle={}, abandoning",
           handle_to_await);
     }
+    // Notify the controller so it can retire the report and clean up its
+    // internal maps.  Use the cached delta to avoid a sudden occlusion flash.
+    if (zpd_report_controller_) {
+      zpd_report_controller_->SetReportResolved(
+          handle_to_await, logical_report->second.cached_delta);
+    }
     logical_zpd_reports_.erase(logical_report);
     zpd_pending_retire_handle_ = XenosReportController::kInvalidReportHandle;
     zpd_pending_retire_stalls_ = 0;
@@ -1497,6 +1519,9 @@ void CommandProcessor::WriteZPDReport(uint32_t begin_record,
           ? memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
                 begin_record)
           : nullptr;
+  if (!end_record) {
+    return;
+  }
   xenos::xe_gpu_depth_sample_counts* end =
       memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
           end_record);

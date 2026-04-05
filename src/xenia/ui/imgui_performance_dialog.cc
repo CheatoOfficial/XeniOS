@@ -39,6 +39,7 @@ ImGuiPerformanceDialog::ImGuiPerformanceDialog(
   // Initialize highlight positions to match current selections
   resolve_highlight_ = readback_resolve_mode_;
   memexport_highlight_ = readback_memexport_mode_;
+  occlusion_query_highlight_ = occlusion_query_mode_;
 }
 
 void ImGuiPerformanceDialog::OnClose() {
@@ -184,7 +185,7 @@ void ImGuiPerformanceDialog::OnOcclusionQueryChanged(int value) {
   command_processor->SetZPDMode(mode);
 
   const char* mode_names[] = {"Fake", "Fast", "Strict"};
-  ShowNotification("Occlusion Query Mode", mode_names[value]);
+  ShowNotification("Occlusion Query Mode", mode_names[static_cast<int>(mode)]);
 }
 
 void ImGuiPerformanceDialog::OnClearMemoryPageStateChanged(bool enabled) {

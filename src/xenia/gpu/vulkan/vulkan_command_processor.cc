@@ -179,6 +179,18 @@ void VulkanCommandProcessor::InitializeShaderStorage(
 
 void VulkanCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {}
 
+void VulkanCommandProcessor::PrepareForWait() {
+  // Refresh completion data so PumpPendingRetire in the base class sees the
+  // latest GPU progress.
+  CheckSubmissionCompletionAndDeviceLoss(GetCompletedSubmission());
+  CommandProcessor::PrepareForWait();
+}
+
+void VulkanCommandProcessor::ReturnFromWait() {
+  CheckSubmissionCompletionAndDeviceLoss(GetCompletedSubmission());
+  CommandProcessor::ReturnFromWait();
+}
+
 std::string VulkanCommandProcessor::GetWindowTitleText() const {
   std::ostringstream title;
   title << "Vulkan";
@@ -4675,7 +4687,7 @@ VkBuffer VulkanCommandProcessor::RequestReadbackBuffer(uint32_t size) {
 }
 
 void VulkanCommandProcessor::EnsureZPDQueryResources() {
-  if (GetZPDMode() == ZPDMode::kFake) {
+  if (GetZPDMode() == ZPDMode::kFake || !zpd_host_query_pool_) {
     return;
   }
 
@@ -4800,11 +4812,16 @@ bool VulkanCommandProcessor::CloseZPDQuery(uint32_t host_index,
 
 bool VulkanCommandProcessor::DiscardZPDQuery(uint32_t host_index,
                                              uint32_t host_generation) {
-  // vkCmdEndQuery is invalid outside a render pass.
-  // CPU reset via vkResetQueryPool is enough.
   if (!in_render_pass_) {
+    // vkCmdEndQuery is invalid outside a render pass for occlusion queries.
+    // The deferred buffer still has a BeginQuery for this slot that will
+    // execute on the GPU.  An immediate host vkResetQueryPool would race
+    // that pending BeginQuery and the slot could be reused before the GPU
+    // finishes, causing a double-active-query.  Defer the release until the
+    // current submission (which contains the stale BeginQuery) completes.
     XELOGW("ZPD: Discard segment requested outside render pass");
-    zpd_host_query_pool_->ReleaseQueryIndex(host_index, host_generation);
+    zpd_deferred_releases_.push_back(
+        {GetCurrentSubmission(), host_index, host_generation});
     return true;
   }
 
@@ -4827,6 +4844,17 @@ VulkanCommandProcessor::ZPDSubmissionBridge::GetState() const {
 
 void VulkanCommandProcessor::ZPDSubmissionBridge::PrepareReadback(
     uint64_t completed_submission) {
+  // Release any query slots whose discarding submission has completed.
+  while (!command_processor_.zpd_deferred_releases_.empty()) {
+    auto& entry = command_processor_.zpd_deferred_releases_.front();
+    if (entry.submission > completed_submission) {
+      break;
+    }
+    command_processor_.zpd_host_query_pool_->ReleaseQueryIndex(
+        entry.query_index, entry.query_generation);
+    command_processor_.zpd_deferred_releases_.pop_front();
+  }
+
   // Invalidate CPU cache before reading results on non-coherent memory.
   if (!command_processor_.zpd_resolves_in_flight_.empty() &&
       command_processor_.zpd_resolves_in_flight_.front().submission <=
@@ -4840,10 +4868,6 @@ bool VulkanCommandProcessor::ZPDSubmissionBridge::EnsureProgress() {
     return false;
   }
 
-  if (!command_processor_.CanEndSubmissionImmediately() &&
-      !command_processor_.pipeline_cache_->IsCreatingPipelines()) {
-    return false;
-  }
   if (!command_processor_.CanEndSubmissionImmediately()) {
     if (cvars::occlusion_query_log) {
       XELOGI(

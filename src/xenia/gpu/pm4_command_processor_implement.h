@@ -1252,7 +1252,8 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
     }
     zpd_batch_last_record_ = report_record_base;
 
-    if (zpd_batch_run_ >= (repeated_orphan_end ? 16u : 4u)) {
+    if (zpd_batch_run_ >= (repeated_orphan_end ? kZPDBatchRunThresholdOrphanEnd
+                                               : kZPDBatchRunThreshold)) {
       // Don't try to mix real and fake results.
       zpd_batch_fake_ = true;
       zpd_batch_fake_count_ = 0;
@@ -1279,6 +1280,11 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
       return true;
     }
     if (is_begin_record) {
+      // Clear the record so the game knows the BEGIN was processed and
+      // stale sentinel data from a prior query lifetime doesn't persist.
+      if (report) {
+        std::memset(report, 0, sizeof(xe_gpu_depth_sample_counts));
+      }
       COMMAND_PROCESSOR::BeginZPDReport(report_address);
       return true;
     }
@@ -1300,7 +1306,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_ZPD(
       }
       return true;
     }
-    return true;
+    // Address is neither BEGIN nor END (non-standard layout). Fall through
+    // to the fake path so the guest at least gets a result written rather
+    // than leaving the sentinel in place forever.
   }
 
   // Conventional fake fallback, which only touches records marked as pending.

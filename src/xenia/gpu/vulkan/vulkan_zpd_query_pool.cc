@@ -19,13 +19,6 @@
 namespace xe {
 namespace gpu {
 namespace vulkan {
-namespace {
-
-struct ResolveRange {
-  uint32_t start;
-  uint32_t count;
-};
-}  // namespace
 
 bool VulkanZPDQueryPool::EnsureInitialized(
     const ui::vulkan::VulkanDevice* vulkan_device, uint32_t requested_capacity,
@@ -141,6 +134,7 @@ bool VulkanZPDQueryPool::EnsureInitialized(
   index_generations_.assign(requested_capacity, 0);
 
   resolve_batch_pending_.assign(requested_capacity, 0);
+  resolve_batch_indices_.clear();
   resolve_batch_index_count_ = 0;
 
   return true;
@@ -157,6 +151,7 @@ void VulkanZPDQueryPool::Shutdown() {
     free_indices_.clear();
     index_generations_.clear();
     resolve_batch_pending_.clear();
+    resolve_batch_indices_.clear();
     resolve_batch_index_count_ = 0;
     return;
   }
@@ -167,6 +162,7 @@ void VulkanZPDQueryPool::Shutdown() {
   free_indices_.clear();
   index_generations_.clear();
   resolve_batch_pending_.clear();
+  resolve_batch_indices_.clear();
   resolve_batch_index_count_ = 0;
 
   capacity_ = 0;
@@ -222,6 +218,9 @@ void VulkanZPDQueryPool::ReleaseQueryIndex(uint32_t query_index,
     return;
   }
 
+  // Bump generation so a second release with the same generation is rejected.
+  ++index_generations_[query_index];
+
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device_->functions();
   const VkDevice device = vulkan_device_->device();
 
@@ -268,6 +267,7 @@ void VulkanZPDQueryPool::QueueQueryResolve(uint32_t query_index) {
   // Guard against duplicates within the same submission.
   if (!resolve_batch_pending_[query_index]) {
     resolve_batch_pending_[query_index] = 1;
+    resolve_batch_indices_.push_back(query_index);
     ++resolve_batch_index_count_;
   }
 }
@@ -278,21 +278,22 @@ void VulkanZPDQueryPool::RecordResolveBatch(VkCommandBuffer command_buffer) {
   }
 
   if (!is_initialized()) {
-    std::fill(resolve_batch_pending_.begin(), resolve_batch_pending_.end(), 0);
+    for (uint32_t index : resolve_batch_indices_) {
+      resolve_batch_pending_[index] = 0;
+    }
+    resolve_batch_indices_.clear();
     resolve_batch_index_count_ = 0;
     return;
   }
 
-  std::vector<ResolveRange> ranges;
+  // Sort so we can coalesce contiguous indices into ranges, cutting down on
+  // vkCmdCopyQueryPoolResults calls.
+  std::sort(resolve_batch_indices_.begin(), resolve_batch_indices_.end());
 
-  // Coalesce into contiguous ranges - minimize vkCmdCopyQueryPoolResults calls.
+  resolve_batch_ranges_.clear();
   uint32_t range_start = 0;
   uint32_t range_count = 0;
-  for (uint32_t index = 0; index < capacity_; ++index) {
-    if (!resolve_batch_pending_[index]) {
-      continue;
-    }
-
+  for (uint32_t index : resolve_batch_indices_) {
     if (range_count == 0) {
       range_start = index;
       range_count = 1;
@@ -304,28 +305,27 @@ void VulkanZPDQueryPool::RecordResolveBatch(VkCommandBuffer command_buffer) {
       continue;
     }
 
-    ranges.push_back({range_start, range_count});
+    resolve_batch_ranges_.push_back({range_start, range_count});
     range_start = index;
     range_count = 1;
   }
 
   if (range_count != 0) {
-    ranges.push_back({range_start, range_count});
+    resolve_batch_ranges_.push_back({range_start, range_count});
   }
 
   // Reset the batch. ENDs from later in this submission belong to the next.
-  std::fill(resolve_batch_pending_.begin(), resolve_batch_pending_.end(), 0);
-  resolve_batch_index_count_ = 0;
-
-  if (ranges.empty()) {
-    return;
+  for (uint32_t index : resolve_batch_indices_) {
+    resolve_batch_pending_[index] = 0;
   }
+  resolve_batch_indices_.clear();
+  resolve_batch_index_count_ = 0;
 
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device_->functions();
 
   VkDeviceSize barrier_offset = VK_WHOLE_SIZE;
   VkDeviceSize barrier_end = 0;
-  for (const ResolveRange& range : ranges) {
+  for (const ResolveRange& range : resolve_batch_ranges_) {
     if (range.start >= capacity_) {
       continue;
     }

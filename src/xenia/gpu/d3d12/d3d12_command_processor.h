@@ -82,6 +82,9 @@ class D3D12CommandProcessor final : public CommandProcessor {
 
   void RestoreEdramSnapshot(const void* snapshot) override;
 
+  void PrepareForWait() override;
+  void ReturnFromWait() override;
+
   ui::d3d12::D3D12Provider& GetD3D12Provider() const {
     return *static_cast<ui::d3d12::D3D12Provider*>(
         graphics_system_->provider());
@@ -512,7 +515,10 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // always produce 0 if the pool was exhausted when it was issued.
   void EnsureZPDQueryResources() override;
   void ShutdownZPDQueryResources() override {
-    zpd_host_query_pool_->Shutdown();
+    zpd_resolves_in_flight_.clear();
+    if (zpd_host_query_pool_) {
+      zpd_host_query_pool_->Shutdown();
+    }
   }
 
   bool IsZPDQueryPoolReady() const override {

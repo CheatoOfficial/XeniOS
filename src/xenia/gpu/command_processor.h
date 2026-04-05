@@ -64,9 +64,27 @@ bool GetGPUSetting(GPUSetting setting);
 // Shared pool capacity for D3D12 and Vulkan.
 constexpr uint32_t kZPDQueryPoolCapacity = 8192;
 
+// Contiguous range of query indices for batched resolve/copy operations.
+struct ResolveRange {
+  uint32_t start;
+  uint32_t count;
+};
+
 // Backstop for strict mode. Abandon any pending retires after this many polls
 // so EVENT_WRITE_ZPD doesn't keep spinning on an unresolved report.
 constexpr uint32_t kStrictZPDRetireMaxStalls = 16;
+
+// Cap for the fast-mode cached delta map.  Games reuse a small set of report
+// addresses so this should never be hit, but prevents unbounded growth if a
+// title cycles through unique addresses.  Clearing the cache has no
+// correctness impact — it only removes speculative writeback hints.
+constexpr size_t kFastZPDCacheMaxEntries = 1024;
+
+// Consecutive stepping records on the same batch page before switching to
+// cumulative fake mode.  Raised to 16 for repeated orphan ENDs (no matching
+// BEGIN) since those are more common in normal use.
+constexpr uint32_t kZPDBatchRunThreshold = 4;
+constexpr uint32_t kZPDBatchRunThresholdOrphanEnd = 16;
 
 class GraphicsSystem;
 class Shader;
@@ -507,7 +525,7 @@ class CommandProcessor {
   std::unordered_map<uint32_t, uint32_t> fast_zpd_report_cached_values_;
 
   // PM4 batched query ripcord. If the guest walks the page of pending 0x20
-  // checkpoints then permanenetly switch to cumulative fake mode.
+  // checkpoints then permanently switch to cumulative fake mode.
   bool zpd_batch_fake_ = false;
   uint32_t zpd_batch_fake_count_ = 0;
   uint32_t zpd_batch_page_ = 0;

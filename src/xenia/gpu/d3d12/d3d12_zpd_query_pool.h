@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "xenia/gpu/command_processor.h"
 #include "xenia/ui/d3d12/d3d12_api.h"
 
 namespace xe {
@@ -88,6 +89,11 @@ class D3D12ZPDQueryPool {
   std::vector<uint32_t> index_generations_;
 
   std::vector<uint8_t> resolve_batch_pending_;
+  // Active indices with resolve_batch_pending_[i] == 1, so flush iterates
+  // only the active entries instead of scanning the full capacity.
+  std::vector<uint32_t> resolve_batch_indices_;
+  // Reusable scratch for coalesced contiguous ranges during flush.
+  std::vector<ResolveRange> resolve_batch_ranges_;
   uint32_t resolve_batch_index_count_ = 0;
 };
 
