@@ -182,6 +182,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
     kEdramR32UintUAV,
     kEdramR32G32UintUAV,
     kEdramR32G32B32A32UintUAV,
+    kZpdROVCounterRawUAV,
 
     kGammaRampTableSRV,
     kGammaRampPWLSRV,
@@ -511,18 +512,19 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // BeginQuery/EndQuery must be in the same command list, segments split at
   // EndSubmission, resume at BeginSubmission. Discarded queries still need
   // EndQuery or the heap slot breaks on some drivers. RecordZPDResolveBatch
-  // emits coalesced ResolveQueryData at submit.
+  // emits coalesced ResolveQueryData and ROV counter copies at submit.
   void EnsureZPDQueryResources() override;
   void ShutdownZPDQueryResources() override {
     zpd_resolves_in_flight_.clear();
+    zpd_active_query_index_ = UINT32_MAX;
+    zpd_active_query_generation_ = 0;
+    zpd_active_query_is_rov_ = false;
     if (zpd_host_query_pool_) {
       zpd_host_query_pool_->Shutdown();
     }
   }
 
-  bool IsZPDQueryPoolReady() const override {
-    return zpd_host_query_pool_->is_initialized();
-  }
+  bool IsZPDQueryPoolReady() const override;
   bool CanOpenZPDQuery() const override;
 
   QueryOpenResult OpenZPDQuery(ReportHandle report_handle,
@@ -542,10 +544,12 @@ class D3D12CommandProcessor final : public CommandProcessor {
     uint64_t submission = 0;
     uint32_t query_index = UINT32_MAX;
     uint32_t query_generation = 0;
+    bool uses_rov_counter = false;
     ReportHandle report_handle = kInvalidReportHandle;
   };
   uint32_t zpd_active_query_index_ = UINT32_MAX;
   uint32_t zpd_active_query_generation_ = 0;
+  bool zpd_active_query_is_rov_ = false;
   std::deque<PendingQueryResolve> zpd_resolves_in_flight_;
 
   std::unique_ptr<ui::d3d12::D3D12GPUCompletionTimeline> completion_timeline_;
@@ -578,6 +582,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   CommandAllocator* command_allocator_submitted_last_ = nullptr;
   ID3D12GraphicsCommandList* command_list_ = nullptr;
   ID3D12GraphicsCommandList1* command_list_1_ = nullptr;
+  ID3D12GraphicsCommandList2* command_list_2_ = nullptr;
   DeferredCommandList deferred_command_list_;
 
   // Should bindless textures and samplers be used - many times faster

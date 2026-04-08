@@ -57,7 +57,8 @@ DEFINE_string(
     occlusion_query, "fast",
     "Controls hardware occlusion query behavior for EVENT_WRITE_ZPD.\n"
     "Used for effects like lens flares, object culling, and auto-exposure.\n"
-    "ROV render path currently supports fake mode only.\n"
+    "Titles that use QueryBatch are not currently supported and fall back to\n"
+    "fake mode, regardless of this setting.\n"
     " fake: Write a fake result without asking the GPU. Safe for most games,\n"
     "       though some effects may look slightly wrong.\n"
     " fast: Ask the GPU but don't wait for the answer. Writes a cached\n"
