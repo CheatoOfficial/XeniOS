@@ -5576,12 +5576,14 @@ bool D3D12CommandProcessor::UpdateBindings_BindfulPath(
   if (write_textures_pixel) {
     view_count_partial_update += texture_count_pixel;
   }
-  // All the constants + shared memory SRV and UAV + textures.
+  // Shared memory SRV and null UAV + null SRV and shared memory UAV +
+  // textures.
   size_t view_count_full_update =
-      2 + texture_count_vertex + texture_count_pixel;
+      4 + texture_count_vertex + texture_count_pixel;
   if (edram_rov_used) {
-    // + EDRAM UAV and the ZPD counter UAV.
-    view_count_full_update += 2;
+    // + EDRAM UAV and ZPD counter UAV in two tables (with the shared memory
+    // SRV and with the shared memory UAV).
+    view_count_full_update += 4;
   }
   D3D12_CPU_DESCRIPTOR_HANDLE view_cpu_handle;
   D3D12_GPU_DESCRIPTOR_HANDLE view_gpu_handle;
@@ -5626,11 +5628,13 @@ bool D3D12CommandProcessor::UpdateBindings_BindfulPath(
     bindful_textures_written_pixel_ = false;
     // If updating fully, write the shared memory SRV and UAV descriptors and,
     // if needed, the EDRAM and ZPD counter descriptors.
+    // SRV + null UAV + EDRAM + ZPD counter.
     gpu_handle_shared_memory_srv_and_edram_ = view_gpu_handle;
     shared_memory_->WriteRawSRVDescriptor(view_cpu_handle);
     view_cpu_handle.ptr += descriptor_size_view;
     view_gpu_handle.ptr += descriptor_size_view;
-    shared_memory_->WriteRawUAVDescriptor(view_cpu_handle);
+    ui::d3d12::util::CreateBufferRawUAV(provider.GetDevice(), view_cpu_handle,
+                                        nullptr, 0);
     view_cpu_handle.ptr += descriptor_size_view;
     view_gpu_handle.ptr += descriptor_size_view;
     if (edram_rov_used) {
