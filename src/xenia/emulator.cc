@@ -648,7 +648,8 @@ X_STATUS Emulator::LaunchXexFile(const std::filesystem::path& path) {
   auto file_name = path.filename();
 
   // Launch the game.
-  auto fs_path = "game:\\" + xe::path_to_utf8(file_name);
+  auto fs_path = fmt::format("{}\\", kDefaultGameSymbolicLink) +
+                 xe::path_to_utf8(file_name);
   X_STATUS result = CompleteLaunch(path, fs_path);
 
   if (XFAILED(result)) {
@@ -664,9 +665,9 @@ X_STATUS Emulator::LaunchXexFile(const std::filesystem::path& path) {
   const std::string mount_path =
       utf8::find_base_guest_path(kernel_state_->GetExecutableModule()->path());
 
-  // System related symlinks
-  file_system_->RegisterSymbolicLink("media:", mount_path);
-  file_system_->RegisterSymbolicLink("font:", mount_path);
+  // System related symlinks. This should point to dashboard location in the
+  // future.
+  file_system_->RegisterSymbolicLink("\\SystemRoot", mount_path);
 
   auto module = kernel_state_->LoadUserModule("xam.xex");
 
@@ -2029,7 +2030,7 @@ std::string Emulator::RemountAndResolveLaunchPath(
 }
 
 std::string Emulator::FindLaunchModule() {
-  std::string path("game:\\");
+  std::string path(fmt::format("{}\\", kDefaultGameSymbolicLink));
 
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
 
