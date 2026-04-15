@@ -28,6 +28,10 @@
 
 DEFINE_bool(protect_zero, true, "Protect the zero page from reads and writes.",
             "Memory");
+DEFINE_bool(emit_inline_mmio_checks, false,
+            "Emit inline MMIO range checks for all I32 loads/stores instead "
+            "of relying on exception-based MMIO detection.",
+            "CPU");
 DEFINE_bool(protect_on_release, false,
             "Protect released memory to prevent accesses.", "Memory");
 DEFINE_bool(scribble_heap, false,
