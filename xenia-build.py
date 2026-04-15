@@ -6,7 +6,6 @@
 
 Run with --help or no arguments for possible commands.
 """
-from datetime import datetime
 from multiprocessing import Pool
 from functools import partial
 from argparse import ArgumentParser
@@ -298,138 +297,6 @@ def setup_qt():
         return False
 
 
-def get_dir_newest_mtime(directory):
-    """Get the newest modification time in a directory tree (files and dirs).
-
-    Checks both files and directories to catch deletions/additions.
-    """
-    newest = 0
-    try:
-        for root, dirs, files in os.walk(directory):
-            # Skip bytecode subdirectories when scanning source
-            dirs[:] = [d for d in dirs if d != "bytecode"]
-            # Check directory mtime (changes when files added/removed)
-            mtime = os.path.getmtime(root)
-            if mtime > newest:
-                newest = mtime
-            for name in files:
-                mtime = os.path.getmtime(os.path.join(root, name))
-                if mtime > newest:
-                    newest = mtime
-    except OSError:
-        pass
-    return newest
-
-
-def get_dir_oldest_mtime(directory):
-    """Get the oldest modification time in a directory tree (files and dirs).
-
-    Checks both files and directories to catch deletions/additions.
-    """
-    oldest = float('inf')
-    try:
-        for root, dirs, files in os.walk(directory):
-            # Check directory mtime
-            mtime = os.path.getmtime(root)
-            if mtime < oldest:
-                oldest = mtime
-            for name in files:
-                mtime = os.path.getmtime(os.path.join(root, name))
-                if mtime < oldest:
-                    oldest = mtime
-    except OSError:
-        pass
-    return oldest
-
-
-def generate_moc_files():
-    """Generates Qt MOC files for all headers containing Q_OBJECT.
-
-    Returns:
-        True if MOC generation succeeded or was skipped, False on error.
-    """
-    qt_dir = os.environ.get("QT_DIR")
-    if not qt_dir:
-        return True  # Qt not available, skip MOC generation
-
-    # Find moc executable
-    if sys.platform == "win32":
-        moc_path = os.path.join(qt_dir, "bin", "moc.exe")
-    else:
-        moc_path = os.path.join(qt_dir, "libexec", "moc")
-        if not os.path.exists(moc_path):
-            moc_path = os.path.join(qt_dir, "bin", "moc")
-
-    if not os.path.exists(moc_path):
-        print_warning(f"moc not found at {moc_path}")
-        return False
-
-    # Find all Qt headers with Q_OBJECT
-    ui_dir = os.path.join("src", "xenia", "ui")
-    qt_headers = []
-    for filename in os.listdir(ui_dir):
-        if filename.endswith("_qt.h"):
-            header_path = os.path.join(ui_dir, filename)
-            with open(header_path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-                if "Q_OBJECT" in content:
-                    qt_headers.append(header_path)
-
-    if not qt_headers:
-        return True
-
-    # Remove orphaned moc files (source was deleted)
-    expected_moc_files = set()
-    for header_path in qt_headers:
-        header_name = os.path.basename(header_path)
-        moc_name = "moc_" + header_name[:-2] + ".cc"
-        expected_moc_files.add(moc_name)
-
-    for filename in os.listdir(ui_dir):
-        if filename.startswith("moc_") and filename.endswith(".cc"):
-            if filename not in expected_moc_files:
-                orphan_path = os.path.join(ui_dir, filename)
-                print(f"- removing orphaned {filename}...")
-                os.remove(orphan_path)
-
-    # Generate MOC files (only if source is newer)
-    any_errors = False
-    generated_count = 0
-    for header_path in qt_headers:
-        header_name = os.path.basename(header_path)
-        moc_name = "moc_" + header_name[:-2] + ".cc"  # Replace .h with .cc
-        moc_path_out = os.path.join(os.path.dirname(header_path), moc_name)
-
-        # Skip if moc file exists and is newer than source
-        if os.path.exists(moc_path_out):
-            if os.path.getmtime(moc_path_out) >= os.path.getmtime(header_path):
-                continue
-
-        # Build include paths for MOC
-        include_args = [
-            f"-I{os.path.join(qt_dir, 'include')}",
-            f"-I{os.path.join(qt_dir, 'include', 'QtCore')}",
-            f"-I{os.path.join(qt_dir, 'include', 'QtGui')}",
-            f"-I{os.path.join(qt_dir, 'include', 'QtWidgets')}",
-            "-Isrc",
-        ]
-
-        cmd = [moc_path] + include_args + ["-o", moc_path_out, header_path]
-
-        result = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        if result != 0:
-            print_error(f"Failed to generate {moc_name}")
-            any_errors = True
-        else:
-            print(f"- generated {moc_name}")
-            generated_count += 1
-
-    if generated_count == 0 and not any_errors:
-        print("MOC files are up-to-date, skipping generation.")
-
-    return not any_errors
-
-
 def main():
     # Add self to the root search path.
     sys.path.insert(0, self_path)
@@ -578,10 +445,15 @@ def shell_call(command, throw_on_error=True, stdout_path=None, stderr_path=None,
     return result
 
 
-def generate_version_h():
-    """Generates a build/version.h file that contains current git info.
+def generate_version_h(build_dir="build"):
+    """Writes <build_dir>/version.h with the current branch/commit/PR info.
+    The file is included by source files via `#include "version.h"`; the
+    relevant build directory is added to the project include path by the
+    root CMakeLists.txt, so different build trees (build/, build-vs/, ...)
+    each get their own copy.
     """
-    header_file = "build/version.h"
+    os.makedirs(build_dir, exist_ok=True)
+    header_file = os.path.join(build_dir, "version.h")
     pr_number = None
 
     if git_is_repository():
@@ -595,7 +467,7 @@ def generate_version_h():
         commit_short = ":("
 
     # header
-    contents_new = f"""// Autogenerated by `xb premake`.
+    contents_new = f"""// Autogenerated by xenia-build.py.
 #ifndef GENERATED_VERSION_H_
 #define GENERATED_VERSION_H_
 #define XE_BUILD_BRANCH "{branch_name}"
@@ -622,49 +494,6 @@ def generate_version_h():
     if contents_old != contents_new:
         with open(header_file, "w") as f:
             f.write(contents_new)
-
-
-def generate_source_class(path):
-    header_path = f"{path}.h"
-    source_path = f"{path}.cc"
-
-    if os.path.isfile(header_path) or os.path.isfile(source_path):
-        print_error("Target file already exists")
-        return 1
-
-    if generate_source_file(header_path) > 0:
-        return 1
-    if generate_source_file(source_path) > 0:
-        # remove header if source file generation failed
-        os.remove(os.path.join(source_root, header_path))
-        return 1
-
-    return 0
-
-def generate_source_file(path):
-    """Generates a source file at the specified path containing copyright notice
-    """
-    copyright = f"""/**
- ******************************************************************************
- * Xenia : Xbox 360 Emulator Research Project                                 *
- ******************************************************************************
- * Copyright {datetime.now().year} Ben Vanik. All rights reserved.                             *
- * Released under the BSD license - see LICENSE in the root for more details. *
- ******************************************************************************
- */"""
-
-    if os.path.isfile(path):
-        print_error("Target file already exists")
-        return 1
-    try:
-        with open(path, "w") as f:
-            f.write(copyright)
-    except Exception as e:
-        print_error(f"Could not write to file [path {path}]")
-        return 1
-
-    return 0
-
 
 
 def git_get_head_info():
@@ -853,86 +682,41 @@ def get_clang_format_binary():
     sys.exit(1)
 
 
-def get_premake_target_os(target_os_override=None):
-    """Gets the target --os to pass to premake, either for the current platform
-    or for the user-specified cross-compilation target.
+def run_cmake_configure(cc=None, generator=None, build_tests=False,
+                        disable_lto=False):
+    """Runs `cmake` to (re)configure build/ from the source root.
 
-    Args:
-      target_os_override: override specified by the user for cross-compilation,
-        or None to target the host platform.
-
-    Returns:
-      Target --os to pass to premake. If a return value of this function valid
-      for the current configuration is passed to it again, the same value will
-      be returned.
+    Uses Ninja Multi-Config by default on all platforms. On Linux the
+    C/C++ compilers come from get_cc() / the CC env var; on Windows the
+    detected Visual Studio toolchain wins. build_tests toggles
+    -DXENIA_BUILD_TESTS=ON; disable_lto toggles -DXENIA_ENABLE_LTO=OFF
+    (faster Release link, at the cost of LTO's whole-program opts).
     """
-    if sys.platform == "darwin":
-        target_os = "macosx"
-    elif sys.platform == "win32":
-        target_os = "windows"
-    elif host_linux_platform_is_android:
-        target_os = "android"
-    else:
-        target_os = "linux"
-    if target_os_override and target_os_override != target_os:
-        if target_os_override == "android":
-            target_os = target_os_override
-        else:
-            print_error(
-                "cross-compilation is only supported for Android target")
-            sys.exit(1)
-    return target_os
-
-
-def run_premake(target_os, action, cc=None):
-    """Runs premake on the main project with the given format.
-
-    Args:
-      target_os: target --os to pass to premake.
-      action: action to perform.
-    """
+    if not generator:
+        generator = "Ninja Multi-Config"
     args = [
-        sys.executable,
-        os.path.join("tools", "build", "premake.py"),
-        "--file=premake5.lua",
-        f"--os={target_os}",
-        "--test-suite-mode=combined",
-        "--verbose",
-        action,
+        "cmake",
+        "-S", ".",
+        "-B", "build",
+        "-G", generator,
     ]
-    if not cc:
-        cc = get_cc(cc=cc)
-
-    if cc:
-        args.insert(4, f"--cc={cc}")
-
+    if sys.platform != "win32":
+        if not cc:
+            cc = get_cc(cc=cc)
+        c_compiler = cc or os.environ.get("CC", "clang")
+        cxx_compiler = (cc + "++") if cc else os.environ.get("CXX", "clang++")
+        args += [
+            f"-DCMAKE_C_COMPILER={c_compiler}",
+            f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+        ]
+    if build_tests:
+        args += ["-DXENIA_BUILD_TESTS=ON"]
+    if disable_lto:
+        args += ["-DXENIA_ENABLE_LTO=OFF"]
     ret = subprocess.call(args)
-
     if ret == 0:
         generate_version_h()
-
     return ret
-
-
-def run_platform_premake(target_os_override=None, cc=None, devenv=None):
-    """Runs all gyp configurations.
-    """
-    target_os = get_premake_target_os(target_os_override)
-    if not devenv:
-        if target_os == "macosx":
-            devenv = "xcode4"
-        elif target_os == "windows":
-            vs_version = os.getenv("VSVERSION", VSVERSION_MINIMUM)
-            if vs_version == "2026":  # Still no vs2026 target, force 2022
-                vs_version = "2022"
-            devenv = f"vs{vs_version}"
-        elif target_os == "android":
-            devenv = "androidndk"
-        else:
-            devenv = "cmake"
-    if not cc:
-        cc = get_cc(cc=cc)
-    return run_premake(target_os=target_os, action=devenv, cc=cc)
 
 
 def get_build_bin_path(args):
@@ -952,64 +736,6 @@ def get_build_bin_path(args):
     else:
         platform = "linux"
     return os.path.join(self_path, "build", "bin", platform.capitalize(), args["config"].capitalize())
-
-
-def run_windeployqt(bin_path, config):
-    """Runs windeployqt to copy Qt DLLs to the build output directory.
-
-    Args:
-      bin_path: Path to the directory containing the built executable.
-      config: Build configuration (debug, checked, or release).
-
-    Returns:
-      True if windeployqt succeeded or was not needed, False on error.
-    """
-    if sys.platform != "win32":
-        return True
-
-    qt_dir = os.environ.get("QT_DIR")
-    if not qt_dir:
-        # Qt not configured, skip
-        return True
-
-    windeployqt_path = os.path.join(qt_dir, "bin", "windeployqt.exe")
-    if not os.path.exists(windeployqt_path):
-        print_warning(f"windeployqt not found at {windeployqt_path}")
-        return True
-
-    # Find the xenia executable
-    exe_path = os.path.join(bin_path, "xenia_edge.exe")
-    if not os.path.exists(exe_path):
-        # Executable not found, might not be building xenia-app
-        return True
-
-    print(f"\n- deploying Qt dependencies to {bin_path}...")
-
-    # Determine if we need debug or release Qt DLLs
-    # Debug and Checked builds need debug Qt DLLs
-    deploy_args = [
-        windeployqt_path,
-        "--no-translations",  # Don't copy translation files
-        "--no-system-d3d-compiler",  # Don't copy D3D compiler
-        "--no-opengl-sw",  # Don't copy software OpenGL renderer
-        "--no-compiler-runtime",  # Don't copy vc_redist.x64.exe (25MB)
-    ]
-
-    if config.lower() in ["debug", "checked", "valgrind"]:
-        deploy_args.append("--debug")
-    else:
-        deploy_args.append("--release")
-
-    deploy_args.append(exe_path)
-
-    result = subprocess.call(deploy_args)
-
-    if result == 0:
-        print("  Qt dependencies deployed successfully")
-        return True
-    else:
-        print_warning(f"windeployqt failed with exit code {result}")
-        return False
 
 
 def create_clion_workspace():
@@ -1062,22 +788,14 @@ def discover_commands(subparsers):
     commands = {
         "setup": SetupCommand(subparsers),
         "fetchdata": FetchDataCommand(subparsers),
-        "pull": PullCommand(subparsers),
-        "premake": PremakeCommand(subparsers),
         "build": BuildCommand(subparsers),
-        "buildshaders": BuildShadersCommand(subparsers),
         "devenv": DevenvCommand(subparsers),
         "gentests": GenTestsCommand(subparsers),
         "test": TestCommand(subparsers),
-        "gputest": GpuTestCommand(subparsers),
         "clean": CleanCommand(subparsers),
-        "nuke": NukeCommand(subparsers),
-        "cleangenerated": CleanGeneratedCommand(subparsers),
         "lint": LintCommand(subparsers),
         "format": FormatCommand(subparsers),
-        "style": StyleCommand(subparsers),
         "tidy": TidyCommand(subparsers),
-        "stub": StubCommand(subparsers),
         }
     return commands
 
@@ -1129,14 +847,10 @@ class SetupCommand(Command):
             name="setup",
             help_short="Setup the build environment.",
             *args, **kwargs)
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
 
     def execute(self, args, pass_args, cwd):
         print("Setting up the build environment...\n")
 
-        # Setup submodules.
         print("- git submodule init / update...")
         if git_is_repository():
             git_submodule_update()
@@ -1144,8 +858,8 @@ class SetupCommand(Command):
         else:
             print_warning("Git not available or not a repository. Dependencies may be missing.")
 
-        print("\n- running premake...")
-        ret = run_platform_premake(target_os_override=args["target_os"])
+        print("\n- running cmake configure...")
+        ret = run_cmake_configure()
         print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
         return ret
 
@@ -1174,86 +888,6 @@ class FetchDataCommand(Command):
         return 0
 
 
-class PullCommand(Command):
-    """'pull' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(PullCommand, self).__init__(
-            subparsers,
-            name="pull",
-            help_short="Pulls the repo and all dependencies and rebases changes.",
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--merge", action="store_true",
-             help=f"Merges on {default_branch} instead of rebasing.")
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
-
-    def execute(self, args, pass_args, cwd):
-        print("Pulling...\n")
-
-        print(f"- switching to {default_branch}...")
-        shell_call([
-            "git",
-            "checkout",
-            default_branch,
-            ])
-        print("")
-
-        print("- pulling self...")
-        if args["merge"]:
-            shell_call([
-                "git",
-                "pull",
-                ])
-        else:
-            shell_call([
-                "git",
-                "pull",
-                "--rebase",
-                ])
-
-        print("\n- pulling dependencies...")
-        git_submodule_update()
-        print("")
-
-        print("- running premake...")
-        if run_platform_premake(target_os_override=args["target_os"]) == 0:
-            print_status(ResultStatus.SUCCESS)
-
-        return 0
-
-
-class PremakeCommand(Command):
-    """'premake' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(PremakeCommand, self).__init__(
-            subparsers,
-            name="premake",
-            help_short="Runs premake to update all projects.",
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--cc", choices=["clang", "gcc", "msc"], default=None, help="Compiler toolchain passed to premake")
-        self.parser.add_argument(
-            "--devenv", default=None, help="Development environment")
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
-
-    def execute(self, args, pass_args, cwd):
-        # Update premake. If no binary found, it will be built from source.
-        print("Running premake...\n")
-        ret = run_platform_premake(target_os_override=args["target_os"],
-                                   cc=args["cc"], devenv=args["devenv"])
-        print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
-
-        return ret
-
-
 class BaseBuildCommand(Command):
     """Base command for things that require building.
     """
@@ -1263,7 +897,8 @@ class BaseBuildCommand(Command):
             subparsers,
             *args, **kwargs)
         self.parser.add_argument(
-            "--cc", choices=["clang", "gcc", "msc"], default=None, help="Compiler toolchain passed to premake")
+            "--cc", choices=["clang", "gcc", "msc"], default=None,
+            help="Compiler toolchain.")
         self.parser.add_argument(
             "--config", choices=["checked", "debug", "release", "valgrind"], default="debug",
             type=str.lower, help="Chooses the build configuration.")
@@ -1274,11 +909,20 @@ class BaseBuildCommand(Command):
             "--force", action="store_true",
             help="Forces a full rebuild.")
         self.parser.add_argument(
-            "--no_premake", action="store_true",
-            help="Skips running premake before building.")
+            "--no_configure", action="store_true",
+            help="Skips the cmake configure step before building.")
+        self.parser.add_argument(
+            "--build-tests", dest="build_tests", action="store_true",
+            default=False,
+            help="Enables building test suites (sets -DXENIA_BUILD_TESTS=ON).")
+        self.parser.add_argument(
+            "--disable-lto", dest="disable_lto", action="store_true",
+            default=False,
+            help="Disables link-time optimization for Release builds "
+                 "(sets -DXENIA_ENABLE_LTO=OFF). Much faster Release link "
+                 "at the cost of whole-program opts.")
 
     def execute(self, args, pass_args, cwd):
-        # Check Vulkan SDK availability
         if not os.environ.get("VULKAN_SDK"):
             print_error("Vulkan SDK not found!"
                   "\nPlease install Vulkan SDK from:"
@@ -1286,89 +930,31 @@ class BaseBuildCommand(Command):
                   f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
             return 1
 
-        if not args["no_premake"]:
-            print("- running premake...")
-            run_platform_premake(cc=args["cc"])
+        if not args["no_configure"]:
+            print("- running cmake configure...")
+            run_cmake_configure(
+                cc=args["cc"],
+                build_tests=args["build_tests"],
+                disable_lto=args["disable_lto"],
+            )
             print("")
 
         print("- building (%s):%s..." % (
             "all" if not len(args["target"]) else ", ".join(args["target"]),
             args["config"]))
-        if sys.platform == "win32":
-            if not vs_version:
-                print_error("Visual Studio is not installed.")
-                result = 1
-            else:
-                targets = None
-                if args["target"]:
-                    # Build each project file directly to avoid MSBuild trying to
-                    # run the target on every project in the solution
-                    result = 0
-                    # Convert config name to match project configuration names
-                    # e.g., "debug" -> "Debug Windows"
-                    config_name = f"{args['config'].capitalize()} Windows"
-                    for target in args["target"]:
-                        project_file = f"build/{target}.vcxproj"
-                        if not os.path.exists(project_file):
-                            print_error(f"Project file {project_file} does not exist")
-                            result = 1
-                            break
-
-                        target_arg = "/t:Rebuild" if args["force"] else "/t:Build"
-                        result = subprocess.call([
-                            "msbuild",
-                            project_file,
-                            "/nologo",
-                            "/m",
-                            "/v:m",
-                            target_arg,
-                            f"/p:Configuration={config_name}",
-                            "/p:Platform=x64",
-                            ] + pass_args)
-                        if result != 0:
-                            break
-                else:
-                    # Build entire solution
-                    targets = "/t:Rebuild" if args["force"] else None
-                    result = subprocess.call([
-                        "msbuild",
-                        "build/xenia.sln",
-                        "/nologo",
-                        "/m",
-                        "/v:m",
-                        f"/p:Configuration={args['config']}",
-                        ] + ([targets] if targets else []) + pass_args)
-        elif sys.platform == "darwin":
-            schemes = args["target"] or ["xenia-app"]
-            nested_args = [["-scheme", scheme] for scheme in schemes]
-            scheme_args = [arg for pair in nested_args for arg in pair]
-            result = subprocess.call([
-                "xcodebuild",
-                "-workspace",
-                "build/xenia.xcworkspace",
-                "-configuration",
-                args["config"]
-            ] + scheme_args + pass_args, env=dict(os.environ))
-        else:
-            result = subprocess.call([
-                "cmake",
-                "-Sbuild",
-                f"-Bbuild/build_{args['config']}",
-                f"-DCMAKE_BUILD_TYPE={args['config'].title()}",
-                f"-DCMAKE_C_COMPILER={os.environ.get('CC', 'clang')}",
-                f"-DCMAKE_CXX_COMPILER={os.environ.get('CXX', 'clang++')}",
-                "-GNinja"
-            ] + pass_args, env=dict(os.environ))
-            print("")
-            if result != 0:
-                print_error("cmake failed with one or more errors.")
-                return result
-            result = subprocess.call([
-                    "ninja",
-                    f"-Cbuild/build_{args['config']}",
-                ] + pass_args, env=dict(os.environ))
-            if result != 0:
-                print_error("ninja failed with one or more errors.")
+        config = args["config"].title()
+        cmake_args = [
+            "cmake", "--build", "build",
+            "--config", config,
+        ]
+        if args["force"]:
+            cmake_args.append("--clean-first")
+        if args["target"]:
+            cmake_args.append("--target")
+            cmake_args.extend(args["target"])
+        result = subprocess.call(cmake_args + pass_args, env=dict(os.environ))
+        if result != 0:
+            print_error("cmake build failed with one or more errors.")
         return result
 
 
@@ -1385,318 +971,9 @@ class BuildCommand(BaseBuildCommand):
 
     def execute(self, args, pass_args, cwd):
         print(f"Building {args['config']}...\n")
-
-        # Generate MOC files before building
-        if not generate_moc_files():
-            print_error("MOC generation failed")
-            return 1
-
-        # Generate shader bytecode before building
-        shader_result = build_shaders()
-        if shader_result != 0:
-            print_error("Shader generation failed")
-            return shader_result
-
         result = super(BuildCommand, self).execute(args, pass_args, cwd)
-
-        if not result:
-            # Run windeployqt to copy Qt DLLs
-            bin_path = get_build_bin_path(args)
-            run_windeployqt(bin_path, args["config"])
-
         print_status(ResultStatus.SUCCESS if not result else ResultStatus.FAILURE)
-
         return result
-
-
-class BuildShadersCommand(Command):
-    """'buildshaders' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(BuildShadersCommand, self).__init__(
-            subparsers,
-            name="buildshaders",
-            help_short="Generates shader binaries for inclusion in C++ files.",
-            help_long="""
-            Generates the shader binaries under src/*/shaders/bytecode/.
-            Run after modifying any .hs/vs/ds/gs/ps/cs.glsl/hlsl/xesl files.
-            Direct3D shaders can be built only on a Windows host.
-            """,
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--target", action="append", choices=["dxbc", "spirv"], default=[],
-            help="Builds only the given target(s).")
-
-    def execute(self, args, pass_args, cwd):
-        return build_shaders(args["target"])
-
-
-def build_shaders(targets=None):
-    """Builds shader bytecode. Called by BuildShadersCommand and BuildCommand.
-
-    Args:
-        targets: List of targets ("dxbc", "spirv"), or None/empty for all.
-
-    Returns:
-        0 on success, non-zero on error.
-    """
-    # Check if shaders need rebuilding by comparing source vs generated timestamps
-    gpu_shaders = "src/xenia/gpu/shaders"
-    ui_shaders = "src/xenia/ui/shaders"
-    # DXBC directories only on Windows, SPIR-V everywhere
-    bytecode_dirs = [
-        "src/xenia/gpu/shaders/bytecode/vulkan_spirv",
-        "src/xenia/ui/shaders/bytecode/vulkan_spirv",
-    ]
-    if sys.platform == "win32":
-        bytecode_dirs.extend([
-            "src/xenia/gpu/shaders/bytecode/d3d12_5_1",
-            "src/xenia/ui/shaders/bytecode/d3d12_5_1",
-        ])
-
-    newest_source = max(get_dir_newest_mtime(gpu_shaders),
-                       get_dir_newest_mtime(ui_shaders))
-    oldest_generated = min((get_dir_oldest_mtime(d) for d in bytecode_dirs),
-                          default=0)
-
-    # If oldest_generated is inf, bytecode doesn't exist - need to generate
-    if oldest_generated != float('inf') and newest_source <= oldest_generated:
-        print("Shaders are up-to-date, skipping generation.")
-        return 0
-
-    # Clean old bytecode before regenerating to remove stale files from deleted sources
-    clean_shader_bytecode()
-
-    src_paths = [os.path.join(root, name)
-                 for root, dirs, files in os.walk("src")
-                 for name in files
-                 if (name.endswith(".glsl") or
-                     name.endswith(".hlsl") or
-                     name.endswith(".xesl"))]
-    if targets is None:
-        targets = []
-    all_targets = len(targets) == 0
-
-    # XeSL ("Xenia Shading Language") means shader files that can be
-    # compiled as multiple languages from a single file. Whenever possible,
-    # this is achieved without the involvement of the build script, using
-    # just conditionals, macros and functions in shaders, however, in some
-    # cases, that's necessary (such as to prepend `#version` in GLSL, as
-    # well as to enable `#include` in GLSL, to include `xesl.xesli` itself,
-    # without writing the same `#if` / `#extension` / `#endif` in every
-    # shader). Also, not all shading languages provide a built-in
-    # preprocessor definition for identification of them, so
-    # `SHADING_LANGUAGE_*_XE` is also defined via the build arguments.
-    # `SHADING_LANGUAGE_*_XE` is set regardless of whether the file is XeSL
-    # or a raw source file in a specific language, as XeSL headers may be
-    # used in language-specific sources.
-
-    # Direct3D DXBC (Windows only).
-    if (all_targets or "dxbc" in targets) and sys.platform == "win32":
-        print("Building Direct3D 12 Shader Model 5.1 DXBC shaders...")
-
-        # Get the FXC path.
-        fxc = os.environ.get("FXC_PATH")
-        if not fxc:
-            # Fall back to searching Windows Kits
-            fxc = glob(os.path.join(os.environ.get("ProgramFiles(x86)", ""),
-                       "Windows Kits", "10", "bin", "*", "x64", "fxc.exe"))
-            if not fxc:
-                print_error("could not find fxc! Set FXC_PATH environment variable or install Windows SDK.")
-                return 1
-            fxc = fxc[-1]  # Highest version is last
-        else:
-            print(f"Using FXC from environment variable: {fxc}")
-
-        # Build DXBC.
-        dxbc_stages = ["vs", "hs", "ds", "gs", "ps", "cs"]
-        for src_path in src_paths:
-            src_name = os.path.basename(src_path)
-            if ((not src_name.endswith(".hlsl") and
-                 not src_name.endswith(".xesl")) or
-                len(src_name) <= 8 or src_name[-8] != "."):
-                continue
-            dxbc_identifier = src_name[:-5].replace(".", "_")
-            dxbc_stage = dxbc_identifier[-2:]
-            if dxbc_stage not in dxbc_stages:
-                continue
-            print(f"- {src_path} > d3d12_5_1")
-            dxbc_dir_path = os.path.join(os.path.dirname(src_path),
-                                         "bytecode/d3d12_5_1")
-            os.makedirs(dxbc_dir_path, exist_ok=True)
-            dxbc_file_path_base = os.path.join(dxbc_dir_path, dxbc_identifier)
-            # Not enabling treating warnings as errors (/WX) because it
-            # overrides #pragma warning, and the FXAA shader triggers a
-            # bug in FXC causing an uninitialized variable warning if
-            # early exit from a function is done.
-            # FXC writes errors and warnings to stderr, not stdout, but
-            # stdout receives generic status messages that only add
-            # clutter in this case.
-            # Check if using DXC or FXC based on executable name
-            is_dxc = "dxc" in fxc.lower()
-
-            # Start with base command - use wine on non-Windows platforms
-            if sys.platform != "win32":
-                compiler_args = ["wine", fxc]
-            else:
-                compiler_args = [fxc]
-
-            src_dir = os.path.dirname(src_path)
-            if is_dxc:
-                # DXC only supports SM 6.0+, cannot compile SM 5.1
-                print_warning("DXC doesn't support SM 5.1, using SM 6.0")
-                compiler_args.extend([
-                    "-T", f"{dxbc_stage}_6_0",
-                    "-HV", "2017",
-                    "-D", "SHADING_LANGUAGE_HLSL_XE=1",
-                    "-I", src_dir,
-                    "-Fh", f"{dxbc_file_path_base}.h",
-                    "-Vn", dxbc_identifier,
-                    "-nologo",
-                    src_path,
-                ])
-            else:
-                # FXC uses traditional syntax
-                compiler_args.extend([
-                    "/D", "SHADING_LANGUAGE_HLSL_XE=1",
-                    "/I", src_dir,
-                    "/Fh", f"{dxbc_file_path_base}.h",
-                    "/T", f"{dxbc_stage}_5_1",
-                    "/Vn", dxbc_identifier,
-                    "/O3",
-                    "/Qstrip_reflect",
-                    "/Qstrip_debug",
-                    "/Qstrip_priv",
-                    "/all_resources_bound",
-                    "/Gfp",
-                    "/nologo",
-                    src_path,
-                ])
-            if subprocess.call(compiler_args, stdout=subprocess.DEVNULL) != 0:
-                print_error(f"failed to compile DXBC shader: {src_path}")
-                return 1
-
-    # Vulkan SPIR-V.
-    if all_targets or "spirv" in targets:
-        print("Building Vulkan SPIR-V shaders...")
-
-        # Get the SPIR-V tool paths.
-        vulkan_sdk_path = os.environ.get("VULKAN_SDK")
-        if not vulkan_sdk_path:
-            print_error("VULKAN_SDK environment variable is not set")
-            if sys.platform == "win32":
-                print("Please install Vulkan SDK from:")
-                print("https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe")
-            else:
-                print("Please install Vulkan SDK and set VULKAN_SDK environment variable")
-            return 1
-        if not os.path.exists(vulkan_sdk_path):
-            print_error(f"could not find the Vulkan SDK at {vulkan_sdk_path}")
-            return 1
-        vulkan_bin_path = os.path.join(vulkan_sdk_path, "bin")
-        if not os.path.exists(vulkan_bin_path):
-            print_error("could not find the Vulkan SDK binaries")
-            return 1
-        glslang = os.path.join(vulkan_bin_path, "glslangValidator")
-        if not has_bin(glslang):
-            print_error("could not find glslangValidator")
-            return 1
-        spirv_opt = os.path.join(vulkan_bin_path, "spirv-opt")
-        if not has_bin(spirv_opt):
-            print_error("could not find spirv-opt")
-            return 1
-        spirv_dis = os.path.join(vulkan_bin_path, "spirv-dis")
-        if not has_bin(spirv_dis):
-            print_error("could not find spirv-dis")
-            return 1
-
-        # Build SPIR-V.
-        spirv_stages = {
-            "vs": "vert", "hs": "tesc", "ds": "tese",
-            "gs": "geom", "ps": "frag", "cs": "comp",
-        }
-        spirv_xesl_wrapper = (
-            "#version 460\n"
-            "#extension GL_EXT_control_flow_attributes : require\n"
-            "#extension GL_EXT_samplerless_texture_functions : require\n"
-            "#extension GL_GOOGLE_include_directive : require\n"
-            "#include \"%s\"\n"
-        )
-        for src_path in src_paths:
-            src_name = os.path.basename(src_path)
-            src_is_xesl = src_name.endswith(".xesl")
-            if ((not src_is_xesl and not src_name.endswith(".glsl")) or
-                len(src_name) <= 8 or src_name[-8] != "."):
-                continue
-            spirv_identifier = src_name[:-5].replace(".", "_")
-            spirv_stage = spirv_stages.get(spirv_identifier[-2:], None)
-            if spirv_stage is None:
-                continue
-            print(f"- {src_path} > vulkan_spirv")
-            src_dir = os.path.dirname(src_path)
-            spirv_dir_path = os.path.join(src_dir, "bytecode/vulkan_spirv")
-            os.makedirs(spirv_dir_path, exist_ok=True)
-            spirv_file_path_base = os.path.join(spirv_dir_path, spirv_identifier)
-            spirv_glslang_file_path = f"{spirv_file_path_base}.glslang.spv"
-
-            glslang_arguments = [glslang,
-                                 "--stdin" if src_is_xesl else src_path,
-                                 "-DSHADING_LANGUAGE_GLSL_XE=1",
-                                 "-S", spirv_stage,
-                                 "-o", spirv_glslang_file_path,
-                                 "-V"]
-            if src_is_xesl:
-                glslang_arguments.append(f"-I{src_dir}")
-            if subprocess.run(
-                   glslang_arguments,
-                   input=(spirv_xesl_wrapper % src_name) if src_is_xesl else None,
-                   text=True).returncode != 0:
-                print_error("failed to build a SPIR-V shader")
-                return 1
-
-            spirv_file_path = f"{spirv_file_path_base}.spv"
-            if subprocess.call([spirv_opt, "-O", "-O", "--canonicalize-ids",
-                               spirv_glslang_file_path, "-o", spirv_file_path]) != 0:
-                print_error("failed to optimize a SPIR-V shader")
-                return 1
-            os.remove(spirv_glslang_file_path)
-
-            spirv_dis_file_path = f"{spirv_file_path_base}.txt"
-            if subprocess.call([spirv_dis, "-o", spirv_dis_file_path,
-                               spirv_file_path]) != 0:
-                print_error("failed to disassemble a SPIR-V shader")
-                return 1
-
-            # Generate the header from the disassembly and the binary.
-            with open(f"{spirv_file_path_base}.h", "w") as out_file:
-                out_file.write("// Generated with `xb buildshaders`.\n#if 0\n")
-                with open(spirv_dis_file_path, "r") as spirv_dis_file:
-                    spirv_dis_data = spirv_dis_file.read()
-                    if len(spirv_dis_data) > 0:
-                        out_file.write(spirv_dis_data)
-                        if spirv_dis_data[-1] != "\n":
-                            out_file.write("\n")
-                out_file.write("#endif\n\nconst uint32_t %s[] = {" % spirv_identifier)
-                with open(spirv_file_path, "rb") as spirv_file:
-                    index = 0
-                    c = spirv_file.read(4)
-                    while len(c) != 0:
-                        if len(c) != 4:
-                            print_error("a SPIR-V shader is misaligned")
-                            return 1
-                        if index % 6 == 0:
-                            out_file.write("\n    ")
-                        else:
-                            out_file.write(" ")
-                        index += 1
-                        out_file.write("0x%08X," % int.from_bytes(c, sys.byteorder))
-                        c = spirv_file.read(4)
-                out_file.write("\n};\n")
-            os.remove(spirv_dis_file_path)
-            os.remove(spirv_file_path)
-
-    return 0
 
 
 class TestCommand(BaseBuildCommand):
@@ -1956,86 +1233,6 @@ class GenTestsCommand(Command):
         return 0
 
 
-class GpuTestCommand(BaseBuildCommand):
-    """'gputest' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(GpuTestCommand, self).__init__(
-            subparsers,
-            name="gputest",
-            help_short="Runs automated GPU diff tests against reference imagery.",
-            help_long="""
-            To pass arguments to the test executables separate them with `--`.
-            """,
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--no_build", action="store_true",
-            help="Don't build before running tests.")
-        self.parser.add_argument(
-            "--update_reference_files", action="store_true",
-            help="Update all reference imagery.")
-        self.parser.add_argument(
-            "--generate_missing_reference_files", action="store_true",
-            help="Create reference files for new traces.")
-
-    def execute(self, args, pass_args, cwd):
-        print("Testing...\n")
-
-        # The test executables that will be built and run.
-        test_targets = args["target"] or [
-            "xenia-gpu-vulkan-trace-dump",
-            ]
-        args["target"] = test_targets
-
-        # Build all targets (if desired).
-        if not args["no_build"]:
-            result = super(GpuTestCommand, self).execute(args, [], cwd)
-            if result:
-                print("Failed to build, aborting test run.")
-                return result
-
-        # Ensure all targets exist before we run.
-        test_executables = [
-            get_bin(os.path.join(get_build_bin_path(args), test_target))
-            for test_target in test_targets]
-        for i in range(0, len(test_targets)):
-            if test_executables[i] is None:
-                print_error(f"Unable to find {test_targets[i]} - build it.")
-                return 1
-
-        output_path = os.path.join(self_path, "build", "gputest")
-        if os.path.isdir(output_path):
-            rmtree(output_path)
-        os.makedirs(output_path)
-        print(f"Running tests and outputting to {output_path}...")
-
-        reference_trace_root = os.path.join(self_path, "testdata",
-                                            "reference-gpu-traces")
-
-        # Run tests.
-        any_failed = False
-        result = shell_call([
-            sys.executable,
-            os.path.join(self_path, "tools", "gpu-trace-diff.py"),
-            f"--executable={test_executables[0]}",
-            f"--trace_path={os.path.join(reference_trace_root, 'traces')}",
-            f"--output_path={output_path}",
-            f"--reference_path={os.path.join(reference_trace_root, 'references')}",
-            ] + (["--generate_missing_reference_files"] if args["generate_missing_reference_files"] else []) +
-                (["--update_reference_files"] if args["update_reference_files"] else []) +
-                            pass_args,
-                            throw_on_error=False)
-        if result:
-            any_failed = True
-
-        if any_failed:
-            print_error("one or more tests failed.")
-            result = 1
-        print(f"Check {output_path}/results.html for more details.")
-        return result
-
-
 class CleanCommand(Command):
     """'clean' command.
     """
@@ -2046,18 +1243,13 @@ class CleanCommand(Command):
             name="clean",
             help_short="Removes intermediate files and build outputs.",
             *args, **kwargs)
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
 
     def execute(self, args, pass_args, cwd):
         print("Cleaning build artifacts...\n"
-              "- premake clean...")
-        run_premake(get_premake_target_os(args["target_os"]), "clean")
-
-        # Also clean generated files
+              "- cmake clean...")
+        if os.path.isdir("build"):
+            subprocess.call(["cmake", "--build", "build", "--target", "clean"])
         clean_generated_files()
-
         print_status(ResultStatus.SUCCESS)
         return 0
 
@@ -2091,62 +1283,6 @@ def clean_generated_files():
     """Removes generated shader bytecode and MOC files."""
     clean_shader_bytecode()
     clean_moc_files()
-
-
-class NukeCommand(Command):
-    """'nuke' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(NukeCommand, self).__init__(
-            subparsers,
-            name="nuke",
-            help_short="Removes all build/ output.",
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
-
-    def execute(self, args, pass_args, cwd):
-        print("Cleaning build artifacts...\n"
-              "- removing build/...")
-        if os.path.isdir("build/"):
-            rmtree("build/")
-
-        # Clean generated files
-        clean_generated_files()
-
-        print(f"\n- git reset to {default_branch}...")
-        shell_call([
-            "git",
-            "reset",
-            "--hard",
-            default_branch,
-            ])
-
-        print("\n- running premake...")
-        run_platform_premake(target_os_override=args["target_os"])
-
-        print_status(ResultStatus.SUCCESS)
-        return 0
-
-
-class CleanGeneratedCommand(Command):
-    """'cleangenerated' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(CleanGeneratedCommand, self).__init__(
-            subparsers,
-            name="cleangenerated",
-            help_short="Removes generated shader bytecode and MOC files.",
-            *args, **kwargs)
-
-    def execute(self, args, pass_args, cwd):
-        print("Cleaning generated files...")
-        clean_generated_files()
-        print("\nSuccess!")
-        return 0
 
 
 # Generated files that should be excluded from linting/formatting
@@ -2341,37 +1477,6 @@ class FormatCommand(Command):
 
 
 # TODO(benvanik): merge into linter, or as lint --anal?
-class StyleCommand(Command):
-    """'style' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(StyleCommand, self).__init__(
-            subparsers,
-            name="style",
-            help_short="Runs the style checker on all code.",
-            *args, **kwargs)
-
-    def execute(self, args, pass_args, cwd):
-        all_files = [file_path for file_path in find_xenia_source_files()
-                     if not file_path.endswith("_test.cc")]
-        print(f"- cpplint [{len(all_files)} files]")
-        ret = shell_call([
-            sys.executable,
-            "third_party/cpplint/cpplint.py",
-            "--output=vs7",
-            #"--linelength=80",
-            "--filter=-build/c++11,+build/include_alpha",
-            "--root=src",
-            ] + all_files, throw_on_error=False)
-        if ret:
-            print_error("1+ cpplint calls failed.")
-            return 1
-        else:
-            print("\nStyle linting completed successfully.")
-            return 0
-
-
 # TODO(benvanik): merge into linter, or as lint --anal?
 class TidyCommand(Command):
     """'tidy' command.
@@ -2386,15 +1491,17 @@ class TidyCommand(Command):
         self.parser.add_argument(
             "--fix", action="store_true",
             help="Applies suggested fixes, where possible.")
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
 
     def execute(self, args, pass_args, cwd):
-        # Run premake to generate our compile_commands.json file for clang to use.
-        # TODO(benvanik): only do linux? whatever clang-tidy is ok with.
-        run_premake(get_premake_target_os(args["target_os"]),
-                    "export-compile-commands")
+        # clang-tidy needs a compile_commands.json; CMake emits one when
+        # CMAKE_EXPORT_COMPILE_COMMANDS is on.
+        ret = subprocess.call([
+            "cmake", "-S", ".", "-B", "build",
+            "-G", "Ninja Multi-Config",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        ])
+        if ret != 0:
+            return ret
 
         if sys.platform == "darwin":
             platform_name = "darwin"
@@ -2437,59 +1544,6 @@ class TidyCommand(Command):
             print("\nTidy completed successfully.")
             return 0
 
-class StubCommand(Command):
-    """'stub' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(StubCommand, self).__init__(
-            subparsers,
-            name="stub",
-            help_short="Create new file(s) in the xenia source tree and run premake",
-            *args, **kwargs)
-        self.parser.add_argument(
-            "--file", default=None,
-            help="Generate a source file at the provided location in the source tree")
-        self.parser.add_argument(
-            "--class", default=None,
-            help="Generate a class pair (.cc/.h) at the provided location in the source tree")
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
-
-    def execute(self, args, pass_args, cwd):
-        root = os.path.dirname(os.path.realpath(__file__))
-        source_root = os.path.join(root, os.path.normpath("src/xenia"))
-
-        if args["class"]:
-            path = os.path.normpath(os.path.join(source_root, args["class"]))
-            target_dir = os.path.dirname(path)
-            class_name = os.path.basename(path)
-
-            status = generate_source_class(path)
-            if status > 0:
-                return status
-
-            print(f"Created class '{class_name}' at {target_dir}")
-
-        elif args["file"]:
-            path = os.path.normpath(os.path.join(source_root, args["file"]))
-            target_dir = os.path.dirname(path)
-            file_name = os.path.basename(path)
-
-            status = generate_source_file(path)
-            if status > 0:
-                return status
-
-            print(f"Created file '{file_name}' at {target_dir}")
-
-        else:
-            print_error("Please specify a file/class to generate")
-            return 1
-
-        run_platform_premake(target_os_override=args["target_os"])
-        return 0
-
 class DevenvCommand(Command):
     """'devenv' command.
     """
@@ -2502,57 +1556,53 @@ class DevenvCommand(Command):
             *args, **kwargs)
 
     def execute(self, args, pass_args, cwd):
-        devenv = None
-        show_reload_prompt = False
         if sys.platform == "win32":
-            if not vs_version:
-                print_error("Visual Studio is not installed.");
-                return 1
-            print("Launching Visual Studio...")
-        elif sys.platform == "darwin":
-            print("Launching Xcode...")
-            devenv = "xcode4"
-        elif has_bin("clion") or has_bin("clion.sh"):
+            return self._launch_visual_studio()
+        # Non-Windows: CLion is the only IDE we know how to launch
+        # automatically. macOS falls through to the manual-open message
+        # (the Xcode generator isn't supported).
+        if has_bin("clion") or has_bin("clion.sh"):
             print("Launching CLion...")
             show_reload_prompt = create_clion_workspace()
-            devenv = "cmake"
-        else:
-            print("Launching CodeLite...")
-            devenv = "codelite"
+            if run_cmake_configure() != 0:
+                return 1
+            if show_reload_prompt:
+                print_box("Please run \"File ⇒ ↺ Reload CMake Project\" from inside the IDE!")
+            bin_name = "clion" if has_bin("clion") else "clion.sh"
+            shell_call([bin_name, "."])
+            return 0
+        print("No supported IDE found. Open the project root in your IDE.")
+        print("CMakeLists.txt and CMakePresets.json are in the project root.")
+        return 0
 
-        print("\n- running premake...")
-        run_platform_premake(devenv=devenv)
-
-        print("\n- launching devenv...")
-        if show_reload_prompt:
-            print_box("Please run \"File ⇒ ↺ Reload CMake Project\" from inside the IDE!")
-        if sys.platform == "win32":
-            shell_call([
-                "devenv",
-                "build\\xenia.sln",
-            ])
-        elif sys.platform == "darwin":
-            shell_call([
-                "xed",
-                "build/xenia.xcworkspace",
-            ])
-        elif has_bin("clion"):
-            shell_call([
-                "clion",
-                ".",
-            ])
-        elif has_bin("clion.sh"):
-            shell_call([
-                "clion.sh",
-                ".",
-            ])
-        else:
-            shell_call([
-                "codelite",
-                "build/xenia.workspace",
-            ])
-        print("")
-
+    def _launch_visual_studio(self):
+        """Configures a VS build tree under build-vs/ and launches devenv."""
+        if not vs_version:
+            print_error("Visual Studio is not installed.")
+            return 1
+        # Kept separate from build/ (Ninja Multi-Config) because CMake
+        # refuses to change generators on an existing tree — mixing the
+        # two workflows in one dir would force a full wipe each time.
+        vs_build_dir = "build-vs"
+        print(f"Configuring Visual Studio build tree in {vs_build_dir}...")
+        # -A x64 without -G lets CMake pick whichever VS generator matches
+        # the installed toolchain (VS 2022, 2026, ...).
+        ret = subprocess.call([
+            "cmake", "-S", ".", "-B", vs_build_dir, "-A", "x64",
+        ])
+        if ret != 0:
+            print_error("cmake configure failed for the VS build tree")
+            return ret
+        generate_version_h(vs_build_dir)
+        # VS 2026+ emits xenia.slnx; older VS emits xenia.sln.
+        sln_path = os.path.join(vs_build_dir, "xenia.slnx")
+        if not os.path.exists(sln_path):
+            sln_path = os.path.join(vs_build_dir, "xenia.sln")
+        if not os.path.exists(sln_path):
+            print_error("cmake configured successfully but no .sln/.slnx was produced")
+            return 1
+        print(f"\n- launching devenv on {sln_path}...")
+        shell_call(["devenv", sln_path])
         return 0
 
 

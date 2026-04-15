@@ -94,7 +94,13 @@ node_modules/.bin/
 # coverage/etc
 /scratch/
 
+# CMake build trees
 /build/
+/build-vs/
+
+# CMake user-specific overrides + compile commands export
+CMakeUserPresets.json
+/compile_commands.json
 
 # ==============================================================================
 # Local-only paths
