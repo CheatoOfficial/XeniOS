@@ -20,6 +20,8 @@
 
 DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 DEFINE_bool(mount_cache, false, "Enable cache mount", "Storage");
+DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
+            "Storage");
 
 #define CATCH_CONFIG_RUNNER
 #include "third_party/catch/single_include/catch2/catch.hpp"

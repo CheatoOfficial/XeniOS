@@ -111,6 +111,9 @@ DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 UPDATE_from_bool(mount_cache, 2024, 8, 31, 20, false);
 
+DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
+            "Storage");
+
 DECLARE_bool(force_mount_devkit);
 
 DECLARE_path(target);  // Defined in windowed_app_main_qt.cc

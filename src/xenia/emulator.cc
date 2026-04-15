@@ -109,6 +109,7 @@ DECLARE_bool(allow_plugins);
 
 DECLARE_bool(mount_scratch);
 DECLARE_bool(mount_cache);
+DECLARE_bool(mount_memory_unit);
 DECLARE_bool(force_mount_devkit);
 
 DEFINE_int32(priority_class, 0,
@@ -1684,6 +1685,20 @@ void Emulator::MountStandardDrives() {
         XELOGE("Unable to register cache path");
       } else {
         fs->RegisterSymbolicLink("cache:", "\\CACHE");
+      }
+    }
+  }
+
+  if (cvars::mount_memory_unit) {
+    auto mu_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\MU", storage_root_ / "mu", false);
+    if (!mu_device->Initialize()) {
+      XELOGE("Unable to scan MU path");
+    } else {
+      if (!fs->RegisterDevice(std::move(mu_device))) {
+        XELOGE("Unable to register MU path");
+      } else {
+        fs->RegisterSymbolicLink("MU:", "\\MU");
       }
     }
   }
