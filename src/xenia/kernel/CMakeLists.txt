@@ -22,3 +22,8 @@ target_link_libraries(xenia-kernel PUBLIC
   aes_128 asio fmt zlib-ng pugixml xenia-apu xenia-base xenia-cpu xenia-hid xenia-vfs
 )
 xe_target_defaults(xenia-kernel)
+
+if(XENIA_BUILD_TESTS)
+  set(CMAKE_FOLDER "tests")
+  add_subdirectory(testing)
+endif()
