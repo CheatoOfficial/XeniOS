@@ -112,25 +112,26 @@ HostToGuestThunk A64HelperEmitter::EmitHostToGuestThunk() {
   stp(x27, x28, ptr(sp, 0x40));
   stp(x29, x30, ptr(sp, 0x50));
 
-  // Save callee-saved NEON regs: d8-d15
-  stp(d8, d9, ptr(sp, 0x60));
-  stp(d10, d11, ptr(sp, 0x70));
-  stp(d12, d13, ptr(sp, 0x80));
-  stp(d14, d15, ptr(sp, 0x90));
+  // Save callee-saved NEON regs: full q8-q15 (JIT uses all 128 bits).
+  stp(Xbyak_aarch64::QReg(8), Xbyak_aarch64::QReg(9), ptr(sp, 0x60));
+  stp(Xbyak_aarch64::QReg(10), Xbyak_aarch64::QReg(11), ptr(sp, 0x80));
+  stp(Xbyak_aarch64::QReg(12), Xbyak_aarch64::QReg(13), ptr(sp, 0xA0));
+  stp(Xbyak_aarch64::QReg(14), Xbyak_aarch64::QReg(15), ptr(sp, 0xC0));
 
   code_offsets.body = getSize();
 
   // Set up guest execution state.
   // x20 = context (PPCContext*)
   mov(x20, x1);
+  // x19 = backend context (immediately before PPCContext in memory)
+  sub(x19, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
   // x21 = virtual_membase (loaded from context)
   ldr(x21, ptr(x20, static_cast<int32_t>(
                         offsetof(ppc::PPCContext, virtual_membase))));
   // Restore the guest scalar FPCR on every host->guest entry so host-side
   // work done before the call can't leak a stale rounding / non-IEEE mode.
-  sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
   ldr(w11,
-      ptr(x10, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
   msr(3, 3, 4, 4, 0, x11);
   // x0 still holds target, x2 holds return address.
   // The guest function's prolog stores x0 to GUEST_RET_ADDR on its stack
@@ -145,11 +146,11 @@ HostToGuestThunk A64HelperEmitter::EmitHostToGuestThunk() {
 
   code_offsets.epilog = getSize();
 
-  // Restore callee-saved NEON regs.
-  ldp(d14, d15, ptr(sp, 0x90));
-  ldp(d12, d13, ptr(sp, 0x80));
-  ldp(d10, d11, ptr(sp, 0x70));
-  ldp(d8, d9, ptr(sp, 0x60));
+  // Restore callee-saved NEON regs (full q8-q15).
+  ldp(Xbyak_aarch64::QReg(14), Xbyak_aarch64::QReg(15), ptr(sp, 0xC0));
+  ldp(Xbyak_aarch64::QReg(12), Xbyak_aarch64::QReg(13), ptr(sp, 0xA0));
+  ldp(Xbyak_aarch64::QReg(10), Xbyak_aarch64::QReg(11), ptr(sp, 0x80));
+  ldp(Xbyak_aarch64::QReg(8), Xbyak_aarch64::QReg(9), ptr(sp, 0x60));
 
   // Restore callee-saved GPRs.
   ldp(x29, x30, ptr(sp, 0x50));
@@ -200,41 +201,50 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
 
   code_offsets.prolog = getSize();
 
-  // The guest JIT uses v4-v7 and v16-v31 as allocatable VEC regs.
-  // These are caller-saved in AAPCS64, so the host C function WILL clobber
-  // them. We must save all guest-allocated VEC regs (full 128-bit Q regs).
+  // The guest JIT uses v4-v15, v16-v31 as allocatable VEC regs.
+  // v0-v7, v16-v31 are caller-saved in AAPCS64 (fully clobbered by C).
+  // v8-v15 lower 64 bits are callee-saved, but upper 64 bits are not.
+  // We must save all guest-allocated VEC regs (full 128-bit Q regs).
   // GPRs x19-x28 are callee-saved in AAPCS64, so the C function preserves them.
   //
   // Stack layout:
   //   q4, q5       sp + 0x000  (32 bytes)
   //   q6, q7       sp + 0x020
-  //   q16, q17     sp + 0x040
-  //   q18, q19     sp + 0x060
-  //   q20, q21     sp + 0x080
-  //   q22, q23     sp + 0x0A0
-  //   q24, q25     sp + 0x0C0
-  //   q26, q27     sp + 0x0E0
-  //   q28, q29     sp + 0x100
-  //   q30, q31     sp + 0x120
-  //   x29, x30     sp + 0x140
-  //   Total: 0x150 = 336 bytes (16-byte aligned)
-  const size_t g2h_stack = 336;
+  //   q8, q9       sp + 0x040
+  //   q10, q11     sp + 0x060
+  //   q12, q13     sp + 0x080
+  //   q14, q15     sp + 0x0A0
+  //   q16, q17     sp + 0x0C0
+  //   q18, q19     sp + 0x0E0
+  //   q20, q21     sp + 0x100
+  //   q22, q23     sp + 0x120
+  //   q24, q25     sp + 0x140
+  //   q26, q27     sp + 0x160
+  //   q28, q29     sp + 0x180
+  //   q30, q31     sp + 0x1A0
+  //   x29, x30     sp + 0x1C0
+  //   Total: 0x1D0 = 464 bytes (16-byte aligned)
+  const size_t g2h_stack = 464;
   sub(sp, sp, static_cast<uint32_t>(g2h_stack));
   code_offsets.prolog_stack_alloc = getSize();
 
   // Save guest-allocated VEC regs (full Q = 128-bit).
   stp(Xbyak_aarch64::QReg(4), Xbyak_aarch64::QReg(5), ptr(sp, 0x000));
   stp(Xbyak_aarch64::QReg(6), Xbyak_aarch64::QReg(7), ptr(sp, 0x020));
-  stp(Xbyak_aarch64::QReg(16), Xbyak_aarch64::QReg(17), ptr(sp, 0x040));
-  stp(Xbyak_aarch64::QReg(18), Xbyak_aarch64::QReg(19), ptr(sp, 0x060));
-  stp(Xbyak_aarch64::QReg(20), Xbyak_aarch64::QReg(21), ptr(sp, 0x080));
-  stp(Xbyak_aarch64::QReg(22), Xbyak_aarch64::QReg(23), ptr(sp, 0x0A0));
-  stp(Xbyak_aarch64::QReg(24), Xbyak_aarch64::QReg(25), ptr(sp, 0x0C0));
-  stp(Xbyak_aarch64::QReg(26), Xbyak_aarch64::QReg(27), ptr(sp, 0x0E0));
-  stp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x100));
-  stp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x120));
+  stp(Xbyak_aarch64::QReg(8), Xbyak_aarch64::QReg(9), ptr(sp, 0x040));
+  stp(Xbyak_aarch64::QReg(10), Xbyak_aarch64::QReg(11), ptr(sp, 0x060));
+  stp(Xbyak_aarch64::QReg(12), Xbyak_aarch64::QReg(13), ptr(sp, 0x080));
+  stp(Xbyak_aarch64::QReg(14), Xbyak_aarch64::QReg(15), ptr(sp, 0x0A0));
+  stp(Xbyak_aarch64::QReg(16), Xbyak_aarch64::QReg(17), ptr(sp, 0x0C0));
+  stp(Xbyak_aarch64::QReg(18), Xbyak_aarch64::QReg(19), ptr(sp, 0x0E0));
+  stp(Xbyak_aarch64::QReg(20), Xbyak_aarch64::QReg(21), ptr(sp, 0x100));
+  stp(Xbyak_aarch64::QReg(22), Xbyak_aarch64::QReg(23), ptr(sp, 0x120));
+  stp(Xbyak_aarch64::QReg(24), Xbyak_aarch64::QReg(25), ptr(sp, 0x140));
+  stp(Xbyak_aarch64::QReg(26), Xbyak_aarch64::QReg(27), ptr(sp, 0x160));
+  stp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x180));
+  stp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x1A0));
   // Save x29/x30 (FP/LR).
-  stp(x29, x30, ptr(sp, 0x140));
+  stp(x29, x30, ptr(sp, 0x1C0));
 
   code_offsets.body = getSize();
 
@@ -247,23 +257,27 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
 
   // Host callbacks may change FPCR. Restore the guest scalar FPCR before
   // resuming the JIT so later guest ops observe the cached PPC mode.
-  sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
+  // x19 (backend context) is callee-saved, so it survives the host call.
   ldr(w11,
-      ptr(x10, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
   msr(3, 3, 4, 4, 0, x11);
 
   code_offsets.epilog = getSize();
 
   // Restore.
-  ldp(x29, x30, ptr(sp, 0x140));
-  ldp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x120));
-  ldp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x100));
-  ldp(Xbyak_aarch64::QReg(26), Xbyak_aarch64::QReg(27), ptr(sp, 0x0E0));
-  ldp(Xbyak_aarch64::QReg(24), Xbyak_aarch64::QReg(25), ptr(sp, 0x0C0));
-  ldp(Xbyak_aarch64::QReg(22), Xbyak_aarch64::QReg(23), ptr(sp, 0x0A0));
-  ldp(Xbyak_aarch64::QReg(20), Xbyak_aarch64::QReg(21), ptr(sp, 0x080));
-  ldp(Xbyak_aarch64::QReg(18), Xbyak_aarch64::QReg(19), ptr(sp, 0x060));
-  ldp(Xbyak_aarch64::QReg(16), Xbyak_aarch64::QReg(17), ptr(sp, 0x040));
+  ldp(x29, x30, ptr(sp, 0x1C0));
+  ldp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x1A0));
+  ldp(Xbyak_aarch64::QReg(28), Xbyak_aarch64::QReg(29), ptr(sp, 0x180));
+  ldp(Xbyak_aarch64::QReg(26), Xbyak_aarch64::QReg(27), ptr(sp, 0x160));
+  ldp(Xbyak_aarch64::QReg(24), Xbyak_aarch64::QReg(25), ptr(sp, 0x140));
+  ldp(Xbyak_aarch64::QReg(22), Xbyak_aarch64::QReg(23), ptr(sp, 0x120));
+  ldp(Xbyak_aarch64::QReg(20), Xbyak_aarch64::QReg(21), ptr(sp, 0x100));
+  ldp(Xbyak_aarch64::QReg(18), Xbyak_aarch64::QReg(19), ptr(sp, 0x0E0));
+  ldp(Xbyak_aarch64::QReg(16), Xbyak_aarch64::QReg(17), ptr(sp, 0x0C0));
+  ldp(Xbyak_aarch64::QReg(14), Xbyak_aarch64::QReg(15), ptr(sp, 0x0A0));
+  ldp(Xbyak_aarch64::QReg(12), Xbyak_aarch64::QReg(13), ptr(sp, 0x080));
+  ldp(Xbyak_aarch64::QReg(10), Xbyak_aarch64::QReg(11), ptr(sp, 0x060));
+  ldp(Xbyak_aarch64::QReg(8), Xbyak_aarch64::QReg(9), ptr(sp, 0x040));
   ldp(Xbyak_aarch64::QReg(6), Xbyak_aarch64::QReg(7), ptr(sp, 0x020));
   ldp(Xbyak_aarch64::QReg(4), Xbyak_aarch64::QReg(5), ptr(sp, 0x000));
 
@@ -335,9 +349,9 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
   ldp(x29, x30, ptr(sp, 0x50));
   add(sp, sp, static_cast<uint32_t>(thunk_stack));
 
-  cbz(x9, 8);  // skip br x9 if null, fall through to brk
-  br(x9);      // Jump to the resolved function (tail call — preserves LR).
-  brk(0xF0);   // Resolution failed — trap for debugging.
+  cbz(x9, 8);   // skip br x9 if null, fall through to brk
+  br(x9);       // Jump to the resolved function (tail call — preserves LR).
+  brk(0xF000);  // Resolution failed — trap for debugging.
 
   code_offsets.tail = getSize();
 
@@ -365,8 +379,8 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
 // On entry (set by the tail-emitted sync check in the guest function):
 //   x8  = return address (where to jump after fixup)
 //   x9  = caller's stack size (to subtract from restored SP)
+//   x19 = A64BackendContext*
 //   x20 = PPCContext*
-//   The backend context is at (x20 - sizeof(A64BackendContext)).
 void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   using namespace Xbyak_aarch64;
   struct {
@@ -381,15 +395,13 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   code_offsets.prolog_stack_alloc = getSize();
   code_offsets.body = getSize();
 
-  // Load backend context pointer: x17 = x20 - sizeof(A64BackendContext)
-  mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-  sub(x17, x20, x17);
+  // x19 = backend context pointer (already set up by HostToGuestThunk)
 
   // x10 = stackpoints array pointer
-  ldr(x10, ptr(x17, static_cast<uint32_t>(
+  ldr(x10, ptr(x19, static_cast<uint32_t>(
                         offsetof(A64BackendContext, stackpoints))));
   // w11 = current_stackpoint_depth
-  ldr(w11, ptr(x17, static_cast<uint32_t>(offsetof(A64BackendContext,
+  ldr(w11, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
 
   // w12 = current guest r1
@@ -438,7 +450,7 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   // Update current_stackpoint_depth = index + 1
   // (the entry we restored to has been consumed)
   add(w13, w13, 1);
-  str(w13, ptr(x17, static_cast<uint32_t>(offsetof(A64BackendContext,
+  str(w13, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
 
   // Jump back to the caller.
@@ -446,7 +458,7 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
 
   L(underflow);
   // Should be impossible — stackpoint array underflowed.
-  brk(0xF1);
+  brk(0xF001);  // assertion failure
 
   code_offsets.epilog = getSize();
   code_offsets.tail = getSize();
@@ -587,13 +599,13 @@ bool A64Backend::Initialize(Processor* processor) {
 
   // Set up machine info for the register allocator.
   machine_info_.supports_extended_load_store = true;
-  // GPR set: x19, x22-x28 (8 registers, excluding x20=context, x21=membase)
+  // GPR set: x22-x28 (7 registers; x19=backend ctx, x20=context, x21=membase)
   auto& gpr_set = machine_info_.register_sets[0];
   gpr_set.id = 0;
   std::strcpy(gpr_set.name, "gpr");
   gpr_set.types = MachineInfo::RegisterSet::INT_TYPES;
   gpr_set.count = A64Emitter::GPR_COUNT;
-  // VEC set: v4-v7, v16-v31 (20 registers, v0-v3 scratch)
+  // VEC set: v4-v15, v16-v31 (28 registers, v0-v3 scratch)
   auto& vec_set = machine_info_.register_sets[1];
   vec_set.id = 1;
   std::strcpy(vec_set.name, "vec");

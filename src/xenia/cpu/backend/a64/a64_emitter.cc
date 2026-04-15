@@ -57,16 +57,17 @@ static uint64_t UndefinedCallExtern(void* raw_context, uint64_t function_ptr) {
 static constexpr size_t kMaxCodeSize = 1_MiB;
 
 // Register maps:
-// GPR allocatable registers: x19, x22, x23, x24, x25, x26, x27, x28
-// (x20=context, x21=membase are reserved)
+// GPR allocatable registers: x22, x23, x24, x25, x26, x27, x28
+// (x19=backend context, x20=context, x21=membase are reserved)
 const uint32_t A64Emitter::gpr_reg_map_[GPR_COUNT] = {
-    19, 22, 23, 24, 25, 26, 27, 28,
+    22, 23, 24, 25, 26, 27, 28,
 };
 
-// VEC allocatable registers: v4-v7, v16-v31
+// VEC allocatable registers: v4-v15, v16-v31
 // (v0-v3 are scratch)
 const uint32_t A64Emitter::vec_reg_map_[VEC_COUNT] = {
-    4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+    4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17,
+    18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 };
 
 A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
@@ -170,9 +171,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // for post-call detection (if depth changes, a longjmp skipped frames).
   PushStackpoint();
   if (cvars::a64_enable_host_guest_stack_synchronization) {
-    mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-    sub(x17, x20, x17);
-    ldr(w16, ptr(x17, static_cast<uint32_t>(offsetof(
+    ldr(w16, ptr(x19, static_cast<uint32_t>(offsetof(
                           A64BackendContext, current_stackpoint_depth))));
     str(w16, ptr(sp, static_cast<uint32_t>(
                          StackLayout::GUEST_SAVED_STACKPOINT_DEPTH)));
@@ -318,7 +317,7 @@ void A64Emitter::MarkSourceOffset(const hir::Instr* i) {
   entry->code_offset = static_cast<uint32_t>(getSize());
 }
 
-void A64Emitter::DebugBreak() { brk(0); }
+void A64Emitter::DebugBreak() { brk(0xF000); }
 
 void A64Emitter::Trap(uint16_t trap_type) { brk(trap_type); }
 
@@ -551,14 +550,10 @@ void A64Emitter::PushStackpoint() {
   if (!cvars::a64_enable_host_guest_stack_synchronization) {
     return;
   }
-  // Load backend context pointer: x17 = x20 - sizeof(A64BackendContext)
-  mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-  sub(x17, x20, x17);
-
   // x8 = stackpoints array, w9 = current depth
-  ldr(x8, ptr(x17,
+  ldr(x8, ptr(x19,
               static_cast<uint32_t>(offsetof(A64BackendContext, stackpoints))));
-  ldr(w9, ptr(x17, static_cast<uint32_t>(
+  ldr(w9, ptr(x19, static_cast<uint32_t>(
                        offsetof(A64BackendContext, current_stackpoint_depth))));
 
   // Compute offset into array: x10 = w9 * sizeof(A64BackendStackpoint)
@@ -581,7 +576,7 @@ void A64Emitter::PushStackpoint() {
 
   // Increment depth.
   add(w9, w9, 1);
-  str(w9, ptr(x17, static_cast<uint32_t>(
+  str(w9, ptr(x19, static_cast<uint32_t>(
                        offsetof(A64BackendContext, current_stackpoint_depth))));
 
   // Check for overflow.
@@ -599,12 +594,10 @@ void A64Emitter::PopStackpoint() {
     return;
   }
   // Decrement current_stackpoint_depth.
-  mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-  sub(x17, x20, x17);
-  ldr(w8, ptr(x17, static_cast<uint32_t>(
+  ldr(w8, ptr(x19, static_cast<uint32_t>(
                        offsetof(A64BackendContext, current_stackpoint_depth))));
   sub(w8, w8, 1);
-  str(w8, ptr(x17, static_cast<uint32_t>(
+  str(w8, ptr(x19, static_cast<uint32_t>(
                        offsetof(A64BackendContext, current_stackpoint_depth))));
 }
 
@@ -617,9 +610,7 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
   // some frames' PopStackpoint never ran.
   auto& return_from_sync = NewCachedLabel();
 
-  mov(x17, static_cast<uint64_t>(sizeof(A64BackendContext)));
-  sub(x17, x20, x17);
-  ldr(w17, ptr(x17, static_cast<uint32_t>(offsetof(A64BackendContext,
+  ldr(w17, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
   ldr(w16, ptr(sp, static_cast<uint32_t>(
                        StackLayout::GUEST_SAVED_STACKPOINT_DEPTH)));
