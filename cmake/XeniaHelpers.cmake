@@ -3,7 +3,7 @@
 include(CMakeParseArguments)
 
 set(XE_PLATFORM_SUFFIXES
-  _win _linux _posix _gnulinux _x11 _gtk _android _mac
+  _win _linux _posix _gnulinux _x11 _gtk _android _mac _amd64 _arm64
 )
 
 # xe_platform_sources(target base_path [RECURSIVE])
@@ -71,6 +71,17 @@ function(xe_platform_sources target base_path)
   endif()
 
   list(APPEND _sources ${_plat_sources})
+
+  # Add back architecture-specific files
+  if(XE_TARGET_X86_64)
+    file(${glob_mode} _arch_sources "${base_path}/*_amd64.h" "${base_path}/*_amd64.cc")
+  elseif(XE_TARGET_AARCH64)
+    file(${glob_mode} _arch_sources "${base_path}/*_arm64.h" "${base_path}/*_arm64.cc")
+  endif()
+  if(_arch_sources)
+    list(APPEND _sources ${_arch_sources})
+  endif()
+
   target_sources(${target} PRIVATE ${_sources})
 endfunction()
 

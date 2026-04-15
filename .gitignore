@@ -97,6 +97,8 @@ node_modules/.bin/
 # CMake build trees
 /build/
 /build-vs/
+/build-arm64/
+/build-x64/
 
 # CMake user-specific overrides + compile commands export
 CMakeUserPresets.json

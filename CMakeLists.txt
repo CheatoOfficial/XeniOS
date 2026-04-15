@@ -6,6 +6,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Detect target architecture.
+# - VS generator: CMAKE_GENERATOR_PLATFORM (from -A flag) takes priority.
+# - Ninja/Makefiles: CMAKE_SYSTEM_PROCESSOR (set via -DCMAKE_SYSTEM_NAME
+#   + -DCMAKE_SYSTEM_PROCESSOR for cross-compile, or auto-detected natively).
+if(CMAKE_GENERATOR_PLATFORM)
+  if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
+    set(XE_TARGET_AARCH64 TRUE)
+    set(XE_TARGET_X86_64 FALSE)
+  else()
+    set(XE_TARGET_AARCH64 FALSE)
+    set(XE_TARGET_X86_64 TRUE)
+  endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+  set(XE_TARGET_AARCH64 TRUE)
+  set(XE_TARGET_X86_64 FALSE)
+else()
+  set(XE_TARGET_AARCH64 FALSE)
+  set(XE_TARGET_X86_64 TRUE)
+endif()
+message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_TARGET_X86_64=${XE_TARGET_X86_64} (CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})")
+
 option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
 option(XENIA_ENABLE_LTO "Enable link-time optimization in Release (slow link)" ON)
@@ -134,9 +155,11 @@ if(MSVC)
     /Zc:__cplusplus    # correct __cplusplus macro value (Qt6 needs this)
     /Zc:preprocessor   # conformant preprocessor
     /wd4201            # nameless struct/unions are ok
-    /arch:AVX
     /MP
   )
+  if(XE_TARGET_X86_64)
+    add_compile_options(/arch:AVX)
+  endif()
   add_compile_definitions(
     _CRT_NONSTDC_NO_DEPRECATE
     _CRT_SECURE_NO_WARNINGS
@@ -204,7 +227,9 @@ if(MSVC)
 
 else()
   # GCC/Clang (Linux)
-  add_compile_options(-mavx)
+  if(XE_TARGET_X86_64)
+    add_compile_options(-mavx)
+  endif()
 
   add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-switch>
