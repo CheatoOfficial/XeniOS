@@ -880,8 +880,6 @@ bool XmaContextNew::DecodePacket(AVCodecContext* av_context,
 
   if (ret == AVERROR(EAGAIN)) {
     // Codec needs more input before producing output (e.g. first frame warmup).
-    XELOGAPU("XmaContext {}: EAGAIN - codec needs more input (warmup frame)",
-             id());
     return false;
   }
   if (ret < 0) {
