@@ -29,6 +29,21 @@ using Xbyak_aarch64::VReg;
 using Xbyak_aarch64::WReg;
 using Xbyak_aarch64::XReg;
 
+template <typename Fn>
+inline void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
+  // VMX vector FP uses its own cached FPCR state in the backend context. Save
+  // and restore around each VMX op so vector code doesn't leak FPCR changes
+  // into later scalar instructions.
+  e.mrs(e.x13, 3, 3, 4, 4, 0);
+  e.sub(e.x14, e.GetContextReg(),
+        static_cast<uint32_t>(sizeof(A64BackendContext)));
+  e.ldr(e.w15, Xbyak_aarch64::ptr(e.x14, static_cast<uint32_t>(offsetof(
+                                             A64BackendContext, fpcr_vmx))));
+  e.msr(3, 3, 4, 4, 0, e.x15);
+  emit_op();
+  e.msr(3, 3, 4, 4, 0, e.x13);
+}
+
 // Load a compile-time vec128_t constant into a NEON register.
 inline void LoadV128Const(A64Emitter& e, int vreg_idx, const vec128_t& val) {
   e.mov(e.x0, val.low);
@@ -70,9 +85,11 @@ inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
     e.mov(e.x0, static_cast<uint64_t>(address));
     return e.x0;
   } else {
+    auto src = guest.reg();
+    // Guest addresses are always 32-bit. Clear any stale upper bits before
+    // applying the host membase so guest pointers can't escape above 4 GB.
+    e.mov(e.w0, WReg(src.getIdx()));
     if (xe::memory::allocation_granularity() > 0x1000) {
-      auto src = guest.reg();
-      e.mov(e.w0, WReg(src.getIdx()));
       e.mov(e.w17, 0xE0000000u);
       e.cmp(e.w0, e.w17);
       auto& skip = e.NewCachedLabel();
@@ -81,10 +98,26 @@ inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
       e.mov(e.w17, 0x1000u);
       e.add(e.w0, e.w0, e.w17);
       e.L(skip);
-      return e.x0;
     }
-    return guest.reg();
+    return e.x0;
   }
+}
+
+template <typename OffsetOp>
+inline XReg AddGuestMemoryOffset(A64Emitter& e, const XReg& base,
+                                 const OffsetOp& offset) {
+  // Guest address arithmetic wraps at 32 bits before the host membase is
+  // applied. Keep the add in W registers so stale high bits can't escape into
+  // the final host pointer.
+  e.mov(e.w0, WReg(base.getIdx()));
+  if (offset.is_constant) {
+    e.mov(e.w17,
+          static_cast<uint64_t>(static_cast<uint32_t>(offset.constant())));
+    e.add(e.w0, e.w0, e.w17);
+  } else {
+    e.add(e.w0, e.w0, WReg(offset.reg().getIdx()));
+  }
+  return e.x0;
 }
 
 // Flush denormal float32 lanes to zero in a NEON register (in-place).
@@ -302,36 +335,36 @@ enum class VmxFpBinOp { Add, Sub, Mul, Div };
 template <typename T1, typename T2>
 inline void EmitVmxFpBinOp_V128(A64Emitter& e, int dest_idx, const T1& src1,
                                 const T2& src2, VmxFpBinOp op) {
-  e.ChangeFpcrMode(FPCRMode::Vmx);
+  EmitWithVmxFpcr(e, [&] {
+    // Flush input denormals → v0=s1, v1=s2.
+    int s1, s2;
+    PrepareVmxFpSources(e, src1, src2, s1, s2);
 
-  // Flush input denormals → v0=s1, v1=s2.
-  int s1, s2;
-  PrepareVmxFpSources(e, src1, src2, s1, s2);
+    // Hardware FP op → v2.
+    switch (op) {
+      case VmxFpBinOp::Add:
+        e.fadd(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case VmxFpBinOp::Sub:
+        e.fsub(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case VmxFpBinOp::Mul:
+        e.fmul(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case VmxFpBinOp::Div:
+        e.fdiv(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+    }
 
-  // Hardware FP op → v2.
-  switch (op) {
-    case VmxFpBinOp::Add:
-      e.fadd(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
-      break;
-    case VmxFpBinOp::Sub:
-      e.fsub(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
-      break;
-    case VmxFpBinOp::Mul:
-      e.fmul(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
-      break;
-    case VmxFpBinOp::Div:
-      e.fdiv(VReg(2).s4, VReg(s1).s4, VReg(s2).s4);
-      break;
-  }
+    // PPC NaN propagation fixup (fast-path skip when no NaN).
+    FixupVmxNan_V128(e);
 
-  // PPC NaN propagation fixup (fast-path skip when no NaN).
-  FixupVmxNan_V128(e);
+    // Flush output denormals.
+    FlushDenormals_V128(e, 2, 0, 1);
 
-  // Flush output denormals.
-  FlushDenormals_V128(e, 2, 0, 1);
-
-  // Move to dest.
-  e.mov(VReg(dest_idx).b16, VReg(2).b16);
+    // Move to dest.
+    e.mov(VReg(dest_idx).b16, VReg(2).b16);
+  });
 }
 
 }  // namespace a64

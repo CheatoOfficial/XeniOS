@@ -26,11 +26,7 @@
 #include "xenia/cpu/stack_walker.h"
 #include "xenia/cpu/xex_module.h"
 
-DEFINE_bool(record_mmio_access_exceptions, true,
-            "For guest addresses records whether we caught any mmio accesses "
-            "for them. This info can then be used on a subsequent run to "
-            "instruct the recompiler to emit checks",
-            "x64");
+DECLARE_bool(record_mmio_access_exceptions);
 
 DEFINE_int64(max_stackpoints, 65536,
              "Max number of host->guest stack mappings we can record.", "x64");
@@ -757,6 +753,9 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   call(rax);
 
   EmitLoadVolatileRegs();
+  // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
+  // so later guest FP ops observe the correct PPC rounding state.
+  vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
 
   code_offsets.epilog = getSize();
 
@@ -805,6 +804,9 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   call(rax);
 
   EmitLoadVolatileRegs();
+  // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
+  // so later guest FP ops observe the correct PPC rounding state.
+  vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
 
   code_offsets.epilog = getSize();
 
