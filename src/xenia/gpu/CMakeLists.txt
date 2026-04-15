@@ -4,10 +4,6 @@ target_include_directories(xenia-gpu PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include
   ${PROJECT_SOURCE_DIR}/third_party/glslang
 )
-# Windows: SPIRV-Tools headers come from the Vulkan SDK
-if(WIN32 AND DEFINED ENV{VULKAN_SDK})
-  target_include_directories(xenia-gpu PRIVATE "$ENV{VULKAN_SDK}/Include")
-endif()
 target_link_libraries(xenia-gpu PUBLIC dxbc fmt glslang-spirv snappy xxhash xenia-base xenia-ui)
 xe_target_defaults(xenia-gpu)
 
@@ -27,9 +23,6 @@ if(XENIA_BUILD_MISC)
     ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include
     ${PROJECT_SOURCE_DIR}/third_party/glslang
   )
-  if(WIN32 AND DEFINED ENV{VULKAN_SDK})
-    target_include_directories(xenia-gpu-shader-compiler PRIVATE "$ENV{VULKAN_SDK}/Include")
-  endif()
   target_link_libraries(xenia-gpu-shader-compiler PRIVATE
     dxbc fmt glslang-spirv snappy xenia-base xenia-gpu xenia-ui xenia-ui-vulkan
   )

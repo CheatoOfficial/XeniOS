@@ -130,20 +130,17 @@ set(_edge_game_patches_src "${PROJECT_SOURCE_DIR}/.data_repos/game-patches/patch
 # release Qt (root CMakeLists maps Debug/Checked/Valgrind imported
 # configs to Release), so deploying Qt6Cored.dll would pull in the
 # debug CRT and corrupt Qt/STL objects at runtime.
-if(WIN32)
-  set(XE_QT_DIR "$ENV{QT_DIR}")
-  if(XE_QT_DIR AND EXISTS "${XE_QT_DIR}/bin/windeployqt.exe")
-    add_custom_command(TARGET xenia-app POST_BUILD
-      COMMAND "${XE_QT_DIR}/bin/windeployqt.exe"
-              --release
-              --no-translations
-              --no-system-d3d-compiler
-              --no-opengl-sw
-              --no-compiler-runtime
-              "$<TARGET_FILE:xenia-app>"
-      VERBATIM
-    )
-  endif()
+if(WIN32 AND TARGET Qt6::windeployqt)
+  add_custom_command(TARGET xenia-app POST_BUILD
+    COMMAND Qt6::windeployqt
+            --release
+            --no-translations
+            --no-system-d3d-compiler
+            --no-opengl-sw
+            --no-compiler-runtime
+            "$<TARGET_FILE:xenia-app>"
+    VERBATIM
+  )
 endif()
 
 # Stage runtime assets (fonts, game patches, optimized settings) next to

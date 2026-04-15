@@ -22,7 +22,6 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/spirv_compatibility.h"
 #include "xenia/gpu/spirv_shader.h"
-#include "xenia/ui/vulkan/spirv_tools_context.h"
 
 DEFINE_string(spirv_version_override, "1.0",
               "Override the SPIR-V version used in shader translation.\n"
@@ -957,24 +956,6 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
   // TODO(Triang3l): Avoid copy?
   std::vector<unsigned int> module_uints;
   builder_->dump(module_uints);
-
-  // Optimize the SPIR-V if optimization is enabled and tools are available
-  if (spirv_optimize_ && spirv_tools_context_) {
-    size_t original_size = module_uints.size();
-    std::vector<uint32_t> optimized_module;
-    spv_result_t result = spirv_tools_context_->Optimize(
-        module_uints.data(), module_uints.size(), optimized_module, true);
-    if (result == SPV_SUCCESS && !optimized_module.empty()) {
-      size_t optimized_size = optimized_module.size();
-      module_uints = std::move(optimized_module);
-      XELOGI("SPIR-V shader optimized: {} -> {} words ({:.1f}% reduction)",
-             original_size, optimized_size,
-             100.0f * (1.0f - float(optimized_size) / float(original_size)));
-    } else {
-      XELOGW("SPIR-V shader optimization failed with error code: {}",
-             static_cast<int>(result));
-    }
-  }
 
   std::vector<uint8_t> module_bytes;
   module_bytes.reserve(sizeof(unsigned int) * module_uints.size());

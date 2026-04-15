@@ -60,11 +60,11 @@ file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/scratch")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# Debug/Checked/Valgrind are compiled against the release CRT (/MD) so we
-# can link the Vulkan SDK's release-only SPIRV-Tools libs. Force any
-# imported library (Qt6::*, etc.) to resolve to its Release variant in
-# those configs too — otherwise Qt6*d.dll drags in /MDd and the process
-# ends up mixing two CRTs, corrupting std::string/QString allocations.
+# Debug/Checked/Valgrind are compiled against the release CRT (/MD) so
+# we can link Qt's release-only prebuilt DLLs — Qt6*d.dll drags in /MDd
+# and mixing two CRTs in one process corrupts std::string/QString
+# allocations. Force any imported library (Qt6::*, etc.) to resolve to
+# its Release variant in those configs too.
 # NOCONFIG is the fallback for imported targets that ship without a
 # configuration suffix (FindOpenGL on Linux creates OpenGL::OpenGL this
 # way — without NOCONFIG in the map we fail to resolve it in Debug et al).
@@ -193,7 +193,7 @@ if(MSVC)
 
   # Debug: /RTC1 requires the debug CRT, so strip it — we're on /MD. Pin
   # _ITERATOR_DEBUG_LEVEL=0 so our STL object layouts match release-CRT
-  # prebuilts (Vulkan SDK SPIRV-Tools) and we don't hit LNK2038.
+  # prebuilts (Qt, etc.) and we don't hit LNK2038.
   string(REPLACE "/RTC1" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
   string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
   add_compile_definitions(

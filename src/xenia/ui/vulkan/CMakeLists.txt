@@ -7,16 +7,6 @@ target_include_directories(xenia-ui-vulkan PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party/glslang
 )
 target_link_libraries(xenia-ui-vulkan PUBLIC xenia-base xenia-ui)
-
-# SPIRV-Tools: Vulkan SDK on Windows (headers + libs under $VULKAN_SDK),
-# system package on Linux (libspirv-tools-*).
-if(WIN32 AND DEFINED ENV{VULKAN_SDK})
-  target_include_directories(xenia-ui-vulkan PRIVATE "$ENV{VULKAN_SDK}/Include")
-  target_link_directories(xenia-ui-vulkan PUBLIC "$ENV{VULKAN_SDK}/Lib")
-  target_link_libraries(xenia-ui-vulkan PUBLIC SPIRV-Tools-opt SPIRV-Tools)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_link_libraries(xenia-ui-vulkan PUBLIC SPIRV-Tools-opt SPIRV-Tools)
-endif()
 xe_target_defaults(xenia-ui-vulkan)
 
 if(XENIA_BUILD_MISC)
