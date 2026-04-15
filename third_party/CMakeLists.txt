@@ -162,12 +162,6 @@ target_include_directories(mspack PUBLIC mspack)
 target_link_libraries(mspack PUBLIC xenia-base)
 
 # ==============================================================================
-# oaknut (header-only, ARM64 codegen)
-# ==============================================================================
-add_library(oaknut INTERFACE)
-target_include_directories(oaknut INTERFACE oaknut/include)
-
-# ==============================================================================
 # pugixml
 # ==============================================================================
 add_library(pugixml STATIC
