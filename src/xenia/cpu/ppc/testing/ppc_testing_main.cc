@@ -554,6 +554,9 @@ TestResult RunTestInChildProcess(TestSuite& test_suite, TestCase& test_case) {
       case SIGABRT:
         signal_name = "SIGABRT";
         break;
+      case SIGTRAP:
+        signal_name = "SIGTRAP";
+        break;
     }
     fprintf(stderr, "  [%s] CRASHED (%s)\n", test_case.name.c_str(),
             signal_name);
@@ -571,7 +574,7 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
                       TestCase& test_case, int& failed_count,
                       int& passed_count) {
 #if XE_COMPILER_MSVC
-  __try {
+  try {
     if (!runner.Setup(test_suite)) {
       fprintf(stderr, "  [%s] FAILED SETUP\n", test_case.name.c_str());
       fflush(stderr);
@@ -580,17 +583,14 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
     }
     if (runner.Run(test_case)) {
       ++passed_count;
-      // Print progress dot
-      fprintf(stdout, ".");
-      fflush(stdout);
     } else {
       fprintf(stderr, "  [%s] FAILED\n", test_case.name.c_str());
       fflush(stderr);
       ++failed_count;
     }
-  } __except (filter(GetExceptionCode())) {
-    fprintf(stderr, "  [%s] FAILED (UNSUPPORTED INSTRUCTION)\n",
-            test_case.name.c_str());
+  } catch (const std::exception& e) {
+    fprintf(stderr, "  [%s] CRASHED (C++ exception: %s)\n",
+            test_case.name.c_str(), e.what());
     fflush(stderr);
     ++failed_count;
   }
@@ -602,9 +602,6 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
 
   if (result == TestResult::kPassed) {
     ++passed_count;
-    // Print progress dot
-    fprintf(stdout, ".");
-    fflush(stdout);
   } else {
     ++failed_count;
   }
@@ -623,7 +620,11 @@ bool RunTests(const std::vector<std::string>& test_names) {
   // Load skip list
   auto skip_list = LoadSkipList(cvars::test_skip_file);
   if (!skip_list.empty()) {
-    XELOGI("Loaded skip list with {} test cases to skip.", skip_list.size());
+    fprintf(stderr, "Loaded skip list with %zu test cases to skip.\n",
+            skip_list.size());
+  } else {
+    fprintf(stderr, "Warning: skip list is empty (path: %s)\n",
+            cvars::test_skip_file.string().c_str());
   }
 
   // Build a set of requested test names for fast lookup
@@ -663,79 +664,55 @@ bool RunTests(const std::vector<std::string>& test_names) {
 
   XELOGI("{} tests loaded.", test_suites.size());
 
-  // Collect all test cases across all suites, filtering out skipped tests
-  std::vector<std::pair<TestSuite*, TestCase*>> all_tests;
+  // Count test cases across all suites, filtering out skipped tests
   int skipped_count = 0;
+  size_t total_cases = 0;
   for (auto& test_suite : test_suites) {
     for (auto& test_case : test_suite.test_cases()) {
       if (skip_list.find(test_case.name) != skip_list.end()) {
         ++skipped_count;
-        continue;  // Skip this test
+      } else {
+        ++total_cases;
       }
-      all_tests.push_back({&test_suite, &test_case});
     }
   }
 
   if (skipped_count > 0) {
-    XELOGI("{} test cases skipped based on skip list.", skipped_count);
+    fprintf(stderr, "Skipped %d test cases based on skip list.\n",
+            skipped_count);
   }
+  fprintf(stderr, "Running %zu test suites, %zu test cases...\n",
+          test_suites.size(), total_cases);
 
 #if XE_COMPILER_MSVC
   // On Windows, use a single shared test runner
   TestRunner runner;
-  // Run tests serially on Windows
-  for (auto& [test_suite, test_case] : all_tests) {
-    ProtectedRunTest(*test_suite, runner, *test_case, failed_count,
-                     passed_count);
-  }
 #else
-  // On POSIX, run tests in parallel using available CPU cores
-  // Get number of CPU cores
-  unsigned int num_cores = std::thread::hardware_concurrency();
-  if (num_cores == 0) num_cores = 4;  // Default to 4 if detection fails
-
-  XELOGI("Running tests in parallel using {} threads", num_cores);
-
-  std::mutex result_mutex;
-  std::atomic<size_t> test_index{0};
-
-  // Worker function for each thread
-  auto worker = [&]() {
-    // Dummy runner for API compatibility (not used on POSIX)
-    TestRunner* runner_ptr = nullptr;
-    TestRunner& runner = *runner_ptr;
-
-    while (true) {
-      size_t idx = test_index.fetch_add(1);
-      if (idx >= all_tests.size()) break;
-
-      auto& [test_suite, test_case] = all_tests[idx];
-      int local_failed = 0;
-      int local_passed = 0;
-
-      ProtectedRunTest(*test_suite, runner, *test_case, local_failed,
-                       local_passed);
-
-      // Update global counters thread-safely
-      std::lock_guard<std::mutex> lock(result_mutex);
-      failed_count += local_failed;
-      passed_count += local_passed;
-    }
-  };
-
-  // Create and run worker threads
-  std::vector<std::thread> threads;
-  for (unsigned int i = 0; i < num_cores; ++i) {
-    threads.emplace_back(worker);
-  }
-
-  // Wait for all threads to complete
-  for (auto& thread : threads) {
-    thread.join();
-  }
+  // On POSIX, each test will create its own runner in a forked process
+  // Pass a dummy value that won't be used
+  TestRunner* runner_ptr = nullptr;
+  TestRunner& runner = *runner_ptr;  // Never dereferenced on POSIX
 #endif
 
-  fprintf(stderr, "\n");
+  // Run tests grouped by suite, printing a dot after each suite completes
+  for (auto& test_suite : test_suites) {
+    bool suite_has_tests = false;
+    for (auto& test_case : test_suite.test_cases()) {
+      if (skip_list.find(test_case.name) != skip_list.end()) {
+        continue;
+      }
+      suite_has_tests = true;
+      ProtectedRunTest(test_suite, runner, test_case, failed_count,
+                       passed_count);
+    }
+    if (suite_has_tests) {
+      fprintf(stdout, ".");
+      fflush(stdout);
+    }
+  }
+
+  fprintf(stdout, "\n");
+  fflush(stdout);
   fprintf(stderr, "Total tests: %d\n", failed_count + passed_count);
   fprintf(stderr, "Passed: %d\n", passed_count);
   fprintf(stderr, "Failed: %d\n", failed_count);
