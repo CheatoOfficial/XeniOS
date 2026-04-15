@@ -12,7 +12,7 @@ if(XENIA_BUILD_MISC)
   )
   target_link_libraries(xenia-ui-window-d3d12-demo PRIVATE
     xenia-apu xenia-base xenia-core xenia-cpu
-    xenia-gpu xenia-hid xenia-hid-skylander
+    xenia-gpu xenia-hid xenia-hid-portal
     xenia-kernel xenia-patcher xenia-ui xenia-ui-d3d12 xenia-vfs
     aes_128 capstone dxbc fmt glslang-spirv imgui mspack snappy xxhash
   )
