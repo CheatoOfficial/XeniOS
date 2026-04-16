@@ -38,16 +38,6 @@ if(WIN32)
     $<$<CONFIG:Debug>:/SUBSYSTEM:CONSOLE>
     /ENTRY:mainCRTStartup
   )
-else()
-  target_sources(xenia-app PRIVATE
-    ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_posix.cc
-  )
-  if(NOT MSVC AND XE_TARGET_X86_64)
-    set_source_files_properties(
-      ${PROJECT_SOURCE_DIR}/src/xenia/base/main_init_posix.cc
-      PROPERTIES COMPILE_OPTIONS "-msse2;-mno-avx"
-    )
-  endif()
 endif()
 
 target_compile_definitions(xenia-app PRIVATE

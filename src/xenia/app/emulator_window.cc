@@ -485,18 +485,20 @@ void EmulatorWindow::OnEmulatorInitialized() {
     pid_t pid = fork();
     if (pid == 0) {
       // Child process
+      std::vector<std::string> arg_storage;
+      std::vector<const char*> argv;
+      std::string gamemode_cmd;
+
+#if XE_PLATFORM_LINUX
       if (cvars::use_mangohud) {
         setenv("MANGOHUD", "1", 1);
       }
-
-      std::vector<std::string> arg_storage;
-      std::vector<const char*> argv;
-
-      std::string gamemode_cmd;
       if (cvars::use_gamemode) {
         gamemode_cmd = "gamemoderun";
         argv.push_back(gamemode_cmd.c_str());
       }
+#endif
+
       arg_storage.push_back(executable_path.string());
       argv.push_back(arg_storage.back().c_str());
 
@@ -535,7 +537,7 @@ void EmulatorWindow::OnEmulatorInitialized() {
       }
       argv.push_back(nullptr);
 
-      if (cvars::use_gamemode) {
+      if (!gamemode_cmd.empty()) {
         execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
       } else {
         execv(executable_path.c_str(), const_cast<char**>(argv.data()));
@@ -599,10 +601,13 @@ void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
         std::vector<const char*> argv;
         std::string gamemode_cmd;
 
+#if XE_PLATFORM_LINUX
         if (cvars::use_gamemode) {
           gamemode_cmd = "gamemoderun";
           argv.push_back(gamemode_cmd.c_str());
         }
+#endif
+
         argv.push_back(executable_path.c_str());
 
         std::string config_arg;
@@ -612,7 +617,7 @@ void EmulatorWindow::EmulatorWindowListener::OnClosing(ui::UIEvent& e) {
         }
         argv.push_back(nullptr);
 
-        if (cvars::use_gamemode) {
+        if (!gamemode_cmd.empty()) {
           execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
         } else {
           execv(executable_path.c_str(), const_cast<char**>(argv.data()));
@@ -2415,23 +2420,20 @@ void EmulatorWindow::LaunchTitleInNewProcess(
 
   if (pid == 0) {
     // Child process
-
-    // Set MangoHUD environment variable if enabled
-    if (cvars::use_mangohud) {
-      setenv("MANGOHUD", "1", 1);
-    }
-
     std::vector<const char*> argv;
     std::string gamemode_cmd;
 
-    // If GameMode is enabled, use gamemoderun as the executable
+#if XE_PLATFORM_LINUX
+    if (cvars::use_mangohud) {
+      setenv("MANGOHUD", "1", 1);
+    }
     if (cvars::use_gamemode) {
       gamemode_cmd = "gamemoderun";
       argv.push_back(gamemode_cmd.c_str());
-      argv.push_back(executable_path.c_str());
-    } else {
-      argv.push_back(executable_path.c_str());
     }
+#endif
+
+    argv.push_back(executable_path.c_str());
 
     // Pass the config file if one is being used
     std::string config_arg;
@@ -2451,17 +2453,14 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     }
     argv.push_back(nullptr);
 
-    // Execute the new process
-    if (cvars::use_gamemode) {
-      // Use execvp to search PATH for gamemoderun
+    if (!gamemode_cmd.empty()) {
       execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
     } else {
       execv(executable_path.c_str(), const_cast<char**>(argv.data()));
     }
 
     // If exec returns, it failed
-    XELOGE("Failed to execute: {}",
-           cvars::use_gamemode ? gamemode_cmd : executable_path.string());
+    XELOGE("Failed to execute: {}", executable_path.string());
     std::exit(1);
   } else if (pid < 0) {
     // Fork failed
