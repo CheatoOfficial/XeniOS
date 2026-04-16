@@ -63,20 +63,17 @@ target_link_libraries(xenia-app PRIVATE
   xenia-cpu
   xenia-gpu
   xenia-gpu-null
-  xenia-gpu-vulkan
   xenia-hid
   xenia-hid-nop
   xenia-kernel
   xenia-patcher
   xenia-ui
-  xenia-ui-vulkan
   xenia-vfs
   aes_128
   capstone
   fmt
   dxbc
   discord-rpc
-  glslang-spirv
   imgui
   libavcodec
   libavutil
@@ -89,6 +86,15 @@ target_link_libraries(xenia-app PRIVATE
   xenia-helper-sdl
   xenia-hid-sdl
 )
+
+# Vulkan/SPIR-V backends (not macOS)
+if(NOT APPLE)
+  target_link_libraries(xenia-app PRIVATE
+    xenia-gpu-vulkan
+    xenia-ui-vulkan
+    glslang-spirv
+  )
+endif()
 
 # Architecture-specific backend
 if(XE_TARGET_X86_64)

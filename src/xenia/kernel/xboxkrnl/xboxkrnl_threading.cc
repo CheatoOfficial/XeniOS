@@ -244,7 +244,7 @@ dword_result_t NtSuspendThread_entry(dword_t handle,
       } else {
         return X_STATUS_THREAD_IS_TERMINATING;
       }
-#elif XE_PLATFORM_LINUX
+#else
       // Handle self-suspension specially to avoid deadlock.
       if (!thread->guest_object<X_KTHREAD>()->terminated) {
         bool is_self_suspend =
@@ -261,8 +261,6 @@ dword_result_t NtSuspendThread_entry(dword_t handle,
       } else {
         return X_STATUS_THREAD_IS_TERMINATING;
       }
-#else
-#error "Unsupported platform"
 #endif
     } else {
       return X_STATUS_OBJECT_TYPE_MISMATCH;
@@ -901,6 +899,10 @@ dword_result_t NtSetTimerEx_entry(dword_t timer_handle, lpqword_t due_time_ptr,
                                   lpdword_t unk_zero) {
   assert_true(mode == 1);
   assert_true(!unk_zero);
+
+  if (unk_zero) {
+    XELOGI("NtSetTimerEx: unk_zero is set!");
+  }
 
   uint64_t due_time = *due_time_ptr;
 

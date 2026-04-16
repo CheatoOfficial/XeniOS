@@ -76,7 +76,7 @@ struct CACHE_CONTROL
     : Sequence<CACHE_CONTROL,
                I<OPCODE_CACHE_CONTROL, VoidOp, I64Op, OffsetOp>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    bool is_prefetch = false, is_prefetchw = false;
+    bool is_clflush = false, is_prefetch = false, is_prefetchw = false;
     switch (CacheControlType(i.instr->flags)) {
       case CacheControlType::CACHE_CONTROL_TYPE_DATA_TOUCH:
         is_prefetch = true;
@@ -86,15 +86,18 @@ struct CACHE_CONTROL
         break;
       case CacheControlType::CACHE_CONTROL_TYPE_DATA_STORE:
       case CacheControlType::CACHE_CONTROL_TYPE_DATA_STORE_AND_FLUSH:
-        // ARM64 dc instructions aren't available in xbyak_aarch64.
-        // These are mostly hints anyway; skip.
-        return;
+        is_clflush = true;
+        break;
       default:
         return;
     }
     auto addr = ComputeMemoryAddress(e, i.src1);
     e.add(e.x0, e.GetMembaseReg(), addr);
     size_t cache_line_size = i.src2.value;
+    if (is_clflush) {
+      // dc civac, x0
+      e.sys(0b011, 0b0111, 0b1110, 0b001, e.x0);
+    }
     if (is_prefetch) {
       e.prfm(Xbyak_aarch64::PLDL1KEEP, ptr(e.x0));
     } else if (is_prefetchw) {
@@ -102,6 +105,10 @@ struct CACHE_CONTROL
     }
     if (cache_line_size >= 128) {
       e.eor(e.x0, e.x0, 64);
+      if (is_clflush) {
+        // dc civac, x0
+        e.sys(0b011, 0b0111, 0b1110, 0b001, e.x0);
+      }
       if (is_prefetch) {
         e.prfm(Xbyak_aarch64::PLDL1KEEP, ptr(e.x0));
       } else if (is_prefetchw) {
@@ -811,55 +818,49 @@ EMITTER_OPCODE_TABLE(OPCODE_STORE_OFFSET, STORE_OFFSET_I8, STORE_OFFSET_I16,
 // ============================================================================
 // OPCODE_MEMSET
 // ============================================================================
+static const bool zva_enable = (xe_cpu_mrs(DCZID_EL0) & 0b1'0000) == 0;
+static const uint64_t zva_length = (4ULL << (xe_cpu_mrs(DCZID_EL0) & 0b0'1111));
+
 struct MEMSET_I64
     : Sequence<MEMSET_I64, I<OPCODE_MEMSET, VoidOp, I64Op, I8Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // memset(membase + guest_addr, value, length)
+    assert_true(i.src2.is_constant);
+    assert_true(i.src3.is_constant);
+    assert_true(i.src2.constant() == 0);
+    // memset(membase + guest_addr, 0, length)
+    // Only used by dcbz/dcbz128: constant zero value, constant aligned size.
     auto addr = ComputeMemoryAddress(e, i.src1);
     e.add(e.x0, e.GetMembaseReg(), addr);
-    // Optimize the common case: zeroing a constant-length block (dcbz/dcbz128).
-    if (i.src2.is_constant && i.src2.constant() == 0 && i.src3.is_constant) {
-      uint64_t len = i.src3.constant();
-      // Inline with STP xzr, xzr pairs (16 bytes each).
-      for (uint64_t off = 0; off + 16 <= len; off += 16) {
-        e.stp(e.xzr, e.xzr, ptr(e.x0, static_cast<int32_t>(off)));
+    const uint64_t len = i.src3.constant();
+    uint64_t off = 0;
+
+    // Use `dc zva` if it writes more bytes at a time than STP
+    if (zva_enable && len >= zva_length && zva_length > 16) {
+      for (; off + zva_length <= len; off += zva_length) {
+        // dc zva, x0
+        e.sys(0b011, 0b0111, 0b0100, 0b001, e.x0);
+        if (off + zva_length < len) {
+          e.add(e.x0, e.x0, zva_length);
+        }
       }
-      // Handle remaining bytes (0-15).
-      uint64_t rem = len & 15;
-      uint64_t base = len & ~15ull;
-      if (rem >= 8) {
-        e.str(e.xzr, ptr(e.x0, static_cast<int32_t>(base)));
-        base += 8;
-        rem -= 8;
-      }
-      if (rem >= 4) {
-        e.str(e.wzr, ptr(e.x0, static_cast<int32_t>(base)));
-        base += 4;
-        rem -= 4;
-      }
-      // 1-3 byte remainder unlikely for dcbz/dcbz128, skip for now.
-    } else {
-      // General case: use a loop.
-      if (i.src2.is_constant) {
-        e.mov(e.w1, static_cast<uint64_t>(i.src2.constant() & 0xFF));
-      } else {
-        e.mov(e.w1, WReg(i.src2.reg().getIdx()));
-      }
-      if (i.src3.is_constant) {
-        e.mov(e.x2, static_cast<uint64_t>(i.src3.constant()));
-      } else {
-        e.mov(e.x2, i.src3.reg());
-      }
-      // Byte-fill loop: store w1 to [x0] for x2 bytes.
-      auto& loop = e.NewCachedLabel();
-      auto& done = e.NewCachedLabel();
-      e.cbz(e.x2, done);
-      e.L(loop);
-      e.strb(e.w1, ptr(e.x0));
-      e.add(e.x0, e.x0, 1);
-      e.subs(e.x2, e.x2, 1);
-      e.b(Xbyak_aarch64::NE, loop);
-      e.L(done);
+    }
+
+    // Inline with STP xzr, xzr pairs (16 bytes each)
+    for (; off + 16 <= len; off += 16) {
+      e.stp(e.xzr, e.xzr, AdrPostImm(e.x0, 16));
+    }
+    // Handle remaining bytes (0-15)
+    if (off + 8 <= len) {
+      e.str(e.xzr, AdrPostImm(e.x0, 8));
+      off += 8;
+    }
+    if (off + 4 <= len) {
+      e.str(e.wzr, AdrPostImm(e.x0, 4));
+      off += 4;
+    }
+    // Byte loop for any remaining 0-3 bytes
+    for (; off + 1 <= len; off += 1) {
+      e.strb(e.wzr, AdrPostImm(e.x0, 1));
     }
   }
 };
@@ -885,6 +886,12 @@ struct ATOMIC_EXCHANGE_I8
     } else {
       e.and_(e.w0, i.src2, 0xFF);
     }
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.swpalb(e.w0, i.dest, ptr(e.x4));
+      return;
+    }
+
     auto& retry = e.NewCachedLabel();
     e.L(retry);
     e.ldaxrb(e.w1, ptr(e.x4));
@@ -908,6 +915,12 @@ struct ATOMIC_EXCHANGE_I16
     } else {
       e.and_(e.w0, i.src2, 0xFFFF);
     }
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.swpalh(e.w0, i.dest, ptr(e.x4));
+      return;
+    }
+
     auto& retry = e.NewCachedLabel();
     e.L(retry);
     e.ldaxrh(e.w1, ptr(e.x4));
@@ -932,6 +945,12 @@ struct ATOMIC_EXCHANGE_I32
     } else {
       e.mov(e.w0, i.src2);
     }
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.swpal(e.w0, i.dest, ptr(e.x4));
+      return;
+    }
+
     auto& retry = e.NewCachedLabel();
     e.L(retry);
     e.ldaxr(e.w1, ptr(e.x4));
@@ -940,31 +959,8 @@ struct ATOMIC_EXCHANGE_I32
     e.mov(i.dest, e.w1);
   }
 };
-struct ATOMIC_EXCHANGE_I64
-    : Sequence<ATOMIC_EXCHANGE_I64,
-               I<OPCODE_ATOMIC_EXCHANGE, I64Op, I64Op, I64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    if (i.src1.is_constant) {
-      e.mov(e.x4, i.src1.constant());
-    } else {
-      e.mov(e.x4, i.src1);
-    }
-    if (i.src2.is_constant) {
-      e.mov(e.x0, static_cast<uint64_t>(i.src2.constant()));
-    } else {
-      e.mov(e.x0, i.src2);
-    }
-    auto& retry = e.NewCachedLabel();
-    e.L(retry);
-    e.ldaxr(e.x1, ptr(e.x4));
-    e.stlxr(e.w2, e.x0, ptr(e.x4));
-    e.cbnz(e.w2, retry);
-    e.mov(i.dest, e.x1);
-  }
-};
 EMITTER_OPCODE_TABLE(OPCODE_ATOMIC_EXCHANGE, ATOMIC_EXCHANGE_I8,
-                     ATOMIC_EXCHANGE_I16, ATOMIC_EXCHANGE_I32,
-                     ATOMIC_EXCHANGE_I64);
+                     ATOMIC_EXCHANGE_I16, ATOMIC_EXCHANGE_I32);
 
 // ============================================================================
 // OPCODE_ATOMIC_COMPARE_EXCHANGE
@@ -989,6 +985,15 @@ struct ATOMIC_COMPARE_EXCHANGE_I32
     } else {
       e.mov(e.w6, i.src3);
     }
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.mov(e.w0, e.w5);
+      e.casal(e.w5, e.w6, ptr(e.x4));
+      e.cmp(e.w5, e.w0);
+      e.cset(i.dest, Xbyak_aarch64::EQ);
+      return;
+    }
+
     auto& retry = e.NewCachedLabel();
     auto& fail = e.NewCachedLabel();
     auto& done = e.NewCachedLabel();
@@ -1022,6 +1027,15 @@ struct ATOMIC_COMPARE_EXCHANGE_I64
     } else {
       e.mov(e.x6, i.src3);
     }
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.mov(e.x0, e.x5);
+      e.casal(e.x5, e.x6, ptr(e.x4));
+      e.cmp(e.x5, e.x0);
+      e.cset(i.dest, Xbyak_aarch64::EQ);
+      return;
+    }
+
     auto& retry = e.NewCachedLabel();
     auto& fail = e.NewCachedLabel();
     auto& done = e.NewCachedLabel();
@@ -1179,20 +1193,29 @@ struct RESERVED_STORE_I32
     }
     // Compute host address.
     e.add(e.x4, e.GetMembaseReg(), addr);
-    // LDXR/STXR loop.
-    auto& cas_loop = e.NewCachedLabel();
-    auto& cas_fail = e.NewCachedLabel();
-    e.L(cas_loop);
-    e.ldaxr(e.w7, ptr(e.x4));
-    e.cmp(e.w7, e.w5);
-    e.b(Xbyak_aarch64::NE, cas_fail);
-    e.stlxr(e.w7, e.w6, ptr(e.x4));
-    e.cbnz(e.w7, cas_loop);
-    // Success.
-    e.mov(i.dest, 1);
-    e.b(done);
-    e.L(cas_fail);
-    e.clrex(15);
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.mov(e.w0, e.w5);
+      e.casal(e.w5, e.w6, ptr(e.x4));
+      e.cmp(e.w5, e.w0);
+      e.cset(i.dest, Xbyak_aarch64::EQ);
+      e.b(done);
+    } else {
+      // LDXR/STXR loop.
+      auto& cas_loop = e.NewCachedLabel();
+      auto& cas_fail = e.NewCachedLabel();
+      e.L(cas_loop);
+      e.ldaxr(e.w7, ptr(e.x4));
+      e.cmp(e.w7, e.w5);
+      e.b(Xbyak_aarch64::NE, cas_fail);
+      e.stlxr(e.w7, e.w6, ptr(e.x4));
+      e.cbnz(e.w7, cas_loop);
+      // Success.
+      e.mov(i.dest, 1);
+      e.b(done);
+      e.L(cas_fail);
+      e.clrex(15);
+    }
     e.L(no_reserve);
     e.mov(i.dest, 0);
     e.L(done);
@@ -1227,18 +1250,27 @@ struct RESERVED_STORE_I64
       e.mov(e.x6, XReg(i.src2.reg().getIdx()));
     }
     e.add(e.x4, e.GetMembaseReg(), addr);
-    auto& cas_loop = e.NewCachedLabel();
-    auto& cas_fail = e.NewCachedLabel();
-    e.L(cas_loop);
-    e.ldaxr(e.x7, ptr(e.x4));
-    e.cmp(e.x7, e.x5);
-    e.b(Xbyak_aarch64::NE, cas_fail);
-    e.stlxr(e.w7, e.x6, ptr(e.x4));
-    e.cbnz(e.w7, cas_loop);
-    e.mov(i.dest, 1);
-    e.b(done);
-    e.L(cas_fail);
-    e.clrex(15);
+
+    if (e.IsFeatureEnabled(kA64EmitLSE)) {
+      e.mov(e.x0, e.x5);
+      e.casal(e.x5, e.x6, ptr(e.x4));
+      e.cmp(e.x5, e.x0);
+      e.cset(i.dest, Xbyak_aarch64::EQ);
+      e.b(done);
+    } else {
+      auto& cas_loop = e.NewCachedLabel();
+      auto& cas_fail = e.NewCachedLabel();
+      e.L(cas_loop);
+      e.ldaxr(e.x7, ptr(e.x4));
+      e.cmp(e.x7, e.x5);
+      e.b(Xbyak_aarch64::NE, cas_fail);
+      e.stlxr(e.w7, e.x6, ptr(e.x4));
+      e.cbnz(e.w7, cas_loop);
+      e.mov(i.dest, 1);
+      e.b(done);
+      e.L(cas_fail);
+      e.clrex(15);
+    }
     e.L(no_reserve);
     e.mov(i.dest, 0);
     e.L(done);

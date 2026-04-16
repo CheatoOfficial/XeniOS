@@ -538,6 +538,115 @@ TEST_CASE("NJM_DEFAULT_ON", "[backend]") {
 }
 
 // =============================================================================
+// SET_NJM — verify NJM toggle updates backend context correctly
+// =============================================================================
+// NJM (Non-Java Mode) is a VMX feature (VSCR bit 16) that controls
+// flush-to-zero for vector FP operations.  We verify that SET_NJM
+// correctly updates the cached VMX FPCR/MXCSR and the NJM flag.
+static uint32_t observed_njm_flags_after_set = 0;
+static uint32_t observed_vmx_fpcr_after_set = 0;
+
+static void ReadBackendNJMState(ppc::PPCContext* ctx, void* arg0, void* arg1) {
+#if XE_ARCH_AMD64
+  auto* bctx = reinterpret_cast<xe::cpu::backend::x64::X64BackendContext*>(
+      reinterpret_cast<intptr_t>(ctx) -
+      sizeof(xe::cpu::backend::x64::X64BackendContext));
+  observed_njm_flags_after_set = bctx->flags;
+  observed_vmx_fpcr_after_set = bctx->mxcsr_vmx;
+#elif XE_ARCH_ARM64
+  auto* bctx = reinterpret_cast<xe::cpu::backend::a64::A64BackendContext*>(
+      reinterpret_cast<intptr_t>(ctx) -
+      sizeof(xe::cpu::backend::a64::A64BackendContext));
+  observed_njm_flags_after_set = bctx->flags;
+  observed_vmx_fpcr_after_set = bctx->fpcr_vmx;
+#endif
+}
+
+// Helper to build and run a SET_NJM test function.
+static void RunSetNJMTest(int njm_value) {
+  observed_njm_flags_after_set = 0;
+  observed_vmx_fpcr_after_set = 0;
+
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  std::unique_ptr<xe::cpu::backend::Backend> backend;
+#if XE_ARCH_AMD64
+  backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+  backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  auto* builtin_fn = processor->DefineBuiltin(
+      "ReadBackendNJMState", ReadBackendNJMState, nullptr, nullptr);
+
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) { return address == 0x80000000; },
+      [builtin_fn, njm_value](HIRBuilder& b) {
+        b.SetNJM(b.LoadConstantInt8(njm_value ? 1 : 0));
+        b.CallExtern(builtin_fn);
+        b.Return();
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(0x80000000, 0x80010000);
+
+  auto fn = processor->ResolveFunction(0x80000000);
+  REQUIRE(fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+
+  fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  memory->SystemHeapFree(stack_address);
+}
+
+TEST_CASE("SET_NJM_ON", "[backend]") {
+  RunSetNJMTest(1);
+  // NJM flag should be set.
+#if XE_ARCH_AMD64
+  REQUIRE((observed_njm_flags_after_set &
+           (1U << xe::cpu::backend::x64::kX64BackendNJMOn)) != 0);
+  // MXCSR should have FZ and DAZ set.
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 15)) != 0);  // FZ
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 6)) != 0);   // DAZ
+#elif XE_ARCH_ARM64
+  REQUIRE((observed_njm_flags_after_set &
+           (1U << xe::cpu::backend::a64::kA64BackendNJMOn)) != 0);
+  // FPCR_VMX should have FZ (bit 24) set.
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 24)) != 0);
+#endif
+}
+
+TEST_CASE("SET_NJM_OFF", "[backend]") {
+  RunSetNJMTest(0);
+  // NJM flag should be cleared.
+#if XE_ARCH_AMD64
+  REQUIRE((observed_njm_flags_after_set &
+           (1U << xe::cpu::backend::x64::kX64BackendNJMOn)) == 0);
+  // MXCSR should NOT have FZ or DAZ.
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 15)) == 0);
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 6)) == 0);
+#elif XE_ARCH_ARM64
+  REQUIRE((observed_njm_flags_after_set &
+           (1U << xe::cpu::backend::a64::kA64BackendNJMOn)) == 0);
+  // FPCR_VMX should NOT have FZ (bit 24).
+  REQUIRE((observed_vmx_fpcr_after_set & (1 << 24)) == 0);
+#endif
+}
+
+// =============================================================================
 // Atomic Exchange I32
 // =============================================================================
 // Tests that AtomicExchange correctly swaps a value in memory and returns
@@ -737,4 +846,108 @@ TEST_CASE("FPCR_PRESERVED_ACROSS_HOST_CALLBACK", "[backend]") {
   // Reset rounding mode.
   processor->backend()->SetGuestRoundingMode(ctx, 0);
   memory->SystemHeapFree(stack_address);
+}
+
+// =============================================================================
+// Unwind info registration for JIT code
+// =============================================================================
+// Verify that the backend registers unwind data for JIT'd functions so that
+// debuggers, profilers, and exception handlers can walk the stack through
+// JIT code.
+//
+// Windows: RtlLookupFunctionEntry directly queries the registered SEH tables.
+// POSIX: we call backtrace() from inside a JIT callback and verify we get
+// enough frames to have unwound through the JIT thunks.  This exercises the
+// DWARF .eh_frame data registered via __register_frame.
+
+#if !XE_PLATFORM_WIN32
+#include <execinfo.h>
+static int jit_backtrace_depth = 0;
+static void CaptureJITBacktrace(ppc::PPCContext* ctx, void* arg0, void* arg1) {
+  void* frames[64];
+  jit_backtrace_depth = backtrace(frames, 64);
+}
+#endif
+
+TEST_CASE("JIT_UNWIND_INFO_REGISTERED", "[backend]") {
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  std::unique_ptr<xe::cpu::backend::Backend> backend;
+#if XE_ARCH_AMD64
+  backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+  backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+#if XE_PLATFORM_WIN32
+  // Compile a minimal guest function and check that Windows can find its
+  // RUNTIME_FUNCTION entry via RtlLookupFunctionEntry.
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) { return address == 0x80000000; },
+      [](HIRBuilder& b) {
+        b.Return();
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(0x80000000, 0x80010000);
+
+  auto fn = processor->ResolveFunction(0x80000000);
+  REQUIRE(fn != nullptr);
+
+  auto* guest_fn = static_cast<GuestFunction*>(fn);
+  void* code = guest_fn->machine_code();
+  REQUIRE(code != nullptr);
+
+  DWORD64 image_base = 0;
+  auto* entry = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(code),
+                                       &image_base, nullptr);
+  REQUIRE(entry != nullptr);
+  REQUIRE(image_base != 0);
+#else
+  // On POSIX, call backtrace() from inside a JIT callback. If the .eh_frame
+  // unwind info is correctly registered, backtrace will unwind through:
+  //   callback -> GuestToHostThunk -> guest func -> HostToGuestThunk -> Call
+  // giving at least 4 frames. Without unwind info it stops at 1-2.
+  jit_backtrace_depth = 0;
+
+  auto* builtin_fn = processor->DefineBuiltin(
+      "CaptureJITBacktrace", CaptureJITBacktrace, nullptr, nullptr);
+
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) { return address == 0x80000000; },
+      [builtin_fn](HIRBuilder& b) {
+        b.CallExtern(builtin_fn);
+        b.Return();
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(0x80000000, 0x80010000);
+
+  auto fn = processor->ResolveFunction(0x80000000);
+  REQUIRE(fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+
+  fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  REQUIRE(jit_backtrace_depth >= 4);
+
+  memory->SystemHeapFree(stack_address);
+#endif
+
+  memory.reset();
 }

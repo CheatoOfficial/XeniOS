@@ -721,6 +721,25 @@ void EmulatorWindow::EmulatorWindowListener::OnMouseDoubleClick(
   emulator_window_.OnMouseDoubleClick(e);
 }
 
+void EmulatorWindow::EmulatorWindowListener::OnUsbDeviceChanged(
+    bool is_arrival) {
+  if (!emulator_window_.emulator()) {
+    return;
+  }
+  if (!emulator_window_.emulator()->input_system()) {
+    return;
+  }
+  auto* portal = emulator_window_.emulator()->input_system()->GetPortal();
+  if (!portal) {
+    return;
+  }
+  if (is_arrival) {
+    portal->OnDeviceArrival();
+  } else {
+    portal->OnDeviceRemoval();
+  }
+}
+
 bool EmulatorWindow::Initialize() {
   window_->AddListener(&window_listener_);
   window_->AddInputListener(&window_listener_, kZOrderEmulatorWindowInput);

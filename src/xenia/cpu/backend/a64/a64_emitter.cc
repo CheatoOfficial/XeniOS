@@ -75,7 +75,8 @@ A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
       processor_(backend->processor()),
       backend_(backend),
       code_cache_(backend->code_cache()),
-      allocator_(allocator) {}
+      allocator_(allocator),
+      feature_flags_(arm64::GetFeatureFlags()) {}
 
 A64Emitter::~A64Emitter() = default;
 
@@ -136,6 +137,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // ARM64 ABI: SP must always be 16-byte aligned.
   assert_true(stack_size % 16 == 0);
   func_info.stack_size = stack_size;
+  func_info.lr_save_offset = StackLayout::HOST_RET_ADDR;
   stack_size_ = stack_size;
 
   struct {
@@ -182,8 +184,9 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // ========================================================================
   code_offsets.body = getSize();
 
-  // Allocate the epilog label.
+  // Allocate the epilog label (owned by label_cache_ for cleanup).
   auto epilog_label_ptr = new Label();
+  label_cache_.push_back(epilog_label_ptr);
   epilog_label_ = epilog_label_ptr;
 
   // Walk HIR blocks and emit ARM64 instructions.
@@ -495,18 +498,15 @@ bool A64Emitter::ChangeFpcrMode(FPCRMode new_mode, bool already_set) {
   }
   fpcr_mode_ = new_mode;
   if (!already_set) {
-    // Read current FPCR.
-    mrs(x0, 3, 3, 4, 4, 0);  // mrs x0, FPCR
+    // Load the pre-computed FPCR value from the backend context.
+    // This avoids an expensive MRS + read-modify-write cycle.
+    auto bctx = GetBackendCtxReg();
     if (new_mode == FPCRMode::Vmx) {
-      // VMX mode: set FZ (bit 24) for flush-to-zero.
-      // Do NOT set DN (bit 25) — PPC preserves NaN payloads.
-      mov(x17, ~static_cast<uint64_t>(1u << 25));
-      and_(x0, x0, x17);
-      orr(x0, x0, static_cast<uint64_t>(1u << 24));
+      ldr(w0, Xbyak_aarch64::ptr(bctx, static_cast<uint32_t>(offsetof(
+                                           A64BackendContext, fpcr_vmx))));
     } else {
-      // FPU mode: clear FZ and DN for IEEE-compliant behavior.
-      mov(x17, ~static_cast<uint64_t>(3u << 24));
-      and_(x0, x0, x17);
+      ldr(w0, Xbyak_aarch64::ptr(bctx, static_cast<uint32_t>(offsetof(
+                                           A64BackendContext, fpcr_fpu))));
     }
     msr(3, 3, 4, 4, 0, x0);  // msr FPCR, x0
   }
