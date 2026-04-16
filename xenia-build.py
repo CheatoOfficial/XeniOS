@@ -301,6 +301,12 @@ def setup_qt(target_arch=None):
                     sys.exit(1)
                 os.environ["QT_HOST_PATH"] = host_dir
                 print(f"Found host Qt at {host_dir} (QT_HOST_PATH)")
+        elif sys.platform == "darwin":
+            # macOS: look for "macos" directory
+            macos_dir = os.path.join(qt_version_dir, "macos")
+            if not os.path.isdir(macos_dir):
+                return False
+            qt_dir = macos_dir
         else:
             # On Linux, look for gcc_64 or similar compiler directories
             compiler_dirs = [d for d in os.listdir(qt_version_dir)
@@ -779,51 +785,53 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
             f"-DCMAKE_C_COMPILER={c_compiler}",
             f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
         ]
-    else:
+    elif platform.machine() in ("ARM64", "aarch64") or target_arch == "arm64":
+        # Determine the effective target and the appropriate compiler/environment.
+        # This covers both native ARM64 builds and x64→ARM64 cross-compilation.
+        # Without this, native ARM64 hosts (e.g. Parallels on Apple Silicon)
+        # may pick up x64-hosted cl.exe via PATH emulation, which defines
+        # _M_AMD64 instead of _M_ARM64.
         is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
-        native_arch = "arm64" if is_native_arm64 else "x64"
-        is_cross = target_arch is not None and target_arch != native_arch
-        if is_cross:
-            if target_arch == "x64":
-                # ARM64 host → x64 target
-                target = "x64"
-                vcvars_arg = "arm64_amd64"
-                processor = "AMD64"
-                cl_glob = r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\HostARM64\x64\cl.exe"
-            else:
-                # x64 host → arm64 target
-                target = "arm64"
-                vcvars_arg = "x64_arm64"
-                processor = "ARM64"
-                cl_glob = r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe"
+        if target_arch == "x64" and is_native_arm64:
+            # Cross-compiling from ARM64 to x64
+            target = "x64"
+            vcvars_arg = "arm64_amd64"
+            processor = "AMD64"
+            cl_glob = r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\HostARM64\x64\cl.exe"
+        else:
+            # Targeting ARM64 (native or cross-compile from x64)
+            target = "arm64"
+            vcvars_arg = "x64_arm64"
+            processor = "ARM64"
+            cl_glob = r"C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe"
 
-            cl_paths = sorted(glob(cl_glob))
-            if cl_paths:
-                cl_exe = cl_paths[-1]
-                # Derive the VS install root from the compiler path:
-                # .../VC/Tools/MSVC/<ver>/bin/Host<x>/target<y>/cl.exe -> .../VC
-                vc_root = cl_exe
-                for _ in range(7):  # walk up 7 levels to VC/
-                    vc_root = os.path.dirname(vc_root)
-                vcvarsall = os.path.join(vc_root, "Auxiliary", "Build", "vcvarsall.bat")
-                if os.path.exists(vcvarsall):
-                    print(f"  Setting up {target.upper()} build environment via: {vcvarsall}")
-                    cmd = f'"{vcvarsall}" {vcvars_arg} >nul 2>&1 && set'
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        for line in result.stdout.splitlines():
-                            if "=" in line:
-                                key, _, value = line.partition("=")
-                                os.environ[key] = value
-                args += [
-                    "-DCMAKE_SYSTEM_NAME=Windows",
-                    f"-DCMAKE_SYSTEM_PROCESSOR={processor}",
-                    f"-DCMAKE_C_COMPILER={cl_exe.replace(os.sep, '/')}",
-                    f"-DCMAKE_CXX_COMPILER={cl_exe.replace(os.sep, '/')}",
-                ]
-            else:
-                print(f"  WARNING: {target.upper()} cross-compiler not found. Install "
-                      f"'MSVC {target.upper()} build tools' in Visual Studio.")
+        cl_paths = sorted(glob(cl_glob))
+        if cl_paths:
+            cl_exe = cl_paths[-1]
+            # Derive the VS install root from the compiler path:
+            # .../VC/Tools/MSVC/<ver>/bin/Host<x>/target<y>/cl.exe -> .../VC
+            vc_root = cl_exe
+            for _ in range(7):  # walk up 7 levels to VC/
+                vc_root = os.path.dirname(vc_root)
+            vcvarsall = os.path.join(vc_root, "Auxiliary", "Build", "vcvarsall.bat")
+            if os.path.exists(vcvarsall):
+                print(f"  Setting up {target.upper()} build environment via: {vcvarsall}")
+                cmd = f'"{vcvarsall}" {vcvars_arg} >nul 2>&1 && set'
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    for line in result.stdout.splitlines():
+                        if "=" in line:
+                            key, _, value = line.partition("=")
+                            os.environ[key] = value
+            args += [
+                "-DCMAKE_SYSTEM_NAME=Windows",
+                f"-DCMAKE_SYSTEM_PROCESSOR={processor}",
+                f"-DCMAKE_C_COMPILER={cl_exe.replace(os.sep, '/')}",
+                f"-DCMAKE_CXX_COMPILER={cl_exe.replace(os.sep, '/')}",
+            ]
+        else:
+            print(f"  WARNING: {target.upper()} cross-compiler not found. Install "
+                  f"'MSVC {target.upper()} build tools' in Visual Studio.")
     if build_tests:
         args += ["-DXENIA_BUILD_TESTS=ON"]
     if disable_lto:
@@ -1052,7 +1060,15 @@ class BaseBuildCommand(Command):
                  "separate build-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
-        if not os.environ.get("VULKAN_SDK"):
+        if not os.environ.get("QT_DIR"):
+            print_error("Qt not found!"
+                  "\nPlease install Qt 6.10.1 via aqtinstall:"
+                  "\n  pip install aqtinstall"
+                  "\n  python -m aqt install-qt <platform> desktop 6.10.1 <arch> -m qtmultimedia"
+                  f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
+            return 1
+
+        if sys.platform != "darwin" and not os.environ.get("VULKAN_SDK"):
             print_error("Vulkan SDK not found!"
                   "\nPlease install Vulkan SDK from:"
                   "\nhttps://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
