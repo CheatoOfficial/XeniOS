@@ -1058,7 +1058,7 @@ bool BaseHeap::AllocFixed(uint32_t base_address, uint32_t size,
                           uint32_t protect) {
   alignment = xe::round_up(alignment, page_size_);
   size = xe::align(size, alignment);
-  assert_true(base_address % alignment == 0);
+  assert_true((base_address + host_address_offset_) % alignment == 0);
   uint32_t page_count = get_page_count(size, page_size_);
   uint32_t start_page_number = (base_address - heap_base_) / page_size_;
   uint32_t end_page_number = start_page_number + page_count - 1;
@@ -1214,7 +1214,11 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
       }
 
       // Compute the highest aligned start within this block and range.
-      uint32_t usable_end = std::min(block_end, high_page_number + 1);
+      // high_page_number is exclusive and rounded down to the stride, so
+      // the top stride of pages is never returned.
+      uint32_t high_aligned =
+          high_page_number - QuickMod(high_page_number, page_scan_stride);
+      uint32_t usable_end = std::min(block_end, high_aligned);
       if (usable_end < page_count) {
         continue;
       }
@@ -1255,10 +1259,12 @@ bool BaseHeap::AllocRange(uint32_t low_address, uint32_t high_address,
       }
 
       // Compute the lowest aligned start within this block and range.
+      // high_page_number is treated as exclusive — the page at
+      // high_page_number itself is never returned.
       uint32_t earliest = std::max(block_start, low_page_number);
       uint32_t aligned_start = xe::round_up(earliest, page_scan_stride, false);
       if (aligned_start + page_count <= block_end &&
-          aligned_start + page_count - 1 <= high_page_number) {
+          aligned_start + page_count <= high_page_number) {
         start_page_number = aligned_start;
         end_page_number = aligned_start + page_count - 1;
         break;
@@ -1743,6 +1749,13 @@ void PhysicalHeap::Initialize(Memory* memory, uint8_t* membase,
   BaseHeap::Initialize(memory, membase, heap_type, heap_base, heap_size,
                        page_size, host_address_offset);
   parent_heap_ = parent_heap;
+
+  // The physical base offset (host_address_offset) must be a multiple of
+  // page_size. Otherwise, aligned parent allocations become misaligned after
+  // translation back to virtual addresses (parent_address + heap_base_ -
+  // GetPhysicalAddress(heap_base_) loses alignment).
+  xenia_assert(host_address_offset % page_size == 0);
+
   system_page_size_ = uint32_t(xe::memory::page_size());
   xenia_assert(xe::is_pow2(system_page_size_));
   system_page_shift_ = xe::log2_floor(system_page_size_);
@@ -1785,7 +1798,15 @@ bool PhysicalHeap::Alloc(uint32_t size, uint32_t alignment,
 
   // Given the address we've reserved in the parent heap, pin that here.
   // Shouldn't be possible for it to be allocated already.
-  uint32_t address = heap_base_ + parent_address - parent_heap_start;
+  const uint32_t address = heap_base_ + parent_address - parent_heap_start;
+  if ((address + host_address_offset_) % alignment != 0) {
+    XELOGE(
+        "PhysicalHeap::Alloc translated address {:08X} misaligned "
+        "(alignment {:08X}, physical base offset {:08X})",
+        address, alignment, parent_heap_start);
+    parent_heap_->Release(parent_address);
+    return false;
+  }
   if (!BaseHeap::AllocFixed(address, size, alignment, allocation_type,
                             protect)) {
     XELOGE(
@@ -1821,12 +1842,17 @@ bool PhysicalHeap::AllocFixed(uint32_t base_address, uint32_t size,
 
   // Given the address we've reserved in the parent heap, pin that here.
   // Shouldn't be possible for it to be allocated already.
-  uint32_t address =
+  const uint32_t address =
       heap_base_ + parent_base_address - GetPhysicalAddress(heap_base_);
-  // The physical memory is already aligned properly by the parent heap.
-  // We only need page alignment for the virtual address since the actual
-  // memory alignment requirement has been satisfied in physical space.
-  if (!BaseHeap::AllocFixed(address, size, page_size_, allocation_type,
+  if ((address + host_address_offset_) % alignment != 0) {
+    XELOGE(
+        "PhysicalHeap::AllocFixed translated address {:08X} misaligned "
+        "(alignment {:08X}, physical base offset {:08X})",
+        address, alignment, GetPhysicalAddress(heap_base_));
+    parent_heap_->Release(parent_base_address);
+    return false;
+  }
+  if (!BaseHeap::AllocFixed(address, size, alignment, allocation_type,
                             protect)) {
     XELOGE(
         "PhysicalHeap::AllocFixed unable to pin physical memory in physical "
@@ -1866,15 +1892,19 @@ bool PhysicalHeap::AllocRange(uint32_t low_address, uint32_t high_address,
         parent_heap_->total_page_count());
     return false;
   }
-
   // Given the address we've reserved in the parent heap, pin that here.
   // Shouldn't be possible for it to be allocated already.
-  uint32_t address =
+  const uint32_t address =
       heap_base_ + parent_address - GetPhysicalAddress(heap_base_);
-  // The physical memory is already aligned properly by the parent heap.
-  // We only need page alignment for the virtual address since the actual
-  // memory alignment requirement has been satisfied in physical space.
-  if (!BaseHeap::AllocFixed(address, size, page_size_, allocation_type,
+  if ((address + host_address_offset_) % alignment != 0) {
+    XELOGE(
+        "PhysicalHeap::AllocRange translated address {:08X} misaligned "
+        "(alignment {:08X}, physical base offset {:08X})",
+        address, alignment, GetPhysicalAddress(heap_base_));
+    parent_heap_->Release(parent_address);
+    return false;
+  }
+  if (!BaseHeap::AllocFixed(address, size, alignment, allocation_type,
                             protect)) {
     XELOGE(
         "PhysicalHeap::AllocRange unable to pin physical memory in physical "

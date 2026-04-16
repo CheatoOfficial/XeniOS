@@ -66,10 +66,10 @@ struct X_KPROCESS {
   // so it sets this ptr to 0x1C0000
   xe::be<uint32_t> clrdataa_masked_ptr;
   xe::be<uint32_t> thread_count;
-  uint8_t unk_18;
-  uint8_t unk_19;
-  uint8_t unk_1A;
-  uint8_t unk_1B;
+  uint8_t process_priority_class;
+  uint8_t default_thread_priority;
+  uint8_t max_dynamic_priority;
+  uint8_t disable_quantum_decay;
   xe::be<uint32_t> kernel_stack_size;
   xe::be<uint32_t> tls_static_data_address;
   xe::be<uint32_t> tls_data_size;
@@ -337,8 +337,9 @@ class KernelState {
 
  private:
   void LoadKernelModule(object_ref<KernelModule> kernel_module);
-  void InitializeProcess(X_KPROCESS* process, uint32_t type, char unk_18,
-                         char unk_19, char unk_1A);
+  void InitializeProcess(X_KPROCESS* process, uint32_t type,
+                         char priority_class, char default_priority,
+                         char max_dynamic_priority);
   void SetProcessTLSVars(X_KPROCESS* process, int num_slots, int tls_data_size,
                          int tls_static_data_address);
   void InitializeKernelGuestGlobals();
@@ -388,6 +389,7 @@ class KernelState {
 
   uint32_t ke_timestamp_bundle_ptr_ = 0;
   std::unique_ptr<xe::threading::HighResolutionTimer> timestamp_timer_;
+  uint32_t quantum_timer_counter_ = 0;
   cpu::backend::GuestTrampolineGroup kernel_trampoline_group_;
   // fixed address referenced by dashboards. Data is currently unknown
   uint32_t strange_hardcoded_page_ = 0x8E038634 & (~0xFFFF);
