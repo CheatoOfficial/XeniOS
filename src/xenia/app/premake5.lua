@@ -195,23 +195,23 @@ project("xenia-app")
       "MetalKit.framework",
       "QuartzCore.framework",
       "SDL2",
+      -- Frameworks pulled in by the static SDL2 build on macOS.
+      "CoreAudio.framework",
+      "AudioToolbox.framework",
+      "AVFoundation.framework",
+      "CoreHaptics.framework",
+      "ForceFeedback.framework",
+      "GameController.framework",
+      "IOKit.framework",
       "iconv",
     })
     linkoptions({
       "-ldxilconv",
       "-lLLVMDxcSupport",
     })
-    if _OPTIONS["mac-x86_64"] then
-      libdirs({
-        metal_converter_libdir,
-        "/usr/local/opt/sdl2/lib",
-      })
-    else
-      libdirs({
-        metal_converter_libdir,
-        "/opt/homebrew/opt/sdl2/lib",
-      })
-    end
+    libdirs({
+      metal_converter_libdir,
+    })
   filter({"system:macosx", "architecture:arm64"})
     libdirs({ dxilconv_libdir_arm64 })
   filter({"system:macosx", "architecture:x86_64"})
@@ -394,61 +394,6 @@ project("xenia-app")
             .. 'else '
             .. 'echo "warning: macdeployqt not found; Qt frameworks/plugins are not bundled" >&2; '
             .. 'fi'
-    local bundle_sdl_command =
-        'app_arch="$(lipo -archs "' .. app_executable .. '" | awk \'{print $1}\')"; '
-            .. 'sdl_dep="$(otool -L "' .. app_executable
-            .. '" | grep "libSDL2-2.0.0.dylib" | awk \'{print $1}\' | head -n 1)"; '
-            .. 'bundle_sdl="' .. app_frameworks .. '/libSDL2-2.0.0.dylib"; '
-            .. 'rm -f "$bundle_sdl"; '
-            .. 'sdl_src=""; '
-            .. 'if [ -n "$sdl_dep" ] && [ "${sdl_dep#/}" != "$sdl_dep" ] && [ -f "$sdl_dep" ] && '
-            .. 'lipo -archs "$sdl_dep" | tr " " "\\n" | grep -qx "$app_arch"; then sdl_src="$sdl_dep"; fi; '
-            .. 'if [ -z "$sdl_src" ] && [ -n "${SDL2_DIR:-}" ] && [ -f "${SDL2_DIR}/lib/libSDL2-2.0.0.dylib" ] && '
-            .. 'lipo -archs "${SDL2_DIR}/lib/libSDL2-2.0.0.dylib" | tr " " "\\n" | grep -qx "$app_arch"; then '
-            .. 'sdl_src="${SDL2_DIR}/lib/libSDL2-2.0.0.dylib"; fi; '
-            .. 'if [ -z "$sdl_src" ] && command -v brew >/dev/null 2>&1; then '
-            .. 'for sdl_prefix in "$(brew --prefix sdl2 2>/dev/null)"; do '
-            .. 'if [ -n "$sdl_prefix" ] && [ -f "$sdl_prefix/lib/libSDL2-2.0.0.dylib" ] && '
-            .. 'lipo -archs "$sdl_prefix/lib/libSDL2-2.0.0.dylib" | tr " " "\\n" | grep -qx "$app_arch"; then '
-            .. 'sdl_src="$sdl_prefix/lib/libSDL2-2.0.0.dylib"; break; fi; done; '
-            .. 'if [ -z "$sdl_src" ] && [ "$(uname -m)" = "arm64" ] && command -v arch >/dev/null 2>&1; then '
-            .. 'for sdl_prefix in "$(arch -x86_64 brew --prefix sdl2 2>/dev/null || true)"; do '
-            .. 'if [ -n "$sdl_prefix" ] && [ -f "$sdl_prefix/lib/libSDL2-2.0.0.dylib" ] && '
-            .. 'lipo -archs "$sdl_prefix/lib/libSDL2-2.0.0.dylib" | tr " " "\\n" | grep -qx "$app_arch"; then '
-            .. 'sdl_src="$sdl_prefix/lib/libSDL2-2.0.0.dylib"; break; fi; done; fi; '
-            .. 'fi; '
-            .. 'if [ -z "$sdl_src" ]; then '
-            .. 'for brew_bin in /usr/local/bin/brew /opt/homebrew/bin/brew; do '
-            .. 'if [ -x "$brew_bin" ]; then '
-            .. 'sdl_prefix="$("$brew_bin" --prefix sdl2 2>/dev/null || true)"; '
-            .. 'if [ -n "$sdl_prefix" ] && [ -f "$sdl_prefix/lib/libSDL2-2.0.0.dylib" ] && '
-            .. 'lipo -archs "$sdl_prefix/lib/libSDL2-2.0.0.dylib" | tr " " "\\n" | grep -qx "$app_arch"; then '
-            .. 'sdl_src="$sdl_prefix/lib/libSDL2-2.0.0.dylib"; break; fi; '
-            .. 'fi; '
-            .. 'done; '
-            .. 'fi; '
-            .. 'if [ -z "$sdl_src" ]; then '
-            .. 'for sdl_prefix in /usr/local/opt/sdl2 /opt/homebrew/opt/sdl2; do '
-            .. 'if [ -f "$sdl_prefix/lib/libSDL2-2.0.0.dylib" ] && '
-            .. 'lipo -archs "$sdl_prefix/lib/libSDL2-2.0.0.dylib" | tr " " "\\n" | grep -qx "$app_arch"; then '
-            .. 'sdl_src="$sdl_prefix/lib/libSDL2-2.0.0.dylib"; break; fi; '
-            .. 'done; '
-            .. 'fi; '
-            .. 'if [ -n "$sdl_src" ]; then '
-            .. 'cp -f "$sdl_src" "$bundle_sdl"; '
-            .. 'install_name_tool -id "@rpath/libSDL2-2.0.0.dylib" "'
-            .. app_frameworks .. '/libSDL2-2.0.0.dylib"; '
-            .. 'elif [ -n "$sdl_dep" ]; then '
-            .. 'echo "error: compatible SDL2 dylib not found for app architecture $app_arch" >&2; exit 1; '
-            .. 'fi'
-    local relink_sdl_command =
-        'sdl_dep="$(otool -L "' .. app_executable
-            .. '" | grep "libSDL2-2.0.0.dylib" | awk \'{print $1}\' | head -n 1)"; '
-            .. 'if [ -n "$sdl_dep" ] && [ "$sdl_dep" != "@rpath/libSDL2-2.0.0.dylib" ] && [ -f "'
-            .. app_frameworks .. '/libSDL2-2.0.0.dylib" ]; then '
-            .. 'install_name_tool -change "$sdl_dep" "@rpath/libSDL2-2.0.0.dylib" "'
-            .. app_executable .. '"; '
-            .. 'fi'
     files({
       "Info.plist",
       project_root.."/xenia.entitlements",
@@ -495,7 +440,6 @@ project("xenia-app")
           .. app_macos .. '/assets/font/"; fi; true',
       'cp -f "' .. path.join(metal_converter_libdir, "libmetalirconverter.dylib")
           .. '" "' .. app_frameworks .. '/"',
-      bundle_sdl_command,
       'if ! otool -l "' .. app_executable
           .. '" | grep -q "@executable_path/../Frameworks"; then '
           .. 'install_name_tool -add_rpath "@executable_path/../Frameworks" "'
@@ -505,12 +449,8 @@ project("xenia-app")
           .. 'install_name_tool -add_rpath "@loader_path/../Frameworks" "'
           .. app_executable .. '"; fi',
       macdeployqt_command,
-      relink_sdl_command,
       'codesign --force --sign - "' .. app_frameworks
           .. '/libmetalirconverter.dylib"',
-      'if [ -f "' .. app_frameworks .. '/libSDL2-2.0.0.dylib" ]; then '
-          .. 'codesign --force --sign - "'
-          .. app_frameworks .. '/libSDL2-2.0.0.dylib"; fi',
       'rm -f "' .. app_macos .. '"/*.log',
       'codesign --force --deep --sign - --entitlements "'
           .. entitlements_path .. '" "' .. app_bundle .. '"',

@@ -339,14 +339,10 @@ jobs:
           git config --global http.lowSpeedTime 60
           git config --global http.postBuffer 524288000
 
-          # Install dependencies via Homebrew
-          brew install sdl2 ninja pipx
-
-          # Install Qt 6.10.1 via aqtinstall
+          # Install Qt 6.10.1 via aqtinstall (installed into user site).
           if [ '${{ steps.cache-qt-macos.outputs.cache-hit }}' != 'true' ]; then
-            pipx install aqtinstall
-            pipx ensurepath
-            export PATH="$HOME/.local/bin:$PATH"
+            python3 -m pip install --user --break-system-packages aqtinstall
+            export PATH="$(python3 -m site --user-base)/bin:$PATH"
             aqt install-qt mac desktop 6.10.1 clang_64 -O ~/Qt
           fi
           export PATH="$HOME/Qt/6.10.1/macos/bin:$PATH"
@@ -399,9 +395,7 @@ jobs:
           if [ -x "$macdeployqt" ]; then
             "$macdeployqt" "$app_bundle" -always-overwrite -verbose=2 \
               -libpath=third_party/metal-shader-converter/lib \
-              -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos/lib \
-              -libpath=/opt/homebrew/opt/sdl2/lib \
-              -libpath=/usr/local/opt/sdl2/lib
+              -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos/lib
           else
             echo "::warning::macdeployqt not found at $macdeployqt"
           fi
@@ -581,10 +575,7 @@ jobs:
           git config --global http.lowSpeedTime 60
           git config --global http.postBuffer 524288000
 
-          # No SDL2/Qt/Vulkan needed for iOS library builds
-          brew install ninja
-
-          # Update submodules (no DirectXShaderCompiler needed for iOS)
+          # No SDL2/Qt/Vulkan/DirectXShaderCompiler needed for iOS library builds.
           retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler')
           # Restore non-submodule files in third_party/ that the submodule
           # cache may have overwritten with stale versions.
@@ -773,17 +764,10 @@ jobs:
           git config --global http.lowSpeedTime 60
           git config --global http.postBuffer 524288000
 
-          # Install dependencies via Homebrew
-          brew install sdl2 ninja pipx
-          sdl2_prefix="$(brew --prefix sdl2)"
-          echo "SDL2_DIR=$sdl2_prefix" >> "$GITHUB_ENV"
-          export SDL2_DIR="$sdl2_prefix"
-
-          # Install Qt 6.10.1 via aqtinstall
+          # Install Qt 6.10.1 via aqtinstall (installed into user site).
           if [ '${{ steps.cache-qt-macos.outputs.cache-hit }}' != 'true' ]; then
-            pipx install aqtinstall
-            pipx ensurepath
-            export PATH="$HOME/.local/bin:$PATH"
+            python3 -m pip install --user --break-system-packages aqtinstall
+            export PATH="$(python3 -m site --user-base)/bin:$PATH"
             aqt install-qt mac desktop 6.10.1 clang_64 -O ~/Qt
           fi
           export PATH="$HOME/Qt/6.10.1/macos/bin:$PATH"
@@ -799,8 +783,7 @@ jobs:
           fi
 
           qtcore_binary="$HOME/Qt/6.10.1/macos/lib/QtCore.framework/QtCore"
-          sdl2_binary="$SDL2_DIR/lib/libSDL2-2.0.0.dylib"
-          for binary in "$qtcore_binary" "$sdl2_binary"; do
+          for binary in "$qtcore_binary"; do
             if [ ! -f "$binary" ]; then
               echo "::error::Required dependency not found: $binary"
               exit 1
@@ -869,9 +852,7 @@ jobs:
           if [ -x "$macdeployqt" ]; then
             "$macdeployqt" "$app_bundle" -always-overwrite -verbose=2 \
               -libpath=third_party/metal-shader-converter/lib \
-              -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib \
-              -libpath=/opt/homebrew/opt/sdl2/lib \
-              -libpath=/usr/local/opt/sdl2/lib
+              -libpath=third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib
           else
             echo "::warning::macdeployqt not found at $macdeployqt"
           fi
