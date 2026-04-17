@@ -3492,9 +3492,10 @@ void MetalTextureCache::MetalTexture::MarkBindlessViewsUsed() {
   if (!HasBindlessViews()) {
     return;
   }
-  uint64_t submission = texture_cache_.command_processor_
-                            ? texture_cache_.command_processor_->GetCurrentSubmission()
-                            : 1;
+  uint64_t submission =
+      texture_cache_.command_processor_
+          ? texture_cache_.command_processor_->GetCurrentSubmission()
+          : 1;
   if (!in_bindless_usage_list_) {
     bindless_last_usage_submission_index_ = submission;
     LinkBindlessUsage();
@@ -3529,7 +3530,8 @@ void MetalTextureCache::MetalTexture::ReleaseBindlessViews() {
           bindless_srv_index_);
       bindless_srv_index_ = UINT32_MAX;
     }
-    for (auto& [key, bindless_srv_index] : swizzled_view_bindless_srv_indices_) {
+    for (auto& [key, bindless_srv_index] :
+         swizzled_view_bindless_srv_indices_) {
       if (bindless_srv_index != UINT32_MAX) {
         texture_cache_.command_processor_->ReleaseViewBindlessIndex(
             bindless_srv_index);
