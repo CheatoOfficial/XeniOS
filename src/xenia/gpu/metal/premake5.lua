@@ -60,9 +60,15 @@ project("xenia-gpu-metal")
     }
     includedirs {
       spirvcross_root,
+      -- metal_command_processor.h transitively includes metal_irconverter_runtime.h;
+      -- that header has two modes and we need metal-cpp mode on both Apple
+      -- targets so it parses as C++. The MSC *.cc sources that call into
+      -- libmetalirconverter are macOS-only (filter "system:macosx" below),
+      -- so iOS gets the declarations without a link dependency.
+      path.join(project_root, "third_party/metal-shader-converter/include"),
     }
     defines {
-      -- Exceptions are enabled for SPIRV-Cross (see spirv-cross.lua).
+      "IR_RUNTIME_METALCPP",
     }
     links {
       "Metal.framework",
