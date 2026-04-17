@@ -11,10 +11,13 @@
 #define XENIA_GPU_METAL_METAL_COMMAND_PROCESSOR_H_
 
 #include <dispatch/dispatch.h>
+#include <os/log.h>
+#include <os/signpost.h>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -22,31 +25,27 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "xenia/base/platform.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/draw_util.h"
-#include "xenia/gpu/metal/metal_primitive_processor.h"
-#include "xenia/gpu/metal/metal_render_target_cache.h"
-#include "xenia/gpu/metal/metal_shared_memory.h"
-#include "xenia/gpu/metal/metal_texture_cache.h"
-#include "xenia/gpu/metal/msl_bindings.h"
-#include "xenia/gpu/metal/msl_shader.h"
-#include "xenia/gpu/spirv_shader_translator.h"
-#if METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/metal/dxbc_to_dxil_converter.h"
 #include "xenia/gpu/metal/metal_geometry_shader.h"
+#include "xenia/gpu/metal/metal_pipeline_cache.h"
+#include "xenia/gpu/metal/metal_primitive_processor.h"
+#include "xenia/gpu/metal/metal_render_target_cache.h"
 #include "xenia/gpu/metal/metal_shader.h"
 #include "xenia/gpu/metal/metal_shader_converter.h"
+#include "xenia/gpu/metal/metal_shared_memory.h"
+#include "xenia/gpu/metal/metal_texture_cache.h"
+#include "xenia/gpu/metal/metal_upload_buffer_pool.h"
 // clang-format off
 // Must come after metal_texture_cache.h which includes Metal.hpp
 #include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
 // clang-format on
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/ui/metal/metal_api.h"
 #include "xenia/ui/metal/metal_provider.h"
 
@@ -78,11 +77,43 @@ class MetalCommandProcessor : public CommandProcessor {
   void InvalidateGpuMemory() override;
   void ClearReadbackBuffers() override;
 
-  // Track memory regions written by IssueCopy (resolve) so trace playback
-  // can skip overwriting them with stale data from the trace file.
-  void MarkResolvedMemory(uint32_t base_ptr, uint32_t length);
-  bool IsResolvedMemory(uint32_t base_ptr, uint32_t length) const;
-  void ClearResolvedMemory();
+  // ---------------------------------------------------------------------------
+  // Trace replay resolve protection.
+  //
+  // During trace playback the trace player replays MemoryRead commands that
+  // blindly overwrite guest physical memory.  When the Metal backend has
+  // already resolved (IssueCopy) into a region, those writes would clobber
+  // live GPU-produced data with stale trace-file contents.
+  //
+  // TraceResolveGuard tracks resolved regions within a frame so the trace
+  // player (or any other caller) can query whether a write should be skipped.
+  // The guard is cleared at every frame boundary (IssueSwap /
+  // RestoreEdramSnapshot).  It carries no state that participates in live
+  // game rendering.
+  // ---------------------------------------------------------------------------
+  class TraceResolveGuard {
+   public:
+    // Record a resolved memory region (called from IssueCopy).
+    void Mark(uint32_t base_ptr, uint32_t length);
+
+    // Return true if the range overlaps any previously resolved region.
+    bool IsResolved(uint32_t base_ptr, uint32_t length) const;
+
+    // Drop all tracked ranges (frame boundary).
+    void Clear();
+
+   private:
+    struct ResolvedRange {
+      uint32_t base;
+      uint32_t length;
+    };
+    std::vector<ResolvedRange> ranges_;
+  };
+
+  TraceResolveGuard& trace_resolve_guard() { return trace_resolve_guard_; }
+  const TraceResolveGuard& trace_resolve_guard() const {
+    return trace_resolve_guard_;
+  }
 
   ui::metal::MetalProvider& GetMetalProvider() const;
 
@@ -92,12 +123,41 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
     return current_command_buffer_;
   }
-  bool HasActiveRenderEncoder() const {
-    return current_render_encoder_ != nullptr;
+
+  // Submission coordination helpers — callers use these to query or obtain
+  // command buffers for transfer/upload work without reaching into internal
+  // command-processor state.
+  bool HasActiveSubmission() const {
+    return current_command_buffer_ != nullptr;
   }
-  uint32_t current_draw_index() const { return current_draw_index_; }
+  // Returns true when upload/transfer work can be encoded onto the current
+  // submission's command buffer without a standalone detour.  This is the
+  // case when a command buffer exists but no render encoder is open.
+  bool CanJoinActiveSubmissionForTransfer() const {
+    return current_command_buffer_ != nullptr &&
+           current_render_encoder_ == nullptr;
+  }
+  // Returns a command buffer suitable for transfer (blit/compute) work.
+  // If a render encoder is active it is ended first; if no command buffer
+  // exists one is created.  Returns nullptr on failure.
+  MTL::CommandBuffer* RequestTransferCommandBuffer();
+
+  // Standalone (detached) transfer command-buffer helpers.
+  // These create command buffers that are independent of the active submission
+  // and are used by caches for upload/transfer work that cannot join the
+  // current command buffer.  The returned CB is retained; ownership transfers
+  // back via CommitStandaloneAsync or CommitStandaloneAndWait.
+  MTL::CommandBuffer* CreateStandaloneTransferCommandBuffer(const char* label);
+  // Commit a standalone command buffer asynchronously (fire-and-forget).
+  // The CB is released via a completion handler.
+  void CommitStandaloneAsync(MTL::CommandBuffer* cmd);
+  // Commit a standalone command buffer synchronously and wait for completion.
+  // The CB is released before returning.
+  void CommitStandaloneAndWait(MTL::CommandBuffer* cmd);
+
   uint64_t GetCurrentSubmission() const;
   uint64_t GetCompletedSubmission() const;
+  uint64_t GetLatestSubmissionStarted() const { return submission_current_; }
   MTL::CommandBuffer* EnsureCommandBuffer();
   void EndRenderEncoder();
   void ResetRenderEncoderResourceUsage();
@@ -106,14 +166,47 @@ class MetalCommandProcessor : public CommandProcessor {
   void EnsureCommandBufferAutoreleasePool();
   void DrainCommandBufferAutoreleasePool();
 
-  // Get current render pass descriptor (for render target binding)
-  MTL::RenderPassDescriptor* GetCurrentRenderPassDescriptor();
+  // Probe counter increments for encoders created outside the main draw path.
+  void ProbeIncrementTransferRenderEncoder() { ++probe_transfer_re_count_; }
+  void ProbeIncrementComputeEncoder() { ++probe_compute_encoder_count_; }
+  void ProbeIncrementBlitEncoder() { ++probe_blit_encoder_count_; }
 
   // Force issue a swap to push render target to presenter (for trace dumps)
   void ForceIssueSwap();
   bool HasSeenSwap() const { return saw_swap_; }
   void SetSwapDestSwap(uint32_t dest_base, bool swap);
   bool ConsumeSwapDestSwap(uint32_t dest_base, bool* swap_out);
+
+  MetalSharedMemory* shared_memory() const { return shared_memory_.get(); }
+  MetalRenderTargetCache* render_target_cache() const {
+    return render_target_cache_.get();
+  }
+  MetalTextureCache* texture_cache() const { return texture_cache_.get(); }
+
+  // Persistent bindless descriptor heap allocators.
+  uint32_t AllocateViewBindlessIndex();
+  void ReleaseViewBindlessIndex(uint32_t index);
+  void RetireViewBindlessIndex(uint32_t index);
+  uint32_t GetViewBindlessHeapAvailableCount() const;
+  uint32_t AllocateSamplerBindlessIndex();
+  void ReleaseSamplerBindlessIndex(uint32_t index);
+  IRDescriptorTableEntry* GetViewBindlessHeapEntry(uint32_t index);
+  IRDescriptorTableEntry* GetSamplerBindlessHeapEntry(uint32_t index);
+
+  // Resolve ordering policy — controls command-buffer boundary placement
+  // around resolve (IssueCopy) operations.  The baseline policy uses
+  // submission boundaries for GPU write visibility because Metal lacks
+  // D3D12's explicit UAV barrier model.  The strict path will introduce
+  // additional policies (e.g. on-tile resolve) that override this.
+  enum class ResolveOrderingPolicy {
+    // Current safe baseline: end the command buffer before and after every
+    // resolve to ensure GPU write visibility at submission boundaries.
+    // This is correct but creates excess command-buffer submissions.
+    kSubmissionBoundary,
+
+    // Future: strict path uses on-tile resolve with no separate submission.
+    // kOnTileResolve,
+  };
 
  protected:
   bool SetupContext() override;
@@ -144,196 +237,117 @@ class MetalCommandProcessor : public CommandProcessor {
   bool IssueDraw(xenos::PrimitiveType primitive_type, uint32_t index_count,
                  IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override;
-  // SPIRV-Cross draw path — called from IssueDraw when metal_use_spirvcross is
-  // enabled. Handles shader translation, pipeline creation, resource binding,
-  // and draw dispatch using native Metal encoder calls.
-  bool IssueDrawMsl(
-      Shader* vertex_shader, Shader* pixel_shader,
-      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      bool primitive_polygonal, bool is_rasterization_done, bool memexport_used,
-      uint32_t normalized_color_mask, const RegisterFile& regs);
   bool IssueCopy() override;
   void WriteRegister(uint32_t index, uint32_t value) override;
 
+  // ===========================================================================
+  // Host render backend boundary.
+  //
+  // The methods below define the host-specific draw, copy/resolve, and
+  // transfer entry points that IssueDraw / IssueCopy delegate to.  They are
+  // virtual so a future strict-path backend can override them without
+  // touching the guest-facing command processor logic.
+  //
+  // Draw path:   UploadConstants  -> PopulateBindlessTables -> DispatchDraw
+  // Copy path:   BeginResolveOrdering -> Resolve -> EndResolveOrdering
+  // Transfer:    MetalRenderTargetCache::PerformTransfersAndResolveClears
+  //              (sole transfer execution entry point; called from both the
+  //              draw path via Update and the copy path via Resolve -- no
+  //              transfer operations bypass the render target cache)
+  // ===========================================================================
+
+  // Per-draw uniform buffer coordinates passed between IssueDraw sub-methods.
+  struct UniformBufferInfo {
+    MTL::Buffer* vs_buf = nullptr;
+    NS::UInteger vs_off = 0;
+    uint64_t vs_gpu = 0;
+    MTL::Buffer* ps_buf = nullptr;
+    NS::UInteger ps_off = 0;
+    uint64_t ps_gpu = 0;
+  };
+
+  // Vertex binding range for stage-in / geometry emulation.
+  struct VertexBindingRange {
+    uint32_t binding_index = 0;
+    uint32_t offset = 0;
+    uint32_t length = 0;
+    uint32_t stride = 0;
+  };
+
+  // Host draw path — upload per-draw constant buffers (system constants,
+  // float/bool/loop/fetch constants, descriptor indices) and apply viewport,
+  // scissor, rasterizer, depth-stencil, and blend state.
+  virtual bool UploadConstants(
+      const RegisterFile& regs, Shader* vertex_shader, Shader* pixel_shader,
+      MetalShader* metal_vertex_shader, MetalShader* metal_pixel_shader,
+      bool shared_memory_is_uav,
+      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+      uint32_t used_texture_mask, uint32_t normalized_color_mask,
+      UniformBufferInfo& uniforms_out);
+
+  // Host draw path — build the per-draw bindless descriptor tables (top-level
+  // argument buffer, CBV table) and bind them plus the heap buffers to the
+  // render encoder.
+  virtual bool PopulateBindlessTables(MetalShader* metal_vertex_shader,
+                                      MetalShader* metal_pixel_shader,
+                                      bool shared_memory_is_uav,
+                                      MTL::ResourceUsage shared_memory_usage,
+                                      bool use_geometry_emulation,
+                                      bool use_tessellation_emulation,
+                                      const UniformBufferInfo& uniforms);
+
+  // Host draw path — bind vertex buffers and dispatch the actual draw call
+  // (tessellation, geometry emulation, or standard path), then track
+  // memexport writes.
+  virtual bool DispatchDraw(
+      const RegisterFile& regs,
+      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+      bool use_tessellation_emulation,
+      MetalPipelineCache::TessellationPipelineState*
+          tessellation_pipeline_state,
+      bool use_geometry_emulation,
+      MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state,
+      bool shared_memory_is_uav, MTL::ResourceUsage shared_memory_usage,
+      bool memexport_used, bool uses_vertex_fetch,
+      const std::vector<Shader::VertexBinding>& vb_bindings,
+      const VertexBindingRange* vertex_ranges, uint32_t vertex_range_count,
+      IndexBufferInfo* index_buffer_info);
+
+  // Host copy/resolve path — enforce the active ResolveOrderingPolicy
+  // around resolve (IssueCopy) work.
+  // Called before resolve work begins.  Ends the render encoder, applies
+  // the pre-resolve boundary policy, ensures a command buffer, and returns
+  // it.  Returns nullptr on failure.
+  virtual MTL::CommandBuffer* BeginResolveOrdering();
+  // Called after resolve work completes.  Applies the post-resolve boundary
+  // policy.
+  virtual void EndResolveOrdering();
+
  private:
-  // Initialize shader translation pipeline
-  bool InitializeShaderTranslation();
-
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  // Request shared-memory ranges needed for the current draw, mirroring
-  // D3D12/Vulkan behavior (vertex buffers, memexport streams).
-  bool RequestSharedMemoryRangesForCurrentDraw(MetalShader* vertex_shader,
-                                               MetalShader* pixel_shader,
-                                               bool memexport_used_vertex,
-                                               bool memexport_used_pixel,
-                                               bool* any_data_resolved_out);
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
-
   // Command buffer management
+  void FlushCommandBufferAndWait(uint64_t timeout_ns, const char* context);
   void BeginCommandBuffer();
   void EndCommandBuffer();
-  // Reset per-render-encoder cached bindings/state for the SPIRV-Cross (MSL)
-  // path. Safe to call when no render encoder is active.
-  void ResetMslRenderEncoderStateCache();
-  // Reset cross-encoder SPIRV-Cross reuse caches at command-buffer boundaries.
-  void ResetMslCrossEncoderReuseCaches();
   bool CanEndSubmissionImmediately();
   void WaitForPendingCompletionHandlers();
   void ProcessCompletedSubmissions();
-  bool EnsureDrawRingCapacity();
+
   void UseRenderEncoderAttachmentHeaps(MTL::RenderPassDescriptor* descriptor);
   void UseRenderEncoderHeap(MTL::Heap* heap);
-#if !METAL_SHADER_CONVERTER_AVAILABLE
-  // SPIRV-Cross path only: uniforms buffer is command-buffer scoped to avoid
-  // CPU writes racing ahead of in-flight GPU reads.
-  bool EnsureSpirvUniformBuffer();
-  bool EnsureSpirvUniformBufferCapacity();
-  void ScheduleSpirvUniformBufferRelease(MTL::CommandBuffer* command_buffer);
-#endif  // !METAL_SHADER_CONVERTER_AVAILABLE
-  bool AcquireSpirvArgumentBufferSlice(uint32_t bytes, uint32_t alignment,
-                                       MTL::Buffer** buffer_out,
-                                       NS::UInteger* offset_out);
-  void ScheduleSpirvArgumentBufferRelease(MTL::CommandBuffer* command_buffer);
-
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  // Pipeline state management (MSC path)
-  MTL::RenderPipelineState* GetOrCreatePipelineState(
-      MetalShader::MetalTranslation* vertex_translation,
-      MetalShader::MetalTranslation* pixel_translation,
-      const RegisterFile& regs);
-
-  struct GeometryVertexStageState {
-    MTL::Library* library = nullptr;
-    MTL::Library* stage_in_library = nullptr;
-    std::string function_name;
-    uint32_t vertex_output_size_in_bytes = 0;
-  };
-
-  struct GeometryShaderStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    uint32_t max_input_primitives_per_mesh_threadgroup = 0;
-    std::vector<MetalShaderFunctionConstant> function_constants;
-  };
-
-  struct GeometryPipelineState {
-    MTL::RenderPipelineState* pipeline = nullptr;
-    uint32_t gs_vertex_size_in_bytes = 0;
-    uint32_t gs_max_input_primitives_per_mesh_threadgroup = 0;
-  };
-
-  struct TessellationVertexStageState {
-    MTL::Library* library = nullptr;
-    MTL::Library* stage_in_library = nullptr;
-    std::string function_name;
-    uint32_t vertex_output_size_in_bytes = 0;
-  };
-
-  struct TessellationHullStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    MetalShaderReflectionInfo reflection;
-  };
-
-  struct TessellationDomainStageState {
-    MTL::Library* library = nullptr;
-    std::string function_name;
-    MetalShaderReflectionInfo reflection;
-  };
-
-  struct TessellationPipelineState {
-    MTL::RenderPipelineState* pipeline = nullptr;
-    IRRuntimeTessellationPipelineConfig config = {};
-    IRRuntimePrimitiveType primitive = IRRuntimePrimitiveTypeTriangle;
-  };
-
-  struct DrawRingBuffers {
-    MTL::Buffer* res_heap_ab = nullptr;
-    MTL::Buffer* smp_heap_ab = nullptr;
-    MTL::Buffer* cbv_heap_ab = nullptr;
-    MTL::Buffer* uniforms_buffer = nullptr;
-    MTL::Buffer* top_level_ab = nullptr;
-    MTL::Buffer* draw_args_buffer = nullptr;
-    uint64_t total_bytes = 0;
-
-    ~DrawRingBuffers();
-  };
-
-  GeometryPipelineState* GetOrCreateGeometryPipelineState(
-      MetalShader::MetalTranslation* vertex_translation,
-      MetalShader::MetalTranslation* pixel_translation,
-      GeometryShaderKey geometry_shader_key, const RegisterFile& regs);
-
-  TessellationPipelineState* GetOrCreateTessellationPipelineState(
-      MetalShader::MetalTranslation* domain_translation,
-      MetalShader::MetalTranslation* pixel_translation,
-      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      const RegisterFile& regs);
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+  uint64_t GetBindlessDescriptorRetirementSubmission() const;
+  void FreeViewBindlessIndexNow(uint32_t index);
+  void FreeSamplerBindlessIndexNow(uint32_t index);
 
   // Fixed-function depth/stencil state (mirrors Vulkan/D3D12 dynamic state).
   void ApplyDepthStencilState(bool primitive_polygonal,
                               reg::RB_DEPTHCONTROL normalized_depth_control);
   void ApplyRasterizerState(bool primitive_polygonal);
 
-  // Constants shared between MSC and SPIRV-Cross paths.
+  // Constants for the MSC path.
   static constexpr size_t kStageCount = 2;  // Vertex + pixel.
   static constexpr size_t kNullBufferSize = 4096;
   static constexpr size_t kCbvSizeBytes = 4096;
   static constexpr size_t kUniformsBytesPerTable = 6 * kCbvSizeBytes;
-
-  struct SpirvArgumentBufferPage {
-    MTL::Buffer* buffer = nullptr;
-    size_t bytes = 0;
-    size_t offset = 0;
-
-    ~SpirvArgumentBufferPage();
-  };
-
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  bool EnsureDepthOnlyPixelShader();
-
-  struct PipelineDiskCacheVertexAttribute {
-    uint32_t attribute_index;
-    uint32_t format;
-    uint32_t offset;
-    uint32_t buffer_index;
-  };
-
-  struct PipelineDiskCacheVertexLayout {
-    uint32_t buffer_index;
-    uint32_t stride;
-    uint32_t step_function;
-    uint32_t step_rate;
-  };
-
-  struct PipelineDiskCacheEntry {
-    uint64_t pipeline_key = 0;
-    uint64_t vertex_shader_cache_key = 0;
-    uint64_t pixel_shader_cache_key = 0;
-    uint32_t sample_count = 1;
-    uint32_t depth_format = 0;
-    uint32_t stencil_format = 0;
-    uint32_t color_formats[4] = {};
-    uint32_t normalized_color_mask = 0;
-    uint32_t alpha_to_mask_enable = 0;
-    uint32_t blendcontrol[4] = {};
-    std::vector<PipelineDiskCacheVertexAttribute> vertex_attributes;
-    std::vector<PipelineDiskCacheVertexLayout> vertex_layouts;
-  };
-
-  bool InitializeShaderStorageInternal(const std::filesystem::path& cache_root,
-                                       uint32_t title_id, bool blocking);
-  void ShutdownShaderStorage();
-  std::string GetShaderStorageDeviceTag() const;
-  bool LoadPipelineDiskCache(const std::filesystem::path& path,
-                             std::vector<PipelineDiskCacheEntry>* entries);
-  bool AppendPipelineDiskCacheEntry(const PipelineDiskCacheEntry& entry);
-  bool InitializePipelineBinaryArchive(
-      const std::filesystem::path& archive_path);
-  void SerializePipelineBinaryArchive();
-  void PrewarmPipelineBinaryArchive(
-      const std::vector<PipelineDiskCacheEntry>& entries);
 
   // Constants for MSC descriptor heap sizes.
   static constexpr size_t kResourceHeapSlotsPerTable = 1025 + 2;
@@ -342,17 +356,6 @@ class MetalCommandProcessor : public CommandProcessor {
   static constexpr size_t kTopLevelABSlotsPerTable = 32;
   static constexpr size_t kTopLevelABBytesPerTable =
       kTopLevelABSlotsPerTable * sizeof(uint64_t);
-
-  // IR Converter runtime resource binding
-  bool CreateIRConverterBuffers();
-  void PopulateIRConverterBuffers();
-  std::shared_ptr<DrawRingBuffers> CreateDrawRingBuffers();
-  uint64_t GetDrawRingAllocationSizeBytes() const;
-  std::shared_ptr<DrawRingBuffers> AcquireDrawRingBuffers();
-  void SetActiveDrawRing(const std::shared_ptr<DrawRingBuffers>& ring);
-  void EnsureActiveDrawRing();
-  void ScheduleDrawRingRelease(MTL::CommandBuffer* command_buffer);
-  void FlushPendingDrawRingReleasesLocked();
 
   // System constants population (mirrors D3D12 implementation)
   void UpdateSystemConstantValues(bool shared_memory_is_uav,
@@ -364,70 +367,11 @@ class MetalCommandProcessor : public CommandProcessor {
                                   reg::RB_DEPTHCONTROL normalized_depth_control,
                                   uint32_t normalized_color_mask);
 
-  // Shader modification selection (mirrors D3D12 PipelineCache logic).
-  DxbcShaderTranslator::Modification GetCurrentVertexShaderModification(
-      const Shader& shader,
-      Shader::HostVertexShaderType host_vertex_shader_type,
-      uint32_t interpolator_mask) const;
-  DxbcShaderTranslator::Modification GetCurrentPixelShaderModification(
-      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
-      reg::RB_DEPTHCONTROL normalized_depth_control) const;
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
-
-  // SPIRV-Cross (MSL) path - shader modification and pipeline helpers.
-  SpirvShaderTranslator::Modification GetCurrentSpirvVertexShaderModification(
-      const Shader& shader,
-      Shader::HostVertexShaderType host_vertex_shader_type,
-      uint32_t interpolator_mask) const;
-  SpirvShaderTranslator::Modification GetCurrentSpirvPixelShaderModification(
-      const Shader& shader, uint32_t interpolator_mask, uint32_t param_gen_pos,
-      reg::RB_DEPTHCONTROL normalized_depth_control,
-      uint32_t normalized_color_mask) const;
-  void UpdateSpirvSystemConstantValues(
-      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
-      bool primitive_polygonal, uint32_t line_loop_closing_index,
-      xenos::Endian index_endian, const draw_util::ViewportInfo& viewport_info,
-      uint32_t used_texture_mask, reg::RB_DEPTHCONTROL normalized_depth_control,
-      uint32_t normalized_color_mask);
-  enum class MslShaderCompileStatus {
-    kReady,
-    kPending,
-    kFailed,
-    kNotQueued,
-  };
-  enum class MslPipelineCompileStatus {
-    kReady,
-    kPending,
-    kFailed,
-  };
-  struct MslPipelineCompileRequest;
-  void InitializeMslAsyncCompilation();
-  void ShutdownMslAsyncCompilation();
-  MslShaderCompileStatus GetMslShaderCompileStatus(
-      MslShader::MslTranslation* translation);
-  bool EnqueueMslShaderCompilation(MslShader::MslTranslation* translation,
-                                   bool is_ios, uint8_t priority);
-  bool EnqueueMslPipelineCompilation(const MslPipelineCompileRequest& request);
-  MTL::RenderPipelineState* CreateMslPipelineState(
-      const MslPipelineCompileRequest& request, std::string* error_out);
-  void MslShaderCompileThread(size_t thread_index);
-  MTL::RenderPipelineState* GetOrCreateMslPipelineState(
-      MslShader::MslTranslation* vertex_translation,
-      MslShader::MslTranslation* pixel_translation, const RegisterFile& regs,
-      MslPipelineCompileStatus* compile_status_out = nullptr);
-
   // Metal device and command queue (from provider)
   MTL::Device* device_ = nullptr;
   MTL::CommandQueue* command_queue_ = nullptr;
   MTL::SharedEvent* wait_shared_event_ = nullptr;
   uint64_t wait_shared_event_value_ = 0;
-
-  // Render targets
-  MTL::Texture* render_target_texture_ = nullptr;
-  MTL::Texture* depth_stencil_texture_ = nullptr;
-  MTL::RenderPassDescriptor* render_pass_descriptor_ = nullptr;
-  uint32_t render_target_width_ = 1280;
-  uint32_t render_target_height_ = 720;
 
   // Current command buffer and encoder
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
@@ -435,10 +379,14 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::RenderPassDescriptor* current_render_pass_descriptor_ = nullptr;
   NS::AutoreleasePool* command_buffer_autorelease_pool_ = nullptr;
 
+  struct EncoderResourceUsage {
+    MTL::Resource* resource = nullptr;
+    uint32_t usage_bits = 0;
+  };
   // Tracks resources marked via useResource for the current render encoder
   // to avoid redundant driver calls across draws within the same encoder.
-  std::unordered_map<MTL::Resource*, uint32_t> render_encoder_resource_usage_;
-  std::unordered_set<MTL::Heap*> render_encoder_heap_usage_;
+  std::vector<EncoderResourceUsage> render_encoder_resource_usage_;
+  std::vector<MTL::Heap*> render_encoder_heap_usage_;
 
   // Shared memory for Xbox 360 memory access
   std::unique_ptr<MetalSharedMemory> shared_memory_;
@@ -451,132 +399,8 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t last_swap_height_ = 0;
   std::unordered_map<uint32_t, bool> swap_dest_swaps_by_base_;
 
- public:
-  MetalSharedMemory* shared_memory() const { return shared_memory_.get(); }
-  MetalRenderTargetCache* render_target_cache() const {
-    return render_target_cache_.get();
-  }
-  MetalTextureCache* texture_cache() const { return texture_cache_.get(); }
-
- private:
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  // MSC shader translation components
-  std::unique_ptr<DxbcShaderTranslator> shader_translator_;
-  std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
-  std::unique_ptr<MetalShaderConverter> metal_shader_converter_;
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
-
-  // Shared between MSC and SPIRV-Cross paths for AnalyzeUcode.
-  StringBuffer ucode_disasm_buffer_;
-
-  // SPIRV-Cross (MSL) path - shader translator and cache.
-  std::unique_ptr<SpirvShaderTranslator> spirv_shader_translator_;
-  std::unordered_map<uint64_t, std::unique_ptr<MslShader>> msl_shader_cache_;
-  SpirvShaderTranslator::SystemConstants spirv_system_constants_ = {};
-  SpirvShaderTranslator::ClipPlaneConstants spirv_clip_plane_constants_ = {};
-  SpirvShaderTranslator::TessellationConstants spirv_tessellation_constants_ =
-      {};
-  struct MslShaderCompileRequest {
-    MslShader::MslTranslation* translation = nullptr;
-    uint64_t shader_hash = 0;
-    uint64_t modification = 0;
-    bool is_ios = false;
-    uint8_t priority = 0;
-  };
-  struct MslPipelineCompileRequest {
-    uint64_t pipeline_key = 0;
-    uint64_t vertex_shader_hash = 0;
-    uint64_t vertex_modification = 0;
-    uint64_t pixel_shader_hash = 0;
-    uint64_t pixel_modification = 0;
-    MTL::Function* vertex_function = nullptr;
-    MTL::Function* fragment_function = nullptr;
-    uint32_t sample_count = 1;
-    MTL::PixelFormat color_formats[4] = {
-        MTL::PixelFormatInvalid, MTL::PixelFormatInvalid,
-        MTL::PixelFormatInvalid, MTL::PixelFormatInvalid};
-    MTL::PixelFormat depth_format = MTL::PixelFormatInvalid;
-    MTL::PixelFormat stencil_format = MTL::PixelFormatInvalid;
-    uint32_t normalized_color_mask = 0;
-    uint32_t alpha_to_mask_enable = 0;
-    uint32_t blendcontrol[4] = {};
-    uint8_t priority = 0;
-  };
-  struct MslShaderCompileRequestCompare {
-    bool operator()(const MslShaderCompileRequest& a,
-                    const MslShaderCompileRequest& b) const {
-      return a.priority < b.priority;
-    }
-  };
-  struct MslPipelineCompileRequestCompare {
-    bool operator()(const MslPipelineCompileRequest& a,
-                    const MslPipelineCompileRequest& b) const {
-      return a.priority < b.priority;
-    }
-  };
-  std::priority_queue<MslShaderCompileRequest,
-                      std::vector<MslShaderCompileRequest>,
-                      MslShaderCompileRequestCompare>
-      msl_shader_compile_queue_;
-  std::priority_queue<MslPipelineCompileRequest,
-                      std::vector<MslPipelineCompileRequest>,
-                      MslPipelineCompileRequestCompare>
-      msl_pipeline_compile_queue_;
-  std::unordered_set<MslShader::MslTranslation*> msl_shader_compile_pending_;
-  std::unordered_set<MslShader::MslTranslation*> msl_shader_compile_failed_;
-  std::unordered_set<uint64_t> msl_pipeline_compile_pending_;
-  std::unordered_set<uint64_t> msl_pipeline_compile_failed_;
-  std::mutex msl_shader_compile_mutex_;
-  std::condition_variable msl_shader_compile_cv_;
-  std::vector<std::thread> msl_shader_compile_threads_;
-  size_t msl_shader_compile_busy_ = 0;
-  bool msl_shader_compile_shutdown_ = false;
-  std::atomic<int64_t> msl_shader_compile_failure_last_log_ns_{0};
-  std::atomic<int64_t> msl_pipeline_compile_failure_last_log_ns_{0};
-  std::atomic<int64_t> msl_pipeline_pending_last_log_ns_{0};
-  std::unordered_map<uint64_t, MTL::RenderPipelineState*> msl_pipeline_cache_;
-
-  // SPIRV-Cross tessellation support.
-  MTL::ComputePipelineState* tess_factor_pipeline_tri_ = nullptr;
-  MTL::ComputePipelineState* tess_factor_pipeline_quad_ = nullptr;
-  // Adaptive tessellation factor pipelines (read per-edge factors from shared
-  // memory instead of using a uniform value).
-  MTL::ComputePipelineState* tess_factor_pipeline_adaptive_tri_ = nullptr;
-  MTL::ComputePipelineState* tess_factor_pipeline_adaptive_quad_ = nullptr;
-  MTL::Buffer* tess_factor_buffer_ = nullptr;
-  uint32_t tess_factor_buffer_patch_capacity_ = 0;
-  std::unordered_map<uint64_t, MTL::RenderPipelineState*>
-      msl_tess_pipeline_cache_;
-  bool InitializeMslTessellation();
-  void ShutdownMslTessellation();
-  MTL::RenderPipelineState* GetOrCreateMslTessPipelineState(
-      MslShader::MslTranslation* domain_translation,
-      MslShader::MslTranslation* pixel_translation,
-      Shader::HostVertexShaderType host_vertex_shader_type,
-      const RegisterFile& regs);
-  bool EnsureTessFactorBuffer(uint32_t patch_count);
-
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  // MSC shader cache (keyed by ucode hash)
-  std::unordered_map<uint64_t, std::unique_ptr<MetalShader>> shader_cache_;
-
-  // MSC pipeline caches (keyed by shader combination)
-  std::unordered_map<uint64_t, MTL::RenderPipelineState*> pipeline_cache_;
-  std::unordered_map<uint64_t, GeometryPipelineState> geometry_pipeline_cache_;
-  std::unordered_map<MetalShader::MetalTranslation*, GeometryVertexStageState>
-      geometry_vertex_stage_cache_;
-  std::unordered_map<GeometryShaderKey, GeometryShaderStageState,
-                     GeometryShaderKey::Hasher>
-      geometry_shader_stage_cache_;
-  std::unordered_map<uint32_t, TessellationVertexStageState>
-      tessellation_vertex_stage_cache_;
-  std::unordered_map<uint64_t, TessellationHullStageState>
-      tessellation_hull_stage_cache_;
-  std::unordered_map<uint64_t, TessellationDomainStageState>
-      tessellation_domain_stage_cache_;
-  std::unordered_map<uint64_t, TessellationPipelineState>
-      tessellation_pipeline_cache_;
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+  // Pipeline cache (owns shaders, pipelines, shader translation components).
+  std::unique_ptr<MetalPipelineCache> pipeline_cache_;
 
   struct DepthStencilStateKey {
     uint32_t depth_control;
@@ -612,196 +436,137 @@ class MetalCommandProcessor : public CommandProcessor {
   // Render target cache for framebuffer management
   std::unique_ptr<MetalRenderTargetCache> render_target_cache_;
 
-  // Null resources for unbound slots (shared between MSC and SPIRV-Cross)
+  // Null resources for unbound slots
   MTL::Buffer* null_buffer_ = nullptr;
   MTL::Texture* null_texture_ = nullptr;
   MTL::SamplerState* null_sampler_ = nullptr;
 
-  // Uniforms buffer and draw ring count (shared between MSC and SPIRV-Cross)
-  MTL::Buffer* uniforms_buffer_ = nullptr;
-  // SPIRV path may rotate through multiple uniforms buffers within a single
-  // Metal command buffer (at ring wrap boundaries). Track all of them so
-  // completion handlers can return every buffer to the available pool.
-  std::vector<MTL::Buffer*> command_buffer_spirv_uniform_buffers_;
-  size_t draw_ring_count_ = 0;
-#if !METAL_SHADER_CONVERTER_AVAILABLE
-  // Owning storage for all SPIRV-Cross uniforms buffers allocated for the
-  // current context.
-  std::vector<MTL::Buffer*> spirv_uniforms_pool_;
-  // Reusable SPIRV-Cross uniforms buffers returned from completed command
-  // buffers to reduce iOS allocation churn.
-  std::vector<MTL::Buffer*> spirv_uniforms_available_;
-  std::mutex spirv_uniforms_mutex_;
-  dispatch_semaphore_t spirv_uniforms_available_semaphore_ = nullptr;
-  bool spirv_uniforms_pool_initialized_ = false;
-#endif  // !METAL_SHADER_CONVERTER_AVAILABLE
-  std::vector<std::shared_ptr<SpirvArgumentBufferPage>> spirv_argbuf_pool_;
-  std::vector<std::shared_ptr<SpirvArgumentBufferPage>>
-      command_buffer_spirv_argbuf_pages_;
-  std::unordered_map<MTL::CommandBuffer*,
-                     std::vector<std::shared_ptr<SpirvArgumentBufferPage>>>
-      pending_spirv_argbuf_releases_;
-  std::mutex spirv_argbuf_mutex_;
+  // Persistent bindless descriptor heaps.
+  // Canonical texture views and samplers get stable slot indices allocated on
+  // demand and freed on destruction. Non-canonical texture views may use
+  // submission-lifetime slots from the same heap. The heaps are bound once per
+  // encoder.
+  // 1M entries (24 MiB). Metal has no API-side descriptor heap cap — the heap
+  // is just an MTLBuffer. D3D12 uses 262144 but doesn't need per-swizzle
+  // texture views; 4x headroom covers the swizzled-view multiplier and avoids
+  // exhausting the heap before the first submission completes.
+  static constexpr uint32_t kViewBindlessHeapSize = 1048576;
+  static constexpr uint32_t kSamplerBindlessHeapSize = 2048;
+  MTL::Buffer* view_bindless_heap_ = nullptr;
+  MTL::Buffer* sampler_bindless_heap_ = nullptr;
+  // Explicit-layout top-level bindings for shared memory / EDRAM use small
+  // dedicated system tables rather than overlapping the bindless texture heap.
+  MTL::Buffer* system_view_tables_ = nullptr;
+  static constexpr uint32_t kSystemViewTableSRVSharedMemory = 0;
+  static constexpr uint32_t kSystemViewTableSRVNull = 1;
+  static constexpr uint32_t kSystemViewTableUAVNullStart = 2;
+  static constexpr uint32_t kSystemViewTableUAVSharedMemoryStart = 4;
+  static constexpr uint32_t kSystemViewTableEntryCount = 6;
 
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  // IR Converter runtime buffers for shader resource binding (MSC path)
-  MTL::Buffer* res_heap_ab_ = nullptr;
-  MTL::Buffer* smp_heap_ab_ = nullptr;
-  MTL::Buffer* cbv_heap_ab_ = nullptr;
-  MTL::Buffer* top_level_ab_ = nullptr;
-  MTL::Buffer* draw_args_buffer_ = nullptr;
+  // Simple bump allocator with free list for persistent heap slots.
+  uint32_t view_bindless_heap_next_ = 0;
+  std::vector<uint32_t> view_bindless_heap_free_;
+  bool view_bindless_heap_exhausted_logged_ = false;
+  uint32_t sampler_bindless_heap_next_ = 0;
+  std::vector<uint32_t> sampler_bindless_heap_free_;
+  bool sampler_bindless_heap_exhausted_logged_ = false;
+  struct RetiredBindlessDescriptor {
+    uint32_t index;
+    uint64_t submission_id;
+  };
+  std::deque<RetiredBindlessDescriptor> retired_view_bindless_indices_;
+  std::deque<RetiredBindlessDescriptor> retired_sampler_bindless_indices_;
+
   MTL::Buffer* tessellator_tables_buffer_ = nullptr;
-  std::shared_ptr<DrawRingBuffers> active_draw_ring_;
-  std::vector<std::shared_ptr<DrawRingBuffers>> draw_ring_pool_;
-  std::vector<std::shared_ptr<DrawRingBuffers>> command_buffer_draw_rings_;
-  std::unordered_map<MTL::CommandBuffer*,
-                     std::vector<std::shared_ptr<DrawRingBuffers>>>
-      pending_draw_ring_releases_;
-  std::mutex draw_ring_mutex_;
-  std::condition_variable draw_ring_pool_cv_;
-  uint64_t draw_ring_pool_max_bytes_ = 0;
-  uint64_t draw_ring_pool_total_bytes_ = 0;
-  uint32_t draw_ring_pool_in_use_count_ = 0;
-  uint64_t draw_ring_pool_wait_count_ = 0;
-  uint64_t draw_ring_pool_timeout_count_ = 0;
-  std::atomic<int64_t> draw_ring_pool_last_log_ns_{0};
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
-  MTL::Library* depth_only_pixel_library_ = nullptr;
-  std::string depth_only_pixel_function_name_;
-
-#if METAL_SHADER_CONVERTER_AVAILABLE
   // System constants - matches DxbcShaderTranslator::SystemConstants layout
   DxbcShaderTranslator::SystemConstants system_constants_;
-  bool system_constants_dirty_ = true;
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
-  bool logged_missing_texture_warning_ = false;
-  // SPIRV-Cross system/clip/tess constants versioning.
-  // Each ring-table slot tracks the last source version copied into it so
-  // draws can skip per-draw memcmp/copy churn for unchanged constants.
-  uint64_t msl_system_constants_version_ = 1;
-  uint64_t msl_clip_plane_constants_version_ = 1;
-  uint64_t msl_tessellation_constants_version_ = 1;
-  MTL::Buffer* msl_constants_versioned_uniform_buffer_ = nullptr;
-  std::vector<uint64_t> msl_system_constants_written_vertex_versions_;
-  std::vector<uint64_t> msl_system_constants_written_pixel_versions_;
-  std::vector<uint64_t> msl_clip_plane_constants_written_vertex_versions_;
-  std::vector<uint64_t> msl_tessellation_constants_written_vertex_versions_;
-  std::vector<uint64_t> msl_tessellation_constants_written_pixel_versions_;
-  // SPIRV-Cross path: highest texture/sampler slot counts bound on the current
-  // render encoder. Used to clear trailing slots when a later draw uses fewer
-  // resources, preventing stale state leakage between draws.
-  uint32_t msl_bound_vertex_texture_count_ = 0;
-  uint32_t msl_bound_pixel_texture_count_ = 0;
-  uint32_t msl_bound_vertex_sampler_count_ = 0;
-  uint32_t msl_bound_pixel_sampler_count_ = 0;
-  uint64_t msl_bound_vertex_texture_binding_uid_ = 0;
-  uint64_t msl_bound_pixel_texture_binding_uid_ = 0;
-  uint64_t msl_bound_vertex_sampler_binding_uid_ = 0;
-  uint64_t msl_bound_pixel_sampler_binding_uid_ = 0;
-  std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
-      msl_bound_vertex_textures_{};
-  std::array<MTL::Texture*, MslTextureIndex::kMaxPerStage>
-      msl_bound_pixel_textures_{};
-  std::array<MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
-      msl_bound_vertex_samplers_{};
-  std::array<MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
-      msl_bound_pixel_samplers_{};
-  MTL::Buffer* msl_bound_vertex_argument_buffer_ = nullptr;
-  MTL::Buffer* msl_bound_pixel_argument_buffer_ = nullptr;
-  NS::UInteger msl_bound_vertex_argument_buffer_offset_ = 0;
-  NS::UInteger msl_bound_pixel_argument_buffer_offset_ = 0;
-  bool msl_bound_vertex_argument_buffer_offset_valid_ = false;
-  bool msl_bound_pixel_argument_buffer_offset_valid_ = false;
-  MTL::Buffer* msl_bound_shared_memory_buffer_ = nullptr;
-  MTL::Buffer* msl_bound_null_buffer_ = nullptr;
-  // Cached argument buffer content for change detection — skip re-encoding
-  // when textures/samplers haven't changed between draws.
-  std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
-      msl_last_argbuf_vertex_textures_{};
-  uint32_t msl_last_argbuf_vertex_texture_count_ = 0;
-  std::array<const MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
-      msl_last_argbuf_vertex_samplers_{};
-  uint32_t msl_last_argbuf_vertex_sampler_count_ = 0;
-  MTL::Buffer* msl_last_argbuf_vertex_buffer_ = nullptr;
-  NS::UInteger msl_last_argbuf_vertex_offset_ = 0;
-  const MslShader::MslTranslation* msl_last_argbuf_vertex_translation_ =
-      nullptr;
-  uint32_t msl_last_argbuf_vertex_encoded_length_ = 0;
-  uint64_t msl_last_argbuf_vertex_layout_uid_ = 0;
-  std::array<const MTL::Texture*, MslTextureIndex::kMaxPerStage>
-      msl_last_argbuf_pixel_textures_{};
-  uint32_t msl_last_argbuf_pixel_texture_count_ = 0;
-  std::array<const MTL::SamplerState*, MslSamplerIndex::kMaxPerStage>
-      msl_last_argbuf_pixel_samplers_{};
-  uint32_t msl_last_argbuf_pixel_sampler_count_ = 0;
-  MTL::Buffer* msl_last_argbuf_pixel_buffer_ = nullptr;
-  NS::UInteger msl_last_argbuf_pixel_offset_ = 0;
-  const MslShader::MslTranslation* msl_last_argbuf_pixel_translation_ = nullptr;
-  uint32_t msl_last_argbuf_pixel_encoded_length_ = 0;
-  uint64_t msl_last_argbuf_pixel_layout_uid_ = 0;
-  // D3D12-style SPIRV constant cache state.
-  std::array<uint64_t, 4> msl_current_float_constant_map_vertex_{};
-  std::array<uint64_t, 4> msl_current_float_constant_map_pixel_{};
-  bool msl_float_constants_dirty_vertex_ = true;
-  bool msl_float_constants_dirty_pixel_ = true;
-  bool msl_bool_loop_constants_dirty_ = true;
-  bool msl_fetch_constants_dirty_ = true;
-  std::array<uint8_t, kCbvSizeBytes> msl_cached_float_constants_vertex_{};
-  std::array<uint8_t, kCbvSizeBytes> msl_cached_float_constants_pixel_{};
-  std::array<uint8_t, kCbvSizeBytes> msl_cached_bool_loop_constants_{};
-  std::array<uint8_t, kCbvSizeBytes> msl_cached_fetch_constants_{};
-  // Uniforms slot binding dedupe.
-  MTL::Buffer* msl_bound_uniforms_buffer_ = nullptr;
-  NS::UInteger msl_bound_uniforms_vs_base_offset_ = 0;
-  NS::UInteger msl_bound_uniforms_ps_base_offset_ = 0;
-  bool msl_bound_uniforms_offsets_valid_ = false;
-  MTL::RenderPipelineState* msl_bound_pipeline_state_ = nullptr;
-  bool msl_viewport_valid_ = false;
-  MTL::Viewport msl_viewport_ = {};
-  bool msl_scissor_valid_ = false;
-  MTL::ScissorRect msl_scissor_ = {};
-  bool msl_rasterizer_state_valid_ = false;
-  MTL::CullMode msl_cull_mode_ = MTL::CullModeNone;
-  MTL::Winding msl_winding_ = MTL::WindingClockwise;
-  MTL::TriangleFillMode msl_fill_mode_ = MTL::TriangleFillModeFill;
-  float msl_depth_bias_constant_ = 0.0f;
-  float msl_depth_bias_slope_ = 0.0f;
-  float msl_depth_bias_clamp_ = 0.0f;
-  MTL::DepthClipMode msl_depth_clip_mode_ = MTL::DepthClipModeClip;
-  MTL::DepthStencilState* msl_depth_stencil_state_ = nullptr;
-  bool msl_stencil_reference_valid_ = false;
-  uint32_t msl_stencil_reference_ = 0;
 
   // Fixed-function dynamic state cached per render encoder.
+  MTL::RenderPipelineState* current_render_pipeline_state_ = nullptr;
   float ff_blend_factor_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   bool ff_blend_factor_valid_ = false;
+  bool rasterizer_state_valid_ = false;
+  MTL::CullMode current_cull_mode_ = MTL::CullModeNone;
+  MTL::Winding current_front_facing_winding_ = MTL::WindingCounterClockwise;
+  MTL::TriangleFillMode current_triangle_fill_mode_ = MTL::TriangleFillModeFill;
+  float current_depth_bias_values_[3] = {0.0f, 0.0f, 0.0f};
+  MTL::DepthClipMode current_depth_clip_mode_ = MTL::DepthClipModeClip;
+  MTL::DepthStencilState* current_depth_stencil_state_ = nullptr;
+  bool stencil_reference_valid_ = false;
+  uint32_t current_stencil_reference_ = 0;
+  bool viewport_dirty_ = true;
+  MTL::Viewport cached_viewport_ = {};
+  bool scissor_dirty_ = true;
+  MTL::ScissorRect cached_scissor_ = {};
 
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  std::filesystem::path shader_storage_root_;
-  std::filesystem::path shader_storage_local_root_;
-  std::filesystem::path shader_storage_title_root_;
-  std::filesystem::path metallib_cache_dir_;
-  std::filesystem::path pipeline_disk_cache_path_;
-  std::filesystem::path pipeline_binary_archive_path_;
-  std::unordered_set<uint64_t> pipeline_disk_cache_keys_;
-  std::vector<PipelineDiskCacheEntry> pipeline_disk_cache_entries_;
-  FILE* pipeline_disk_cache_file_ = nullptr;
-  MTL::BinaryArchive* pipeline_binary_archive_ = nullptr;
-  bool pipeline_binary_archive_dirty_ = false;
-  std::mutex pipeline_binary_archive_mutex_;
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+  // Constant buffer dirty tracking (D3D12 pattern).
+  // Each binding records the pool-allocated buffer, offset, and GPU address
+  // for the most recent constant upload.  When up_to_date is true the data
+  // from the previous allocation can be copied instead of re-gathering from
+  // the register file.
+  struct ConstantBufferBinding {
+    MTL::Buffer* buffer = nullptr;
+    NS::UInteger offset = 0;
+    uint64_t gpu_address = 0;
+    bool up_to_date = false;
+  };
+  bool cbuffer_binding_system_up_to_date_ = false;
+  ConstantBufferBinding cbuffer_binding_float_vertex_;
+  ConstantBufferBinding cbuffer_binding_float_pixel_;
+  ConstantBufferBinding cbuffer_binding_bool_loop_;
+  ConstantBufferBinding cbuffer_binding_fetch_;
+  bool cbuffer_binding_descriptor_indices_vertex_up_to_date_ = false;
+  bool cbuffer_binding_descriptor_indices_pixel_up_to_date_ = false;
+
+  // Float constant usage bitmaps for the current shader pair.
+  // Used to gate WriteRegister invalidation: only dirty the float CBV
+  // when the written register is in the current shader's bitmap.
+  // Matches D3D12's current_float_constant_map_vertex_/pixel_ at
+  // d3d12_command_processor.h:829-830.
+  uint64_t current_float_constant_map_vertex_[4] = {};
+  uint64_t current_float_constant_map_pixel_[4] = {};
+  size_t current_texture_layout_uid_vertex_ = 0;
+  size_t current_texture_layout_uid_pixel_ = 0;
+  size_t current_sampler_layout_uid_vertex_ = 0;
+  size_t current_sampler_layout_uid_pixel_ = 0;
+  std::vector<MetalTextureCache::TextureSRVKey>
+      current_texture_srv_keys_vertex_;
+  std::vector<MetalTextureCache::TextureSRVKey> current_texture_srv_keys_pixel_;
+  std::vector<MetalTextureCache::SamplerParameters> current_samplers_vertex_;
+  std::vector<MetalTextureCache::SamplerParameters> current_samplers_pixel_;
+  std::vector<uint32_t> current_texture_bindless_indices_vertex_;
+  std::vector<uint32_t> current_texture_bindless_indices_pixel_;
+  std::vector<uint32_t> current_sampler_bindless_indices_vertex_;
+  std::vector<uint32_t> current_sampler_bindless_indices_pixel_;
+  bool current_bindless_table_valid_ = false;
+  MTL::Buffer* current_bindless_top_level_buffer_ = nullptr;
+  NS::UInteger current_bindless_top_level_offset_ = 0;
+  uint64_t current_bindless_top_level_gpu_address_ = 0;
+  MTL::Buffer* current_bindless_cbv_buffer_ = nullptr;
+  NS::UInteger current_bindless_cbv_offset_ = 0;
+  uint64_t current_bindless_cbv_gpu_address_ = 0;
+  uint64_t current_bindless_vs_uniforms_gpu_ = 0;
+  uint64_t current_bindless_ps_uniforms_gpu_ = 0;
+  bool current_bindless_shared_memory_is_uav_ = false;
+  bool current_bindless_uses_mesh_stages_ = false;
+
+  // Pool for per-draw constant buffer allocations (replaces the ring's
+  // uniforms_buffer_ for constant data).
+  std::unique_ptr<MetalUploadBufferPool> constant_buffer_pool_;
+  // Track which heap buffer binds have been set on the current encoder.
+  bool heap_binds_set_on_encoder_ = false;
 
   std::atomic<uint64_t> completed_command_buffers_{0};
   std::atomic<uint32_t> pending_completion_handlers_{0};
   uint64_t submission_current_ = 0;
   uint64_t submission_completed_processed_ = 0;
 
-  // Draw counter for ring-buffer descriptor heap allocation
-  // Each draw uses a different region of the descriptor heap to avoid
-  // overwriting previous draws' descriptors before GPU execution
-  uint32_t current_draw_index_ = 0;
+  bool submission_has_draws_ = false;
   bool copy_resolve_writes_pending_ = false;
+
+  ResolveOrderingPolicy resolve_ordering_policy_ =
+      ResolveOrderingPolicy::kSubmissionBoundary;
 
   // Memexport tracking for shared memory invalidation.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
@@ -809,15 +574,24 @@ class MetalCommandProcessor : public CommandProcessor {
   bool gamma_ramp_256_entry_table_up_to_date_ = false;
   bool gamma_ramp_pwl_up_to_date_ = false;
 
-  // Track memory regions written by IssueCopy (resolve) during trace playback.
+  // Trace-only resolve protection (see TraceResolveGuard above).
+  TraceResolveGuard trace_resolve_guard_;
 
-  // This prevents the trace player from overwriting resolved data with stale
-  // data from the trace file.
-  struct ResolvedRange {
-    uint32_t base;
-    uint32_t length;
-  };
-  std::vector<ResolvedRange> resolved_memory_ranges_;
+  // Performance probe state (only meaningful when cvars::metal_perf_probe).
+  os_log_t probe_log_ = nullptr;
+  // Per-command-buffer counters (reset in EnsureCommandBuffer).
+  uint32_t probe_main_re_count_ = 0;      // XeniaRE (main draw path)
+  uint32_t probe_transfer_re_count_ = 0;  // XeniaTransferRE
+  uint32_t probe_compute_encoder_count_ = 0;
+  uint32_t probe_blit_encoder_count_ = 0;
+  uint32_t probe_draw_count_ = 0;
+  // Per-render-encoder counters (reset on encoder begin).
+  uint32_t probe_encoder_draw_count_ = 0;
+  uint32_t probe_encoder_indexed_draw_count_ = 0;
+  uint32_t probe_encoder_pipeline_changes_ = 0;
+  uint32_t probe_encoder_viewport_changes_ = 0;
+  uint32_t probe_encoder_scissor_changes_ = 0;
+  uint32_t probe_encoder_depth_stencil_changes_ = 0;
 };
 
 }  // namespace metal

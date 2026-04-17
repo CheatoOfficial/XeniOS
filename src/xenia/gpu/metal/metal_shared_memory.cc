@@ -66,7 +66,14 @@ bool MetalSharedMemory::Initialize() {
   }
 
   if (!buffer_) {
-    buffer_ = device->newBuffer(kBufferSize, MTL::ResourceStorageModeShared);
+    // WriteCombined is safe here: the CPU only writes to this buffer (memcpy in
+    // UploadRanges) and never reads back.  This yields 2-4x faster sequential
+    // write throughput on Apple Silicon.  The zero-copy path above aliases
+    // guest memory which IS read by the CPU, so WriteCombined must NOT be used
+    // there.
+    buffer_ = device->newBuffer(kBufferSize,
+                                MTL::ResourceStorageModeShared |
+                                    MTL::ResourceCPUCacheModeWriteCombined);
   }
   if (!buffer_) {
     XELOGE("Failed to create Metal shared memory buffer");
@@ -86,28 +93,11 @@ bool MetalSharedMemory::Initialize() {
   return true;
 }
 
-void MetalSharedMemory::ClearCache() { SharedMemory::ClearCache(); }
-
 bool MetalSharedMemory::UploadRanges(
     const std::pair<uint32_t, uint32_t>* upload_page_ranges,
     uint32_t num_upload_ranges) {
   // Copy modified ranges from Xbox memory to Metal buffer when not using
   // bytes-no-copy shared memory.
-
-  static bool first_upload = true;
-  if (first_upload) {
-    first_upload = false;
-    const uint32_t page_size = 1u << page_size_log2();
-    XELOGD("MetalSharedMemory::UploadRanges: page_size={}, {} ranges to upload",
-           page_size, num_upload_ranges);
-    for (uint32_t i = 0; i < std::min(5u, num_upload_ranges); i++) {
-      uint32_t start_byte = upload_page_ranges[i].first * page_size;
-      uint32_t length_bytes = upload_page_ranges[i].second * page_size;
-      XELOGD("  Range[{}]: page={} count={} -> byte offset=0x{:08X} length={}",
-             i, upload_page_ranges[i].first, upload_page_ranges[i].second,
-             start_byte, length_bytes);
-    }
-  }
 
   if (!buffer_ || num_upload_ranges == 0) {
     return true;

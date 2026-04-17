@@ -8,8 +8,11 @@
  */
 
 #include "xenia/gpu/metal/metal_render_target_cache.h"
-#include "xenia/gpu/gpu_flags.h"
 
+#ifdef __APPLE__
+#include <os/log.h>
+#include <os/signpost.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -51,6 +54,7 @@
 #include "xenia/gpu/shaders/bytecode/metal/resolve_full_8bpp_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/resolve_full_8bpp_scaled_cs.h"
 
+#include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
 #include "xenia/gpu/metal/metal_command_processor.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/texture_util.h"
@@ -320,186 +324,6 @@ uint32_t PackR8G8B8A8Unorm(const DebugColor& color) {
   return r | (g << 8u) | (b << 16u) | (a << 24u);
 }
 
-bool PackColor32bpp(uint32_t format, const DebugColor& color,
-                    uint32_t* packed_out) {
-  switch (format) {
-    case uint32_t(MetalEdramDumpFormat::kColorRGBA8): {
-      *packed_out = PackR8G8B8A8Unorm(color);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRGB10A2Unorm): {
-      uint32_t r = PackUnorm(color.r, 1023.0f);
-      uint32_t g = PackUnorm(color.g, 1023.0f);
-      uint32_t b = PackUnorm(color.b, 1023.0f);
-      uint32_t a = PackUnorm(color.a, 3.0f);
-      *packed_out = r | (g << 10u) | (b << 20u) | (a << 30u);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRGB10A2Float): {
-      uint32_t r = XeUnclampedFloat32To7e3(color.r);
-      uint32_t g = XeUnclampedFloat32To7e3(color.g);
-      uint32_t b = XeUnclampedFloat32To7e3(color.b);
-      uint32_t a = PackUnorm(color.a, 3.0f);
-      *packed_out = (r & 0x3FFu) | ((g & 0x3FFu) << 10u) |
-                    ((b & 0x3FFu) << 20u) | ((a & 0x3u) << 30u);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRG16Snorm): {
-      uint32_t r = PackSnorm16(color.r);
-      uint32_t g = PackSnorm16(color.g);
-      *packed_out = r | (g << 16u);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRG16Float): {
-      uint16_t r = FloatToHalf(color.r);
-      uint16_t g = FloatToHalf(color.g);
-      *packed_out = uint32_t(r) | (uint32_t(g) << 16u);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorR32Float): {
-      *packed_out = FloatToBits(color.r);
-      return true;
-    }
-    default:
-      break;
-  }
-  return false;
-}
-
-bool UnpackColor32bpp(uint32_t format, uint32_t packed, DebugColor* color_out) {
-  if (!color_out) {
-    return false;
-  }
-  switch (format) {
-    case uint32_t(MetalEdramDumpFormat::kColorRGBA8): {
-      color_out->r = float(packed & 0xFFu) * (1.0f / 255.0f);
-      color_out->g = float((packed >> 8u) & 0xFFu) * (1.0f / 255.0f);
-      color_out->b = float((packed >> 16u) & 0xFFu) * (1.0f / 255.0f);
-      color_out->a = float(packed >> 24u) * (1.0f / 255.0f);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRGB10A2Unorm): {
-      color_out->r = float(packed & 0x3FFu) * (1.0f / 1023.0f);
-      color_out->g = float((packed >> 10u) & 0x3FFu) * (1.0f / 1023.0f);
-      color_out->b = float((packed >> 20u) & 0x3FFu) * (1.0f / 1023.0f);
-      color_out->a = float((packed >> 30u) & 0x3u) * (1.0f / 3.0f);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRGB10A2Float): {
-      color_out->r = XeFloat7e3To32(packed & 0x3FFu);
-      color_out->g = XeFloat7e3To32((packed >> 10u) & 0x3FFu);
-      color_out->b = XeFloat7e3To32((packed >> 20u) & 0x3FFu);
-      color_out->a = float((packed >> 30u) & 0x3u) * (1.0f / 3.0f);
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRG16Snorm): {
-      int16_t r = int16_t(packed & 0xFFFFu);
-      int16_t g = int16_t(packed >> 16u);
-      color_out->r = std::max(float(r) * (1.0f / 32767.0f), -1.0f);
-      color_out->g = std::max(float(g) * (1.0f / 32767.0f), -1.0f);
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorRG16Float): {
-      uint16_t r = uint16_t(packed & 0xFFFFu);
-      uint16_t g = uint16_t(packed >> 16u);
-      color_out->r = HalfToFloat(r);
-      color_out->g = HalfToFloat(g);
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    case uint32_t(MetalEdramDumpFormat::kColorR32Float): {
-      color_out->r = BitsToFloat(packed);
-      color_out->g = 0.0f;
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    default:
-      break;
-  }
-  return false;
-}
-
-bool DecodeColorTexel(MTL::PixelFormat format, const uint8_t* bytes,
-                      DebugColor* color_out) {
-  if (!color_out) {
-    return false;
-  }
-  switch (format) {
-    case MTL::PixelFormatRGBA16Float: {
-      uint16_t components[4];
-      std::memcpy(components, bytes, sizeof(components));
-      color_out->r = HalfToFloat(components[0]);
-      color_out->g = HalfToFloat(components[1]);
-      color_out->b = HalfToFloat(components[2]);
-      color_out->a = HalfToFloat(components[3]);
-      return true;
-    }
-    case MTL::PixelFormatRG16Float: {
-      uint16_t components[2];
-      std::memcpy(components, bytes, sizeof(components));
-      color_out->r = HalfToFloat(components[0]);
-      color_out->g = HalfToFloat(components[1]);
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    case MTL::PixelFormatRGBA8Unorm: {
-      color_out->r = float(bytes[0]) * (1.0f / 255.0f);
-      color_out->g = float(bytes[1]) * (1.0f / 255.0f);
-      color_out->b = float(bytes[2]) * (1.0f / 255.0f);
-      color_out->a = float(bytes[3]) * (1.0f / 255.0f);
-      return true;
-    }
-    case MTL::PixelFormatBGRA8Unorm: {
-      color_out->b = float(bytes[0]) * (1.0f / 255.0f);
-      color_out->g = float(bytes[1]) * (1.0f / 255.0f);
-      color_out->r = float(bytes[2]) * (1.0f / 255.0f);
-      color_out->a = float(bytes[3]) * (1.0f / 255.0f);
-      return true;
-    }
-    case MTL::PixelFormatRGB10A2Unorm:
-    case MTL::PixelFormatBGR10A2Unorm: {
-      uint32_t packed = 0;
-      std::memcpy(&packed, bytes, sizeof(packed));
-      DebugColor unpacked;
-      unpacked.r = float(packed & 0x3FFu) * (1.0f / 1023.0f);
-      unpacked.g = float((packed >> 10u) & 0x3FFu) * (1.0f / 1023.0f);
-      unpacked.b = float((packed >> 20u) & 0x3FFu) * (1.0f / 1023.0f);
-      unpacked.a = float((packed >> 30u) & 0x3u) * (1.0f / 3.0f);
-      if (format == MTL::PixelFormatBGR10A2Unorm) {
-        std::swap(unpacked.r, unpacked.b);
-      }
-      *color_out = unpacked;
-      return true;
-    }
-    case MTL::PixelFormatR32Float: {
-      uint32_t packed = 0;
-      std::memcpy(&packed, bytes, sizeof(packed));
-      color_out->r = BitsToFloat(packed);
-      color_out->g = 0.0f;
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    case MTL::PixelFormatRG32Float: {
-      uint32_t packed[2] = {};
-      std::memcpy(packed, bytes, sizeof(packed));
-      color_out->r = BitsToFloat(packed[0]);
-      color_out->g = BitsToFloat(packed[1]);
-      color_out->b = 0.0f;
-      color_out->a = 1.0f;
-      return true;
-    }
-    default:
-      break;
-  }
-  return false;
-}
-
 size_t MsaaSamplesToIndex(xenos::MsaaSamples samples) {
   switch (samples) {
     case xenos::MsaaSamples::k1X:
@@ -717,6 +541,137 @@ RenderTargetCache::Path MetalRenderTargetCache::GetPath() const {
   return Path::kHostRenderTargets;
 }
 
+bool MetalRenderTargetCache::InitializeEdramBufferViews() {
+  ReleaseEdramBufferViews();
+  if (!edram_buffer_) {
+    return false;
+  }
+
+  struct ViewInit {
+    uint32_t element_size_bytes_pow2;
+    MTL::PixelFormat format;
+    MTL::Texture** texture_out;
+    const char* label;
+  };
+  const ViewInit kViews[] = {
+      {2, MTL::PixelFormatR32Uint, &edram_r32_uint_buffer_view_,
+       "XeniaEDRAMR32UintView"},
+      {3, MTL::PixelFormatRG32Uint, &edram_r32g32_uint_buffer_view_,
+       "XeniaEDRAMR32G32UintView"},
+      {4, MTL::PixelFormatRGBA32Uint, &edram_r32g32b32a32_uint_buffer_view_,
+       "XeniaEDRAMR32G32B32A32UintView"},
+  };
+
+  for (const ViewInit& view_init : kViews) {
+    const NS::UInteger bytes_per_element = NS::UInteger(1u)
+                                           << view_init.element_size_bytes_pow2;
+    const NS::UInteger width = edram_buffer_->length() / bytes_per_element;
+    if (!width) {
+      XELOGE("MetalRenderTargetCache: invalid EDRAM bindless width for {}",
+             view_init.label);
+      ReleaseEdramBufferViews();
+      return false;
+    }
+
+    MTL::TextureDescriptor* desc = MTL::TextureDescriptor::alloc()->init();
+    desc->setTextureType(MTL::TextureTypeTextureBuffer);
+    desc->setPixelFormat(view_init.format);
+    desc->setWidth(width);
+    desc->setHeight(1);
+    desc->setUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite |
+                   MTL::TextureUsagePixelFormatView);
+    desc->setResourceOptions(edram_buffer_->resourceOptions());
+    desc->setStorageMode(edram_buffer_->storageMode());
+
+    MTL::Texture* texture =
+        edram_buffer_->newTexture(desc, 0, edram_buffer_->length());
+    desc->release();
+    if (!texture) {
+      XELOGE("MetalRenderTargetCache: failed to create EDRAM bindless view {}",
+             view_init.label);
+      ReleaseEdramBufferViews();
+      return false;
+    }
+    texture->setLabel(
+        NS::String::string(view_init.label, NS::UTF8StringEncoding));
+    *view_init.texture_out = texture;
+  }
+
+  return true;
+}
+
+void MetalRenderTargetCache::ReleaseEdramBufferViews() {
+  if (edram_r32_uint_buffer_view_) {
+    edram_r32_uint_buffer_view_->release();
+    edram_r32_uint_buffer_view_ = nullptr;
+  }
+  if (edram_r32g32_uint_buffer_view_) {
+    edram_r32g32_uint_buffer_view_->release();
+    edram_r32g32_uint_buffer_view_ = nullptr;
+  }
+  if (edram_r32g32b32a32_uint_buffer_view_) {
+    edram_r32g32b32a32_uint_buffer_view_->release();
+    edram_r32g32b32a32_uint_buffer_view_ = nullptr;
+  }
+}
+
+MTL::Texture* MetalRenderTargetCache::GetEdramUintPow2BufferView(
+    uint32_t element_size_bytes_pow2) const {
+  switch (element_size_bytes_pow2) {
+    case 2:
+      return edram_r32_uint_buffer_view_;
+    case 3:
+      return edram_r32g32_uint_buffer_view_;
+    case 4:
+      return edram_r32g32b32a32_uint_buffer_view_;
+    default:
+      assert_unhandled_case(element_size_bytes_pow2);
+      return nullptr;
+  }
+}
+
+bool MetalRenderTargetCache::WriteEdramUintPow2BindlessDescriptor(
+    IRDescriptorTableEntry* entry, uint32_t element_size_bytes_pow2) const {
+  if (!entry || !edram_buffer_) {
+    return false;
+  }
+  MTL::Texture* texture_view =
+      GetEdramUintPow2BufferView(element_size_bytes_pow2);
+  if (!texture_view) {
+    return false;
+  }
+  IRBufferView buffer_view = {};
+  const uint64_t bytes_per_element = uint64_t(1u) << element_size_bytes_pow2;
+  buffer_view.buffer = edram_buffer_;
+  buffer_view.bufferOffset = 0;
+  buffer_view.bufferSize = edram_buffer_->length();
+  buffer_view.textureBufferView = texture_view;
+  buffer_view.textureViewOffsetInElements = uint32_t(
+      (uint64_t(edram_buffer_->gpuAddress()) % 16u) / bytes_per_element);
+  buffer_view.typedBuffer = true;
+  IRDescriptorTableSetBufferView(entry, &buffer_view);
+  return true;
+}
+
+void MetalRenderTargetCache::UseBindlessResources(
+    MetalCommandProcessor& command_processor, MTL::ResourceUsage usage) const {
+  if (edram_buffer_) {
+    command_processor.UseRenderEncoderResource(edram_buffer_, usage);
+  }
+  if (edram_r32_uint_buffer_view_) {
+    command_processor.UseRenderEncoderResource(edram_r32_uint_buffer_view_,
+                                               usage);
+  }
+  if (edram_r32g32_uint_buffer_view_) {
+    command_processor.UseRenderEncoderResource(edram_r32g32_uint_buffer_view_,
+                                               usage);
+  }
+  if (edram_r32g32b32a32_uint_buffer_view_) {
+    command_processor.UseRenderEncoderResource(
+        edram_r32g32b32a32_uint_buffer_view_, usage);
+  }
+}
+
 bool MetalRenderTargetCache::Initialize() {
   device_ = command_processor_.GetMetalDevice();
   if (!device_) {
@@ -774,21 +729,25 @@ bool MetalRenderTargetCache::Initialize() {
     }
   } else {
     ScopedAutoreleasePool autorelease_pool;
-    MTL::CommandQueue* queue = command_processor_.GetMetalCommandQueue();
-    if (queue) {
-      MTL::CommandBuffer* cmd = queue->commandBuffer();
-      if (cmd) {
-        MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-        if (blit) {
-          blit->fillBuffer(
-              edram_buffer_,
-              NS::Range::Make(0, static_cast<NS::UInteger>(edram_size_bytes)),
-              0);
-          blit->endEncoding();
-          cmd->commit();
-        }
+    MTL::CommandBuffer* cmd =
+        command_processor_.CreateStandaloneTransferCommandBuffer(
+            "XeniaCB reason=edram-init");
+    if (cmd) {
+      MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+      if (blit) {
+        blit->fillBuffer(
+            edram_buffer_,
+            NS::Range::Make(0, static_cast<NS::UInteger>(edram_size_bytes)), 0);
+        blit->endEncoding();
+        command_processor_.CommitStandaloneAsync(cmd);
+      } else {
+        cmd->release();
       }
     }
+  }
+  if (!InitializeEdramBufferViews()) {
+    XELOGE("MetalRenderTargetCache: Failed to create EDRAM bindless views");
+    return false;
   }
   // Initialize EDRAM compute shaders
   if (!InitializeEdramComputeShaders()) {
@@ -915,6 +874,7 @@ void MetalRenderTargetCache::Shutdown(bool from_destructor) {
 
   // Clean up EDRAM compute shaders
   ShutdownEdramComputeShaders();
+  ReleaseEdramBufferViews();
 
   if (edram_buffer_) {
     edram_buffer_->release();
@@ -939,7 +899,6 @@ void MetalRenderTargetCache::Shutdown(bool from_destructor) {
 bool MetalRenderTargetCache::InitializeEdramComputeShaders() {
   // Initialize the resolve / EDRAM compute pipelines used by the Metal backend.
   const bool draw_resolution_scaled = IsDrawResolutionScaled();
-  edram_load_pipeline_ = nullptr;
   edram_store_pipeline_ = nullptr;
   edram_dump_color_32bpp_1xmsaa_pipeline_ = nullptr;
   edram_dump_color_32bpp_2xmsaa_pipeline_ = nullptr;
@@ -1105,9 +1064,13 @@ bool MetalRenderTargetCache::InitializeEdramComputeShaders() {
     }
   }
 
-  // EDRAM dump compute shader for 32-bpp color, 1x MSAA.
-  {
-    static const char kEdramDumpColor32bpp1xMsaaShader[] = R"METAL(
+  // EDRAM dump compute shaders -- parameterized MSL template compiled 9 times
+  // with different #defines. Each variant differs in MSAA sample count,
+  // bits-per-pixel, and whether it dumps color or depth data.
+  //
+  // Shared preamble: constants, utilities, and ALL pack functions so every
+  // variant can reference them through #if guards in the kernel template.
+  static const char kEdramDumpPreamble[] = R"METAL(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -1157,9 +1120,12 @@ constant uint kDumpFormatColorRGBA16Unorm = 8;
 constant uint kDumpFormatColorRG32Float = 9;
 constant uint kDumpFormatDepthD24S8 = 16;
 constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;  // bit 0
-constant uint kDumpFlagDepthRound = 2;  // bit 1
-constant uint kDumpFlagGammaAsLinear = 4;  // bit 2: source is linear, needs PWL gamma encode
+constant uint kDumpFlagHasStencil = 1;   // bit 0
+constant uint kDumpFlagDepthRound = 2;   // bit 1
+constant uint kDumpFlagGammaAsLinear = 4; // bit 2
+
+// --- Color 32bpp helpers (guarded so depth-only compiles skip them) ---
+#if DUMP_IS_DEPTH == 0 && DUMP_BPP == 32
 
 // PWL gamma encode: linear -> gamma (for gamma RTs stored as linear RGBA16Unorm)
 inline float XeLinearToPWLGamma(float value) {
@@ -1254,161 +1220,10 @@ uint XePackColor32bpp(uint format, float4 color) {
   }
 }
 
-kernel void edram_dump_color_32bpp_1xmsaa(
-    texture2d<float, access::read> source [[texture(0)]],
-    device uint* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
+#endif  // DUMP_IS_DEPTH == 0 && DUMP_BPP == 32
 
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_coord = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                             source_tile_y * tile_size.y + sample_in_tile.y);
-
-  float4 color = source.read(source_coord);
-
-  // If source is a linear RGBA16Unorm gamma RT, convert to PWL gamma encoding
-  if (constants.flags & kDumpFlagGammaAsLinear) {
-    color.rgb = XeLinearToPWLGamma3(color.rgb);
-  }
-
-  uint packed = XePackColor32bpp(constants.format, color);
-
-  edram[edram_index] = packed;
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpColor32bpp1xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_32bpp_1xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_32bpp_1xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_32bpp_1xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_32bpp_1xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_32bpp_1xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_32bpp_1xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 32-bpp color, 2x MSAA.
-  {
-    static const char kEdramDumpColor32bpp2xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;  // bit 0
-constant uint kDumpFlagDepthRound = 2;  // bit 1
-constant uint kDumpFlagGammaAsLinear = 4;  // bit 2: source is linear, needs PWL gamma encode
-
-// PWL gamma encode: linear -> gamma (for gamma RTs stored as linear RGBA16Unorm)
-inline float XeLinearToPWLGamma(float value) {
-  float clamped = clamp(value, 0.0f, 1.0f);
-  float scale, offset;
-  if (clamped >= (128.0f / 1023.0f)) {
-    if (clamped >= (512.0f / 1023.0f)) { scale = 1023.0f / 8.0f; offset = 128.0f / 255.0f; }
-    else { scale = 1023.0f / 4.0f; offset = 64.0f / 255.0f; }
-  } else {
-    if (clamped >= (64.0f / 1023.0f)) { scale = 1023.0f / 2.0f; offset = 32.0f / 255.0f; }
-    else { scale = 1023.0f; offset = 0.0f; }
-  }
-  return trunc(clamped * scale) * (1.0f / 255.0f) + offset;
-}
-inline float3 XeLinearToPWLGamma3(float3 v) {
-  return float3(XeLinearToPWLGamma(v.r), XeLinearToPWLGamma(v.g), XeLinearToPWLGamma(v.b));
-}
-
-inline uint XePackUnorm(float value, float scale) {
-  return uint(clamp(value, 0.0f, 1.0f) * scale + 0.5f);
-}
+// --- Color 64bpp helpers ---
+#if DUMP_IS_DEPTH == 0 && DUMP_BPP == 64
 
 inline uint XePackSnorm16(float value) {
   float clamped = clamp(value, -1.0f, 1.0f);
@@ -1417,440 +1232,52 @@ inline uint XePackSnorm16(float value) {
   return uint(packed) & 0xFFFFu;
 }
 
-uint XePreClampedFloat32To7e3(float value) {
-  uint f32 = as_type<uint>(value);
-  uint biased_f32;
-  if (f32 < 0x3E800000u) {
-    uint f32_exp = f32 >> 23u;
-    uint shift = 125u - f32_exp;
-    shift = min(shift, 24u);
-    uint mantissa = (f32 & 0x7FFFFFu) | 0x800000u;
-    biased_f32 = mantissa >> shift;
-  } else {
-    biased_f32 = f32 + 0xC2000000u;
-  }
-  uint round_bit = (biased_f32 >> 16u) & 1u;
-  uint f10 = biased_f32 + 0x7FFFu + round_bit;
-  return (f10 >> 16u) & 0x3FFu;
-}
-
-uint XeUnclampedFloat32To7e3(float value) {
-  float clamped = min(max(value, 0.0f), 31.875f);
-  return XePreClampedFloat32To7e3(clamped);
-}
-
-uint XePackColor32bpp(uint format, float4 color) {
-  switch (format) {
-    case kDumpFormatColorRGBA8: {
-      uint r = XePackUnorm(color.r, 255.0f);
-      uint g = XePackUnorm(color.g, 255.0f);
-      uint b = XePackUnorm(color.b, 255.0f);
-      uint a = XePackUnorm(color.a, 255.0f);
-      return r | (g << 8u) | (b << 16u) | (a << 24u);
-    }
-    case kDumpFormatColorRGB10A2Unorm: {
-      uint r = XePackUnorm(color.r, 1023.0f);
-      uint g = XePackUnorm(color.g, 1023.0f);
-      uint b = XePackUnorm(color.b, 1023.0f);
-      uint a = XePackUnorm(color.a, 3.0f);
-      return r | (g << 10u) | (b << 20u) | (a << 30u);
-    }
-    case kDumpFormatColorRGB10A2Float: {
-      uint r = XeUnclampedFloat32To7e3(color.r);
-      uint g = XeUnclampedFloat32To7e3(color.g);
-      uint b = XeUnclampedFloat32To7e3(color.b);
-      uint a = XePackUnorm(color.a, 3.0f);
-      return (r & 0x3FFu) | ((g & 0x3FFu) << 10u) |
-             ((b & 0x3FFu) << 20u) | ((a & 0x3u) << 30u);
-    }
-    case kDumpFormatColorRG16Snorm: {
-      uint r = XePackSnorm16(color.r);
-      uint g = XePackSnorm16(color.g);
-      return r | (g << 16u);
-    }
-    case kDumpFormatColorRG16Float:
-      return as_type<uint>(half2(color.rg));
-    case kDumpFormatColorR32Float:
-      return as_type<uint>(color.r);
-    default: {
-      uint r = XePackUnorm(color.r, 255.0f);
-      uint g = XePackUnorm(color.g, 255.0f);
-      uint b = XePackUnorm(color.b, 255.0f);
-      uint a = XePackUnorm(color.a, 255.0f);
-      return r | (g << 8u) | (b << 16u) | (a << 24u);
-    }
-  }
-}
-
-kernel void edram_dump_color_32bpp_2xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    device uint* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_id = source_sample.y & 1u;
-  uint2 pixel_coord = uint2(source_sample.x, source_sample.y >> 1);
-
-  float4 color = source.read(pixel_coord, sample_id);
-
-  // If source is a linear RGBA16Unorm gamma RT, convert to PWL gamma encoding
-  if (constants.flags & kDumpFlagGammaAsLinear) {
-    color.rgb = XeLinearToPWLGamma3(color.rgb);
-  }
-
-  uint packed = XePackColor32bpp(constants.format, color);
-
-  edram[edram_index] = packed;
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpColor32bpp2xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_32bpp_2xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_32bpp_2xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_32bpp_2xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_32bpp_2xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_32bpp_2xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_32bpp_2xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 32-bpp color, 4x MSAA.
-  {
-    static const char kEdramDumpColor32bpp4xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;  // bit 0
-constant uint kDumpFlagDepthRound = 2;  // bit 1
-constant uint kDumpFlagGammaAsLinear = 4;  // bit 2: source is linear, needs PWL gamma encode
-
-// PWL gamma encode: linear -> gamma (for gamma RTs stored as linear RGBA16Unorm)
-inline float XeLinearToPWLGamma(float value) {
-  float clamped = clamp(value, 0.0f, 1.0f);
-  float scale, offset;
-  if (clamped >= (128.0f / 1023.0f)) {
-    if (clamped >= (512.0f / 1023.0f)) { scale = 1023.0f / 8.0f; offset = 128.0f / 255.0f; }
-    else { scale = 1023.0f / 4.0f; offset = 64.0f / 255.0f; }
-  } else {
-    if (clamped >= (64.0f / 1023.0f)) { scale = 1023.0f / 2.0f; offset = 32.0f / 255.0f; }
-    else { scale = 1023.0f; offset = 0.0f; }
-  }
-  return trunc(clamped * scale) * (1.0f / 255.0f) + offset;
-}
-inline float3 XeLinearToPWLGamma3(float3 v) {
-  return float3(XeLinearToPWLGamma(v.r), XeLinearToPWLGamma(v.g), XeLinearToPWLGamma(v.b));
-}
-
 inline uint XePackUnorm(float value, float scale) {
   return uint(clamp(value, 0.0f, 1.0f) * scale + 0.5f);
 }
 
-inline uint XePackSnorm16(float value) {
-  float clamped = clamp(value, -1.0f, 1.0f);
-  float bias = clamped >= 0.0f ? 0.5f : -0.5f;
-  int packed = int(clamped * 32767.0f + bias);
-  return uint(packed) & 0xFFFFu;
-}
-
-uint XePreClampedFloat32To7e3(float value) {
-  uint f32 = as_type<uint>(value);
-  uint biased_f32;
-  if (f32 < 0x3E800000u) {
-    uint f32_exp = f32 >> 23u;
-    uint shift = 125u - f32_exp;
-    shift = min(shift, 24u);
-    uint mantissa = (f32 & 0x7FFFFFu) | 0x800000u;
-    biased_f32 = mantissa >> shift;
-  } else {
-    biased_f32 = f32 + 0xC2000000u;
-  }
-  uint round_bit = (biased_f32 >> 16u) & 1u;
-  uint f10 = biased_f32 + 0x7FFFu + round_bit;
-  return (f10 >> 16u) & 0x3FFu;
-}
-
-uint XeUnclampedFloat32To7e3(float value) {
-  float clamped = min(max(value, 0.0f), 31.875f);
-  return XePreClampedFloat32To7e3(clamped);
-}
-
-uint XePackColor32bpp(uint format, float4 color) {
+uint2 XePackColor64bpp(uint format, float4 color) {
   switch (format) {
-    case kDumpFormatColorRGBA8: {
-      uint r = XePackUnorm(color.r, 255.0f);
-      uint g = XePackUnorm(color.g, 255.0f);
-      uint b = XePackUnorm(color.b, 255.0f);
-      uint a = XePackUnorm(color.a, 255.0f);
-      return r | (g << 8u) | (b << 16u) | (a << 24u);
-    }
-    case kDumpFormatColorRGB10A2Unorm: {
-      uint r = XePackUnorm(color.r, 1023.0f);
-      uint g = XePackUnorm(color.g, 1023.0f);
-      uint b = XePackUnorm(color.b, 1023.0f);
-      uint a = XePackUnorm(color.a, 3.0f);
-      return r | (g << 10u) | (b << 20u) | (a << 30u);
-    }
-    case kDumpFormatColorRGB10A2Float: {
-      uint r = XeUnclampedFloat32To7e3(color.r);
-      uint g = XeUnclampedFloat32To7e3(color.g);
-      uint b = XeUnclampedFloat32To7e3(color.b);
-      uint a = XePackUnorm(color.a, 3.0f);
-      return (r & 0x3FFu) | ((g & 0x3FFu) << 10u) |
-             ((b & 0x3FFu) << 20u) | ((a & 0x3u) << 30u);
-    }
-    case kDumpFormatColorRG16Snorm: {
+    case kDumpFormatColorRGBA16Snorm: {
       uint r = XePackSnorm16(color.r);
       uint g = XePackSnorm16(color.g);
-      return r | (g << 16u);
+      uint b = XePackSnorm16(color.b);
+      uint a = XePackSnorm16(color.a);
+      uint rg = r | (g << 16u);
+      uint ba = b | (a << 16u);
+      return uint2(rg, ba);
     }
-    case kDumpFormatColorRG16Float:
-      return as_type<uint>(half2(color.rg));
-    case kDumpFormatColorR32Float:
-      return as_type<uint>(color.r);
+    case kDumpFormatColorRGBA16Float: {
+      uint rg = as_type<uint>(half2(color.rg));
+      uint ba = as_type<uint>(half2(color.ba));
+      return uint2(rg, ba);
+    }
+    case kDumpFormatColorRGBA16Unorm: {
+      uint r = XePackUnorm(color.r, 65535.0f);
+      uint g = XePackUnorm(color.g, 65535.0f);
+      uint b = XePackUnorm(color.b, 65535.0f);
+      uint a = XePackUnorm(color.a, 65535.0f);
+      uint rg = r | (g << 16u);
+      uint ba = b | (a << 16u);
+      return uint2(rg, ba);
+    }
+    case kDumpFormatColorRG32Float: {
+      uint r = as_type<uint>(color.r);
+      uint g = as_type<uint>(color.g);
+      return uint2(r, g);
+    }
     default: {
-      uint r = XePackUnorm(color.r, 255.0f);
-      uint g = XePackUnorm(color.g, 255.0f);
-      uint b = XePackUnorm(color.b, 255.0f);
-      uint a = XePackUnorm(color.a, 255.0f);
-      return r | (g << 8u) | (b << 16u) | (a << 24u);
+      uint rg = as_type<uint>(half2(color.rg));
+      uint ba = as_type<uint>(half2(color.ba));
+      return uint2(rg, ba);
     }
   }
 }
 
-kernel void edram_dump_color_32bpp_4xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    device uint* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
+#endif  // DUMP_IS_DEPTH == 0 && DUMP_BPP == 64
 
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_x = source_sample.x & 1u;
-  uint sample_y = source_sample.y & 1u;
-  uint sample_id = sample_x | (sample_y << 1u);
-  uint2 pixel_coord = uint2(source_sample.x >> 1, source_sample.y >> 1);
-
-  float4 color = source.read(pixel_coord, sample_id);
-
-  // If source is a linear RGBA16Unorm gamma RT, convert to PWL gamma encoding
-  if (constants.flags & kDumpFlagGammaAsLinear) {
-    color.rgb = XeLinearToPWLGamma3(color.rgb);
-  }
-
-  uint packed = XePackColor32bpp(constants.format, color);
-
-  edram[edram_index] = packed;
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpColor32bpp4xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_32bpp_4xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_32bpp_4xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_32bpp_4xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_32bpp_4xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_32bpp_4xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_32bpp_4xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 32-bpp depth, 4x MSAA.
-  {
-    static const char kEdramDumpDepth32bpp4xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
+// --- Depth 32bpp helpers ---
+#if DUMP_IS_DEPTH == 1
 
 inline uint XeRoundToNearestEven(float value) {
   float floor_value = floor(value);
@@ -1874,364 +1301,36 @@ uint XeFloat32To20e4(float value, bool round_to_nearest_even) {
   return (f24 >> 3u) & 0xFFFFFFu;
 }
 
-kernel void edram_dump_depth_32bpp_4xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    texture2d_ms<uint, access::read> stencil [[texture(1)]],
-    device uint* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-  uint2 edram_sample_in_tile = sample_in_tile;
-  uint tile_width_half = tile_size.x >> 1u;
-  edram_sample_in_tile.x =
-      (edram_sample_in_tile.x < tile_width_half)
-          ? (edram_sample_in_tile.x + tile_width_half)
-          : (edram_sample_in_tile.x - tile_width_half);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index =
-      edram_sample_in_tile.y * tile_size.x + edram_sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_x = source_sample.x & 1u;
-  uint sample_y = source_sample.y & 1u;
-  uint sample_id = sample_x | (sample_y << 1u);
-  uint2 pixel_coord = uint2(source_sample.x >> 1, source_sample.y >> 1);
-
-  float depth = source.read(pixel_coord, sample_id).r;
-
-  uint depth24;
-  if (constants.format == kDumpFormatDepthD24FS8) {
-    bool round_depth = (constants.flags & kDumpFlagDepthRound) != 0u;
-    depth24 = XeFloat32To20e4(depth * 2.0f, round_depth);
-  } else {
-    float depth_f = clamp(depth, 0.0f, 1.0f) * 16777215.0f;
-    depth24 = XeRoundToNearestEven(depth_f);
-  }
-
-  uint stencil_value = 0u;
-  if ((constants.flags & kDumpFlagHasStencil) != 0u) {
-    stencil_value = stencil.read(pixel_coord, sample_id).x & 0xFFu;
-  }
-
-  uint packed = (depth24 << 8u) | stencil_value;
-
-  edram[edram_index] = packed;
-}
+#endif  // DUMP_IS_DEPTH == 1
 )METAL";
 
-    NS::String* source = NS::String::string(kEdramDumpDepth32bpp4xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_depth_32bpp_4xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_depth_32bpp_4xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_depth_32bpp_4xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_depth_32bpp_4xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_depth_32bpp_4xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_depth_32bpp_4xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
+  // Parameterized kernel template. Uses #if on DUMP_MSAA_SAMPLES, DUMP_BPP,
+  // and DUMP_IS_DEPTH to select texture type, sample access, EDRAM element
+  // type, pack function, and the depth-specific tile-half swizzle.
+  static const char kEdramDumpKernelTemplate[] = R"METAL(
 
-  // EDRAM dump compute shader for 32-bpp depth, 2x MSAA.
-  {
-    static const char kEdramDumpDepth32bpp2xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
-
-inline uint XeRoundToNearestEven(float value) {
-  float floor_value = floor(value);
-  float frac = value - floor_value;
-  uint result = uint(floor_value);
-  if (frac > 0.5f || (frac == 0.5f && (result & 1u))) {
-    result += 1u;
-  }
-  return result;
-}
-
-uint XeFloat32To20e4(float value, bool round_to_nearest_even) {
-  uint f32 = as_type<uint>(value);
-  f32 = min((f32 <= 0x7FFFFFFFu) ? f32 : 0u, 0x3FFFFFF8u);
-  uint denormalized =
-      ((f32 & 0x7FFFFFu) | 0x800000u) >> min(113u - (f32 >> 23u), 24u);
-  uint f24 = (f32 < 0x38800000u) ? denormalized : (f32 + 0xC8000000u);
-  if (round_to_nearest_even) {
-    f24 += 3u + ((f24 >> 3u) & 1u);
-  }
-  return (f24 >> 3u) & 0xFFFFFFu;
-}
-
-kernel void edram_dump_depth_32bpp_2xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    texture2d_ms<uint, access::read> stencil [[texture(1)]],
-    device uint* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-  uint2 edram_sample_in_tile = sample_in_tile;
-  uint tile_width_half = tile_size.x >> 1u;
-  edram_sample_in_tile.x =
-      (edram_sample_in_tile.x < tile_width_half)
-          ? (edram_sample_in_tile.x + tile_width_half)
-          : (edram_sample_in_tile.x - tile_width_half);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index =
-      edram_sample_in_tile.y * tile_size.x + edram_sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_id = source_sample.y & 1u;
-  uint2 pixel_coord = uint2(source_sample.x, source_sample.y >> 1);
-
-  float depth = source.read(pixel_coord, sample_id).r;
-
-  uint depth24;
-  if (constants.format == kDumpFormatDepthD24FS8) {
-    bool round_depth = (constants.flags & kDumpFlagDepthRound) != 0u;
-    depth24 = XeFloat32To20e4(depth * 2.0f, round_depth);
-  } else {
-    float depth_f = clamp(depth, 0.0f, 1.0f) * 16777215.0f;
-    depth24 = XeRoundToNearestEven(depth_f);
-  }
-
-  uint stencil_value = 0u;
-  if ((constants.flags & kDumpFlagHasStencil) != 0u) {
-    stencil_value = stencil.read(pixel_coord, sample_id).x & 0xFFu;
-  }
-
-  uint packed = (depth24 << 8u) | stencil_value;
-
-  edram[edram_index] = packed;
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpDepth32bpp2xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_depth_32bpp_2xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_depth_32bpp_2xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_depth_32bpp_2xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_depth_32bpp_2xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_depth_32bpp_2xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_depth_32bpp_2xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 32-bpp depth, 1x MSAA.
-  {
-    static const char kEdramDumpDepth32bpp1xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
-
-inline uint XeRoundToNearestEven(float value) {
-  float floor_value = floor(value);
-  float frac = value - floor_value;
-  uint result = uint(floor_value);
-  if (frac > 0.5f || (frac == 0.5f && (result & 1u))) {
-    result += 1u;
-  }
-  return result;
-}
-
-uint XeFloat32To20e4(float value, bool round_to_nearest_even) {
-  uint f32 = as_type<uint>(value);
-  f32 = min((f32 <= 0x7FFFFFFFu) ? f32 : 0u, 0x3FFFFFF8u);
-  uint denormalized =
-      ((f32 & 0x7FFFFFu) | 0x800000u) >> min(113u - (f32 >> 23u), 24u);
-  uint f24 = (f32 < 0x38800000u) ? denormalized : (f32 + 0xC8000000u);
-  if (round_to_nearest_even) {
-    f24 += 3u + ((f24 >> 3u) & 1u);
-  }
-  return (f24 >> 3u) & 0xFFFFFFu;
-}
-
-kernel void edram_dump_depth_32bpp_1xmsaa(
+kernel void DUMP_KERNEL_NAME(
+#if DUMP_IS_DEPTH == 1
+  #if DUMP_MSAA_SAMPLES == 1
     texture2d<float, access::read> source [[texture(0)]],
     texture2d<uint, access::read> stencil [[texture(1)]],
+  #else
+    texture2d_ms<float, access::read> source [[texture(0)]],
+    texture2d_ms<uint, access::read> stencil [[texture(1)]],
+  #endif
     device uint* edram [[buffer(0)]],
+#else  // color
+  #if DUMP_MSAA_SAMPLES == 1
+    texture2d<float, access::read> source [[texture(0)]],
+  #else
+    texture2d_ms<float, access::read> source [[texture(0)]],
+  #endif
+  #if DUMP_BPP == 64
+    device uint2* edram [[buffer(0)]],
+  #else
+    device uint* edram [[buffer(0)]],
+  #endif
+#endif
     constant EdramDumpConstants& constants [[buffer(1)]],
     uint3 tid [[thread_position_in_grid]]) {
   const uint kEdramTileCount = 2048u;
@@ -2248,12 +1347,16 @@ kernel void edram_dump_depth_32bpp_1xmsaa(
                sample_in_tile_y);
   uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
   uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
+
+#if DUMP_IS_DEPTH == 1
+  // Depth tiles use a half-width swizzle for EDRAM sample indexing.
   uint2 edram_sample_in_tile = sample_in_tile;
   uint tile_width_half = tile_size.x >> 1u;
   edram_sample_in_tile.x =
       (edram_sample_in_tile.x < tile_width_half)
           ? (edram_sample_in_tile.x + tile_width_half)
           : (edram_sample_in_tile.x - tile_width_half);
+#endif
 
   uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
 
@@ -2261,8 +1364,12 @@ kernel void edram_dump_depth_32bpp_1xmsaa(
   uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
 
   uint tile_samples = tile_size.x * tile_size.y;
+#if DUMP_IS_DEPTH == 1
   uint sample_index =
       edram_sample_in_tile.y * tile_size.x + edram_sample_in_tile.x;
+#else
+  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
+#endif
   uint edram_index = wrapped_tile * tile_samples + sample_index;
 
   uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
@@ -2270,10 +1377,32 @@ kernel void edram_dump_depth_32bpp_1xmsaa(
   uint source_tile_x = 0u;
   XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
                constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
+
+#if DUMP_MSAA_SAMPLES == 1
   uint2 source_coord = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
                              source_tile_y * tile_size.y + sample_in_tile.y);
+#else
+  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
+                              source_tile_y * tile_size.y + sample_in_tile.y);
+  #if DUMP_MSAA_SAMPLES == 2
+  uint sample_id = (source_sample.y & 1u) ? DUMP_2X_SAMPLE_MAP_1
+                                           : DUMP_2X_SAMPLE_MAP_0;
+  uint2 pixel_coord = uint2(source_sample.x, source_sample.y >> 1);
+  #else  // 4x
+  uint sample_x = source_sample.x & 1u;
+  uint sample_y = source_sample.y & 1u;
+  uint sample_id = sample_x | (sample_y << 1u);
+  uint2 pixel_coord = uint2(source_sample.x >> 1, source_sample.y >> 1);
+  #endif
+#endif
 
+  // --- Read and pack ---
+#if DUMP_IS_DEPTH == 1
+  #if DUMP_MSAA_SAMPLES == 1
   float depth = source.read(source_coord).r;
+  #else
+  float depth = source.read(pixel_coord, sample_id).r;
+  #endif
 
   uint depth24;
   if (constants.format == kDumpFormatDepthD24FS8) {
@@ -2286,581 +1415,131 @@ kernel void edram_dump_depth_32bpp_1xmsaa(
 
   uint stencil_value = 0u;
   if ((constants.flags & kDumpFlagHasStencil) != 0u) {
+  #if DUMP_MSAA_SAMPLES == 1
     stencil_value = stencil.read(source_coord).x & 0xFFu;
+  #else
+    stencil_value = stencil.read(pixel_coord, sample_id).x & 0xFFu;
+  #endif
   }
 
-  uint packed = (depth24 << 8u) | stencil_value;
+  edram[edram_index] = (depth24 << 8u) | stencil_value;
 
-  edram[edram_index] = packed;
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpDepth32bpp1xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_depth_32bpp_1xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_depth_32bpp_1xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_depth_32bpp_1xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_depth_32bpp_1xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_depth_32bpp_1xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_depth_32bpp_1xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 64-bpp color, 1x MSAA.
-  // 64bpp tiles are half the horizontal width (40 samples per tile, not 80).
-  {
-    static const char kEdramDumpColor64bpp1xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
-
-inline uint XePackSnorm16(float value) {
-  float clamped = clamp(value, -1.0f, 1.0f);
-  float bias = clamped >= 0.0f ? 0.5f : -0.5f;
-  int packed = int(clamped * 32767.0f + bias);
-  return uint(packed) & 0xFFFFu;
-}
-
-inline uint XePackUnorm(float value, float scale) {
-  return uint(clamp(value, 0.0f, 1.0f) * scale + 0.5f);
-}
-
-uint2 XePackColor64bpp(uint format, float4 color) {
-  switch (format) {
-    case kDumpFormatColorRGBA16Snorm: {
-      uint r = XePackSnorm16(color.r);
-      uint g = XePackSnorm16(color.g);
-      uint b = XePackSnorm16(color.b);
-      uint a = XePackSnorm16(color.a);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Float: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Unorm: {
-      uint r = XePackUnorm(color.r, 65535.0f);
-      uint g = XePackUnorm(color.g, 65535.0f);
-      uint b = XePackUnorm(color.b, 65535.0f);
-      uint a = XePackUnorm(color.a, 65535.0f);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRG32Float: {
-      uint r = as_type<uint>(color.r);
-      uint g = as_type<uint>(color.g);
-      return uint2(r, g);
-    }
-    default: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-  }
-}
-
-kernel void edram_dump_color_64bpp_1xmsaa(
-    texture2d<float, access::read> source [[texture(0)]],
-    device uint2* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  // 64bpp: 40 samples wide per tile instead of 80.
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_coord = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                             source_tile_y * tile_size.y + sample_in_tile.y);
-
+#elif DUMP_BPP == 32
+  #if DUMP_MSAA_SAMPLES == 1
   float4 color = source.read(source_coord);
-
-  edram[edram_index] = XePackColor64bpp(constants.format, color);
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpColor64bpp1xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_64bpp_1xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_64bpp_1xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_64bpp_1xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_64bpp_1xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_64bpp_1xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_64bpp_1xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
-  }
-
-  // EDRAM dump compute shader for 64-bpp color, 2x MSAA.
-  {
-    static const char kEdramDumpColor64bpp2xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
-
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
-
-inline uint XePackSnorm16(float value) {
-  float clamped = clamp(value, -1.0f, 1.0f);
-  float bias = clamped >= 0.0f ? 0.5f : -0.5f;
-  int packed = int(clamped * 32767.0f + bias);
-  return uint(packed) & 0xFFFFu;
-}
-
-inline uint XePackUnorm(float value, float scale) {
-  return uint(clamp(value, 0.0f, 1.0f) * scale + 0.5f);
-}
-
-uint2 XePackColor64bpp(uint format, float4 color) {
-  switch (format) {
-    case kDumpFormatColorRGBA16Snorm: {
-      uint r = XePackSnorm16(color.r);
-      uint g = XePackSnorm16(color.g);
-      uint b = XePackSnorm16(color.b);
-      uint a = XePackSnorm16(color.a);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Float: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Unorm: {
-      uint r = XePackUnorm(color.r, 65535.0f);
-      uint g = XePackUnorm(color.g, 65535.0f);
-      uint b = XePackUnorm(color.b, 65535.0f);
-      uint a = XePackUnorm(color.a, 65535.0f);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRG32Float: {
-      uint r = as_type<uint>(color.r);
-      uint g = as_type<uint>(color.g);
-      return uint2(r, g);
-    }
-    default: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-  }
-}
-
-kernel void edram_dump_color_64bpp_2xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    device uint2* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  // 64bpp: 40 samples wide per tile instead of 80.
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_id = source_sample.y & 1u;
-  uint2 pixel_coord = uint2(source_sample.x, source_sample.y >> 1);
-
+  #else
   float4 color = source.read(pixel_coord, sample_id);
+  #endif
 
-  edram[edram_index] = XePackColor64bpp(constants.format, color);
-}
-)METAL";
-
-    NS::String* source = NS::String::string(kEdramDumpColor64bpp2xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
-    if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_64bpp_2xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_64bpp_2xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_64bpp_2xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_64bpp_2xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_64bpp_2xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_64bpp_2xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
-    }
+  // If source is a linear RGBA16Unorm gamma RT, convert to PWL gamma encoding
+  if (constants.flags & kDumpFlagGammaAsLinear) {
+    color.rgb = XeLinearToPWLGamma3(color.rgb);
   }
 
-  // EDRAM dump compute shader for 64-bpp color, 4x MSAA.
-  {
-    static const char kEdramDumpColor64bpp4xMsaaShader[] = R"METAL(
-#include <metal_stdlib>
-using namespace metal;
+  edram[edram_index] = XePackColor32bpp(constants.format, color);
 
-struct EdramDumpConstants {
-  uint dispatch_first_tile;
-  uint source_base_tiles;
-  uint dest_pitch_tiles;
-  uint source_pitch_tiles;
-  uint2 resolution_scale;
-  uint tile_size_x;
-  uint tile_size_y;
-  float tile_size_inv_x;
-  float tile_size_inv_y;
-  float source_pitch_tiles_inv;
-  uint format;
-  uint flags;
-  uint padding;
-};
-
-inline void XeFastDivMod(uint x, uint w, float inv_w, thread uint& q,
-                         thread uint& r) {
-  if (w == 0u) {
-    q = 0u;
-    r = 0u;
-    return;
-  }
-  q = uint(float(x) * inv_w);
-  r = x - q * w;
-  if (r >= w) {
-    r -= w;
-    q += 1u;
-  } else if (r > x) {
-    r += w;
-    q -= 1u;
-  }
-}
-
-constant uint kDumpFormatColorRGBA8 = 0;
-constant uint kDumpFormatColorRGB10A2Unorm = 1;
-constant uint kDumpFormatColorRGB10A2Float = 2;
-constant uint kDumpFormatColorRG16Snorm = 3;
-constant uint kDumpFormatColorRG16Float = 4;
-constant uint kDumpFormatColorR32Float = 5;
-constant uint kDumpFormatColorRGBA16Snorm = 6;
-constant uint kDumpFormatColorRGBA16Float = 7;
-constant uint kDumpFormatColorRGBA16Unorm = 8;
-constant uint kDumpFormatColorRG32Float = 9;
-constant uint kDumpFormatDepthD24S8 = 16;
-constant uint kDumpFormatDepthD24FS8 = 17;
-constant uint kDumpFlagHasStencil = 1;
-constant uint kDumpFlagDepthRound = 2;
-
-inline uint XePackSnorm16(float value) {
-  float clamped = clamp(value, -1.0f, 1.0f);
-  float bias = clamped >= 0.0f ? 0.5f : -0.5f;
-  int packed = int(clamped * 32767.0f + bias);
-  return uint(packed) & 0xFFFFu;
-}
-
-inline uint XePackUnorm(float value, float scale) {
-  return uint(clamp(value, 0.0f, 1.0f) * scale + 0.5f);
-}
-
-uint2 XePackColor64bpp(uint format, float4 color) {
-  switch (format) {
-    case kDumpFormatColorRGBA16Snorm: {
-      uint r = XePackSnorm16(color.r);
-      uint g = XePackSnorm16(color.g);
-      uint b = XePackSnorm16(color.b);
-      uint a = XePackSnorm16(color.a);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Float: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRGBA16Unorm: {
-      uint r = XePackUnorm(color.r, 65535.0f);
-      uint g = XePackUnorm(color.g, 65535.0f);
-      uint b = XePackUnorm(color.b, 65535.0f);
-      uint a = XePackUnorm(color.a, 65535.0f);
-      uint rg = r | (g << 16u);
-      uint ba = b | (a << 16u);
-      return uint2(rg, ba);
-    }
-    case kDumpFormatColorRG32Float: {
-      uint r = as_type<uint>(color.r);
-      uint g = as_type<uint>(color.g);
-      return uint2(r, g);
-    }
-    default: {
-      uint rg = as_type<uint>(half2(color.rg));
-      uint ba = as_type<uint>(half2(color.ba));
-      return uint2(rg, ba);
-    }
-  }
-}
-
-kernel void edram_dump_color_64bpp_4xmsaa(
-    texture2d_ms<float, access::read> source [[texture(0)]],
-    device uint2* edram [[buffer(0)]],
-    constant EdramDumpConstants& constants [[buffer(1)]],
-    uint3 tid [[thread_position_in_grid]]) {
-  const uint kEdramTileCount = 2048u;
-
-  // 64bpp: 40 samples wide per tile instead of 80.
-  uint2 tile_size = uint2(constants.tile_size_x, constants.tile_size_y);
-
-  uint tile_coord_x = 0u;
-  uint tile_coord_y = 0u;
-  uint sample_in_tile_x = 0u;
-  uint sample_in_tile_y = 0u;
-  XeFastDivMod(tid.x, tile_size.x, constants.tile_size_inv_x, tile_coord_x,
-               sample_in_tile_x);
-  XeFastDivMod(tid.y, tile_size.y, constants.tile_size_inv_y, tile_coord_y,
-               sample_in_tile_y);
-  uint2 tile_coord = uint2(tile_coord_x, tile_coord_y);
-  uint2 sample_in_tile = uint2(sample_in_tile_x, sample_in_tile_y);
-
-  uint rect_tile_index = tile_coord.y * constants.dest_pitch_tiles + tile_coord.x;
-
-  uint nonwrapped_tile = constants.dispatch_first_tile + rect_tile_index;
-  uint wrapped_tile = nonwrapped_tile & (kEdramTileCount - 1u);
-
-  uint tile_samples = tile_size.x * tile_size.y;
-  uint sample_index = sample_in_tile.y * tile_size.x + sample_in_tile.x;
-  uint edram_index = wrapped_tile * tile_samples + sample_index;
-
-  uint source_linear_tile = nonwrapped_tile - constants.source_base_tiles;
-  uint source_tile_y = 0u;
-  uint source_tile_x = 0u;
-  XeFastDivMod(source_linear_tile, constants.source_pitch_tiles,
-               constants.source_pitch_tiles_inv, source_tile_y, source_tile_x);
-  uint2 source_sample = uint2(source_tile_x * tile_size.x + sample_in_tile.x,
-                              source_tile_y * tile_size.y + sample_in_tile.y);
-
-  uint sample_x = source_sample.x & 1u;
-  uint sample_y = source_sample.y & 1u;
-  uint sample_id = sample_x | (sample_y << 1u);
-  uint2 pixel_coord = uint2(source_sample.x >> 1, source_sample.y >> 1);
-
+#else  // color 64bpp
+  #if DUMP_MSAA_SAMPLES == 1
+  float4 color = source.read(source_coord);
+  #else
   float4 color = source.read(pixel_coord, sample_id);
+  #endif
 
   edram[edram_index] = XePackColor64bpp(constants.format, color);
+#endif
 }
 )METAL";
 
-    NS::String* source = NS::String::string(kEdramDumpColor64bpp4xMsaaShader,
-                                            NS::UTF8StringEncoding);
-    MTL::Library* lib = device_->newLibrary(source, nullptr, &error);
+  // Configuration table for the 9 EDRAM dump shader variants.
+  struct EdramDumpConfig {
+    const char* kernel_name;
+    uint32_t msaa_samples;
+    uint32_t bpp;
+    uint32_t is_depth;
+    MTL::ComputePipelineState** pipeline;
+  };
+  const EdramDumpConfig kEdramDumpConfigs[] = {
+      {"edram_dump_color_32bpp_1xmsaa", 1, 32, 0,
+       &edram_dump_color_32bpp_1xmsaa_pipeline_},
+      {"edram_dump_color_32bpp_2xmsaa", 2, 32, 0,
+       &edram_dump_color_32bpp_2xmsaa_pipeline_},
+      {"edram_dump_color_32bpp_4xmsaa", 4, 32, 0,
+       &edram_dump_color_32bpp_4xmsaa_pipeline_},
+      {"edram_dump_depth_32bpp_1xmsaa", 1, 32, 1,
+       &edram_dump_depth_32bpp_1xmsaa_pipeline_},
+      {"edram_dump_depth_32bpp_2xmsaa", 2, 32, 1,
+       &edram_dump_depth_32bpp_2xmsaa_pipeline_},
+      {"edram_dump_depth_32bpp_4xmsaa", 4, 32, 1,
+       &edram_dump_depth_32bpp_4xmsaa_pipeline_},
+      {"edram_dump_color_64bpp_1xmsaa", 1, 64, 0,
+       &edram_dump_color_64bpp_1xmsaa_pipeline_},
+      {"edram_dump_color_64bpp_2xmsaa", 2, 64, 0,
+       &edram_dump_color_64bpp_2xmsaa_pipeline_},
+      {"edram_dump_color_64bpp_4xmsaa", 4, 64, 0,
+       &edram_dump_color_64bpp_4xmsaa_pipeline_},
+  };
+
+  auto append_dump_define = [](std::string& src, const char* name,
+                               uint32_t value) {
+    src.append("#define ");
+    src.append(name);
+    src.push_back(' ');
+    src.append(std::to_string(value));
+    src.push_back('\n');
+  };
+  auto append_dump_define_str = [](std::string& src, const char* name,
+                                   const char* value) {
+    src.append("#define ");
+    src.append(name);
+    src.push_back(' ');
+    src.append(value);
+    src.push_back('\n');
+  };
+
+  for (const auto& cfg : kEdramDumpConfigs) {
+    std::string dump_source;
+    dump_source.reserve(8192);
+
+    // Prepend per-variant #defines before the shared preamble.
+    append_dump_define(dump_source, "DUMP_MSAA_SAMPLES", cfg.msaa_samples);
+    append_dump_define(dump_source, "DUMP_BPP", cfg.bpp);
+    append_dump_define(dump_source, "DUMP_IS_DEPTH", cfg.is_depth);
+    append_dump_define_str(dump_source, "DUMP_KERNEL_NAME", cfg.kernel_name);
+    if (cfg.msaa_samples == 2) {
+      // 2x MSAA sample remapping: guest sample 0/1 -> host sample indices.
+      uint32_t map_0 =
+          draw_util::GetD3D10SampleIndexForGuest2xMSAA(0, msaa_2x_supported_);
+      uint32_t map_1 =
+          draw_util::GetD3D10SampleIndexForGuest2xMSAA(1, msaa_2x_supported_);
+      append_dump_define(dump_source, "DUMP_2X_SAMPLE_MAP_0", map_0);
+      append_dump_define(dump_source, "DUMP_2X_SAMPLE_MAP_1", map_1);
+    }
+
+    dump_source.append(kEdramDumpPreamble);
+    dump_source.append(kEdramDumpKernelTemplate);
+
+    NS::String* ns_source =
+        NS::String::string(dump_source.c_str(), NS::UTF8StringEncoding);
+    MTL::Library* lib = device_->newLibrary(ns_source, nullptr, &error);
     if (!lib) {
-      XELOGW(
-          "Metal: failed to compile edram_dump_color_64bpp_4xmsaa shader: {}",
-          error ? error->localizedDescription()->utf8String() : "unknown");
-    } else {
-      NS::String* fn_name = NS::String::string("edram_dump_color_64bpp_4xmsaa",
-                                               NS::UTF8StringEncoding);
-      MTL::Function* fn = lib->newFunction(fn_name);
-      if (!fn) {
-        XELOGW("Metal: edram_dump_color_64bpp_4xmsaa missing entrypoint");
-        lib->release();
-      } else {
-        edram_dump_color_64bpp_4xmsaa_pipeline_ =
-            device_->newComputePipelineState(fn, &error);
-        fn->release();
-        lib->release();
-        if (!edram_dump_color_64bpp_4xmsaa_pipeline_) {
-          XELOGW(
-              "Metal: failed to create edram_dump_color_64bpp_4xmsaa pipeline: "
-              "{}",
-              error ? error->localizedDescription()->utf8String() : "unknown");
-        }
-      }
+      XELOGW("Metal: failed to compile {} shader: {}", cfg.kernel_name,
+             error ? error->localizedDescription()->utf8String() : "unknown");
+      continue;
+    }
+    NS::String* fn_name =
+        NS::String::string(cfg.kernel_name, NS::UTF8StringEncoding);
+    MTL::Function* fn = lib->newFunction(fn_name);
+    if (!fn) {
+      XELOGW("Metal: {} missing entrypoint", cfg.kernel_name);
+      lib->release();
+      continue;
+    }
+    *cfg.pipeline = device_->newComputePipelineState(fn, &error);
+    fn->release();
+    lib->release();
+    if (!*cfg.pipeline) {
+      XELOGW("Metal: failed to create {} pipeline: {}", cfg.kernel_name,
+             error ? error->localizedDescription()->utf8String() : "unknown");
     }
   }
 
@@ -2868,10 +1547,6 @@ kernel void edram_dump_color_64bpp_4xmsaa(
 }
 
 void MetalRenderTargetCache::ShutdownEdramComputeShaders() {
-  if (edram_load_pipeline_) {
-    edram_load_pipeline_->release();
-    edram_load_pipeline_ = nullptr;
-  }
   if (edram_store_pipeline_) {
     edram_store_pipeline_->release();
     edram_store_pipeline_ = nullptr;
@@ -3175,25 +1850,33 @@ RenderTargetCache::RenderTarget* MetalRenderTargetCache::CreateRenderTarget(
         GetColorOwnershipTransferPixelFormat(key.GetColorFormat(), nullptr);
     if (draw_format != resource_format) {
       MTL::Texture* draw_view = texture->newTextureView(draw_format);
-      RecordRenderTargetViewCreated();
+      if (!draw_view) {
+        XELOGE("Failed to create texture view for render target");
+      }
       render_target->SetDrawTexture(draw_view);
     }
     if (transfer_format != resource_format) {
       MTL::Texture* transfer_view = texture->newTextureView(transfer_format);
-      RecordRenderTargetViewCreated();
+      if (!transfer_view) {
+        XELOGE("Failed to create texture view for render target");
+      }
       render_target->SetTransferTexture(transfer_view);
     }
     if (render_target->msaa_texture()) {
       if (draw_format != render_target->msaa_texture()->pixelFormat()) {
         MTL::Texture* msaa_draw_view =
             render_target->msaa_texture()->newTextureView(draw_format);
-        RecordRenderTargetViewCreated();
+        if (!msaa_draw_view) {
+          XELOGE("Failed to create texture view for render target");
+        }
         render_target->SetMsaaDrawTexture(msaa_draw_view);
       }
       if (transfer_format != render_target->msaa_texture()->pixelFormat()) {
         MTL::Texture* msaa_transfer_view =
             render_target->msaa_texture()->newTextureView(transfer_format);
-        RecordRenderTargetViewCreated();
+        if (!msaa_transfer_view) {
+          XELOGE("Failed to create texture view for render target");
+        }
         render_target->SetMsaaTransferTexture(msaa_transfer_view);
       }
     }
@@ -3288,13 +1971,9 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
   }
 
   ScopedAutoreleasePool autorelease_pool;
-  MTL::CommandQueue* queue = command_processor_.GetMetalCommandQueue();
-  if (!queue) {
-    staging->release();
-    return;
-  }
-
-  MTL::CommandBuffer* cmd = queue->commandBuffer();
+  MTL::CommandBuffer* cmd =
+      command_processor_.CreateStandaloneTransferCommandBuffer(
+          "XeniaCB reason=rt-texture-upload");
   if (!cmd) {
     staging->release();
     return;
@@ -3302,7 +1981,7 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
 
   MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
   if (!blit) {
-    // cmd is autoreleased from commandBuffer() - do not release
+    cmd->release();
     staging->release();
     return;
   }
@@ -3311,9 +1990,7 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
                        MTL::Size::Make(kWidth, kHeight, 1), texture, 0, 0,
                        MTL::Origin::Make(0, 0, 0));
   blit->endEncoding();
-  cmd->commit();
-  cmd->waitUntilCompleted();
-  // cmd is autoreleased from commandBuffer() - do not release
+  command_processor_.CommitStandaloneAndWait(cmd);
   staging->release();
   if (metal_rt->needs_initial_clear()) {
     metal_rt->SetNeedsInitialClear(false);
@@ -3776,13 +2453,18 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
         MTL::PixelFormat transfer_format =
             GetColorOwnershipTransferPixelFormat(fmt, nullptr);
         if (draw_format != resource_format) {
-          entry.target->SetDrawTexture(tex->newTextureView(draw_format));
-          RecordRenderTargetViewCreated();
+          MTL::Texture* draw_view = tex->newTextureView(draw_format);
+          if (!draw_view) {
+            XELOGE("Failed to create texture view for render target");
+          }
+          entry.target->SetDrawTexture(draw_view);
         }
         if (transfer_format != resource_format) {
-          entry.target->SetTransferTexture(
-              tex->newTextureView(transfer_format));
-          RecordRenderTargetViewCreated();
+          MTL::Texture* transfer_view = tex->newTextureView(transfer_format);
+          if (!transfer_view) {
+            XELOGE("Failed to create texture view for render target");
+          }
+          entry.target->SetTransferTexture(transfer_view);
         }
       }
     }
@@ -3846,10 +2528,6 @@ MTL::Texture* MetalRenderTargetCache::GetDummyColorTarget() const {
     return dummy_color_target_->texture();
   }
   return nullptr;
-}
-
-void MetalRenderTargetCache::RecordRenderTargetViewCreated() {
-  render_target_views_created_.fetch_add(1, std::memory_order_relaxed);
 }
 
 MetalRenderTargetCache::MetalRenderTarget*
@@ -4014,6 +2692,14 @@ void MetalRenderTargetCache::StoreTiledData(MTL::CommandBuffer* command_buffer,
   }
 
   // Set compute pipeline
+  if (!edram_store_pipeline_) {
+    XELOGE("StoreTiledData: edram_store_pipeline_ is null");
+    encoder->endEncoding();
+    if (temp_texture) {
+      temp_texture->release();
+    }
+    return;
+  }
   encoder->setComputePipelineState(edram_store_pipeline_);
 
   // Bind input texture (either original or resolved)
@@ -4024,12 +2710,10 @@ void MetalRenderTargetCache::StoreTiledData(MTL::CommandBuffer* command_buffer,
   encoder->useResource(source_texture, MTL::ResourceUsageRead);
   encoder->useResource(edram_buffer_, MTL::ResourceUsageWrite);
 
-  // Create parameter buffers
+  // Pass parameters inline via setBytes (avoids transient buffer allocation)
   uint32_t params[2] = {edram_base, pitch_tiles};
-  MTL::Buffer* param_buffer = device_->newBuffer(
-      &params, sizeof(params), MTL::ResourceStorageModeShared);
-  encoder->setBuffer(param_buffer, 0, 1);
-  encoder->setBuffer(param_buffer, sizeof(uint32_t), 2);
+  encoder->setBytes(&params[0], sizeof(uint32_t), 1);
+  encoder->setBytes(&params[1], sizeof(uint32_t), 2);
 
   // Calculate thread group sizes
   MTL::Size threads_per_threadgroup = MTL::Size::Make(8, 8, 1);
@@ -4044,8 +2728,6 @@ void MetalRenderTargetCache::StoreTiledData(MTL::CommandBuffer* command_buffer,
   if (temp_texture) {
     temp_texture->release();
   }
-
-  param_buffer->release();
 }
 
 void MetalRenderTargetCache::DumpRenderTargets(
@@ -4094,28 +2776,25 @@ void MetalRenderTargetCache::DumpRenderTargets(
     uint32_t padding;
   };
 
-  MTL::CommandQueue* queue = command_processor_.GetMetalCommandQueue();
-  if (!queue) {
-    XELOGE("MetalRenderTargetCache::DumpRenderTargets: no command queue");
-    return;
-  }
-
   ScopedAutoreleasePool autorelease_pool;
-  bool owns_command_buffer = false;
+  bool standalone = false;
   MTL::CommandBuffer* cmd = command_buffer;
   if (!cmd) {
-    cmd = queue->commandBuffer();
+    cmd = command_processor_.CreateStandaloneTransferCommandBuffer(
+        "XeniaCB reason=rt-dump");
     if (!cmd) {
       XELOGE("MetalRenderTargetCache::DumpRenderTargets: no command buffer");
       return;
     }
-    owns_command_buffer = true;
+    standalone = true;
   }
 
   MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
   if (!encoder) {
     XELOGE("MetalRenderTargetCache::DumpRenderTargets: no compute encoder");
-    // cmd is autoreleased from commandBuffer() - do not release
+    if (standalone) {
+      cmd->release();
+    }
     return;
   }
 
@@ -4309,11 +2988,9 @@ void MetalRenderTargetCache::DumpRenderTargets(
   }
 
   encoder->endEncoding();
-  if (owns_command_buffer) {
-    cmd->commit();
-    cmd->waitUntilCompleted();
+  if (standalone) {
+    command_processor_.CommitStandaloneAndWait(cmd);
   }
-  // cmd is autoreleased from commandBuffer() - do not release
 }
 
 MTL::Library* MetalRenderTargetCache::GetOrCreateEdramLoadLibrary(bool msaa) {
@@ -4628,10 +3305,6 @@ bool MetalRenderTargetCache::Resolve(Memory& memory, uint32_t& written_address,
 
   bool is_depth = resolve_info.IsCopyingDepth();
 
-  if (!resolve_info.copy_dest_extent_length) {
-    return true;
-  }
-
   bool draw_resolution_scaled = IsDrawResolutionScaled();
 
   const auto& coord = resolve_info.coordinate_info;
@@ -4648,273 +3321,285 @@ bool MetalRenderTargetCache::Resolve(Memory& memory, uint32_t& written_address,
   DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
                     command_buffer);
 
-  uint32_t dest_base = resolve_info.copy_dest_base;
-  uint32_t dest_local_start = resolve_info.copy_dest_extent_start - dest_base;
-  uint32_t dest_local_end =
-      dest_local_start + resolve_info.copy_dest_extent_length;
-
-  command_processor_.SetSwapDestSwap(
-      dest_base, resolve_info.copy_dest_info.copy_dest_swap);
-
-  // For now, only apply the 8888 restriction to color resolves; depth resolves
-  // may use different destination formats.
-  uint32_t bytes_per_pixel = 4;
-
   // Try GPU compute resolve first (RT -> EDRAM -> shared memory), matching
   // D3D12/Vulkan behavior for the supported cases.
   if (edram_buffer_) {
-    draw_util::ResolveCopyShaderConstants copy_constants;
-    uint32_t group_count_x = 0, group_count_y = 0;
-    draw_util::ResolveCopyShaderIndex copy_shader = resolve_info.GetCopyShader(
-        draw_resolution_scale_x(), draw_resolution_scale_y(), copy_constants,
-        group_count_x, group_count_y);
+    // Copy dispatch -- only when there is an actual copy extent.
+    bool copy_succeeded = !resolve_info.copy_dest_extent_length;
+    if (resolve_info.copy_dest_extent_length) {
+      uint32_t dest_base = resolve_info.copy_dest_base;
+      uint32_t dest_local_start =
+          resolve_info.copy_dest_extent_start - dest_base;
+      uint32_t dest_local_end =
+          dest_local_start + resolve_info.copy_dest_extent_length;
 
-    // Select the appropriate Metal pipeline for this shader.
-    MTL::ComputePipelineState* pipeline = nullptr;
-    if (draw_resolution_scaled) {
-      switch (copy_shader) {
-        case draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA:
-          pipeline = resolve_fast_32bpp_1x2xmsaa_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast32bpp4xMSAA:
-          pipeline = resolve_fast_32bpp_4xmsaa_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast64bpp1x2xMSAA:
-          pipeline = resolve_fast_64bpp_1x2xmsaa_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast64bpp4xMSAA:
-          pipeline = resolve_fast_64bpp_4xmsaa_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull8bpp:
-          pipeline = resolve_full_8bpp_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull16bpp:
-          pipeline = resolve_full_16bpp_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull32bpp:
-          pipeline = resolve_full_32bpp_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull64bpp:
-          pipeline = resolve_full_64bpp_scaled_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull128bpp:
-          pipeline = resolve_full_128bpp_scaled_pipeline_;
-          break;
-        default:
-          pipeline = nullptr;
-          break;
-      }
-    } else {
-      switch (copy_shader) {
-        case draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA:
-          pipeline = resolve_fast_32bpp_1x2xmsaa_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast32bpp4xMSAA:
-          pipeline = resolve_fast_32bpp_4xmsaa_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast64bpp1x2xMSAA:
-          pipeline = resolve_fast_64bpp_1x2xmsaa_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFast64bpp4xMSAA:
-          pipeline = resolve_fast_64bpp_4xmsaa_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull8bpp:
-          pipeline = resolve_full_8bpp_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull16bpp:
-          pipeline = resolve_full_16bpp_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull32bpp:
-          pipeline = resolve_full_32bpp_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull64bpp:
-          pipeline = resolve_full_64bpp_pipeline_;
-          break;
-        case draw_util::ResolveCopyShaderIndex::kFull128bpp:
-          pipeline = resolve_full_128bpp_pipeline_;
-          break;
-        default:
-          pipeline = nullptr;
-          break;
-      }
-    }
-    if (draw_resolution_scaled && !pipeline) {
-      static uint32_t missing_scaled_pipeline_log_count = 0;
-      if (missing_scaled_pipeline_log_count < 8) {
-        ++missing_scaled_pipeline_log_count;
-        XELOGW("MetalResolve: scaled resolve pipeline missing for shader {}",
-               int(copy_shader));
-      }
-    }
+      command_processor_.SetSwapDestSwap(
+          dest_base, resolve_info.copy_dest_info.copy_dest_swap);
 
-    if (pipeline && group_count_x && group_count_y) {
-      uint32_t dest_pitch_pixels =
-          copy_constants.dest_relative.dest_coordinate_info.pitch_aligned_div_32
-          << 5;
-      if (dest_pitch_pixels < resolve_width) {
-        uint32_t new_pitch_pixels = (resolve_width + 31) & ~31u;
-        XELOGW(
-            "MetalResolve: overriding dest pitch {} -> {} "
-            "(resolve_width={})",
-            dest_pitch_pixels, new_pitch_pixels, resolve_width);
-        copy_constants.dest_relative.dest_coordinate_info.pitch_aligned_div_32 =
-            new_pitch_pixels >> 5;
-      }
-      auto* shared = command_processor_.shared_memory();
-      auto* texture_cache = command_processor_.texture_cache();
-      MTL::Buffer* dest_buffer = nullptr;
-      size_t dest_buffer_offset = 0;
-      size_t dest_buffer_length = 0;
-      const uint8_t* shared_bytes = nullptr;
-      uint32_t scaled_range_length = 0;
+      // For now, only apply the 8888 restriction to color resolves; depth
+      // resolves may use different destination formats.
+      uint32_t bytes_per_pixel = 4;
+
+      draw_util::ResolveCopyShaderConstants copy_constants;
+      uint32_t group_count_x = 0, group_count_y = 0;
+      draw_util::ResolveCopyShaderIndex copy_shader =
+          resolve_info.GetCopyShader(draw_resolution_scale_x(),
+                                     draw_resolution_scale_y(), copy_constants,
+                                     group_count_x, group_count_y);
+
+      // Select the appropriate Metal pipeline for this shader.
+      MTL::ComputePipelineState* pipeline = nullptr;
       if (draw_resolution_scaled) {
-        auto* metal_texture_cache =
-            texture_cache ? static_cast<MetalTextureCache*>(texture_cache)
-                          : nullptr;
-        if (!metal_texture_cache) {
-          XELOGE("MetalResolve: missing MetalTextureCache for scaled resolve");
-          return false;
+        switch (copy_shader) {
+          case draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA:
+            pipeline = resolve_fast_32bpp_1x2xmsaa_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast32bpp4xMSAA:
+            pipeline = resolve_fast_32bpp_4xmsaa_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast64bpp1x2xMSAA:
+            pipeline = resolve_fast_64bpp_1x2xmsaa_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast64bpp4xMSAA:
+            pipeline = resolve_fast_64bpp_4xmsaa_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull8bpp:
+            pipeline = resolve_full_8bpp_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull16bpp:
+            pipeline = resolve_full_16bpp_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull32bpp:
+            pipeline = resolve_full_32bpp_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull64bpp:
+            pipeline = resolve_full_64bpp_scaled_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull128bpp:
+            pipeline = resolve_full_128bpp_scaled_pipeline_;
+            break;
+          default:
+            pipeline = nullptr;
+            break;
         }
-        uint32_t range_length = resolve_info.copy_dest_extent_start -
-                                resolve_info.copy_dest_base +
-                                resolve_info.copy_dest_extent_length;
-        scaled_range_length = range_length;
-        if (!metal_texture_cache->EnsureScaledResolveMemoryCommitted(
+      } else {
+        switch (copy_shader) {
+          case draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA:
+            pipeline = resolve_fast_32bpp_1x2xmsaa_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast32bpp4xMSAA:
+            pipeline = resolve_fast_32bpp_4xmsaa_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast64bpp1x2xMSAA:
+            pipeline = resolve_fast_64bpp_1x2xmsaa_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFast64bpp4xMSAA:
+            pipeline = resolve_fast_64bpp_4xmsaa_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull8bpp:
+            pipeline = resolve_full_8bpp_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull16bpp:
+            pipeline = resolve_full_16bpp_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull32bpp:
+            pipeline = resolve_full_32bpp_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull64bpp:
+            pipeline = resolve_full_64bpp_pipeline_;
+            break;
+          case draw_util::ResolveCopyShaderIndex::kFull128bpp:
+            pipeline = resolve_full_128bpp_pipeline_;
+            break;
+          default:
+            pipeline = nullptr;
+            break;
+        }
+      }
+      if (draw_resolution_scaled && !pipeline) {
+        static uint32_t missing_scaled_pipeline_log_count = 0;
+        if (missing_scaled_pipeline_log_count < 8) {
+          ++missing_scaled_pipeline_log_count;
+          XELOGW("MetalResolve: scaled resolve pipeline missing for shader {}",
+                 int(copy_shader));
+        }
+      }
+
+      if (pipeline && group_count_x && group_count_y) {
+        uint32_t dest_pitch_pixels =
+            copy_constants.dest_relative.dest_coordinate_info
+                .pitch_aligned_div_32
+            << 5;
+        if (dest_pitch_pixels < resolve_width) {
+          uint32_t new_pitch_pixels = (resolve_width + 31) & ~31u;
+          XELOGW(
+              "MetalResolve: overriding dest pitch {} -> {} "
+              "(resolve_width={})",
+              dest_pitch_pixels, new_pitch_pixels, resolve_width);
+          copy_constants.dest_relative.dest_coordinate_info
+              .pitch_aligned_div_32 = new_pitch_pixels >> 5;
+        }
+        auto* shared = command_processor_.shared_memory();
+        auto* texture_cache = command_processor_.texture_cache();
+        MTL::Buffer* dest_buffer = nullptr;
+        size_t dest_buffer_offset = 0;
+        size_t dest_buffer_length = 0;
+        const uint8_t* shared_bytes = nullptr;
+        uint32_t scaled_range_length = 0;
+        if (draw_resolution_scaled) {
+          auto* metal_texture_cache =
+              texture_cache ? static_cast<MetalTextureCache*>(texture_cache)
+                            : nullptr;
+          if (!metal_texture_cache) {
+            XELOGE(
+                "MetalResolve: missing MetalTextureCache for scaled resolve");
+            return false;
+          }
+          uint32_t range_length = resolve_info.copy_dest_extent_start -
+                                  resolve_info.copy_dest_base +
+                                  resolve_info.copy_dest_extent_length;
+          scaled_range_length = range_length;
+          if (!metal_texture_cache->EnsureScaledResolveMemoryCommitted(
+                  resolve_info.copy_dest_extent_start,
+                  resolve_info.copy_dest_extent_length) ||
+              !metal_texture_cache->MakeScaledResolveRangeCurrent(
+                  resolve_info.copy_dest_base, range_length) ||
+              !metal_texture_cache->GetCurrentScaledResolveBuffer(
+                  dest_buffer, dest_buffer_offset, dest_buffer_length)) {
+            XELOGE("MetalResolve: failed to select scaled resolve buffer");
+            return false;
+          }
+          (void)dest_buffer_length;
+        } else {
+          dest_buffer = shared ? shared->GetBuffer() : nullptr;
+          if (!dest_buffer) {
+            XELOGE("MetalResolve: missing shared memory buffer");
+            return false;
+          }
+          // Request the destination shared memory range before the GPU write,
+          // mirroring D3D12/Vulkan behavior. This ensures pages are committed
+          // and any CPU data is uploaded before the GPU overwrites it.
+          if (!shared->RequestRange(resolve_info.copy_dest_extent_start,
+                                    resolve_info.copy_dest_extent_length)) {
+            XELOGE(
+                "MetalRenderTargetCache::Resolve: RequestRange failed for "
+                "0x{:08X} len {}",
                 resolve_info.copy_dest_extent_start,
-                resolve_info.copy_dest_extent_length) ||
-            !metal_texture_cache->MakeScaledResolveRangeCurrent(
-                resolve_info.copy_dest_base, range_length) ||
-            !metal_texture_cache->GetCurrentScaledResolveBuffer(
-                dest_buffer, dest_buffer_offset, dest_buffer_length)) {
-          XELOGE("MetalResolve: failed to select scaled resolve buffer");
-          return false;
-        }
-        (void)dest_buffer_length;
-      } else {
-        dest_buffer = shared ? shared->GetBuffer() : nullptr;
-        if (!dest_buffer) {
-          XELOGE("MetalResolve: missing shared memory buffer");
-          return false;
-        }
-        // Request the destination shared memory range before the GPU write,
-        // mirroring D3D12/Vulkan behavior. This ensures pages are committed and
-        // any CPU data is uploaded before the GPU overwrites it.
-        if (!shared->RequestRange(resolve_info.copy_dest_extent_start,
-                                  resolve_info.copy_dest_extent_length)) {
-          XELOGE(
-              "MetalRenderTargetCache::Resolve: RequestRange failed for "
-              "0x{:08X} len {}",
-              resolve_info.copy_dest_extent_start,
-              resolve_info.copy_dest_extent_length);
-          return false;
+                resolve_info.copy_dest_extent_length);
+            return false;
+          }
+
+          shared_bytes = static_cast<const uint8_t*>(dest_buffer->contents());
         }
 
-        shared_bytes = static_cast<const uint8_t*>(dest_buffer->contents());
-      }
-      if (draw_resolution_scaled) {
-      }
-
-      MTL::CommandQueue* queue = command_processor_.GetMetalCommandQueue();
-
-      if (!queue) {
-        XELOGE(
-            "MetalRenderTargetCache::Resolve: no command queue for GPU path");
-      } else {
-        ScopedAutoreleasePool autorelease_pool;
-        bool owns_command_buffer = false;
-        MTL::CommandBuffer* cmd = command_buffer;
-        if (!cmd) {
-          cmd = queue->commandBuffer();
+        {
+          ScopedAutoreleasePool autorelease_pool;
+          bool standalone = false;
+          MTL::CommandBuffer* cmd = command_buffer;
           if (!cmd) {
-            XELOGE(
-                "MetalRenderTargetCache::Resolve: failed to get command "
-                "buffer for GPU path");
-            cmd = nullptr;
+            cmd = command_processor_.CreateStandaloneTransferCommandBuffer(
+                "XeniaCB reason=resolve-compute");
+            if (!cmd) {
+              XELOGE(
+                  "MetalRenderTargetCache::Resolve: failed to get command "
+                  "buffer for GPU path");
+            }
+            standalone = (cmd != nullptr);
           }
-          owns_command_buffer = true;
-        }
-        if (cmd) {
-          MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
-          if (!encoder) {
-            XELOGE(
-                "MetalRenderTargetCache::Resolve: failed to get compute "
-                "encoder for GPU path");
-            // cmd is autoreleased from commandBuffer() - do not release
-          } else {
-            encoder->setComputePipelineState(pipeline);
-
-            // Buffer 0: push constants
-            if (draw_resolution_scaled) {
-              encoder->setBytes(&copy_constants.dest_relative,
-                                sizeof(copy_constants.dest_relative), 0);
+          if (cmd) {
+            MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
+            if (!encoder) {
+              XELOGE(
+                  "MetalRenderTargetCache::Resolve: failed to get compute "
+                  "encoder for GPU path");
+              if (standalone) {
+                cmd->release();
+              }
             } else {
-              encoder->setBytes(&copy_constants, sizeof(copy_constants), 0);
-            }
+              encoder->setComputePipelineState(pipeline);
 
-            // Buffer 1: destination memory (shared or scaled resolve).
-            encoder->setBuffer(dest_buffer, dest_buffer_offset, 1);
-
-            // Buffer 2: EDRAM source buffer.
-            encoder->setBuffer(edram_buffer_, 0, 2);
-            encoder->useResource(dest_buffer, MTL::ResourceUsageWrite);
-            encoder->useResource(edram_buffer_, MTL::ResourceUsageRead);
-
-            encoder->dispatchThreadgroups(
-                MTL::Size::Make(group_count_x, group_count_y, 1),
-                MTL::Size::Make(8, 8, 1));
-
-            encoder->endEncoding();
-            if (owns_command_buffer) {
-              cmd->commit();
-              cmd->waitUntilCompleted();
-            }
-            // cmd is autoreleased from commandBuffer() - do not release
-
-            written_address = resolve_info.copy_dest_extent_start;
-            written_length = resolve_info.copy_dest_extent_length;
-
-            // Mark the shared memory range as GPU-written resolve data so
-            // texture caches and trace dumping can see it without an extra
-            // CPU copy. This mirrors D3D12/Vulkan behavior.
-            if (!draw_resolution_scaled) {
-              if (auto* shared_after = command_processor_.shared_memory()) {
-                shared_after->RangeWrittenByGpu(written_address,
-                                                written_length);
+              // Buffer 0: push constants
+              if (draw_resolution_scaled) {
+                encoder->setBytes(&copy_constants.dest_relative,
+                                  sizeof(copy_constants.dest_relative), 0);
+              } else {
+                encoder->setBytes(&copy_constants, sizeof(copy_constants), 0);
               }
-            }
 
-            // Mark the range as resolved in the texture cache so that any
-            // textures overlapping this range will be reloaded from the
-            // updated shared memory. This matches D3D12/Vulkan behavior.
-            if (auto* tex_cache = command_processor_.texture_cache()) {
-              tex_cache->MarkRangeAsResolved(written_address, written_length);
-            }
+              // Buffer 1: destination memory (shared or scaled resolve).
+              encoder->setBuffer(dest_buffer, dest_buffer_offset, 1);
 
-            bool clear_depth = resolve_info.IsClearingDepth();
-            bool clear_color = resolve_info.IsClearingColor();
-            if (clear_depth || clear_color) {
-              Transfer::Rectangle clear_rectangle;
-              RenderTarget* clear_targets[2] = {};
-              std::vector<Transfer> clear_transfers[2];
-              if (PrepareHostRenderTargetsResolveClear(
-                      resolve_info, clear_rectangle, clear_targets[0],
-                      clear_transfers[0], clear_targets[1],
-                      clear_transfers[1])) {
-                uint64_t clear_values[2];
-                clear_values[0] = resolve_info.rb_depth_clear;
-                clear_values[1] =
-                    resolve_info.rb_color_clear |
-                    (uint64_t(resolve_info.rb_color_clear_lo) << 32);
-                PerformTransfersAndResolveClears(
-                    2, clear_targets, clear_transfers, clear_values,
-                    &clear_rectangle, command_buffer);
+              // Buffer 2: EDRAM source buffer.
+              encoder->setBuffer(edram_buffer_, 0, 2);
+              encoder->useResource(dest_buffer, MTL::ResourceUsageWrite);
+              encoder->useResource(edram_buffer_, MTL::ResourceUsageRead);
+
+              encoder->dispatchThreadgroups(
+                  MTL::Size::Make(group_count_x, group_count_y, 1),
+                  MTL::Size::Make(8, 8, 1));
+
+              encoder->endEncoding();
+              if (standalone) {
+                command_processor_.CommitStandaloneAndWait(cmd);
               }
+
+              written_address = resolve_info.copy_dest_extent_start;
+              written_length = resolve_info.copy_dest_extent_length;
+
+              // Mark the shared memory range as GPU-written resolve data so
+              // texture caches and trace dumping can see it without an extra
+              // CPU copy. This mirrors D3D12/Vulkan behavior.
+              if (!draw_resolution_scaled) {
+                if (auto* shared_after = command_processor_.shared_memory()) {
+                  shared_after->RangeWrittenByGpu(written_address,
+                                                  written_length);
+                }
+              }
+
+              // Mark the range as resolved in the texture cache so that any
+              // textures overlapping this range will be reloaded from the
+              // updated shared memory. This matches D3D12/Vulkan behavior.
+              if (auto* tex_cache = command_processor_.texture_cache()) {
+                tex_cache->MarkRangeAsResolved(written_address, written_length);
+              }
+
+              copy_succeeded = true;
             }
-            return true;
           }
         }
+      }
+
+      if (!copy_succeeded) {
+        XELOGE(
+            "MetalRenderTargetCache::Resolve: no valid GPU resolve shader / "
+            "pipeline for this configuration");
+      }
+    }  // if (copy_dest_extent_length)
+
+    // Clearing -- runs independently of whether the copy succeeded, matching
+    // D3D12/Vulkan behavior.
+    bool clear_depth = resolve_info.IsClearingDepth();
+    bool clear_color = resolve_info.IsClearingColor();
+    bool clear_succeeded = !(clear_depth || clear_color);
+    if (clear_depth || clear_color) {
+      clear_succeeded = true;
+      Transfer::Rectangle clear_rectangle;
+      RenderTarget* clear_targets[2] = {};
+      std::vector<Transfer> clear_transfers[2];
+      if (PrepareHostRenderTargetsResolveClear(
+              resolve_info, clear_rectangle, clear_targets[0],
+              clear_transfers[0], clear_targets[1], clear_transfers[1])) {
+        uint64_t clear_values[2];
+        clear_values[0] = resolve_info.rb_depth_clear;
+        clear_values[1] = resolve_info.rb_color_clear |
+                          (uint64_t(resolve_info.rb_color_clear_lo) << 32);
+        PerformTransfersAndResolveClears(2, clear_targets, clear_transfers,
+                                         clear_values, &clear_rectangle,
+                                         command_buffer);
       }
     }
+
+    return copy_succeeded && clear_succeeded;
   }
 
   XELOGE(
@@ -4932,6 +3617,18 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
   if (!render_targets || !render_target_transfers) {
     return;
   }
+
+#ifdef __APPLE__
+  static os_log_t probe_transfer_log = nullptr;
+  if (cvars::metal_perf_probe && !probe_transfer_log) {
+    probe_transfer_log = os_log_create("org.xenia.gpu", "metal-transfer");
+  }
+  if (cvars::metal_perf_probe && probe_transfer_log) {
+    os_signpost_interval_begin(
+        probe_transfer_log, (os_signpost_id_t)(uintptr_t)command_buffer,
+        "TransferResolve", "rt_count=%u", render_target_count);
+  }
+#endif
 
   bool resolve_clear_needed =
       render_target_resolve_clear_values && resolve_clear_rectangle;
@@ -4966,7 +3663,13 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
 
   MTL::CommandBuffer* cmd = command_buffer;
   if (!cmd) {
-    cmd = command_processor_.EnsureCommandBuffer();
+    // RequestTransferCommandBuffer ends any active render encoder and
+    // ensures a command buffer exists in one step.
+    cmd = command_processor_.RequestTransferCommandBuffer();
+  } else {
+    // An externally-provided command buffer still requires the render
+    // encoder to be ended before transfer work can proceed.
+    command_processor_.EndRenderEncoder();
   }
   if (!cmd) {
     XELOGE(
@@ -4974,8 +3677,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         "buffer");
     return;
   }
-
-  command_processor_.EndRenderEncoder();
 
   uint32_t scale_x = draw_resolution_scale_x();
   uint32_t scale_y = draw_resolution_scale_y();
@@ -4989,8 +3690,10 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
                              : 0u;
 
   // Host depth store pass (dest depth where host depth source == dest).
+  // Use a single compute encoder for all depth store dispatches.
   bool host_depth_store_dispatched = false;
   if (host_depth_store_needed) {
+    MTL::ComputeCommandEncoder* depth_store_encoder = nullptr;
     for (uint32_t i = 0; i < render_target_count; ++i) {
       RenderTarget* dest_rt = render_targets[i];
       if (!dest_rt) {
@@ -5029,19 +3732,28 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         HostDepthStoreRenderTargetConstant render_target_constant =
             GetHostDepthStoreRenderTargetConstant(dest_key.pitch_tiles_at_32bpp,
                                                   msaa_2x_supported_);
-        MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
-        if (!encoder) {
-          XELOGE(
-              "MetalRenderTargetCache::PerformTransfersAndResolveClears: "
-              "failed to create host depth store encoder");
-          continue;
+        if (!depth_store_encoder) {
+          depth_store_encoder = cmd->computeCommandEncoder();
+          if (!depth_store_encoder) {
+            XELOGE(
+                "MetalRenderTargetCache::PerformTransfersAndResolveClears: "
+                "failed to create host depth store encoder");
+            break;
+          }
+          if (cvars::metal_perf_probe) {
+            depth_store_encoder->setLabel(
+                NS::String::string("XeniaDepthStore", NS::UTF8StringEncoding));
+            command_processor_.ProbeIncrementComputeEncoder();
+          }
+          depth_store_encoder->setComputePipelineState(
+              host_depth_store_pipelines_[pipeline_index]);
+          depth_store_encoder->setBuffer(edram_buffer_, 0, 1);
+          depth_store_encoder->setTexture(depth_texture, 0);
+          depth_store_encoder->useResource(edram_buffer_,
+                                           MTL::ResourceUsageWrite);
+          depth_store_encoder->useResource(depth_texture,
+                                           MTL::ResourceUsageRead);
         }
-        encoder->setComputePipelineState(
-            host_depth_store_pipelines_[pipeline_index]);
-        encoder->setBuffer(edram_buffer_, 0, 1);
-        encoder->setTexture(depth_texture, 0);
-        encoder->useResource(edram_buffer_, MTL::ResourceUsageWrite);
-        encoder->useResource(depth_texture, MTL::ResourceUsageRead);
         for (uint32_t rect_index = 0; rect_index < rectangle_count;
              ++rect_index) {
           uint32_t group_count_x = 0;
@@ -5056,15 +3768,17 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
           HostDepthStoreConstants constants = {};
           constants.rectangle = rectangle_constant;
           constants.render_target = render_target_constant;
-          encoder->setBytes(&constants, sizeof(constants), 0);
-          encoder->dispatchThreadgroups(
+          depth_store_encoder->setBytes(&constants, sizeof(constants), 0);
+          depth_store_encoder->dispatchThreadgroups(
               MTL::Size::Make(group_count_x, group_count_y, 1),
               MTL::Size::Make(8, 8, 1));
           host_depth_store_dispatched = true;
         }
-        encoder->endEncoding();
       }
       break;
+    }
+    if (depth_store_encoder) {
+      depth_store_encoder->endEncoding();
     }
   }
 
@@ -5560,6 +4274,11 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     auto ensure_blit_encoder = [&]() -> MTL::BlitCommandEncoder* {
       if (!blit_encoder) {
         blit_encoder = cmd->blitCommandEncoder();
+        if (blit_encoder && cvars::metal_perf_probe) {
+          blit_encoder->setLabel(
+              NS::String::string("XeniaTransferBlit", NS::UTF8StringEncoding));
+          command_processor_.ProbeIncrementBlitEncoder();
+        }
       }
       return blit_encoder;
     };
@@ -5603,7 +4322,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         }
         if (source_texture->pixelFormat() != dest_texture->pixelFormat() ||
             source_texture->sampleCount() != dest_texture->sampleCount() ||
-            source_texture->sampleCount() != 1 ||
             source_texture->width() != dest_width ||
             source_texture->height() != dest_height) {
           return false;
@@ -5932,6 +4650,17 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       }
     }
 
+    // Depth transfers that fully overwrite the destination still need a clean
+    // stencil surface before the per-bit stencil draws run. A load-action
+    // clear is cheaper than a separate clear draw in that case.
+    bool transfer_stencil_clear_via_load_action =
+        dest_is_depth && !transfers_for_shaders.empty() &&
+        transfers_fully_overwrite_target() && !resolve_clear_via_load_action;
+    if (transfer_stencil_clear_via_load_action) {
+      resolve_clear_depth = 0.0;
+      resolve_clear_stencil = 0;
+    }
+
     // Prefer DontCare on transfer-pass loads only when destination contents are
     // provably fully overwritten by this pass.
     bool transfer_pass_load_dontcare = false;
@@ -5939,11 +4668,13 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         !resolve_clear_via_load_action) {
       transfer_pass_load_dontcare = true;
     }
-    if (!transfer_pass_load_dontcare && !resolve_clear_needed) {
+    if (!transfer_pass_load_dontcare && !resolve_clear_needed &&
+        !transfer_stencil_clear_via_load_action) {
       transfer_pass_load_dontcare = transfers_fully_overwrite_target();
     }
     MTL::LoadAction transfer_load_action = MTL::LoadActionLoad;
-    if (resolve_clear_via_load_action) {
+    if (resolve_clear_via_load_action ||
+        transfer_stencil_clear_via_load_action) {
       transfer_load_action = MTL::LoadActionClear;
     } else if (transfer_pass_load_dontcare) {
       transfer_load_action = MTL::LoadActionDontCare;
@@ -5984,6 +4715,14 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         }
       }
       transfer_encoder = cmd->renderCommandEncoder(rp);
+      if (transfer_encoder && cvars::metal_perf_probe) {
+        char label[128];
+        snprintf(label, sizeof(label), "XeniaTransferRE rt=%u depth=%d", i,
+                 dest_is_depth ? 1 : 0);
+        transfer_encoder->setLabel(
+            NS::String::string(label, NS::UTF8StringEncoding));
+        command_processor_.ProbeIncrementTransferRenderEncoder();
+      }
       return transfer_encoder;
     };
 
@@ -5998,7 +4737,8 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       }
     } else if (!transfers_for_shaders.empty()) {
       bool need_stencil_bit_draws = dest_is_depth;
-      bool stencil_clear_needed = need_stencil_bit_draws;
+      bool stencil_clear_needed =
+          need_stencil_bit_draws && !transfer_stencil_clear_via_load_action;
 
       transfer_invocations_.clear();
       transfer_invocations_.reserve(transfers_for_shaders.size() *
@@ -6670,6 +5410,19 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       }
     }
 
+    if ((resolve_clear_via_load_action ||
+         transfer_stencil_clear_via_load_action) &&
+        !transfer_encoder && transfers_for_shaders.empty()) {
+#ifdef __APPLE__
+      if (cvars::metal_perf_probe && probe_transfer_log) {
+        os_signpost_event_emit(
+            probe_transfer_log, OS_SIGNPOST_ID_EXCLUSIVE, "EmptyRenderPass",
+            "load_action_clear rt=%u depth=%d", i, dest_is_depth ? 1 : 0);
+      }
+#endif
+      ensure_transfer_encoder();
+    }
+
     if (resolve_clear_needed && !resolve_clear_via_load_action) {
       uint64_t clear_value = render_target_resolve_clear_values[i];
       if (dest_is_depth) {
@@ -6864,6 +5617,14 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       transfer_encoder->endEncoding();
     }
   }
+
+#ifdef __APPLE__
+  if (cvars::metal_perf_probe && probe_transfer_log) {
+    os_signpost_interval_end(probe_transfer_log,
+                             (os_signpost_id_t)(uintptr_t)command_buffer,
+                             "TransferResolve", "done");
+  }
+#endif
 }
 
 MTL::RenderPipelineState* MetalRenderTargetCache::GetOrCreateTransferPipelines(

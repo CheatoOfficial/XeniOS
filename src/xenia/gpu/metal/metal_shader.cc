@@ -171,7 +171,7 @@ bool MetalShader::MetalTranslation::TranslateToMetal(
          dxil_data_.size(), metallib_data_.size());
 
   // Debug: Dump shader artifacts (DXBC, DXIL, MetalLib) to files when enabled.
-  static int shader_dump_counter = 0;
+  static std::atomic<int> shader_dump_counter{0};
   if (!cvars::dump_shaders.empty()) {
     std::filesystem::path base_dir = cvars::dump_shaders / "metal_shaders";
 
@@ -248,28 +248,7 @@ bool MetalShader::MetalTranslation::TranslateToMetal(
   metal_function_ = metal_library_->newFunction(function_name);
 
   if (!metal_function_) {
-    // Try alternative function names
-    const char* alt_names[] = {"main0", "main", "vertexMain", "fragmentMain"};
-    for (const char* alt_name : alt_names) {
-      NS::String* alt_func_name =
-          NS::String::string(alt_name, NS::UTF8StringEncoding);
-      metal_function_ = metal_library_->newFunction(alt_func_name);
-      if (metal_function_) {
-        XELOGD("MetalShader: Found function with alternative name: {}",
-               alt_name);
-        break;
-      }
-    }
-  }
-
-  if (!metal_function_) {
-    // List available functions for debugging
-    NS::Array* function_names = metal_library_->functionNames();
-    XELOGE("MetalShader: Could not find shader function. Available functions:");
-    for (NS::UInteger i = 0; i < function_names->count(); i++) {
-      NS::String* name = static_cast<NS::String*>(function_names->object(i));
-      XELOGE("  - {}", name->utf8String());
-    }
+    XELOGE("MetalShader: Function '{}' not found in metallib", function_name_);
     return false;
   }
 

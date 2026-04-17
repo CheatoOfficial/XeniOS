@@ -27,17 +27,11 @@ class MetalSharedMemory : public SharedMemory {
   ~MetalSharedMemory() override;
   bool Initialize();
   void Shutdown();
-  void ClearCache() override;
-
   MTL::Buffer* GetBuffer() const { return buffer_; }
   const uint8_t* GetXboxRamBase() const {
     return static_cast<const uint8_t*>(memory().TranslatePhysical(0));
   }
 
-  // For trace dump, simplified - just make buffer available for reading
-  void UseForReading() {
-    // No state transitions needed in Metal
-  }
   // Override pure virtual function from SharedMemory
   bool UploadRanges(const std::pair<uint32_t, uint32_t>* upload_page_ranges,
                     uint32_t num_upload_ranges) override;

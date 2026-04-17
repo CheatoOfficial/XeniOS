@@ -743,6 +743,25 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
 
+bool TextureCache::DestroyOldestTextureIfUnused(
+    uint64_t completed_submission_index) {
+  Texture* texture = texture_used_first_;
+  if (!texture ||
+      texture->last_usage_submission_index() > completed_submission_index) {
+    return false;
+  }
+  ResetTextureBindings();
+  auto found_texture_it = textures_.find(texture->key());
+  assert_true(found_texture_it != textures_.end());
+  if (found_texture_it == textures_.end()) {
+    return false;
+  }
+  assert_true(found_texture_it->second.get() == texture);
+  textures_.erase(found_texture_it);
+  COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
+  return true;
+}
+
 TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
   // Check if the texture is a scaled resolve texture.
   if (IsDrawResolutionScaled() && key.tiled &&

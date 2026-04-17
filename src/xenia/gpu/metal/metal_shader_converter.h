@@ -125,10 +125,8 @@ class MetalShaderConverter {
 
   // Create Xbox 360 root signature for the given shader visibility
   void* CreateXbox360RootSignature(MetalShaderStage stage,
-                                   bool force_all_visibility);
-
-  // Destroy a root signature
-  void DestroyRootSignature(void* root_sig);
+                                   bool force_all_visibility,
+                                   bool bindless_resources_used);
 };
 
 }  // namespace metal

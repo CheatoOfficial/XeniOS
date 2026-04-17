@@ -57,9 +57,8 @@ project("xenia-gpu-metal")
       "metal_shader_cache.h",
       "metal_texture_cache.cc",
       "metal_texture_cache.h",
-      "msl_bindings.h",
-      "msl_shader.cc",
-      "msl_shader.h",
+      "metal_upload_buffer_pool.cc",
+      "metal_upload_buffer_pool.h",
     }
     includedirs {
       spirvcross_root,
@@ -80,6 +79,8 @@ project("xenia-gpu-metal")
       "ir_runtime_impl.mm",
       "metal_geometry_shader.cc",
       "metal_geometry_shader.h",
+      "metal_pipeline_cache.cc",
+      "metal_pipeline_cache.h",
       "metal_shader.cc",
       "metal_shader.h",
       "metal_shader_converter.cc",
@@ -283,6 +284,9 @@ project("xenia-gpu-metal-trace-dump")
   files {
     "metal_trace_dump_main.cc",
   }
+  includedirs {
+    path.join(project_root, "third_party/glslang"),
+  }
   
   -- Check if mac-specific file exists, otherwise use posix
   local mac_main_cc = path.join("..", "..", "base", "console_app_main_mac.cc")
@@ -323,6 +327,7 @@ project("xenia-gpu-metal-trace-dump")
       "MetalFX.framework",
       "MetalKit.framework",
       "QuartzCore.framework",
+      "iconv",
       "metalirconverter",
       "dxilconv",
       "LLVMDxcSupport",

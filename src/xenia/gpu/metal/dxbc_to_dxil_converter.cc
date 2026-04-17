@@ -84,7 +84,6 @@ bool DxbcToDxilConverter::Initialize() {
   }
   test_converter->Release();
 
-  dxilconv_path_ = "linked";
   is_available_ = true;
   if (extra_options && *extra_options) {
     XELOGI("DxbcToDxilConverter: Using extra options: {}", extra_options);
