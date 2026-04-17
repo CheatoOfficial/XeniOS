@@ -866,6 +866,23 @@ def git_submodule_update():
         "--depth=1",
         "-j", f"{os.cpu_count()}",
         ])
+    # DirectXShaderCompiler has nested submodules (SPIRV-Headers,
+    # SPIRV-Tools) that its CMake build references unconditionally even
+    # when SPIR-V codegen is disabled. Initialize them here if DXC was
+    # checked out (skipped on iOS, which excludes DXC).
+    dxc_path = os.path.join("third_party", "DirectXShaderCompiler")
+    if os.path.isdir(os.path.join(dxc_path, ".git")) or \
+            os.path.isfile(os.path.join(dxc_path, ".git")):
+        shell_call([
+            "git",
+            "-C", dxc_path,
+            "submodule",
+            "update",
+            "--init",
+            "--depth=1",
+            "external/SPIRV-Headers",
+            "external/SPIRV-Tools",
+            ])
 
 
 def fetch_data_repos():
