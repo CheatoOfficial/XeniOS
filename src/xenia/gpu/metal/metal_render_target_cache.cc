@@ -9,10 +9,6 @@
 
 #include "xenia/gpu/metal/metal_render_target_cache.h"
 
-#ifdef __APPLE__
-#include <os/log.h>
-#include <os/signpost.h>
-#endif
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -3618,18 +3614,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     return;
   }
 
-#ifdef __APPLE__
-  static os_log_t probe_transfer_log = nullptr;
-  if (cvars::metal_perf_probe && !probe_transfer_log) {
-    probe_transfer_log = os_log_create("org.xenia.gpu", "metal-transfer");
-  }
-  if (cvars::metal_perf_probe && probe_transfer_log) {
-    os_signpost_interval_begin(
-        probe_transfer_log, (os_signpost_id_t)(uintptr_t)command_buffer,
-        "TransferResolve", "rt_count=%u", render_target_count);
-  }
-#endif
-
   bool resolve_clear_needed =
       render_target_resolve_clear_values && resolve_clear_rectangle;
   bool any_work = false;
@@ -3739,11 +3723,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
                 "MetalRenderTargetCache::PerformTransfersAndResolveClears: "
                 "failed to create host depth store encoder");
             break;
-          }
-          if (cvars::metal_perf_probe) {
-            depth_store_encoder->setLabel(
-                NS::String::string("XeniaDepthStore", NS::UTF8StringEncoding));
-            command_processor_.ProbeIncrementComputeEncoder();
           }
           depth_store_encoder->setComputePipelineState(
               host_depth_store_pipelines_[pipeline_index]);
@@ -4274,11 +4253,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     auto ensure_blit_encoder = [&]() -> MTL::BlitCommandEncoder* {
       if (!blit_encoder) {
         blit_encoder = cmd->blitCommandEncoder();
-        if (blit_encoder && cvars::metal_perf_probe) {
-          blit_encoder->setLabel(
-              NS::String::string("XeniaTransferBlit", NS::UTF8StringEncoding));
-          command_processor_.ProbeIncrementBlitEncoder();
-        }
       }
       return blit_encoder;
     };
@@ -4715,14 +4689,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
         }
       }
       transfer_encoder = cmd->renderCommandEncoder(rp);
-      if (transfer_encoder && cvars::metal_perf_probe) {
-        char label[128];
-        snprintf(label, sizeof(label), "XeniaTransferRE rt=%u depth=%d", i,
-                 dest_is_depth ? 1 : 0);
-        transfer_encoder->setLabel(
-            NS::String::string(label, NS::UTF8StringEncoding));
-        command_processor_.ProbeIncrementTransferRenderEncoder();
-      }
       return transfer_encoder;
     };
 
@@ -5413,13 +5379,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
     if ((resolve_clear_via_load_action ||
          transfer_stencil_clear_via_load_action) &&
         !transfer_encoder && transfers_for_shaders.empty()) {
-#ifdef __APPLE__
-      if (cvars::metal_perf_probe && probe_transfer_log) {
-        os_signpost_event_emit(
-            probe_transfer_log, OS_SIGNPOST_ID_EXCLUSIVE, "EmptyRenderPass",
-            "load_action_clear rt=%u depth=%d", i, dest_is_depth ? 1 : 0);
-      }
-#endif
       ensure_transfer_encoder();
     }
 
@@ -5617,14 +5576,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
       transfer_encoder->endEncoding();
     }
   }
-
-#ifdef __APPLE__
-  if (cvars::metal_perf_probe && probe_transfer_log) {
-    os_signpost_interval_end(probe_transfer_log,
-                             (os_signpost_id_t)(uintptr_t)command_buffer,
-                             "TransferResolve", "done");
-  }
-#endif
 }
 
 MTL::RenderPipelineState* MetalRenderTargetCache::GetOrCreateTransferPipelines(

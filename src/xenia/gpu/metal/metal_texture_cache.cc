@@ -11,10 +11,6 @@
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/metal/metal_heap_pool.h"
 
-#ifdef __APPLE__
-#include <os/log.h>
-#include <os/signpost.h>
-#endif
 #include <algorithm>
 #include <cfloat>
 #include <cstdint>
@@ -2028,31 +2024,18 @@ bool MetalTextureCache::TrimViewBindlessPressure(uint32_t needed_slot_count) {
   if (!command_processor_) {
     return false;
   }
-  uint32_t available_before = 0;
-  if (cvars::metal_perf_probe) {
-    available_before = command_processor_->GetViewBindlessHeapAvailableCount();
-  }
-  bool destroyed_any = false;
+  bool released_any = false;
   uint64_t completed_submission = command_processor_->GetCompletedSubmission();
   while (command_processor_->GetViewBindlessHeapAvailableCount() <
          needed_slot_count) {
-    if (!DestroyOldestTextureIfUnused(completed_submission)) {
+    if (!bindless_used_first_ ||
+        !bindless_used_first_->ReleaseBindlessViewsIfUnused(
+            completed_submission)) {
       break;
     }
-    destroyed_any = true;
+    released_any = true;
   }
-  if (cvars::metal_perf_probe && destroyed_any) {
-    uint32_t available_after =
-        command_processor_->GetViewBindlessHeapAvailableCount();
-#ifdef __APPLE__
-    static os_log_t trim_log = os_log_create("org.xenia.gpu", "metal-bindless");
-    os_signpost_event_emit(trim_log, OS_SIGNPOST_ID_EXCLUSIVE, "TrimBindless",
-                           "needed=%u before=%u after=%u freed=%u",
-                           needed_slot_count, available_before, available_after,
-                           available_after - available_before);
-#endif
-  }
-  return destroyed_any;
+  return released_any;
 }
 
 void MetalTextureCache::ClearCache() {
@@ -3451,19 +3434,7 @@ MetalTextureCache::MetalTexture::MetalTexture(MetalTextureCache& texture_cache,
 }
 
 MetalTextureCache::MetalTexture::~MetalTexture() {
-  // Release persistent bindless SRV slots before destroying the texture.
-  if (bindless_srv_index_ != UINT32_MAX) {
-    texture_cache_.command_processor_->ReleaseViewBindlessIndex(
-        bindless_srv_index_);
-    bindless_srv_index_ = UINT32_MAX;
-  }
-  for (auto& [key, bindless_srv_index] : swizzled_view_bindless_srv_indices_) {
-    if (bindless_srv_index != UINT32_MAX) {
-      texture_cache_.command_processor_->ReleaseViewBindlessIndex(
-          bindless_srv_index);
-    }
-  }
-  swizzled_view_bindless_srv_indices_.clear();
+  ReleaseBindlessViews();
 
   uint64_t views_released = 0;
   for (auto& entry : swizzled_view_cache_) {
@@ -3476,6 +3447,111 @@ MetalTextureCache::MetalTexture::~MetalTexture() {
     metal_texture_->release();
     metal_texture_ = nullptr;
   }
+}
+
+bool MetalTextureCache::MetalTexture::HasBindlessViews() const {
+  return bindless_srv_index_ != UINT32_MAX ||
+         !swizzled_view_bindless_srv_indices_.empty();
+}
+
+void MetalTextureCache::MetalTexture::LinkBindlessUsage() {
+  if (in_bindless_usage_list_) {
+    return;
+  }
+  bindless_previous_ = texture_cache_.bindless_used_last_;
+  bindless_next_ = nullptr;
+  if (texture_cache_.bindless_used_last_) {
+    texture_cache_.bindless_used_last_->bindless_next_ = this;
+  } else {
+    texture_cache_.bindless_used_first_ = this;
+  }
+  texture_cache_.bindless_used_last_ = this;
+  in_bindless_usage_list_ = true;
+}
+
+void MetalTextureCache::MetalTexture::UnlinkBindlessUsage() {
+  if (!in_bindless_usage_list_) {
+    return;
+  }
+  if (bindless_previous_) {
+    bindless_previous_->bindless_next_ = bindless_next_;
+  } else {
+    texture_cache_.bindless_used_first_ = bindless_next_;
+  }
+  if (bindless_next_) {
+    bindless_next_->bindless_previous_ = bindless_previous_;
+  } else {
+    texture_cache_.bindless_used_last_ = bindless_previous_;
+  }
+  bindless_previous_ = nullptr;
+  bindless_next_ = nullptr;
+  in_bindless_usage_list_ = false;
+}
+
+void MetalTextureCache::MetalTexture::MarkBindlessViewsUsed() {
+  if (!HasBindlessViews()) {
+    return;
+  }
+  uint64_t submission = texture_cache_.command_processor_
+                            ? texture_cache_.command_processor_->GetCurrentSubmission()
+                            : 1;
+  if (!in_bindless_usage_list_) {
+    bindless_last_usage_submission_index_ = submission;
+    LinkBindlessUsage();
+    return;
+  }
+  if (bindless_last_usage_submission_index_ >= submission) {
+    return;
+  }
+  bindless_last_usage_submission_index_ = submission;
+  if (!bindless_next_) {
+    return;
+  }
+  if (bindless_previous_) {
+    bindless_previous_->bindless_next_ = bindless_next_;
+  } else {
+    texture_cache_.bindless_used_first_ = bindless_next_;
+  }
+  bindless_next_->bindless_previous_ = bindless_previous_;
+  bindless_previous_ = texture_cache_.bindless_used_last_;
+  bindless_next_ = nullptr;
+  texture_cache_.bindless_used_last_->bindless_next_ = this;
+  texture_cache_.bindless_used_last_ = this;
+}
+
+void MetalTextureCache::MetalTexture::ReleaseBindlessViews() {
+  if (texture_3d_as_2d_) {
+    texture_3d_as_2d_->ReleaseBindlessViews();
+  }
+  if (texture_cache_.command_processor_) {
+    if (bindless_srv_index_ != UINT32_MAX) {
+      texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+          bindless_srv_index_);
+      bindless_srv_index_ = UINT32_MAX;
+    }
+    for (auto& [key, bindless_srv_index] : swizzled_view_bindless_srv_indices_) {
+      if (bindless_srv_index != UINT32_MAX) {
+        texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+            bindless_srv_index);
+      }
+    }
+  }
+  swizzled_view_bindless_srv_indices_.clear();
+  bindless_last_usage_submission_index_ = 0;
+  UnlinkBindlessUsage();
+}
+
+bool MetalTextureCache::MetalTexture::ReleaseBindlessViewsIfUnused(
+    uint64_t completed_submission_index) {
+  if (!HasBindlessViews()) {
+    UnlinkBindlessUsage();
+    return false;
+  }
+  if (bindless_last_usage_submission_index_ > completed_submission_index) {
+    return false;
+  }
+  ReleaseBindlessViews();
+  return true;
 }
 
 uint64_t MetalTextureCache::MetalTexture::GetViewKey(
@@ -3540,6 +3616,7 @@ MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndexForResolvedView(
 
   auto existing = swizzled_view_bindless_srv_indices_.find(view_key);
   if (existing != swizzled_view_bindless_srv_indices_.end()) {
+    MarkBindlessViewsUsed();
     return existing->second;
   }
 
@@ -3557,6 +3634,7 @@ MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndexForResolvedView(
   }
   IRDescriptorTableSetTexture(entry, view, 0.0f, 0);
   swizzled_view_bindless_srv_indices_.emplace(view_key, bindless_srv_index);
+  MarkBindlessViewsUsed();
   return bindless_srv_index;
 }
 
@@ -3655,6 +3733,7 @@ uint32_t MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndex(
       }
       IRDescriptorTableSetTexture(entry, metal_texture_, 0.0f, 0);
     }
+    MarkBindlessViewsUsed();
     return bindless_srv_index_;
   }
 
@@ -3662,6 +3741,7 @@ uint32_t MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndex(
       GetViewKey(host_swizzle, dimension, is_signed, view_format);
   auto existing = swizzled_view_bindless_srv_indices_.find(view_key);
   if (existing != swizzled_view_bindless_srv_indices_.end()) {
+    MarkBindlessViewsUsed();
     return existing->second;
   }
   MTL::Texture* view = GetOrCreateView(host_swizzle, dimension, is_signed);

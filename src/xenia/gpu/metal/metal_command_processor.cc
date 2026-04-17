@@ -10,8 +10,6 @@
 #include "xenia/gpu/metal/metal_command_processor.h"
 
 #include <dispatch/dispatch.h>
-#include <os/log.h>
-#include <os/signpost.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -588,9 +586,6 @@ bool MetalCommandProcessor::SetupContext() {
   swap_dest_swaps_by_base_.clear();
   gamma_ramp_256_entry_table_up_to_date_ = false;
   gamma_ramp_pwl_up_to_date_ = false;
-  if (cvars::metal_perf_probe && !probe_log_) {
-    probe_log_ = os_log_create("org.xenia.gpu", "metal-perf");
-  }
 
   if (!CommandProcessor::SetupContext()) {
     XELOGE("Failed to initialize base command processor context");
@@ -1000,7 +995,7 @@ uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
       view_bindless_heap_exhausted_logged_ = false;
       return idx;
     }
-    // Still full — try evicting least-recently-used textures.
+    // Still full — try releasing least-recently-used cached bindless views.
     if (texture_cache_ && texture_cache_->TrimViewBindlessPressure()) {
       if (!view_bindless_heap_free_.empty()) {
         uint32_t idx = view_bindless_heap_free_.back();
@@ -1012,22 +1007,12 @@ uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
     if (!view_bindless_heap_exhausted_logged_) {
       uint64_t completed =
           completed_command_buffers_.load(std::memory_order_relaxed);
-      uint64_t texture_count =
-          texture_cache_ ? texture_cache_->GetTotalTextureCount() : 0;
       XELOGE(
           "View bindless heap exhausted ({} allocated, {} free, {} retired, "
-          "submissions: current={} completed={}, textures={})",
+          "submissions: current={} completed={})",
           view_bindless_heap_next_, view_bindless_heap_free_.size(),
-          retired_view_bindless_indices_.size(), submission_current_, completed,
-          texture_count);
-      if (cvars::metal_perf_probe && probe_log_) {
-        os_signpost_event_emit(
-            probe_log_, OS_SIGNPOST_ID_EXCLUSIVE, "BindlessExhaustion",
-            "alloc=%u free=%zu retired=%zu textures=%llu",
-            view_bindless_heap_next_, view_bindless_heap_free_.size(),
-            retired_view_bindless_indices_.size(),
-            (unsigned long long)texture_count);
-      }
+          retired_view_bindless_indices_.size(), submission_current_,
+          completed);
       view_bindless_heap_exhausted_logged_ = true;
     }
     return UINT32_MAX;
@@ -1186,24 +1171,6 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
 
   // Submit and wait for command buffer
   if (current_command_buffer_) {
-    if (cvars::metal_perf_probe) {
-      char label[512];
-      snprintf(label, sizeof(label),
-               "XeniaCB commit=swap mainRE:%u transferRE:%u "
-               "compute:%u blit:%u draws:%u sub:%llu",
-               probe_main_re_count_, probe_transfer_re_count_,
-               probe_compute_encoder_count_, probe_blit_encoder_count_,
-               probe_draw_count_, (unsigned long long)submission_current_);
-      current_command_buffer_->setLabel(
-          NS::String::string(label, NS::UTF8StringEncoding));
-      if (probe_log_) {
-        os_signpost_interval_end(
-            probe_log_, (os_signpost_id_t)submission_current_, "CommandBuffer",
-            "commit=swap mRE%u tRE%u C%u B%u d%u", probe_main_re_count_,
-            probe_transfer_re_count_, probe_compute_encoder_count_,
-            probe_blit_encoder_count_, probe_draw_count_);
-      }
-    }
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;
@@ -1227,11 +1194,6 @@ void MetalCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         kViewBindlessHeapSize / 4;  // trim when < 25% free
     uint32_t available = GetViewBindlessHeapAvailableCount();
     if (available < kDescriptorPressureThreshold) {
-      if (cvars::metal_perf_probe && probe_log_) {
-        os_signpost_event_emit(probe_log_, OS_SIGNPOST_ID_EXCLUSIVE, "SwapTrim",
-                               "available=%u threshold=%u", available,
-                               kDescriptorPressureThreshold);
-      }
       texture_cache_->TrimViewBindlessPressure(kDescriptorPressureThreshold);
     }
   }
@@ -1835,9 +1797,6 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   if (current_render_pipeline_state_ != pipeline) {
     current_render_encoder_->setRenderPipelineState(pipeline);
     current_render_pipeline_state_ = pipeline;
-    if (cvars::metal_perf_probe) {
-      ++probe_encoder_pipeline_changes_;
-    }
   }
   if (use_tessellation_emulation) {
     if (!tessellator_tables_buffer_) {
@@ -1961,9 +1920,6 @@ bool MetalCommandProcessor::UploadConstants(
     current_render_encoder_->setViewport(mtl_viewport);
     cached_viewport_ = mtl_viewport;
     viewport_dirty_ = false;
-    if (cvars::metal_perf_probe) {
-      ++probe_encoder_viewport_changes_;
-    }
   }
 
   MTL::ScissorRect mtl_scissor;
@@ -1976,9 +1932,6 @@ bool MetalCommandProcessor::UploadConstants(
     current_render_encoder_->setScissorRect(mtl_scissor);
     cached_scissor_ = mtl_scissor;
     scissor_dirty_ = false;
-    if (cvars::metal_perf_probe) {
-      ++probe_encoder_scissor_changes_;
-    }
   }
 
   ApplyRasterizerState(primitive_polygonal);
@@ -3124,14 +3077,6 @@ bool MetalCommandProcessor::DispatchDraw(
   }
 
   submission_has_draws_ = true;
-  if (cvars::metal_perf_probe) {
-    ++probe_encoder_draw_count_;
-    ++probe_draw_count_;
-    if (index_buffer_info) {
-      ++probe_encoder_indexed_draw_count_;
-    }
-  }
-
   return true;
 }
 
@@ -3275,23 +3220,8 @@ MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   current_command_buffer_->retain();
 
   ++submission_current_;
-
-  if (cvars::metal_perf_probe) {
-    probe_main_re_count_ = 0;
-    probe_transfer_re_count_ = 0;
-    probe_compute_encoder_count_ = 0;
-    probe_blit_encoder_count_ = 0;
-    probe_draw_count_ = 0;
-    if (probe_log_) {
-      os_signpost_interval_begin(
-          probe_log_, (os_signpost_id_t)submission_current_, "CommandBuffer",
-          "sub=%llu frame_open=%d", (unsigned long long)submission_current_,
-          frame_open_ ? 1 : 0);
-    }
-  } else {
-    current_command_buffer_->setLabel(
-        NS::String::string("XeniaCommandBuffer", NS::UTF8StringEncoding));
-  }
+  current_command_buffer_->setLabel(
+      NS::String::string("XeniaCommandBuffer", NS::UTF8StringEncoding));
 
   pending_completion_handlers_.fetch_add(1, std::memory_order_relaxed);
   current_command_buffer_->addCompletedHandler(
@@ -3370,25 +3300,6 @@ void MetalCommandProcessor::EndRenderEncoder() {
   if (!current_render_encoder_) {
     return;
   }
-  if (cvars::metal_perf_probe) {
-    char label[256];
-    snprintf(
-        label, sizeof(label), "XeniaRE draws=%u/%u pipe=%u vp=%u sc=%u ds=%u",
-        probe_encoder_draw_count_, probe_encoder_indexed_draw_count_,
-        probe_encoder_pipeline_changes_, probe_encoder_viewport_changes_,
-        probe_encoder_scissor_changes_, probe_encoder_depth_stencil_changes_);
-    current_render_encoder_->setLabel(
-        NS::String::string(label, NS::UTF8StringEncoding));
-    if (probe_log_) {
-      os_signpost_interval_end(
-          probe_log_,
-          (os_signpost_id_t)(submission_current_ * 1000 + probe_main_re_count_),
-          "RenderEncoder", "draws=%u indexed=%u pipe=%u",
-          probe_encoder_draw_count_, probe_encoder_indexed_draw_count_,
-          probe_encoder_pipeline_changes_);
-    }
-    ++probe_main_re_count_;
-  }
   current_render_encoder_->endEncoding();
   current_render_encoder_->release();
   current_render_encoder_ = nullptr;
@@ -3417,9 +3328,7 @@ MetalCommandProcessor::CreateStandaloneTransferCommandBuffer(
     return nullptr;
   }
   cmd->retain();
-  if (label && cvars::metal_perf_probe) {
-    cmd->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
-  }
+  (void)label;
   return cmd;
 }
 
@@ -3569,25 +3478,8 @@ void MetalCommandProcessor::BeginCommandBuffer() {
       return;
     }
     current_render_encoder_->retain();
-    if (cvars::metal_perf_probe) {
-      probe_encoder_draw_count_ = 0;
-      probe_encoder_indexed_draw_count_ = 0;
-      probe_encoder_pipeline_changes_ = 0;
-      probe_encoder_viewport_changes_ = 0;
-      probe_encoder_scissor_changes_ = 0;
-      probe_encoder_depth_stencil_changes_ = 0;
-      if (probe_log_) {
-        os_signpost_interval_begin(
-            probe_log_,
-            (os_signpost_id_t)(submission_current_ * 1000 +
-                               probe_main_re_count_),
-            "RenderEncoder", "reason=main-draw sub=%llu enc=%u",
-            (unsigned long long)submission_current_, probe_main_re_count_);
-      }
-    } else {
-      current_render_encoder_->setLabel(
-          NS::String::string("XeniaRenderEncoder", NS::UTF8StringEncoding));
-    }
+    current_render_encoder_->setLabel(
+        NS::String::string("XeniaRenderEncoder", NS::UTF8StringEncoding));
     current_render_pipeline_state_ = nullptr;
     ff_blend_factor_valid_ = false;
     rasterizer_state_valid_ = false;
@@ -3627,29 +3519,6 @@ void MetalCommandProcessor::EndCommandBuffer() {
   EndRenderEncoder();
 
   if (current_command_buffer_) {
-    if (cvars::metal_perf_probe) {
-      bool empty =
-          (probe_main_re_count_ == 0 && probe_transfer_re_count_ == 0 &&
-           probe_compute_encoder_count_ == 0 && probe_blit_encoder_count_ == 0);
-      char label[512];
-      snprintf(label, sizeof(label),
-               "XeniaCB commit=draw mainRE:%u transferRE:%u "
-               "compute:%u blit:%u draws:%u sub:%llu%s",
-               probe_main_re_count_, probe_transfer_re_count_,
-               probe_compute_encoder_count_, probe_blit_encoder_count_,
-               probe_draw_count_, (unsigned long long)submission_current_,
-               empty ? " EMPTY" : "");
-      current_command_buffer_->setLabel(
-          NS::String::string(label, NS::UTF8StringEncoding));
-      if (probe_log_) {
-        os_signpost_interval_end(
-            probe_log_, (os_signpost_id_t)submission_current_, "CommandBuffer",
-            "commit=draw mRE%u tRE%u C%u B%u d%u%s", probe_main_re_count_,
-            probe_transfer_re_count_, probe_compute_encoder_count_,
-            probe_blit_encoder_count_, probe_draw_count_,
-            empty ? " EMPTY" : "");
-      }
-    }
     current_command_buffer_->commit();
     current_command_buffer_->release();
     current_command_buffer_ = nullptr;
@@ -3774,9 +3643,6 @@ void MetalCommandProcessor::ApplyDepthStencilState(
   if (current_depth_stencil_state_ != state) {
     current_render_encoder_->setDepthStencilState(state);
     current_depth_stencil_state_ = state;
-    if (cvars::metal_perf_probe) {
-      ++probe_encoder_depth_stencil_changes_;
-    }
   }
 
   if (depth_control.stencil_enable) {

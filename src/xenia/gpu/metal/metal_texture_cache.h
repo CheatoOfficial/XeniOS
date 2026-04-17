@@ -215,6 +215,10 @@ class MetalTextureCache : public TextureCache {
     uint32_t GetOrCreateBindlessSRVIndex(uint32_t host_swizzle,
                                          xenos::FetchOpDimension dimension,
                                          bool is_signed);
+    uint64_t bindless_last_usage_submission_index() const {
+      return bindless_last_usage_submission_index_;
+    }
+    bool ReleaseBindlessViewsIfUnused(uint64_t completed_submission_index);
 
     // Persistent bindless SRV index for the default resolved view in the
     // view_bindless_heap_. Additional resolved view variants use persistent
@@ -226,6 +230,11 @@ class MetalTextureCache : public TextureCache {
     uint64_t GetViewKey(uint32_t host_swizzle,
                         xenos::FetchOpDimension dimension, bool is_signed,
                         MTL::PixelFormat view_format) const;
+    bool HasBindlessViews() const;
+    void LinkBindlessUsage();
+    void UnlinkBindlessUsage();
+    void MarkBindlessViewsUsed();
+    void ReleaseBindlessViews();
     MTL::PixelFormat GetViewPixelFormat(bool is_signed) const;
     MTL::TextureType GetViewType(xenos::FetchOpDimension dimension) const;
     uint32_t GetOrCreateBindlessSRVIndexForResolvedView(uint64_t view_key,
@@ -235,6 +244,10 @@ class MetalTextureCache : public TextureCache {
     MTL::Texture* metal_texture_;
     uint32_t bindless_srv_index_ = UINT32_MAX;
     std::unique_ptr<MetalTexture> texture_3d_as_2d_;
+    uint64_t bindless_last_usage_submission_index_ = 0;
+    MetalTexture* bindless_previous_ = nullptr;
+    MetalTexture* bindless_next_ = nullptr;
+    bool in_bindless_usage_list_ = false;
     bool is_3d_as_2d_wrapper_ = false;
     std::unordered_map<uint64_t, MTL::Texture*> swizzled_view_cache_;
     std::unordered_map<uint64_t, uint32_t> swizzled_view_bindless_srv_indices_;
@@ -318,6 +331,8 @@ class MetalTextureCache : public TextureCache {
   MTL::CommandBuffer* upload_batch_command_buffer_ = nullptr;
   bool upload_batch_command_buffer_has_work_ = false;
   uint32_t upload_batch_depth_ = 0;
+  MetalTexture* bindless_used_first_ = nullptr;
+  MetalTexture* bindless_used_last_ = nullptr;
   std::unique_ptr<MetalHeapPool> texture_heap_pool_;
   bool supports_bc_texture_compression_ = false;
 

@@ -128,8 +128,6 @@ class TextureCache {
     texture_binding_generation_.fetch_add(1, std::memory_order_relaxed);
   }
 
-  size_t GetTotalTextureCount() const { return textures_.size(); }
-
   virtual void RequestTextures(uint32_t used_texture_mask);
   // Returns whether RequestTextures(used_texture_mask) may need to process
   // bindings or reload texture data from guest memory.
@@ -641,7 +639,6 @@ class TextureCache {
   void ResetTextureBindings(bool from_destructor = false);
   bool IsBindingOutdatedForUse(const TextureBinding& binding) const;
   void InvalidateUsedOutdatedBindings(uint32_t used_texture_mask);
-  bool DestroyOldestTextureIfUnused(uint64_t completed_submission_index);
 
   const TextureBinding* GetValidTextureBinding(
       uint32_t fetch_constant_index) const {

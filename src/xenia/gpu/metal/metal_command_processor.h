@@ -11,8 +11,6 @@
 #define XENIA_GPU_METAL_METAL_COMMAND_PROCESSOR_H_
 
 #include <dispatch/dispatch.h>
-#include <os/log.h>
-#include <os/signpost.h>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -165,11 +163,6 @@ class MetalCommandProcessor : public CommandProcessor {
                                 MTL::ResourceUsage usage);
   void EnsureCommandBufferAutoreleasePool();
   void DrainCommandBufferAutoreleasePool();
-
-  // Probe counter increments for encoders created outside the main draw path.
-  void ProbeIncrementTransferRenderEncoder() { ++probe_transfer_re_count_; }
-  void ProbeIncrementComputeEncoder() { ++probe_compute_encoder_count_; }
-  void ProbeIncrementBlitEncoder() { ++probe_blit_encoder_count_; }
 
   // Force issue a swap to push render target to presenter (for trace dumps)
   void ForceIssueSwap();
@@ -576,22 +569,6 @@ class MetalCommandProcessor : public CommandProcessor {
 
   // Trace-only resolve protection (see TraceResolveGuard above).
   TraceResolveGuard trace_resolve_guard_;
-
-  // Performance probe state (only meaningful when cvars::metal_perf_probe).
-  os_log_t probe_log_ = nullptr;
-  // Per-command-buffer counters (reset in EnsureCommandBuffer).
-  uint32_t probe_main_re_count_ = 0;      // XeniaRE (main draw path)
-  uint32_t probe_transfer_re_count_ = 0;  // XeniaTransferRE
-  uint32_t probe_compute_encoder_count_ = 0;
-  uint32_t probe_blit_encoder_count_ = 0;
-  uint32_t probe_draw_count_ = 0;
-  // Per-render-encoder counters (reset on encoder begin).
-  uint32_t probe_encoder_draw_count_ = 0;
-  uint32_t probe_encoder_indexed_draw_count_ = 0;
-  uint32_t probe_encoder_pipeline_changes_ = 0;
-  uint32_t probe_encoder_viewport_changes_ = 0;
-  uint32_t probe_encoder_scissor_changes_ = 0;
-  uint32_t probe_encoder_depth_stencil_changes_ = 0;
 };
 
 }  // namespace metal

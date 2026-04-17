@@ -127,11 +127,6 @@ DEFINE_bool(metal_texture_upload_via_blit, true,
             "of CPU replaceRegion.",
             "GPU");
 
-DEFINE_bool(metal_perf_probe, false,
-            "Enable Metal performance probes: detailed encoder/command-buffer "
-            "labels and os_signpost intervals for Instruments profiling.",
-            "GPU");
-
 DEFINE_bool(occlusion_query_enable, false,
             "Use hardware occlusion queries instead of fake results. More "
             "accurate but causes GPU stalls and performance issues.",
