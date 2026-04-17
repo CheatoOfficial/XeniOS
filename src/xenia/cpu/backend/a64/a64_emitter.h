@@ -131,7 +131,6 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   const Xbyak_aarch64::XReg& GetMembaseReg() const { return x21; }
 
   void ReloadMembase();
-  void EmitIndirectionLookup();
 
   void PushStackpoint();
   void PopStackpoint();

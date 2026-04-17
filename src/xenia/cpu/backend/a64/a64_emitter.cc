@@ -360,8 +360,36 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   }
 
   if (code_cache_->has_indirection_table()) {
+    // Indirection table stores rel32 offsets (bit 31 clear) or tagged
+    // external-table indices (bit 31 set).  The table itself lives at an
+    // OS-chosen address; the emitter compensates via base bias.
+    Label external_target;
+    Label indirection_ready;
+
+    // w16 = guest address (must stay in w16 — the resolve thunk reads it).
     mov(w16, function->address());
-    EmitIndirectionLookup();
+    // x14 = &slot = bias + guest_addr
+    mov(x14, code_cache_->indirection_table_base_bias());
+    add(x14, x14, w16, UXTW);
+    // w9 = encoded indirection entry
+    ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+    // Tag bit (bit 31) set => external table entry.
+    tbnz(w9, 31, external_target);
+
+    // Fast path: rel32 offset from code cache base.
+    mov(x14, code_cache_->execute_base_address());
+    add(x9, x14, w9, UXTW);
+    b(indirection_ready);
+
+    // Slow path: external table lookup (resolve thunks, trampolines).
+    L(external_target);
+    and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
+    mov(x14, code_cache_->external_indirection_table_base_address());
+    lsl(x15, x15, 3);  // index * sizeof(uint64_t)
+    add(x14, x14, x15);
+    ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+
+    L(indirection_ready);
   } else {
     // No indirection table: resolve at runtime.
     mov(x0, x20);  // context
@@ -403,8 +431,37 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
 
   // Load host code address from indirection table.
   if (code_cache_->has_indirection_table()) {
-    mov(w16, target_w);  // w16 = guest address (also used by resolve thunk)
-    EmitIndirectionLookup();
+    // Indirection table stores rel32 offsets (bit 31 clear) or tagged
+    // external-table indices (bit 31 set).
+    Label external_target;
+    Label indirection_ready;
+
+    // w16 = guest address (must stay in w16 — the resolve thunk reads it).
+    if (target_w.getIdx() != w16.getIdx()) {
+      mov(w16, target_w);
+    }
+    // x14 = &slot = bias + guest_addr
+    mov(x14, code_cache_->indirection_table_base_bias());
+    add(x14, x14, w16, UXTW);
+    // w9 = encoded indirection entry
+    ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+    // Tag bit (bit 31) set => external table entry.
+    tbnz(w9, 31, external_target);
+
+    // Fast path: rel32 offset from code cache base.
+    mov(x14, code_cache_->execute_base_address());
+    add(x9, x14, w9, UXTW);
+    b(indirection_ready);
+
+    // Slow path: external table lookup.
+    L(external_target);
+    and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
+    mov(x14, code_cache_->external_indirection_table_base_address());
+    lsl(x15, x15, 3);  // index * sizeof(uint64_t)
+    add(x14, x14, x15);
+    ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+
+    L(indirection_ready);
   } else {
     // No indirection table: resolve at runtime.
     mov(w16, target_w);
@@ -482,40 +539,6 @@ void A64Emitter::CallNativeSafe(void* fn) {
 void A64Emitter::SetReturnAddress(uint64_t value) {
   mov(x0, value);
   str(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
-}
-
-void A64Emitter::EmitIndirectionLookup() {
-  // w16 already holds the guest address.  Load the host code address into x9.
-  if (!code_cache_->encoded_indirection()) {
-    // Fast path: table is at the guest address range.
-    ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
-  } else {
-    // Encoded path: table is at a dynamic address.  Entries are
-    // code-cache-relative offsets (bit 31 clear) or external table indices
-    // (bit 31 set).
-    ldr(x17, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
-                                                     indirection_table_bias))));
-    add(x17, x17, x16);
-    ldr(w9, ptr(x17, static_cast<uint32_t>(0)));
-
-    auto& external_label = NewCachedLabel();
-    auto& done_label = NewCachedLabel();
-    tbnz(w9, 31, external_label);
-
-    // Internal: offset from code cache base.
-    ldr(x17, ptr(x19, static_cast<uint32_t>(
-                          offsetof(A64BackendContext, code_execute_base))));
-    add(x9, x17, x9, UXTW);
-    b(done_label);
-
-    L(external_label);
-    and_(w9, w9, 0x7FFFFFFF);
-    ldr(x17, ptr(x19, static_cast<uint32_t>(offsetof(
-                          A64BackendContext, external_indirection_table))));
-    ldr(x9, ptr(x17, x9, LSL, 3));
-
-    L(done_label);
-  }
 }
 
 void A64Emitter::ReloadMembase() {

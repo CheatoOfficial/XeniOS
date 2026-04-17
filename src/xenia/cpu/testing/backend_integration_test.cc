@@ -912,3 +912,83 @@ TEST_CASE("JIT_UNWIND_INFO_REGISTERED", "[backend]") {
 
   memory.reset();
 }
+
+// =============================================================================
+// Guest -> Guest call through the JIT indirection dispatch
+// =============================================================================
+// Exercises a guest CALL between two JIT'd functions, which goes through the
+// emitter's indirection-table lookup sequence and the backend's code-cache
+// relocation path. Regression test for the A64 emitter's `cmp(w9, wzr)`
+// xbyak range-check throw; would also catch breakage in either backend's
+// Call/CallIndirect emission.
+TEST_CASE("GUEST_TO_GUEST_CALL", "[backend]") {
+  constexpr uint32_t kCallerAddr = 0x80000000;
+  constexpr uint32_t kCalleeAddr = 0x80001000;
+  constexpr uint64_t kSentinel = 0xCAFEBEEFD00DF00Dull;
+
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  std::unique_ptr<xe::cpu::backend::Backend> backend;
+#if XE_ARCH_AMD64
+  backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+  backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  // Two guest functions share the generator. TestModule invokes the generator
+  // once per DeclareFunction, so we declare the callee first (populating
+  // callee_fn) and then let the caller's generator reference it.
+  int gen_invocation = 0;
+  Function* callee_fn = nullptr;
+  auto module_owner = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) {
+        return address == kCallerAddr || address == kCalleeAddr;
+      },
+      [&](HIRBuilder& b) {
+        if (gen_invocation++ == 0) {
+          // Callee: write the sentinel into r[3] and return.
+          StoreGPR(b, 3, b.LoadConstantUint64(kSentinel));
+          b.Return();
+        } else {
+          // Caller: call the callee, then return.
+          REQUIRE(callee_fn != nullptr);
+          b.Call(callee_fn);
+          b.Return();
+        }
+        return true;
+      });
+  auto* module = module_owner.get();
+  processor->AddModule(std::move(module_owner));
+  processor->backend()->CommitExecutableRange(kCallerAddr,
+                                              kCalleeAddr + 0x1000);
+
+  // Resolve the callee first so its Function* is available when the caller's
+  // HIR is generated.
+  callee_fn = processor->ResolveFunction(kCalleeAddr);
+  REQUIRE(callee_fn != nullptr);
+
+  auto* caller_fn = processor->ResolveFunction(kCallerAddr);
+  REQUIRE(caller_fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+  ctx->r[3] = 0;
+
+  caller_fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  // If the dispatch works, the callee ran and wrote the sentinel.
+  REQUIRE(ctx->r[3] == kSentinel);
+
+  memory->SystemHeapFree(stack_address);
+  (void)module;
+}

@@ -10,7 +10,9 @@
 #include "xenia/cpu/backend/a64/a64_code_cache.h"
 
 #include <cstring>
+#include <mutex>
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -25,156 +27,224 @@ namespace cpu {
 namespace backend {
 namespace a64 {
 
-A64CodeCache::~A64CodeCache() {
-  delete[] external_table_;
-  external_table_ = nullptr;
-}
-
 bool A64CodeCache::Initialize() {
-  // Try the fast path: fixed-address allocation.
-  if (CodeCacheBase::Initialize()) {
-    encoded_indirection_ = false;
-    return true;
-  }
-
-  // Fixed allocation failed (e.g. macOS ARM64). Fall back to dynamic.
-  XELOGI(
-      "A64CodeCache: fixed-address allocation failed; using encoded "
-      "indirection fallback");
-  encoded_indirection_ = true;
-
-  // Allocate indirection table at any available address.
+  // --- Indirection table: allocate at an OS-chosen address ---
+  // We no longer require the table to live at host VA 0x80000000.
+  // The emitter compensates via indirection_table_base_bias_.
   indirection_table_base_ = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
       nullptr, kIndirectionTableSize, xe::memory::AllocationType::kReserve,
       xe::memory::PageAccess::kReadWrite));
   if (!indirection_table_base_) {
-    XELOGE("A64CodeCache: unable to allocate indirection table (dynamic)");
+    XELOGE("Unable to reserve indirection table at any address (size=0x{:X})",
+           static_cast<uint64_t>(kIndirectionTableSize));
     return false;
   }
+  indirection_table_actual_base_ =
+      reinterpret_cast<uintptr_t>(indirection_table_base_);
+  indirection_table_base_bias_ = indirection_table_actual_base_ -
+                                 static_cast<uintptr_t>(kIndirectionTableBase);
+  XELOGI(
+      "A64 indirection table: guest_base=0x{:08X} table_base=0x{:016X} "
+      "bias=0x{:016X}",
+      static_cast<uint32_t>(kIndirectionTableBase),
+      static_cast<uint64_t>(indirection_table_actual_base_),
+      static_cast<uint64_t>(indirection_table_base_bias_));
 
-  // Create file mapping for the code cache.
+  // --- External indirection targets (for out-of-cache addresses) ---
+  external_indirection_targets_ =
+      std::make_unique<uint64_t[]>(kIndirectionExternalCapacity);
+  if (!external_indirection_targets_) {
+    XELOGE("Unable to allocate external indirection table (entries={})",
+           static_cast<uint32_t>(kIndirectionExternalCapacity));
+    return false;
+  }
+  external_indirection_target_count_.store(0, std::memory_order_relaxed);
+
+  // --- File-backed mapping for the generated code region ---
   file_name_ = fmt::format("xenia_code_cache_{}", Clock::QueryHostTickCount());
   mapping_ = xe::memory::CreateFileMappingHandle(
       file_name_, kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite,
       false);
   if (mapping_ == xe::memory::kFileMappingHandleInvalid) {
-    XELOGE("A64CodeCache: unable to create code cache file mapping (dynamic)");
+    XELOGE("Unable to create code cache mmap");
     return false;
   }
 
-  // Map execute and write views at OS-chosen addresses.
+  // --- Map the generated code region ---
+  // Try the preferred fixed address first; fall back to OS-chosen on failure.
   if (xe::memory::IsWritableExecutableMemoryPreferred()) {
-    generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
-        xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
-                                xe::memory::PageAccess::kExecuteReadWrite, 0));
+    generated_code_execute_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite, 0));
+    if (!generated_code_execute_base_) {
+      XELOGW(
+          "Fixed address mapping for generated code failed at 0x{:X}, "
+          "trying OS-chosen address",
+          static_cast<uint64_t>(kGeneratedCodeExecuteBase));
+      generated_code_execute_base_ =
+          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+              mapping_, nullptr, kGeneratedCodeSize,
+              xe::memory::PageAccess::kExecuteReadWrite, 0));
+    }
     generated_code_write_base_ = generated_code_execute_base_;
+    if (!generated_code_execute_base_) {
+      XELOGE("Unable to allocate code cache generated code storage");
+      return false;
+    }
   } else {
-    generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
-        xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
-                                xe::memory::PageAccess::kExecuteReadOnly, 0));
-    generated_code_write_base_ = reinterpret_cast<uint8_t*>(
-        xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
-                                xe::memory::PageAccess::kReadWrite, 0));
-  }
-  if (!generated_code_execute_base_ || !generated_code_write_base_) {
-    XELOGE("A64CodeCache: unable to map code cache views (dynamic)");
-    return false;
+    // W^X split: separate execute and write views.
+    generated_code_execute_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadOnly, 0));
+    if (!generated_code_execute_base_) {
+      XELOGW(
+          "Fixed address mapping for execute view failed at 0x{:X}, "
+          "trying OS-chosen address",
+          static_cast<uint64_t>(kGeneratedCodeExecuteBase));
+      generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
+          xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
+                                  xe::memory::PageAccess::kExecuteReadOnly, 0));
+    }
+    generated_code_write_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeWriteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kReadWrite, 0));
+    if (!generated_code_write_base_) {
+      XELOGW(
+          "Fixed address mapping for write view failed, "
+          "trying OS-chosen address");
+      generated_code_write_base_ = reinterpret_cast<uint8_t*>(
+          xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
+                                  xe::memory::PageAccess::kReadWrite, 0));
+    }
+    if (!generated_code_execute_base_ || !generated_code_write_base_) {
+      XELOGE("Unable to allocate code cache generated code storage");
+      return false;
+    }
   }
 
-  XELOGI("A64CodeCache: indirection table at {:016X}, code cache at {:016X}",
-         reinterpret_cast<uint64_t>(indirection_table_base_),
-         reinterpret_cast<uint64_t>(generated_code_execute_base_));
-
-  // Allocate external table for trampoline addresses.
-  external_table_ = new uint64_t[kMaxExternalEntries]();
-  external_table_count_ = 0;
+  XELOGI("A64 code cache: execute_base=0x{:016X} write_base=0x{:016X}",
+         reinterpret_cast<uint64_t>(generated_code_execute_base_),
+         reinterpret_cast<uint64_t>(generated_code_write_base_));
 
   generated_code_map_.reserve(kMaximumFunctionCount);
   return true;
 }
 
-void A64CodeCache::set_indirection_default(uint32_t default_value) {
-  indirection_default_value_ = default_value;
-}
-
-void A64CodeCache::set_indirection_default_encoded(uint64_t default_value) {
-  // The resolve thunk is in the code cache, encode as cache-relative offset.
-  uint64_t code_base = reinterpret_cast<uint64_t>(generated_code_execute_base_);
-  encoded_default_value_ = EncodeIndirectionTarget(default_value);
-  // Also set the base class default for CommitExecutableRange to use.
-  indirection_default_value_ = encoded_default_value_;
+uintptr_t A64CodeCache::execute_base_address() const {
+  return generated_code_execute_base_
+             ? reinterpret_cast<uintptr_t>(generated_code_execute_base_)
+             : kGeneratedCodeExecuteBase;
 }
 
 uint32_t A64CodeCache::EncodeIndirectionTarget(uint64_t host_address) {
-  uint64_t code_base = reinterpret_cast<uint64_t>(generated_code_execute_base_);
-  uint64_t code_end = code_base + kGeneratedCodeSize;
+  const uintptr_t code_base = execute_base_address();
+  const uintptr_t code_end = code_base + kGeneratedCodeSize;
   if (host_address >= code_base && host_address < code_end) {
-    uint32_t offset = static_cast<uint32_t>(host_address - code_base);
-    assert_true((offset & 0x80000000) == 0);
-    return offset;
+    // Fast path: rel32 offset from code cache base (bit 31 always clear
+    // because kGeneratedCodeSize = 0x0FFFFFFF < 0x80000000).
+    return static_cast<uint32_t>(host_address - code_base);
   }
-  return AllocateExternalSlot(host_address) | 0x80000000;
-}
 
-uint32_t A64CodeCache::AllocateExternalSlot(uint64_t host_address) {
-  std::lock_guard<std::mutex> lock(external_table_mutex_);
-  // Check if already registered.
-  for (uint32_t i = 0; i < external_table_count_; i++) {
-    if (external_table_[i] == host_address) {
-      return i;
+  // Slow path: allocate an external table entry (or reuse existing).
+  std::lock_guard<std::mutex> lock(external_indirection_mutex_);
+  const uint32_t current_count =
+      external_indirection_target_count_.load(std::memory_order_relaxed);
+
+  // Deduplicate — table is small (dozens of entries), linear scan is fine.
+  for (uint32_t i = 0; i < current_count; i++) {
+    if (external_indirection_targets_[i] == host_address) {
+      return kIndirectionExternalTag | i;
     }
   }
-  assert_true(external_table_count_ < kMaxExternalEntries);
-  uint32_t index = external_table_count_++;
-  external_table_[index] = host_address;
-  return index;
+
+  if (current_count >= kIndirectionExternalCapacity) {
+    XELOGE(
+        "A64 indirection external table overflow (count={} capacity={}); "
+        "falling back to default target",
+        current_count, static_cast<uint32_t>(kIndirectionExternalCapacity));
+    return indirection_default_value_;
+  }
+
+  external_indirection_targets_[current_count] = host_address;
+  external_indirection_target_count_.store(current_count + 1,
+                                           std::memory_order_release);
+  return kIndirectionExternalTag | current_count;
+}
+
+void A64CodeCache::set_indirection_default_64(uint64_t default_value) {
+  indirection_default_value_ = EncodeIndirectionTarget(default_value);
+}
+
+void A64CodeCache::UpdateIndirection(uint32_t guest_address,
+                                     void* code_execute_address) {
+  if (guest_address < kIndirectionTableBase) {
+    return;
+  }
+  const uint64_t guest_delta = guest_address - kIndirectionTableBase;
+  const uint64_t slot_offset = (guest_delta / 4) * 4;
+  if (slot_offset + 4 > kIndirectionTableSize) {
+    return;
+  }
+  uint32_t* slot =
+      reinterpret_cast<uint32_t*>(indirection_table_base_ + slot_offset);
+  *slot =
+      EncodeIndirectionTarget(reinterpret_cast<uint64_t>(code_execute_address));
 }
 
 void A64CodeCache::AddIndirection(uint32_t guest_address,
                                   uint32_t host_address) {
-  if (!encoded_indirection_) {
-    CodeCacheBase::AddIndirection(guest_address, host_address);
-    return;
-  }
-  AddIndirectionEncoded(guest_address, static_cast<uint64_t>(host_address));
+  AddIndirection64(guest_address, static_cast<uint64_t>(host_address));
 }
 
-void A64CodeCache::AddIndirectionEncoded(uint32_t guest_address,
-                                         uint64_t host_address) {
-  if (!indirection_table_base_) return;
-  uint32_t* slot = reinterpret_cast<uint32_t*>(
-      indirection_table_base_ + (guest_address - kIndirectionTableBase));
+void A64CodeCache::AddIndirection64(uint32_t guest_address,
+                                    uint64_t host_address) {
+  if (!indirection_table_base_) {
+    return;
+  }
+  if (guest_address < kIndirectionTableBase) {
+    return;
+  }
+  const uint64_t guest_delta = guest_address - kIndirectionTableBase;
+  const uint64_t slot_offset = (guest_delta / 4) * 4;
+  if (slot_offset + 4 > kIndirectionTableSize) {
+    return;
+  }
+  uint32_t* slot =
+      reinterpret_cast<uint32_t*>(indirection_table_base_ + slot_offset);
   *slot = EncodeIndirectionTarget(host_address);
 }
 
 void A64CodeCache::CommitExecutableRange(uint32_t guest_low,
                                          uint32_t guest_high) {
-  if (!encoded_indirection_) {
-    CodeCacheBase::CommitExecutableRange(guest_low, guest_high);
+  if (!indirection_table_base_) {
     return;
   }
-  if (!indirection_table_base_) return;
-
-  xe::memory::AllocFixed(
-      indirection_table_base_ + (guest_low - kIndirectionTableBase),
-      guest_high - guest_low, xe::memory::AllocationType::kCommit,
-      xe::memory::PageAccess::kReadWrite);
-  uint32_t* p = reinterpret_cast<uint32_t*>(indirection_table_base_);
-  for (uint32_t address = guest_low; address < guest_high; address += 4) {
-    p[(address - kIndirectionTableBase) / 4] = encoded_default_value_;
+  if (guest_low < kIndirectionTableBase) {
+    return;
   }
-}
 
-void A64CodeCache::OnPlaceGuestCodeIndirection(uint32_t guest_address,
-                                               void* code_execute_address) {
-  if (!indirection_table_base_ || !guest_address) return;
-  if (!encoded_indirection_) {
-    uint32_t* slot = reinterpret_cast<uint32_t*>(
-        indirection_table_base_ + (guest_address - kIndirectionTableBase));
-    *slot = uint32_t(reinterpret_cast<uint64_t>(code_execute_address));
-  } else {
-    AddIndirectionEncoded(guest_address,
-                          reinterpret_cast<uint64_t>(code_execute_address));
+  const size_t start_offset =
+      static_cast<size_t>(guest_low - kIndirectionTableBase);
+  const size_t size = static_cast<size_t>(guest_high - guest_low);
+
+  if (start_offset + size > kIndirectionTableSize) {
+    XELOGE("CommitExecutableRange: range [0x{:08X}, 0x{:08X}) exceeds table",
+           guest_low, guest_high);
+    return;
+  }
+
+  xe::memory::AllocFixed(indirection_table_base_ + start_offset, size,
+                         xe::memory::AllocationType::kCommit,
+                         xe::memory::PageAccess::kReadWrite);
+
+  uint32_t* p =
+      reinterpret_cast<uint32_t*>(indirection_table_base_ + start_offset);
+  const size_t entry_count = size / 4;
+  for (size_t i = 0; i < entry_count; i++) {
+    p[i] = indirection_default_value_;
   }
 }
 
