@@ -127,14 +127,38 @@ set(_edge_game_patches_src "${PROJECT_SOURCE_DIR}/.data_repos/game-patches/patch
 # configs to Release), so deploying Qt6Cored.dll would pull in the
 # debug CRT and corrupt Qt/STL objects at runtime.
 if(WIN32 AND TARGET Qt6::windeployqt)
+  set(_windeployqt_args
+    --release
+    --no-translations
+    --no-system-d3d-compiler
+    --no-opengl-sw
+    --no-compiler-runtime)
+  # Cross-compile: Qt6::windeployqt is imported from the host Qt via
+  # QT_HOST_PATH and self-locates its Qt from its own bin path — so without
+  # --qtpaths it deploys host-arch DLLs next to a target-arch exe and the
+  # loader fails with 0xc000007b on the target. Point it at the target Qt's
+  # qtpaths so it deploys target-arch DLLs instead.
+  #   x64 host → ARM64 target: target Qt is the "cross_compiled" flavor and
+  #     ships a host-runnable .bat shim (host-qtpaths.bat on Qt 6.10.1+,
+  #     qtpaths.bat on older versions).
+  #   ARM64 host → x64 target: target Qt is the normal x64 desktop build;
+  #     its qtpaths.exe runs natively under Prism emulation on ARM64 Windows.
+  if(CMAKE_CROSSCOMPILING AND XE_QT_DIR)
+    if(EXISTS "${XE_QT_DIR}/bin/host-qtpaths.bat")
+      list(APPEND _windeployqt_args --qtpaths "${XE_QT_DIR}/bin/host-qtpaths.bat")
+    elseif(EXISTS "${XE_QT_DIR}/bin/qtpaths.bat")
+      list(APPEND _windeployqt_args --qtpaths "${XE_QT_DIR}/bin/qtpaths.bat")
+    elseif(EXISTS "${XE_QT_DIR}/bin/qtpaths.exe")
+      list(APPEND _windeployqt_args --qtpaths "${XE_QT_DIR}/bin/qtpaths.exe")
+    endif()
+  endif()
   add_custom_command(TARGET xenia-app POST_BUILD
-    COMMAND Qt6::windeployqt
-            --release
-            --no-translations
-            --no-system-d3d-compiler
-            --no-opengl-sw
-            --no-compiler-runtime
-            "$<TARGET_FILE:xenia-app>"
+    COMMAND Qt6::windeployqt ${_windeployqt_args} "$<TARGET_FILE:xenia-app>"
+    # icuuc.dll is a Windows 10+ system forwarder (C:\Windows\System32\icuuc.dll)
+    # that windeployqt wrongly deploys from the host's System32 — host-arch on a
+    # cross-compile, shadowing the target's own system copy. Upstream fix tracked
+    # in QTBUG-142131, targeted for Qt 6.11.1.
+    COMMAND ${CMAKE_COMMAND} -E remove -f "$<TARGET_FILE_DIR:xenia-app>/icuuc.dll"
     VERBATIM
   )
 endif()

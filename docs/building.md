@@ -81,6 +81,50 @@ xb gputest
 xb genspirv
 -->
 
+#### Cross-compiling (Windows ARM64 ↔ x64)
+
+The build supports cross-compiling between Windows x64 and ARM64 on the same
+machine. The host and target Qt installs are kept in separate trees under
+`C:\Qt\<version>\` and `xb` configures into `build-<target>/` so it never
+clobbers the native-build tree.
+
+* Install Visual Studio components for the target architecture:
+  * x64 host targeting ARM64: **MSVC v143 - VS 2022 C++ ARM64/ARM64EC build tools**
+  * ARM64 host targeting x64: **MSVC v143 - VS 2022 C++ x64/x86 build tools**
+* Install both Qt flavors via aqtinstall. Qt 6.10.1 renamed the host-runnable
+  `qmake.bat` / `qtpaths.bat` shims to `host-qmake.bat` / `host-qtpaths.bat`;
+  aqtinstall ≤3.3.0 still looks for the old names and fails at the patch step,
+  leaving the install tree un-stitched ([aqtinstall#998](https://github.com/miurahr/aqtinstall/issues/998)).
+  Install aqt from master until the fix ([PR #952](https://github.com/miurahr/aqtinstall/pull/952))
+  lands in a tagged release:
+  ```
+  python -m pip install --upgrade git+https://github.com/miurahr/aqtinstall.git
+  ```
+* From an **x64 host** targeting ARM64, install both the x64 Qt (for host
+  moc/rcc and the windeployqt tool) and the ARM64 "cross_compiled" Qt (for
+  target libs + the `.bat` shims that redirect host tools at the target):
+  ```
+  python -m aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
+  python -m aqt install-qt windows desktop 6.10.1 win64_msvc2022_arm64_cross_compiled -m qtmultimedia -O C:\Qt
+  ```
+  Then:
+  ```
+  xb build --target-arch arm64 --config=release
+  ```
+  Output lands in `build-arm64\bin\Windows\Release\`.
+* From an **ARM64 host** targeting x64, install both the ARM64 "cross_compiled"
+  Qt (the host tree — aqt does not offer a separate native ARM64 flavor) and
+  the x64 Qt (for target libs; its tools run under Prism emulation):
+  ```
+  python -m aqt install-qt windows desktop 6.10.1 win64_msvc2022_arm64_cross_compiled -m qtmultimedia -O C:\Qt
+  python -m aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtmultimedia -O C:\Qt
+  ```
+  Then:
+  ```
+  xb build --target-arch x64 --config=release
+  ```
+  Output lands in `build-x64\bin\Windows\Release\`.
+
 #### Debugging
 
 VS behaves oddly with the debug paths. Open the 'xenia-app' project properties
