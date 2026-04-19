@@ -35,8 +35,17 @@ std::pair<ExceptionHandler::Handler, void*> handlers_[kMaxHandlerCount];
 
 static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                      void* signal_context) {
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+  // The Darwin kernel may pass an unaligned ucontext_t pointer to signal
+  // handlers; copy into an aligned local before reading. mcontext_t is a
+  // pointer on Mac, so writes still reach kernel storage via the pointer.
+  alignas(16) ucontext_t ucontext_storage;
+  std::memcpy(&ucontext_storage, signal_context, sizeof(ucontext_t));
+  mcontext_t& mcontext = ucontext_storage.uc_mcontext;
+#else
   mcontext_t& mcontext =
       reinterpret_cast<ucontext_t*>(signal_context)->uc_mcontext;
+#endif
 
   HostThreadContext thread_context;
 
