@@ -114,14 +114,13 @@ if(XE_QT_DIR)
   find_package(Qt6 COMPONENTS Core Gui GuiPrivate Widgets QUIET)
   if(Qt6_FOUND)
     message(STATUS "Qt6: using QT_DIR=${XE_QT_DIR} (version ${Qt6_VERSION})")
-    set(CMAKE_AUTOMOC ON)
     # CMAKE_INCLUDE_CURRENT_DIR is intentionally off. Setting it globally
     # would add each target's source dir to its include path, and
     # src/xenia/base contains files named assert.h / string.h / memory.h /
     # mutex.h that collide with C/C++ standard headers. Targets that need
     # their source dir on the path (xenia-ui, so AUTOMOC-generated moc
     # files can find Q_OBJECT headers) add it via target_include_directories.
-    if(NOT WIN32)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       add_link_options("-Wl,-rpath,${XE_QT_DIR}/lib")
     endif()
     set(XE_HAS_QT TRUE)
@@ -288,6 +287,7 @@ else()
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-shorten-64-to-32>
       -Wno-deprecated-declarations
       -Wno-character-conversion
+      -fno-common
     )
     add_link_options(-Wl,-no_warn_duplicate_libraries)
     link_libraries(

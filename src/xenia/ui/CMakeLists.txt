@@ -24,6 +24,7 @@ target_link_libraries(xenia-ui PUBLIC xenia-base)
 if(XE_HAS_QT)
   target_link_libraries(xenia-ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets)
   target_link_libraries(xenia-ui PRIVATE Qt6::GuiPrivate)
+  set_target_properties(xenia-ui PROPERTIES AUTOMOC ON)
   # AUTOMOC-generated moc files sit in xenia-ui_autogen/ and include the
   # original header via `#include "foo.h"`, so their directory needs to
   # be on the quoted-include path. Scoped to this target — the global
