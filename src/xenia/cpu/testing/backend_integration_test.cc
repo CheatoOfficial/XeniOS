@@ -14,11 +14,6 @@
 #include <cstring>
 
 #include "xenia/base/platform.h"
-#if XE_ARCH_AMD64
-#include "xenia/cpu/backend/x64/x64_backend.h"
-#elif XE_ARCH_ARM64
-#include "xenia/cpu/backend/a64/a64_backend.h"
-#endif
 
 using namespace xe;
 using namespace xe::cpu;
@@ -100,12 +95,7 @@ TEST_CASE("GUEST_TRAMPOLINE_BASIC", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -146,12 +136,7 @@ TEST_CASE("HOST_GUEST_HOST_ROUNDTRIP", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -222,12 +207,7 @@ TEST_CASE("GPR_PRESERVATION_ACROSS_HOST_CALL", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -312,12 +292,7 @@ TEST_CASE("VEC_PRESERVATION_ACROSS_HOST_CALL", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -409,12 +384,7 @@ TEST_CASE("MULTIPLE_BUILTIN_CALLS", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -487,12 +457,7 @@ TEST_CASE("NJM_DEFAULT_ON", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -570,12 +535,7 @@ static void RunSetNJMTest(int njm_value) {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -748,12 +708,7 @@ TEST_CASE("FPCR_PRESERVED_ACROSS_HOST_CALLBACK", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -834,12 +789,7 @@ TEST_CASE("JIT_UNWIND_INFO_REGISTERED", "[backend]") {
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
@@ -916,33 +866,40 @@ TEST_CASE("JIT_UNWIND_INFO_REGISTERED", "[backend]") {
 // =============================================================================
 // Guest -> Guest call through the JIT indirection dispatch
 // =============================================================================
-// Exercises a guest CALL between two JIT'd functions, which goes through the
-// emitter's indirection-table lookup sequence and the backend's code-cache
-// relocation path. Regression test for the A64 emitter's `cmp(w9, wzr)`
-// xbyak range-check throw; would also catch breakage in either backend's
-// Call/CallIndirect emission.
+// Exercises a guest CALL between two JIT'd functions — the emitter's
+// indirection-table lookup and the backend's call/jmp.
+//
+// The caller loads several guest GPRs into HIR values *before* the call and
+// stores them back afterwards.  The regalloc keeps these values in host
+// registers from gpr_reg_map_ (x64: R10-R15; A64: X19+) across the call,
+// so any indirection-lookup emit that clobbers an HIR-allocatable register
+// for scratch will silently trash them and the canary REQUIREs below will
+// fail.
 TEST_CASE("GUEST_TO_GUEST_CALL", "[backend]") {
   constexpr uint32_t kCallerAddr = 0x80000000;
   constexpr uint32_t kCalleeAddr = 0x80001000;
   constexpr uint64_t kSentinel = 0xCAFEBEEFD00DF00Dull;
 
+  // Distinct canaries — one per guest GPR we carry across the call.
+  // Values chosen so any corruption (including low-32 truncation or
+  // zero-extension) is visible.
+  constexpr uint64_t kCanary4 = 0x1111111122222222ull;
+  constexpr uint64_t kCanary5 = 0x3333333344444444ull;
+  constexpr uint64_t kCanary6 = 0x5555555566666666ull;
+  constexpr uint64_t kCanary7 = 0x7777777788888888ull;
+  constexpr uint64_t kCanary8 = 0x9999999900000000ull;
+
   auto memory = std::make_unique<Memory>();
   memory->Initialize();
 
-  std::unique_ptr<xe::cpu::backend::Backend> backend;
-#if XE_ARCH_AMD64
-  backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-  backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif
+  auto backend = CreateBackend();
   REQUIRE(backend);
 
   auto processor = std::make_unique<Processor>(memory.get(), nullptr);
   processor->Setup(std::move(backend));
 
-  // Two guest functions share the generator. TestModule invokes the generator
-  // once per DeclareFunction, so we declare the callee first (populating
-  // callee_fn) and then let the caller's generator reference it.
+  // TestModule invokes the single generator once per DeclareFunction, so
+  // we resolve the callee first and let the caller's HIR reference it.
   int gen_invocation = 0;
   Function* callee_fn = nullptr;
   auto module_owner = std::make_unique<TestModule>(
@@ -952,18 +909,32 @@ TEST_CASE("GUEST_TO_GUEST_CALL", "[backend]") {
       },
       [&](HIRBuilder& b) {
         if (gen_invocation++ == 0) {
-          // Callee: write the sentinel into r[3] and return.
+          // Callee: sentinel into r[3], return.
           StoreGPR(b, 3, b.LoadConstantUint64(kSentinel));
           b.Return();
         } else {
-          // Caller: call the callee, then return.
+          // Caller: r[4..8] -> HIR values live across the call -> r[20..24].
           REQUIRE(callee_fn != nullptr);
+          auto v4 = LoadGPR(b, 4);
+          auto v5 = LoadGPR(b, 5);
+          auto v6 = LoadGPR(b, 6);
+          auto v7 = LoadGPR(b, 7);
+          auto v8 = LoadGPR(b, 8);
           b.Call(callee_fn);
+          StoreGPR(b, 20, v4);
+          StoreGPR(b, 21, v5);
+          StoreGPR(b, 22, v6);
+          StoreGPR(b, 23, v7);
+          StoreGPR(b, 24, v8);
           b.Return();
         }
         return true;
-      });
-  auto* module = module_owner.get();
+      },
+      // HIRBuilder::Call ends its block and no fallthrough edge is added,
+      // so ControlFlowSimplificationPass would discard the post-call block
+      // as "unreachable" and wipe the StoreContexts.  Real PPC code avoids
+      // this because the frontend emits explicit branches.
+      /*skip_cf_simplification=*/true);
   processor->AddModule(std::move(module_owner));
   processor->backend()->CommitExecutableRange(kCallerAddr,
                                               kCalleeAddr + 0x1000);
@@ -983,12 +954,25 @@ TEST_CASE("GUEST_TO_GUEST_CALL", "[backend]") {
   auto ctx = thread_state->context();
   ctx->lr = 0xBCBCBCBC;
   ctx->r[3] = 0;
+  ctx->r[4] = kCanary4;
+  ctx->r[5] = kCanary5;
+  ctx->r[6] = kCanary6;
+  ctx->r[7] = kCanary7;
+  ctx->r[8] = kCanary8;
 
   caller_fn->Call(thread_state.get(), uint32_t(ctx->lr));
 
-  // If the dispatch works, the callee ran and wrote the sentinel.
+  // Callee ran and wrote the sentinel into r[3].
   REQUIRE(ctx->r[3] == kSentinel);
 
+  // Live HIR values threaded through the indirection lookup uncorrupted.
+  // Failure => the lookup clobbered an HIR-allocatable host register
+  // (x64: R10-R15; A64: X19+).
+  REQUIRE(ctx->r[20] == kCanary4);
+  REQUIRE(ctx->r[21] == kCanary5);
+  REQUIRE(ctx->r[22] == kCanary6);
+  REQUIRE(ctx->r[23] == kCanary7);
+  REQUIRE(ctx->r[24] == kCanary8);
+
   memory->SystemHeapFree(stack_address);
-  (void)module;
 }

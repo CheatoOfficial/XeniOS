@@ -12,12 +12,9 @@
 #include <cstring>
 
 #if ENABLE_VTUNE
+#include "third_party/fmt/include/fmt/format.h"
 #include "third_party/vtune/include/jitprofiling.h"
 #pragma comment(lib, "../third_party/vtune/lib64/jitprofiling.lib")
-#endif
-
-#if ENABLE_VTUNE
-#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/cpu/module.h"
 #endif
 
@@ -25,8 +22,6 @@ namespace xe {
 namespace cpu {
 namespace backend {
 namespace x64 {
-
-bool X64CodeCache::Initialize() { return CodeCacheBase::Initialize(); }
 
 void X64CodeCache::FillCode(void* write_address, size_t size) {
   std::memset(write_address, 0xCC, size);

@@ -228,6 +228,7 @@ class X64Backend : public Backend {
   // range that will be used to dispatch to host code
   BitMap guest_trampoline_address_bitmap_;
   uint8_t* guest_trampoline_memory_;
+  bool guest_trampolines_sub4gb_ = false;
 };
 
 }  // namespace x64

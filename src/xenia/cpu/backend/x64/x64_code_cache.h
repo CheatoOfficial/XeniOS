@@ -25,8 +25,6 @@ class X64CodeCache : public CodeCacheBase<X64CodeCache> {
 
   static std::unique_ptr<X64CodeCache> Create();
 
-  virtual bool Initialize();
-
   void* LookupUnwindInfo(uint64_t host_pc) override { return nullptr; }
 
   // CRTP hooks for CodeCacheBase.

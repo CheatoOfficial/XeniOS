@@ -585,6 +585,7 @@ A64Backend::A64Backend() {
   }
   xenia_assert(buf);
   guest_trampoline_memory_ = reinterpret_cast<uint8_t*>(buf);
+  guest_trampolines_sub4gb_ = reinterpret_cast<uintptr_t>(buf) < 0x100000000ull;
   guest_trampoline_address_bitmap_.Resize(MAX_GUEST_TRAMPOLINES);
 }
 
@@ -603,7 +604,8 @@ bool A64Backend::Initialize(Processor* processor) {
     return false;
   }
 
-  // Initialize the code cache.
+  // Fast indirection is only viable if trampolines made it under 4GB.
+  code_cache_->set_allow_fast_indirection(guest_trampolines_sub4gb_);
   if (!code_cache_->Initialize()) {
     XELOGE("A64Backend: Failed to initialize code cache");
     return false;

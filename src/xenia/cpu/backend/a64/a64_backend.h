@@ -165,6 +165,7 @@ class A64Backend : public Backend {
   alignas(64) ReserveHelper reserve_helper_;
   BitMap guest_trampoline_address_bitmap_;
   uint8_t* guest_trampoline_memory_ = nullptr;
+  bool guest_trampolines_sub4gb_ = false;
 };
 
 }  // namespace a64

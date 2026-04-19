@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -58,8 +59,9 @@ struct EmitFunctionInfo {
 };
 
 // CRTP base class for JIT code caches. Contains all platform-independent
-// logic for memory management, indirection tables, code placement, and
-// function lookup. Derived classes provide architecture-specific hooks:
+// logic for memory management, the indirection table (fast + encoded paths),
+// code placement, and function lookup. Derived classes provide architecture-
+// specific hooks:
 //
 //   void FillCode(void* address, size_t size)
 //     Fill unused code regions with trap instructions (0xCC / BRK).
@@ -80,6 +82,13 @@ struct EmitFunctionInfo {
 //                     void* code_execute_address, size_t code_size)
 //     Optional hook called after code is placed outside the critical section
 //     (used for VTune integration on x64). Default is no-op.
+//
+// Indirection dispatch operates in one of two modes, picked at Initialize:
+//  * Fast: fixed-VA table at kIndirectionTableBase; slots hold truncated
+//          32-bit absolute host addresses.  Emitter uses a 2-insn lookup.
+//  * Encoded: OS-chosen table; slots hold rel32 (bit 31 clear, target in
+//          the code cache) or a tagged index into an external 64-bit table
+//          (bit 31 set).  Emitter compensates via indirection_table_base_bias_.
 template <typename Derived>
 class CodeCacheBase : public CodeCache {
  public:
@@ -105,36 +114,285 @@ class CodeCacheBase : public CodeCache {
 
   const std::filesystem::path& file_name() const override { return file_name_; }
   uintptr_t execute_base_address() const override {
-    return kGeneratedCodeExecuteBase;
+    return generated_code_execute_base_
+               ? reinterpret_cast<uintptr_t>(generated_code_execute_base_)
+               : kGeneratedCodeExecuteBase;
   }
   size_t total_size() const override { return kGeneratedCodeSize; }
 
   bool has_indirection_table() { return indirection_table_base_ != nullptr; }
 
-  void set_indirection_default(uint32_t default_value) {
-    indirection_default_value_ = default_value;
+  // True when slots hold encoded rel32 + tagged-external values, false when
+  // fixed allocation succeeded and slots hold raw 32-bit absolute addresses.
+  bool encoded_indirection() const { return encoded_indirection_; }
+
+  // Hint from the backend: if false, skip the fast-path attempt entirely
+  // (trampolines couldn't land sub-4GB, so fast-mode slot encoding won't
+  // fit them).  Must be set before Initialize.
+  void set_allow_fast_indirection(bool v) { allow_fast_indirection_ = v; }
+
+  // Accessors the emitter bakes as immediates for the encoded lookup.
+  uintptr_t indirection_table_base_bias() const {
+    return indirection_table_base_bias_;
+  }
+  uintptr_t external_indirection_table_base_address() const {
+    return reinterpret_cast<uintptr_t>(external_indirection_targets_.get());
+  }
+  uintptr_t indirection_table_base_address() const {
+    return indirection_table_actual_base_;
+  }
+
+  // Slot-encoding constants for the encoded path.
+  static constexpr uint32_t kIndirectionExternalTag = 0x80000000u;
+  static constexpr uint32_t kIndirectionExternalIndexMask = 0x7FFFFFFFu;
+  static constexpr uint32_t kIndirectionExternalCapacity = 0x00010000u;
+
+  // Virtual so that platform-specific derived classes (Win32/POSIX) can
+  // override and chain up to add unwind registration.
+  virtual bool Initialize() {
+    file_name_ =
+        fmt::format("xenia_code_cache_{}", Clock::QueryHostTickCount());
+    mapping_ = xe::memory::CreateFileMappingHandle(
+        file_name_, kGeneratedCodeSize,
+        xe::memory::PageAccess::kExecuteReadWrite, false);
+    if (mapping_ == xe::memory::kFileMappingHandleInvalid) {
+      XELOGE("Unable to create code cache mmap");
+      return false;
+    }
+
+    const bool wx_preferred = xe::memory::IsWritableExecutableMemoryPreferred();
+
+    // Fast path: fixed-VA table + code cache, slots hold raw 32-bit targets.
+    if (allow_fast_indirection_) {
+      indirection_table_base_ =
+          reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
+              reinterpret_cast<void*>(kIndirectionTableBase),
+              kIndirectionTableSize, xe::memory::AllocationType::kReserve,
+              xe::memory::PageAccess::kReadWrite));
+      if (indirection_table_base_) {
+        uint8_t* exec = reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+            kGeneratedCodeSize,
+            wx_preferred ? xe::memory::PageAccess::kExecuteReadWrite
+                         : xe::memory::PageAccess::kExecuteReadOnly,
+            0));
+        uint8_t* write = exec;
+        if (exec && !wx_preferred) {
+          write = reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+              mapping_, reinterpret_cast<void*>(kGeneratedCodeWriteBase),
+              kGeneratedCodeSize, xe::memory::PageAccess::kReadWrite, 0));
+          if (!write) {
+            xe::memory::UnmapFileView(mapping_, exec, kGeneratedCodeSize);
+            exec = nullptr;
+          }
+        }
+        if (exec) {
+          generated_code_execute_base_ = exec;
+          generated_code_write_base_ = write;
+          indirection_table_actual_base_ = kIndirectionTableBase;
+          indirection_table_base_bias_ = 0;
+          encoded_indirection_ = false;
+          generated_code_map_.reserve(kMaximumFunctionCount);
+          return true;
+        }
+        xe::memory::DeallocFixed(indirection_table_base_, kIndirectionTableSize,
+                                 xe::memory::DeallocationType::kRelease);
+        indirection_table_base_ = nullptr;
+      }
+    }
+
+    // Encoded path: OS-chosen allocation, slots hold rel32 + tagged external.
+    encoded_indirection_ = true;
+    indirection_table_base_ = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
+        nullptr, kIndirectionTableSize, xe::memory::AllocationType::kReserve,
+        xe::memory::PageAccess::kReadWrite));
+    if (!indirection_table_base_) {
+      XELOGE("Unable to reserve indirection table at any address (size=0x{:X})",
+             static_cast<uint64_t>(kIndirectionTableSize));
+      return false;
+    }
+    indirection_table_actual_base_ =
+        reinterpret_cast<uintptr_t>(indirection_table_base_);
+    indirection_table_base_bias_ =
+        indirection_table_actual_base_ -
+        static_cast<uintptr_t>(kIndirectionTableBase);
+
+    external_indirection_targets_ =
+        std::make_unique<uint64_t[]>(kIndirectionExternalCapacity);
+    if (!external_indirection_targets_) {
+      XELOGE("Unable to allocate external indirection table (entries={})",
+             static_cast<uint32_t>(kIndirectionExternalCapacity));
+      return false;
+    }
+    external_indirection_target_count_.store(0, std::memory_order_relaxed);
+
+    // Try the preferred fixed address first; fall back to OS-chosen on fail.
+    if (wx_preferred) {
+      generated_code_execute_base_ =
+          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+              mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+              kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite,
+              0));
+      if (!generated_code_execute_base_) {
+        generated_code_execute_base_ =
+            reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+                mapping_, nullptr, kGeneratedCodeSize,
+                xe::memory::PageAccess::kExecuteReadWrite, 0));
+      }
+      generated_code_write_base_ = generated_code_execute_base_;
+    } else {
+      generated_code_execute_base_ =
+          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+              mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+              kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadOnly, 0));
+      if (!generated_code_execute_base_) {
+        generated_code_execute_base_ =
+            reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+                mapping_, nullptr, kGeneratedCodeSize,
+                xe::memory::PageAccess::kExecuteReadOnly, 0));
+      }
+      generated_code_write_base_ =
+          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+              mapping_, reinterpret_cast<void*>(kGeneratedCodeWriteBase),
+              kGeneratedCodeSize, xe::memory::PageAccess::kReadWrite, 0));
+      if (!generated_code_write_base_) {
+        generated_code_write_base_ = reinterpret_cast<uint8_t*>(
+            xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
+                                    xe::memory::PageAccess::kReadWrite, 0));
+      }
+    }
+    if (!generated_code_execute_base_ || !generated_code_write_base_) {
+      XELOGE("Unable to allocate code cache generated code storage");
+      return false;
+    }
+
+    generated_code_map_.reserve(kMaximumFunctionCount);
+    return true;
+  }
+
+  // Encode a host address as a 32-bit indirection entry:
+  //  - bit 31 clear: rel32 offset from code cache base (target in cache).
+  //  - bit 31 set:   tagged index into external 64-bit table (target out).
+  // In fast mode this is never called; slots hold raw 32-bit addresses.
+  uint32_t EncodeIndirectionTarget(uint64_t host_address) {
+    const uintptr_t code_base = execute_base_address();
+    const uintptr_t code_end = code_base + kGeneratedCodeSize;
+    if (host_address >= code_base && host_address < code_end) {
+      // Bit 31 of the offset is always clear because kGeneratedCodeSize
+      // (0x0FFFFFFF) is less than 0x80000000 — that's what keeps the tag
+      // bit free for the external-table case below.
+      return static_cast<uint32_t>(host_address - code_base);
+    }
+
+    std::lock_guard<std::mutex> lock(external_indirection_mutex_);
+    const uint32_t current_count =
+        external_indirection_target_count_.load(std::memory_order_relaxed);
+
+    // Table is small (dozens of entries in practice); linear scan is fine.
+    for (uint32_t i = 0; i < current_count; i++) {
+      if (external_indirection_targets_[i] == host_address) {
+        return kIndirectionExternalTag | i;
+      }
+    }
+
+    if (current_count >= kIndirectionExternalCapacity) {
+      XELOGE(
+          "Indirection external table overflow (count={} capacity={}); "
+          "falling back to default target",
+          current_count, static_cast<uint32_t>(kIndirectionExternalCapacity));
+      return indirection_default_value_;
+    }
+
+    external_indirection_targets_[current_count] = host_address;
+    external_indirection_target_count_.store(current_count + 1,
+                                             std::memory_order_release);
+    return kIndirectionExternalTag | current_count;
+  }
+
+  void set_indirection_default_64(uint64_t default_value) {
+    if (encoded_indirection_) {
+      indirection_default_value_ = EncodeIndirectionTarget(default_value);
+    } else {
+      assert_zero(default_value & 0xFFFFFFFF00000000ull);
+      indirection_default_value_ = static_cast<uint32_t>(default_value);
+    }
   }
 
   void AddIndirection(uint32_t guest_address, uint32_t host_address) {
+    AddIndirection64(guest_address, static_cast<uint64_t>(host_address));
+  }
+
+  void AddIndirection64(uint32_t guest_address, uint64_t host_address) {
     if (!indirection_table_base_) {
       return;
     }
-    uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
-        indirection_table_base_ + (guest_address - kIndirectionTableBase));
-    *indirection_slot = host_address;
+    if (guest_address < kIndirectionTableBase) {
+      return;
+    }
+    const uint64_t guest_delta = guest_address - kIndirectionTableBase;
+    const uint64_t slot_offset = (guest_delta / 4) * 4;
+    if (slot_offset + 4 > kIndirectionTableSize) {
+      return;
+    }
+    uint32_t* slot =
+        reinterpret_cast<uint32_t*>(indirection_table_base_ + slot_offset);
+    if (encoded_indirection_) {
+      *slot = EncodeIndirectionTarget(host_address);
+    } else {
+      assert_zero(host_address & 0xFFFFFFFF00000000ull);
+      *slot = static_cast<uint32_t>(host_address);
+    }
+  }
+
+  // CRTP hook invoked from PlaceGuestCode after a new function is written.
+  void UpdateIndirection(uint32_t guest_address, void* code_execute_address) {
+    if (guest_address < kIndirectionTableBase) {
+      return;
+    }
+    const uint64_t guest_delta = guest_address - kIndirectionTableBase;
+    const uint64_t slot_offset = (guest_delta / 4) * 4;
+    if (slot_offset + 4 > kIndirectionTableSize) {
+      return;
+    }
+    uint32_t* slot =
+        reinterpret_cast<uint32_t*>(indirection_table_base_ + slot_offset);
+    const uint64_t host_address =
+        reinterpret_cast<uint64_t>(code_execute_address);
+    if (encoded_indirection_) {
+      *slot = EncodeIndirectionTarget(host_address);
+    } else {
+      assert_zero(host_address & 0xFFFFFFFF00000000ull);
+      *slot = static_cast<uint32_t>(host_address);
+    }
   }
 
   void CommitExecutableRange(uint32_t guest_low, uint32_t guest_high) {
     if (!indirection_table_base_) {
       return;
     }
-    xe::memory::AllocFixed(
-        indirection_table_base_ + (guest_low - kIndirectionTableBase),
-        guest_high - guest_low, xe::memory::AllocationType::kCommit,
-        xe::memory::PageAccess::kReadWrite);
-    uint32_t* p = reinterpret_cast<uint32_t*>(indirection_table_base_);
-    for (uint32_t address = guest_low; address < guest_high; ++address) {
-      p[(address - kIndirectionTableBase) / 4] = indirection_default_value_;
+    if (guest_low < kIndirectionTableBase) {
+      return;
+    }
+
+    const size_t start_offset =
+        static_cast<size_t>(guest_low - kIndirectionTableBase);
+    const size_t size = static_cast<size_t>(guest_high - guest_low);
+
+    if (start_offset + size > kIndirectionTableSize) {
+      XELOGE("CommitExecutableRange: range [0x{:08X}, 0x{:08X}) exceeds table",
+             guest_low, guest_high);
+      return;
+    }
+
+    xe::memory::AllocFixed(indirection_table_base_ + start_offset, size,
+                           xe::memory::AllocationType::kCommit,
+                           xe::memory::PageAccess::kReadWrite);
+
+    uint32_t* p =
+        reinterpret_cast<uint32_t*>(indirection_table_base_ + start_offset);
+    const size_t entry_count = size / 4;
+    for (size_t i = 0; i < entry_count; i++) {
+      p[i] = indirection_default_value_;
     }
   }
 
@@ -210,10 +468,9 @@ class CodeCacheBase : public CodeCache {
     self().OnCodePlaced(guest_address, function_info, code_execute_address,
                         func_info.code_size.total);
 
-    // Fix up indirection table (dispatched via CRTP so derived classes
-    // can override the encoding, e.g. rel32 + tagged external on ARM64).
+    // Fix up indirection table.
     if (guest_address && indirection_table_base_) {
-      self().UpdateIndirection(guest_address, code_execute_address);
+      UpdateIndirection(guest_address, code_execute_address);
     }
   }
 
@@ -283,85 +540,9 @@ class CodeCacheBase : public CodeCache {
 
   CodeCacheBase() = default;
 
-  bool Initialize() {
-    indirection_table_base_ = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
-        reinterpret_cast<void*>(kIndirectionTableBase), kIndirectionTableSize,
-        xe::memory::AllocationType::kReserve,
-        xe::memory::PageAccess::kReadWrite));
-    if (!indirection_table_base_) {
-      XELOGE("Unable to allocate code cache indirection table");
-      XELOGE(
-          "This is likely because the {:X}-{:X} range is in use by some "
-          "other system DLL",
-          static_cast<uint64_t>(kIndirectionTableBase),
-          kIndirectionTableBase + kIndirectionTableSize);
-      return false;
-    }
-
-    file_name_ =
-        fmt::format("xenia_code_cache_{}", Clock::QueryHostTickCount());
-    mapping_ = xe::memory::CreateFileMappingHandle(
-        file_name_, kGeneratedCodeSize,
-        xe::memory::PageAccess::kExecuteReadWrite, false);
-    if (mapping_ == xe::memory::kFileMappingHandleInvalid) {
-      XELOGE("Unable to create code cache mmap");
-      return false;
-    }
-
-    if (xe::memory::IsWritableExecutableMemoryPreferred()) {
-      generated_code_execute_base_ =
-          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
-              mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
-              kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite,
-              0));
-      generated_code_write_base_ = generated_code_execute_base_;
-      if (!generated_code_execute_base_ || !generated_code_write_base_) {
-        XELOGE("Unable to allocate code cache generated code storage");
-        XELOGE(
-            "This is likely because the {:X}-{:X} range is in use by some "
-            "other system DLL",
-            uint64_t(kGeneratedCodeExecuteBase),
-            uint64_t(kGeneratedCodeExecuteBase + kGeneratedCodeSize));
-        return false;
-      }
-    } else {
-      generated_code_execute_base_ =
-          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
-              mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
-              kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadOnly, 0));
-      generated_code_write_base_ =
-          reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
-              mapping_, reinterpret_cast<void*>(kGeneratedCodeWriteBase),
-              kGeneratedCodeSize, xe::memory::PageAccess::kReadWrite, 0));
-      if (!generated_code_execute_base_ || !generated_code_write_base_) {
-        XELOGE("Unable to allocate code cache generated code storage");
-        XELOGE(
-            "This is likely because the {:X}-{:X} and {:X}-{:X} ranges are "
-            "in use by some other system DLL",
-            uint64_t(kGeneratedCodeExecuteBase),
-            uint64_t(kGeneratedCodeExecuteBase + kGeneratedCodeSize),
-            uint64_t(kGeneratedCodeWriteBase),
-            uint64_t(kGeneratedCodeWriteBase + kGeneratedCodeSize));
-        return false;
-      }
-    }
-
-    generated_code_map_.reserve(kMaximumFunctionCount);
-    return true;
-  }
-
   // Default no-op for the OnCodePlaced hook.
   void OnCodePlaced(uint32_t guest_address, GuestFunction* function_info,
                     void* code_execute_address, size_t code_size) {}
-
-  // Default indirection fixup: write truncated 32-bit absolute address.
-  // Overridden by A64CodeCache to use rel32 + tagged external encoding.
-  void UpdateIndirection(uint32_t guest_address, void* code_execute_address) {
-    uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
-        indirection_table_base_ + (guest_address - kIndirectionTableBase));
-    *indirection_slot =
-        uint32_t(reinterpret_cast<uint64_t>(code_execute_address));
-  }
 
   std::filesystem::path file_name_;
   xe::memory::FileMappingHandle mapping_ =
@@ -374,6 +555,14 @@ class CodeCacheBase : public CodeCache {
   size_t generated_code_offset_ = 0;
   std::atomic<size_t> generated_code_commit_mark_ = {0};
   std::vector<std::pair<uint64_t, GuestFunction*>> generated_code_map_;
+
+  bool encoded_indirection_ = true;
+  bool allow_fast_indirection_ = true;
+  uintptr_t indirection_table_actual_base_ = 0;
+  uintptr_t indirection_table_base_bias_ = 0;
+  std::unique_ptr<uint64_t[]> external_indirection_targets_;
+  std::atomic<uint32_t> external_indirection_target_count_{0};
+  std::mutex external_indirection_mutex_;
 
  private:
   Derived& self() { return static_cast<Derived&>(*this); }

@@ -360,36 +360,37 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   }
 
   if (code_cache_->has_indirection_table()) {
-    // Indirection table stores rel32 offsets (bit 31 clear) or tagged
-    // external-table indices (bit 31 set).  The table itself lives at an
-    // OS-chosen address; the emitter compensates via base bias.
-    Label external_target;
-    Label indirection_ready;
-
-    // w16 = guest address (must stay in w16 — the resolve thunk reads it).
+    // Must leave the guest address in w16 for the resolve thunk to read.
     mov(w16, function->address());
-    // x14 = &slot = bias + guest_addr
-    mov(x14, code_cache_->indirection_table_base_bias());
-    add(x14, x14, w16, UXTW);
-    // w9 = encoded indirection entry
-    ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
-    // Tag bit (bit 31) set => external table entry.
-    tbnz(w9, 31, external_target);
+    if (!code_cache_->encoded_indirection()) {
+      // Fast path: table mapped at host VA == guest addr; slot holds raw
+      // 32-bit host target.
+      ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
+    } else {
+      // Encoded path: see A64CodeCache for the entry format.
+      Label external_target;
+      Label indirection_ready;
 
-    // Fast path: rel32 offset from code cache base.
-    mov(x14, code_cache_->execute_base_address());
-    add(x9, x14, w9, UXTW);
-    b(indirection_ready);
+      mov(x14, code_cache_->indirection_table_base_bias());
+      add(x14, x14, w16, UXTW);
+      ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+      tbnz(w9, 31, external_target);
 
-    // Slow path: external table lookup (resolve thunks, trampolines).
-    L(external_target);
-    and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
-    mov(x14, code_cache_->external_indirection_table_base_address());
-    lsl(x15, x15, 3);  // index * sizeof(uint64_t)
-    add(x14, x14, x15);
-    ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+      // Internal: rel32 from code cache base.
+      mov(x14, code_cache_->execute_base_address());
+      add(x9, x14, w9, UXTW);
+      b(indirection_ready);
 
-    L(indirection_ready);
+      // External: tagged index into the side table.
+      L(external_target);
+      and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
+      mov(x14, code_cache_->external_indirection_table_base_address());
+      lsl(x15, x15, 3);
+      add(x14, x14, x15);
+      ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+
+      L(indirection_ready);
+    }
   } else {
     // No indirection table: resolve at runtime.
     mov(x0, x20);  // context
@@ -431,37 +432,39 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
 
   // Load host code address from indirection table.
   if (code_cache_->has_indirection_table()) {
-    // Indirection table stores rel32 offsets (bit 31 clear) or tagged
-    // external-table indices (bit 31 set).
-    Label external_target;
-    Label indirection_ready;
-
-    // w16 = guest address (must stay in w16 — the resolve thunk reads it).
+    // Must leave the guest address in w16 for the resolve thunk to read.
     if (target_w.getIdx() != w16.getIdx()) {
       mov(w16, target_w);
     }
-    // x14 = &slot = bias + guest_addr
-    mov(x14, code_cache_->indirection_table_base_bias());
-    add(x14, x14, w16, UXTW);
-    // w9 = encoded indirection entry
-    ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
-    // Tag bit (bit 31) set => external table entry.
-    tbnz(w9, 31, external_target);
+    if (!code_cache_->encoded_indirection()) {
+      // Fast path: table mapped at host VA == guest addr; slot holds raw
+      // 32-bit host target.
+      ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
+    } else {
+      // Encoded path: see A64CodeCache for the entry format.
+      Label external_target;
+      Label indirection_ready;
 
-    // Fast path: rel32 offset from code cache base.
-    mov(x14, code_cache_->execute_base_address());
-    add(x9, x14, w9, UXTW);
-    b(indirection_ready);
+      mov(x14, code_cache_->indirection_table_base_bias());
+      add(x14, x14, w16, UXTW);
+      ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+      tbnz(w9, 31, external_target);
 
-    // Slow path: external table lookup.
-    L(external_target);
-    and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
-    mov(x14, code_cache_->external_indirection_table_base_address());
-    lsl(x15, x15, 3);  // index * sizeof(uint64_t)
-    add(x14, x14, x15);
-    ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+      // Internal: rel32 from code cache base.
+      mov(x14, code_cache_->execute_base_address());
+      add(x9, x14, w9, UXTW);
+      b(indirection_ready);
 
-    L(indirection_ready);
+      // External: tagged index into the side table.
+      L(external_target);
+      and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
+      mov(x14, code_cache_->external_indirection_table_base_address());
+      lsl(x15, x15, 3);
+      add(x14, x14, x15);
+      ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+
+      L(indirection_ready);
+    }
   } else {
     // No indirection table: resolve at runtime.
     mov(w16, target_w);
