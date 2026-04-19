@@ -29,8 +29,13 @@
 #include "xenia/base/math.h"
 #include "xenia/base/memory.h"
 #include "xenia/base/mutex.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/backend/code_cache.h"
 #include "xenia/cpu/function.h"
+
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#include <pthread.h>
+#endif
 
 namespace xe {
 namespace cpu {
@@ -228,6 +233,16 @@ class CodeCacheBase : public CodeCache {
 
     // Try the preferred fixed address first; fall back to OS-chosen on fail.
     if (wx_preferred) {
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+      // macOS allows RWX only on anonymous MAP_JIT regions, so the cache is
+      // a single anonymous mapping; writes are gated by
+      // pthread_jit_write_protect_np in PlaceGuestCode/PlaceData.
+      generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
+          xe::memory::AllocFixed(nullptr, kGeneratedCodeSize,
+                                 xe::memory::AllocationType::kReserveCommit,
+                                 xe::memory::PageAccess::kExecuteReadWrite));
+      generated_code_write_base_ = generated_code_execute_base_;
+#else
       generated_code_execute_base_ =
           reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
               mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
@@ -240,6 +255,7 @@ class CodeCacheBase : public CodeCache {
                 xe::memory::PageAccess::kExecuteReadWrite, 0));
       }
       generated_code_write_base_ = generated_code_execute_base_;
+#endif
     } else {
       generated_code_execute_base_ =
           reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
@@ -443,6 +459,17 @@ class CodeCacheBase : public CodeCache {
       // Commit memory if needed.
       EnsureCommitted(high_mark);
 
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+      // Toggle the per-thread MAP_JIT write gate around writes. Only needed
+      // when execute and write bases alias (single MAP_JIT region); a
+      // separate RW view needs no gating.
+      const bool jit_write_toggle =
+          generated_code_execute_base_ == generated_code_write_base_;
+      if (jit_write_toggle) {
+        pthread_jit_write_protect_np(0);
+      }
+#endif
+
       // Copy code.
       std::memcpy(code_write_address, machine_code, func_info.code_size.total);
 
@@ -451,6 +478,17 @@ class CodeCacheBase : public CodeCache {
           tail_write_address,
           static_cast<size_t>(end_write_address - tail_write_address));
 
+      // Platform-specific unwind registration. Must stay inside the JIT
+      // write window: on Mac it writes DWARF entries into the cache view.
+      self().PlaceCode(guest_address, machine_code, func_info,
+                       code_execute_address, unwind_reservation);
+
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+      if (jit_write_toggle) {
+        pthread_jit_write_protect_np(1);
+      }
+#endif
+
       // Flush I-cache for code and fill regions.
       self().FlushCodeRange(code_write_address, func_info.code_size.total);
       if (tail_write_address < end_write_address) {
@@ -458,10 +496,6 @@ class CodeCacheBase : public CodeCache {
             tail_write_address,
             static_cast<size_t>(end_write_address - tail_write_address));
       }
-
-      // Platform-specific unwind registration.
-      self().PlaceCode(guest_address, machine_code, func_info,
-                       code_execute_address, unwind_reservation);
     }
 
     // Post-placement hook (e.g. VTune notification).
@@ -484,7 +518,19 @@ class CodeCacheBase : public CodeCache {
       high_mark = generated_code_offset_;
     }
     EnsureCommitted(high_mark);
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+    const bool jit_write_toggle =
+        generated_code_execute_base_ == generated_code_write_base_;
+    if (jit_write_toggle) {
+      pthread_jit_write_protect_np(0);
+    }
+#endif
     std::memcpy(data_address, data, length);
+#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+    if (jit_write_toggle) {
+      pthread_jit_write_protect_np(1);
+    }
+#endif
     return uint32_t(uintptr_t(data_address));
   }
 

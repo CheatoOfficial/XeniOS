@@ -114,9 +114,28 @@ PageAccess ToXeniaProtectFlags(const char* protection) {
 
 #if XE_PLATFORM_MAC
 bool IsWritableExecutableMemorySupported() {
-  // macOS enforces W^X on Apple Silicon. Shared file mappings cannot be both
-  // writable and executable. The code cache must use separate RW and RX views.
-  return false;
+  // macOS allows RWX only on anonymous MAP_JIT regions. Callers that see
+  // true must allocate via AllocFixed (which sets MAP_JIT) and toggle
+  // pthread_jit_write_protect_np around writes. MAP_JIT requires the
+  // com.apple.security.cs.allow-jit entitlement; without it the probe
+  // fails and JIT is disabled.
+  static const bool supported = []() {
+    const size_t test_size = page_size();
+    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_JIT
+    flags |= MAP_JIT;
+#endif
+    void* test_mapping = mmap(nullptr, test_size,
+                              PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
+    if (test_mapping == MAP_FAILED) {
+      XELOGE("MAP_JIT probe failed: {} ({}); JIT will not work",
+             strerror(errno), errno);
+      return false;
+    }
+    munmap(test_mapping, test_size);
+    return true;
+  }();
+  return supported;
 }
 #else
 bool IsWritableExecutableMemorySupported() { return true; }
