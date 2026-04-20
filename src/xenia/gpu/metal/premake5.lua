@@ -75,12 +75,21 @@ project("xenia-gpu-metal")
       "MetalKit.framework",
     }
 
-  -- MSC-only source files (macOS only, excluded on iOS).
+  -- The Metal IR runtime header only emits its bind-point and helper function
+  -- definitions when compiled once with IR_PRIVATE_IMPLEMENTATION. Shared GPU
+  -- sources use those symbols on both macOS and iOS, so keep the runtime
+  -- implementation in both Apple builds even though the rest of the MSC tool
+  -- chain stays macOS-only.
+  filter {"system:macosx or system:ios"}
+    files {
+      "ir_runtime_impl.mm",
+    }
+
+  -- MSC-only source files that require the macOS-only converter toolchain.
   filter "system:macosx"
     files {
       "dxbc_to_dxil_converter.cc",
       "dxbc_to_dxil_converter.h",
-      "ir_runtime_impl.mm",
       "metal_geometry_shader.cc",
       "metal_geometry_shader.h",
       "metal_pipeline_cache.cc",
