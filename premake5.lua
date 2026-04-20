@@ -767,11 +767,8 @@ workspace("xenia")
         buildoptions({ "-include config.h" })
         includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
         files({
-          ffmpeg_dir .. "/libavcodec/aarch64/fft_init_aarch64.c",
           ffmpeg_dir .. "/libavcodec/aarch64/idctdsp_init_aarch64.c",
-          ffmpeg_dir .. "/libavcodec/aarch64/fft_neon.S",
           ffmpeg_dir .. "/libavcodec/aarch64/simple_idct_neon.S",
-          ffmpeg_dir .. "/libavcodec/aarch64/mdct_neon.S",
         })
       filter({})
     project("libavutil")
