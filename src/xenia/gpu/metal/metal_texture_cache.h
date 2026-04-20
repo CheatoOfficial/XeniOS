@@ -71,8 +71,10 @@ class MetalTextureCache : public TextureCache {
   // Returns the persistent sampler_bindless_heap_ slot for the sampler that
   // would be created for the given binding.  Falls back to
   // null_sampler_bindless_index_ when no sampler can be resolved.
+#if METAL_SHADER_CONVERTER_AVAILABLE
   uint32_t GetBindlessSamplerIndexForBinding(
       const DxbcShader::SamplerBinding& binding);
+#endif
 
   // Persistent bindless indices for null textures.
   uint32_t null_texture_2d_bindless_index() const {

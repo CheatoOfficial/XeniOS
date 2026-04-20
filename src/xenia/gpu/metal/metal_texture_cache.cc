@@ -33,6 +33,10 @@
 #include "xenia/base/profiling.h"
 #include "xenia/gpu/metal/metal_command_processor.h"
 #include "xenia/gpu/metal/metal_shared_memory.h"
+// clang-format off
+#define IR_RUNTIME_METALCPP
+#include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
+// clang-format on
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_128bpb_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_128bpb_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_16bpb_cs.h"
@@ -2547,6 +2551,7 @@ uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
   return (srv_index != UINT32_MAX) ? srv_index : get_null_index_for_dimension();
 }
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
 uint32_t MetalTextureCache::GetBindlessSamplerIndexForBinding(
     const DxbcShader::SamplerBinding& binding) {
   SamplerParameters parameters = GetSamplerParameters(binding);
@@ -2562,6 +2567,7 @@ uint32_t MetalTextureCache::GetBindlessSamplerIndexForBinding(
   }
   return null_sampler_bindless_index_;
 }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
 MTL::Texture* MetalTextureCache::RequestSwapTexture(
     uint32_t& width_scaled_out, uint32_t& height_scaled_out,
@@ -2755,10 +2761,6 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
 
-  xenos::TextureFilter mip_filter =
-      req_mip_filter == xenos::TextureFilter::kUseFetchConst ? fetch.mip_filter
-                                                             : req_mip_filter;
-
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
     parameters.min_linear = 1;
@@ -2912,7 +2914,14 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
 
 xenos::ClampMode MetalTextureCache::NormalizeClampMode(
     xenos::ClampMode clamp_mode) const {
-  return NormalizeClampModeStatic(clamp_mode);
+  if (clamp_mode == xenos::ClampMode::kClampToHalfway) {
+    return xenos::ClampMode::kClampToEdge;
+  }
+  if (clamp_mode == xenos::ClampMode::kMirrorClampToHalfway ||
+      clamp_mode == xenos::ClampMode::kMirrorClampToBorder) {
+    return xenos::ClampMode::kMirrorClampToEdge;
+  }
+  return clamp_mode;
 }
 
 // GetHostFormatSwizzle implementation
