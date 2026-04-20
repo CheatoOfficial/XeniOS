@@ -68,12 +68,18 @@ project("xenia-gpu-metal")
       "MetalKit.framework",
     }
 
+  -- The IR runtime helpers are used by the iOS bindless texture/sampler path
+  -- even when Metal Shader Converter itself is macOS-only.
+  filter "system:ios"
+    files {
+      "ir_runtime_impl.mm",
+    }
+
   -- MSC-only source files (macOS only, excluded on iOS).
   filter "system:macosx"
     files {
       "dxbc_to_dxil_converter.cc",
       "dxbc_to_dxil_converter.h",
-      "ir_runtime_impl.mm",
       "metal_geometry_shader.cc",
       "metal_geometry_shader.h",
       "metal_shader.cc",

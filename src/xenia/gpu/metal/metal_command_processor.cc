@@ -1268,6 +1268,50 @@ void MetalCommandProcessor::WaitForPendingCompletionHandlers() {
   }
 }
 
+void MetalCommandProcessor::FlushCommandBufferAndWait(uint64_t timeout_ns,
+                                                      const char* context) {
+  if (!current_command_buffer_) {
+    DrainCommandBufferAutoreleasePool();
+    return;
+  }
+
+  uint64_t wait_value = 0;
+  if (wait_shared_event_) {
+    wait_value = ++wait_shared_event_value_;
+    current_command_buffer_->encodeSignalEvent(wait_shared_event_, wait_value);
+  }
+
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  ScheduleDrawRingRelease(current_command_buffer_);
+#endif
+
+  current_command_buffer_->commit();
+
+  if (wait_shared_event_) {
+    wait_shared_event_->waitUntilSignaledValue(wait_value, timeout_ns);
+  } else {
+    if (timeout_ns != std::numeric_limits<uint64_t>::max()) {
+      XELOGW(
+          "MetalCommandProcessor::{}: SharedEvent unavailable; waiting "
+          "without timeout",
+          context);
+    }
+    current_command_buffer_->waitUntilCompleted();
+  }
+
+  current_command_buffer_->release();
+  current_command_buffer_ = nullptr;
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  SetActiveDrawRing(nullptr);
+#endif
+  current_draw_index_ = 0;
+  submission_has_draws_ = false;
+  current_bindless_table_valid_ = false;
+  copy_resolve_writes_pending_ = false;
+  DrainCommandBufferAutoreleasePool();
+  ProcessCompletedSubmissions();
+}
+
 void MetalCommandProcessor::ShutdownContext() {
   // End the render encoder directly (not via EndRenderEncoder — we release
   // the encoder object below after the command buffer completes).
@@ -4809,6 +4853,29 @@ void MetalCommandProcessor::BeginCommandBuffer() {
   // Mark dirty so IssueDraw re-applies the per-draw viewport/scissor.
   viewport_dirty_ = true;
   scissor_dirty_ = true;
+}
+
+void MetalCommandProcessor::EndCommandBuffer() {
+  EndRenderEncoder();
+
+  if (current_command_buffer_) {
+#if METAL_SHADER_CONVERTER_AVAILABLE
+    ScheduleDrawRingRelease(current_command_buffer_);
+#endif
+    current_command_buffer_->commit();
+    current_command_buffer_->release();
+    current_command_buffer_ = nullptr;
+#if METAL_SHADER_CONVERTER_AVAILABLE
+    SetActiveDrawRing(nullptr);
+#endif
+    current_draw_index_ = 0;
+    submission_has_draws_ = false;
+    current_bindless_table_valid_ = false;
+  }
+
+  copy_resolve_writes_pending_ = false;
+  DrainCommandBufferAutoreleasePool();
+  ProcessCompletedSubmissions();
 }
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
