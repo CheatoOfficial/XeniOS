@@ -235,7 +235,6 @@ jobs:
   
   build-windows-x86_64:
     name: Build Windows x86_64
-    if: false
     needs: lint
     runs-on: windows-2025
     env:
