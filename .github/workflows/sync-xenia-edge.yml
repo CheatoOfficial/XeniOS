@@ -1,0 +1,121 @@
+name: Sync xenia-edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: xenia-edge branch to merge into xenios
+        required: false
+        default: metal/msc-pre-strict-clean-localized
+        type: string
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-xenia-edge
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out xenios
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: xenios
+
+      - name: Configure Git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream branch
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_branch="${{ github.event.inputs.upstream_branch }}"
+          if [ -z "${upstream_branch}" ]; then
+            upstream_branch="metal/msc-pre-strict-clean-localized"
+          fi
+
+          sync_branch="automation/xeniaedge-sync"
+
+          git remote remove xeniaedge 2>/dev/null || true
+          git remote add xeniaedge https://github.com/has207/xenia-edge.git
+
+          git fetch origin xenios
+          git fetch xeniaedge "${upstream_branch}"
+
+          git checkout -B "${sync_branch}" origin/xenios
+
+          if ! git merge --no-ff -X ours --no-edit "xeniaedge/${upstream_branch}"; then
+            echo "::error::Automatic merge from xeniaedge/${upstream_branch} failed"
+            git status --short
+            git merge --abort || true
+            exit 1
+          fi
+
+          if git diff --quiet origin/xenios...HEAD; then
+            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
+            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "has_changes=true" >> "${GITHUB_OUTPUT}"
+          echo "sync_branch=${sync_branch}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
+
+      - name: Push sync branch
+        if: steps.merge.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin "${{ steps.merge.outputs.sync_branch }}"
+
+      - name: Create or update PR
+        if: steps.merge.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sync_branch="${{ steps.merge.outputs.sync_branch }}"
+          upstream_branch="${{ steps.merge.outputs.upstream_branch }}"
+          title="Sync xenia-edge: ${upstream_branch}"
+          body=$(cat <<EOF
+          Automated merge of \`has207/xenia-edge:${upstream_branch}\` into \`xenios\`.
+
+          Notes:
+          - Uses \`git merge -X ours\` so iOS-specific fork changes win on conflicting hunks.
+          - Non-conflicting xenia-edge updates are still pulled in automatically.
+          - CI on this PR is the gate before anything should be merged back to \`xenios\`.
+          EOF
+          )
+
+          pr_number="$(gh pr list \
+            --base xenios \
+            --head "${sync_branch}" \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" --title "${title}" --body "${body}"
+          else
+            gh pr create \
+              --base xenios \
+              --head "${sync_branch}" \
+              --title "${title}" \
+              --body "${body}" \
+              --draft
+          fi
