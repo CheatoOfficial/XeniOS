@@ -2326,8 +2326,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         pixel_shader->GetOrCreateTranslation(pixel_shader_modification.value));
     if (!pixel_translation->is_translated()) {
       if (!pipeline_cache_manager_->shader_translator()
-               ->TranslateAnalyzedShader(
-              *pixel_translation)) {
+               ->TranslateAnalyzedShader(*pixel_translation)) {
         XELOGE("Failed to translate pixel shader to DXBC");
         return false;
       }
@@ -3828,8 +3827,8 @@ bool MetalCommandProcessor::DispatchDraw(
   submission_has_draws_ = true;
   return true;
 #else   // !METAL_SHADER_CONVERTER_AVAILABLE
-  XELOGE("MSC draw path not available");
-  return false;
+XELOGE("MSC draw path not available");
+return false;
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 }
 
