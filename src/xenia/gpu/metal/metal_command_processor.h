@@ -39,8 +39,10 @@
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/metal/dxbc_to_dxil_converter.h"
 #include "xenia/gpu/metal/metal_geometry_shader.h"
+#include "xenia/gpu/metal/metal_pipeline_cache.h"
 #include "xenia/gpu/metal/metal_shader.h"
 #include "xenia/gpu/metal/metal_shader_converter.h"
+#include "xenia/gpu/metal/metal_upload_buffer_pool.h"
 // clang-format off
 // Must come after metal_texture_cache.h which includes Metal.hpp
 #include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
@@ -259,6 +261,7 @@ class MetalCommandProcessor : public CommandProcessor {
   //              transfer operations bypass the render target cache)
   // ===========================================================================
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
   // Per-draw uniform buffer coordinates passed between IssueDraw sub-methods.
   struct UniformBufferInfo {
     MTL::Buffer* vs_buf = nullptr;
@@ -315,6 +318,7 @@ class MetalCommandProcessor : public CommandProcessor {
       const std::vector<Shader::VertexBinding>& vb_bindings,
       const VertexBindingRange* vertex_ranges, uint32_t vertex_range_count,
       IndexBufferInfo* index_buffer_info);
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   // Host copy/resolve path — enforce the active ResolveOrderingPolicy
   // around resolve (IssueCopy) work.
@@ -559,15 +563,10 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t last_swap_height_ = 0;
   std::unordered_map<uint32_t, bool> swap_dest_swaps_by_base_;
 
- public:
-  MetalSharedMemory* shared_memory() const { return shared_memory_.get(); }
-  MetalRenderTargetCache* render_target_cache() const {
-    return render_target_cache_.get();
-  }
-  MetalTextureCache* texture_cache() const { return texture_cache_.get(); }
-
  private:
 #if METAL_SHADER_CONVERTER_AVAILABLE
+  std::unique_ptr<MetalPipelineCache> pipeline_cache_manager_;
+
   // MSC shader translation components
   std::unique_ptr<DxbcShaderTranslator> shader_translator_;
   std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
@@ -698,8 +697,6 @@ class MetalCommandProcessor : public CommandProcessor {
   std::deque<RetiredBindlessDescriptor> retired_view_bindless_indices_;
   std::deque<RetiredBindlessDescriptor> retired_sampler_bindless_indices_;
 
-  MTL::Buffer* tessellator_tables_buffer_ = nullptr;
-
 #if METAL_SHADER_CONVERTER_AVAILABLE
   // System constants - matches DxbcShaderTranslator::SystemConstants layout
   DxbcShaderTranslator::SystemConstants system_constants_;
@@ -771,9 +768,11 @@ class MetalCommandProcessor : public CommandProcessor {
   bool current_bindless_shared_memory_is_uav_ = false;
   bool current_bindless_uses_mesh_stages_ = false;
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
   // Pool for per-draw constant buffer allocations (replaces the ring's
   // uniforms_buffer_ for constant data).
   std::unique_ptr<MetalUploadBufferPool> constant_buffer_pool_;
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
   // Track which heap buffer binds have been set on the current encoder.
   bool heap_binds_set_on_encoder_ = false;
 

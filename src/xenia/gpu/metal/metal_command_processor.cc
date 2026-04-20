@@ -885,14 +885,15 @@ bool MetalCommandProcessor::SetupContext() {
 
   // Create and initialize pipeline cache (shader translation + pipeline
   // management).
-  pipeline_cache_ =
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  pipeline_cache_manager_ =
       std::make_unique<MetalPipelineCache>(device_, *register_file_);
   {
     bool edram_rov_used = false;
     bool gamma_render_target_as_unorm8 =
         !(edram_rov_used ||
           render_target_cache_->gamma_render_target_as_unorm16());
-    if (!pipeline_cache_->InitializeShaderTranslation(
+    if (!pipeline_cache_manager_->InitializeShaderTranslation(
             gamma_render_target_as_unorm8,
             render_target_cache_->msaa_2x_supported(),
             render_target_cache_->draw_resolution_scale_x(),
@@ -901,6 +902,7 @@ bool MetalCommandProcessor::SetupContext() {
       return false;
     }
   }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 #if METAL_SHADER_CONVERTER_AVAILABLE
   if (mesh_shader_supported_) {
     uint64_t tess_tables_size = IRRuntimeTessellatorTablesSize();
@@ -918,7 +920,9 @@ bool MetalCommandProcessor::SetupContext() {
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   // Create the upload buffer pool for per-draw constant buffer allocations.
+#if METAL_SHADER_CONVERTER_AVAILABLE
   constant_buffer_pool_ = std::make_unique<MetalUploadBufferPool>(device_);
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
   render_encoder_resource_usage_.reserve(128);
   render_encoder_heap_usage_.reserve(32);
 
@@ -1332,8 +1336,9 @@ void MetalCommandProcessor::InitializeShaderStorage(
     std::function<void()> completion_callback) {
   CommandProcessor::InitializeShaderStorage(cache_root, title_id, blocking,
                                             nullptr);
-  if (pipeline_cache_) {
-    pipeline_cache_->InitializeShaderStorage(cache_root, title_id, blocking);
+  if (pipeline_cache_manager_) {
+    pipeline_cache_manager_->InitializeShaderStorage(cache_root, title_id,
+                                                     blocking);
   }
   if (completion_callback) {
     completion_callback();
@@ -1986,7 +1991,12 @@ void MetalCommandProcessor::OnPrimaryBufferEnd() {
 
 bool MetalCommandProcessor::CanEndSubmissionImmediately() {
   if (!current_command_buffer_) return false;
-  if (pipeline_cache_ && pipeline_cache_->IsCreatingPipelines()) return false;
+#if METAL_SHADER_CONVERTER_AVAILABLE
+  if (pipeline_cache_manager_ &&
+      pipeline_cache_manager_->IsCreatingPipelines()) {
+    return false;
+  }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
   return true;
 }
 
@@ -2066,7 +2076,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     return false;
   }
   if (!vertex_shader->is_ucode_analyzed()) {
-    vertex_shader->AnalyzeUcode(pipeline_cache_->ucode_disasm_buffer());
+    vertex_shader->AnalyzeUcode(ucode_disasm_buffer_);
   }
   bool memexport_used_vertex = vertex_shader->memexport_eM_written() != 0;
 
@@ -2080,7 +2090,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
       pixel_shader = active_pixel_shader();
       if (pixel_shader) {
         if (!pixel_shader->is_ucode_analyzed()) {
-          pixel_shader->AnalyzeUcode(pipeline_cache_->ucode_disasm_buffer());
+          pixel_shader->AnalyzeUcode(ucode_disasm_buffer_);
         }
         if (!draw_util::IsPixelShaderNeededWithRasterization(*pixel_shader,
                                                              regs)) {
@@ -2166,6 +2176,8 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     }
   }
 
+  bool memexport_used = memexport_used_vertex || memexport_used_pixel;
+
   // Begin command buffer if needed (will use cache-provided render targets).
   BeginCommandBuffer();
 #if METAL_SHADER_CONVERTER_AVAILABLE
@@ -2224,11 +2236,11 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         Shader::HostVertexShaderType::kVertex;
   }
   DxbcShaderTranslator::Modification vertex_shader_modification =
-      pipeline_cache_->GetCurrentVertexShaderModification(
+      pipeline_cache_manager_->GetCurrentVertexShaderModification(
           *vertex_shader, host_vertex_shader_type_for_translation,
           interpolator_mask);
   DxbcShaderTranslator::Modification pixel_shader_modification =
-      pixel_shader ? pipeline_cache_->GetCurrentPixelShaderModification(
+      pixel_shader ? pipeline_cache_manager_->GetCurrentPixelShaderModification(
                          *pixel_shader, interpolator_mask, ps_param_gen_pos,
                          normalized_depth_control)
                    : DxbcShaderTranslator::Modification(0);
@@ -2293,7 +2305,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   auto vertex_translation = static_cast<MetalShader::MetalTranslation*>(
       vertex_shader->GetOrCreateTranslation(vertex_shader_modification.value));
   if (!vertex_translation->is_translated()) {
-    if (!pipeline_cache_->shader_translator()->TranslateAnalyzedShader(
+    if (!pipeline_cache_manager_->shader_translator()->TranslateAnalyzedShader(
             *vertex_translation)) {
       XELOGE("Failed to translate vertex shader to DXBC");
       return false;
@@ -2301,8 +2313,8 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   }
   if (!use_tessellation_emulation && !vertex_translation->is_valid()) {
     if (!vertex_translation->TranslateToMetal(
-            device_, *pipeline_cache_->dxbc_to_dxil_converter(),
-            *pipeline_cache_->metal_shader_converter())) {
+            device_, *pipeline_cache_manager_->dxbc_to_dxil_converter(),
+            *pipeline_cache_manager_->metal_shader_converter())) {
       XELOGE("Failed to translate vertex shader to Metal");
       return false;
     }
@@ -2313,7 +2325,8 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     pixel_translation = static_cast<MetalShader::MetalTranslation*>(
         pixel_shader->GetOrCreateTranslation(pixel_shader_modification.value));
     if (!pixel_translation->is_translated()) {
-      if (!pipeline_cache_->shader_translator()->TranslateAnalyzedShader(
+      if (!pipeline_cache_manager_->shader_translator()
+               ->TranslateAnalyzedShader(
               *pixel_translation)) {
         XELOGE("Failed to translate pixel shader to DXBC");
         return false;
@@ -2321,8 +2334,8 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     }
     if (!pixel_translation->is_valid()) {
       if (!pixel_translation->TranslateToMetal(
-              device_, *pipeline_cache_->dxbc_to_dxil_converter(),
-              *pipeline_cache_->metal_shader_converter())) {
+              device_, *pipeline_cache_manager_->dxbc_to_dxil_converter(),
+              *pipeline_cache_manager_->metal_shader_converter())) {
         XELOGE("Failed to translate pixel shader to Metal");
         return false;
       }
@@ -2366,16 +2379,17 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   MetalPipelineCache::GeometryPipelineState* geometry_pipeline_state = nullptr;
   if (use_tessellation_emulation) {
     tessellation_pipeline_state =
-        pipeline_cache_->GetOrCreateTessellationPipelineState(
+        pipeline_cache_manager_->GetOrCreateTessellationPipelineState(
             vertex_translation, pixel_translation, primitive_processing_result,
             attachment_formats, rendering_key);
     pipeline = tessellation_pipeline_state
                    ? tessellation_pipeline_state->pipeline
                    : nullptr;
   } else if (use_geometry_emulation) {
-    geometry_pipeline_state = pipeline_cache_->GetOrCreateGeometryPipelineState(
-        vertex_translation, pixel_translation, geometry_shader_key,
-        attachment_formats, rendering_key);
+    geometry_pipeline_state =
+        pipeline_cache_manager_->GetOrCreateGeometryPipelineState(
+            vertex_translation, pixel_translation, geometry_shader_key,
+            attachment_formats, rendering_key);
     if (!geometry_pipeline_state || !geometry_pipeline_state->pipeline) {
       static bool geometry_pipeline_failure_logged = false;
       if (!geometry_pipeline_failure_logged) {
@@ -2389,7 +2403,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
     }
     pipeline = geometry_pipeline_state->pipeline;
   } else {
-    auto* pipeline_handle = pipeline_cache_->GetOrCreatePipelineState(
+    auto* pipeline_handle = pipeline_cache_manager_->GetOrCreatePipelineState(
         vertex_translation, pixel_translation, attachment_formats,
         rendering_key);
     if (pipeline_handle) {
@@ -2554,7 +2568,6 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   }
 
   // Bind vertex buffers and dispatch the draw.
-  bool memexport_used = memexport_used_vertex || memexport_used_pixel;
   return DispatchDraw(regs, primitive_processing_result,
                       use_tessellation_emulation, tessellation_pipeline_state,
                       use_geometry_emulation, geometry_pipeline_state,
@@ -2563,6 +2576,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                       vertex_range_count, index_buffer_info);
 }
 
+#if METAL_SHADER_CONVERTER_AVAILABLE
 bool MetalCommandProcessor::UploadConstants(
     const RegisterFile& regs, Shader* vertex_shader, Shader* pixel_shader,
     MetalShader* metal_vertex_shader, MetalShader* metal_pixel_shader,
@@ -4307,6 +4321,8 @@ bool MetalCommandProcessor::IssueDrawMsl(
   return true;
 }
 
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
 MTL::CommandBuffer* MetalCommandProcessor::BeginResolveOrdering() {
   // End any in-flight rendering so render target contents are visible to
   // resolve logic.
@@ -4489,9 +4505,11 @@ void MetalCommandProcessor::ProcessCompletedSubmissions() {
     return;
   }
   submission_completed_processed_ = completed;
+#if METAL_SHADER_CONVERTER_AVAILABLE
   if (constant_buffer_pool_) {
     constant_buffer_pool_->Reclaim(completed);
   }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
   if (texture_cache_) {
     texture_cache_->CompletedSubmissionUpdated(completed);
   }
