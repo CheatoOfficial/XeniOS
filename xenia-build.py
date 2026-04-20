@@ -161,7 +161,7 @@ def import_vs_environment():
 
 vs_version = import_vs_environment()
 
-default_branch = "canary_experimental"
+default_branch = "xenios"
 
 def setup_vulkan_sdk():
     """Setup Vulkan SDK environment variables if not already set.
@@ -2743,7 +2743,7 @@ class LintCommand(Command):
                 sys.executable,
                 "third_party/clang-format/git-clang-format",
                 f"--binary={clang_format_binary}",
-                f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
+                f"--commit={'origin/' + default_branch if args['origin'] else 'HEAD'}",
                 "--style=file",
                 "--diff",
             ]
@@ -2764,7 +2764,7 @@ class LintCommand(Command):
                     sys.executable,
                     "third_party/clang-format/git-clang-format",
                     f"--binary={clang_format_binary}",
-                    f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
+                    f"--commit={'origin/' + default_branch if args['origin'] else 'HEAD'}",
                     "--style=file",
                     "--diff",
                 ]
@@ -2826,7 +2826,7 @@ class FormatCommand(Command):
                 sys.executable,
                 "third_party/clang-format/git-clang-format",
                 f"--binary={clang_format_binary}",
-                f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
+                f"--commit={'origin/' + default_branch if args['origin'] else 'HEAD'}",
             ]
             # Exclude generated files
             for generated_file in GENERATED_FILES:
