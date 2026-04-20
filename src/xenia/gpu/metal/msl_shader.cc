@@ -91,8 +91,7 @@ static void AddResourceBindings(spirv_cross::CompilerMSL& compiler,
   {
     MSLBinding binding;
     binding.stage = stage;
-    binding.desc_set =
-        SpirvBindingLayout::kDescriptorSetSharedMemoryAndEdram;
+    binding.desc_set = SpirvBindingLayout::kDescriptorSetSharedMemoryAndEdram;
     binding.binding = 0;
     binding.msl_buffer = MslBindings::kSharedMemory;
     binding.msl_texture = 0;
@@ -106,8 +105,7 @@ static void AddResourceBindings(spirv_cross::CompilerMSL& compiler,
   {
     MSLBinding binding;
     binding.stage = stage;
-    binding.desc_set =
-        SpirvBindingLayout::kDescriptorSetSharedMemoryAndEdram;
+    binding.desc_set = SpirvBindingLayout::kDescriptorSetSharedMemoryAndEdram;
     binding.binding = 1;
     binding.msl_buffer = 30;  // High index, unused.
     binding.msl_texture = 0;
@@ -129,8 +127,7 @@ static void AddResourceBindings(spirv_cross::CompilerMSL& compiler,
        MslBindings::kFloatConstantsPixel},
       {SpirvBindingLayout::kConstantBufferBoolLoop,
        MslBindings::kBoolLoopConstants},
-      {SpirvBindingLayout::kConstantBufferFetch,
-       MslBindings::kFetchConstants},
+      {SpirvBindingLayout::kConstantBufferFetch, MslBindings::kFetchConstants},
       {SpirvBindingLayout::kConstantBufferClipPlanes,
        MslBindings::kClipPlaneConstants},
       {SpirvBindingLayout::kConstantBufferTessellation,

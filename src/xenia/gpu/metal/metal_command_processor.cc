@@ -52,7 +52,6 @@
 using BYTE = uint8_t;
 #include "xenia/gpu/shaders/bytecode/metal/resolve_downscale_cs.h"
 #if METAL_SHADER_CONVERTER_AVAILABLE
-#include "xenia/gpu/metal/metal_shader_converter.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/adaptive_quad_hs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/adaptive_triangle_hs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/continuous_quad_1cp_hs.h"
@@ -65,6 +64,7 @@ using BYTE = uint8_t;
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/discrete_triangle_3cp_hs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/tessellation_adaptive_vs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/tessellation_indexed_vs.h"
+#include "xenia/gpu/metal/metal_shader_converter.h"
 // Metal IR Converter Runtime - defines IRDescriptorTableEntry and bind points
 #define IR_RUNTIME_METALCPP
 #include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
@@ -1079,7 +1079,7 @@ bool MetalCommandProcessor::InitializeShaderTranslation() {
         render_target_cache_->draw_resolution_scale_x(),
         render_target_cache_->draw_resolution_scale_y(),
         nullptr,  // spirv_tools_context
-        false);  // spirv_optimize
+        false);   // spirv_optimize
 
     XELOGI(
         "SpirvShaderTranslator init (SPIRV-Cross MSL path): msaa_2x={}, "
@@ -3969,8 +3969,7 @@ bool MetalCommandProcessor::IssueDrawMsl(
 
   // Update SPIRV system constants.
   UpdateSpirvSystemConstantValues(
-      primitive_polygonal,
-      primitive_processing_result.line_loop_closing_index,
+      primitive_polygonal, primitive_processing_result.line_loop_closing_index,
       primitive_processing_result.host_shader_index_endian, viewport_info,
       used_texture_mask, normalized_depth_control, normalized_color_mask);
 
@@ -4216,9 +4215,8 @@ bool MetalCommandProcessor::IssueDrawMsl(
       mtl_primitive = MTL::PrimitiveTypeTriangleStrip;
       break;
     default:
-      XELOGE(
-          "SPIRV-Cross: Unsupported host primitive type {}",
-          uint32_t(primitive_processing_result.host_primitive_type));
+      XELOGE("SPIRV-Cross: Unsupported host primitive type {}",
+             uint32_t(primitive_processing_result.host_primitive_type));
       return false;
   }
 
@@ -7466,14 +7464,12 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
       float(pa_su_point_size.width) * (2.0f / 16.0f);
   consts.point_constant_diameter[1] =
       float(pa_su_point_size.height) * (2.0f / 16.0f);
-  float point_screen_to_ndc_x =
-      (viewport_info.ndc_scale[0] != 0.0f)
-          ? (0.5f / viewport_info.ndc_scale[0])
-          : 0.0f;
-  float point_screen_to_ndc_y =
-      (viewport_info.ndc_scale[1] != 0.0f)
-          ? (-0.5f / viewport_info.ndc_scale[1])
-          : 0.0f;
+  float point_screen_to_ndc_x = (viewport_info.ndc_scale[0] != 0.0f)
+                                    ? (0.5f / viewport_info.ndc_scale[0])
+                                    : 0.0f;
+  float point_screen_to_ndc_y = (viewport_info.ndc_scale[1] != 0.0f)
+                                    ? (-0.5f / viewport_info.ndc_scale[1])
+                                    : 0.0f;
   consts.point_screen_diameter_to_ndc_radius[0] = point_screen_to_ndc_x;
   consts.point_screen_diameter_to_ndc_radius[1] = point_screen_to_ndc_y;
 
