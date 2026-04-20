@@ -51,6 +51,10 @@
 #include "xenia/ui/metal/metal_presenter.h"
 using BYTE = uint8_t;
 #include "xenia/gpu/shaders/bytecode/metal/resolve_downscale_cs.h"
+// Metal IR Converter Runtime - defines IRDescriptorTableEntry and bind points.
+// The descriptor entry layout is also used by the iOS bindless heap path.
+#define IR_RUNTIME_METALCPP
+#include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
 #if METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/adaptive_quad_hs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/adaptive_triangle_hs.h"
@@ -65,9 +69,6 @@ using BYTE = uint8_t;
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/tessellation_adaptive_vs.h"
 #include "xenia/gpu/metal/d3d12_5_1_bytecode/tessellation_indexed_vs.h"
 #include "xenia/gpu/metal/metal_shader_converter.h"
-// Metal IR Converter Runtime - defines IRDescriptorTableEntry and bind points
-#define IR_RUNTIME_METALCPP
-#include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
 #ifndef DISPATCH_DATA_DESTRUCTOR_NONE
@@ -472,55 +473,6 @@ MetalCommandProcessor::DrawRingBuffers::~DrawRingBuffers() {
   }
 }
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
-
-void MetalCommandProcessor::RequestCapture() {
-  capture_requested_.store(true, std::memory_order_release);
-}
-
-void MetalCommandProcessor::MaybeStartCapture() {
-  if (!capture_requested_.exchange(false, std::memory_order_acq_rel)) {
-    return;
-  }
-  if (!command_queue_) {
-    XELOGW("Metal capture requested but command queue is not ready");
-    return;
-  }
-  capture_manager_ = MTL::CaptureManager::sharedCaptureManager();
-  if (!capture_manager_) {
-    XELOGW("Metal capture manager not available");
-    return;
-  }
-  auto* descriptor = MTL::CaptureDescriptor::alloc()->init();
-  descriptor->setCaptureObject(command_queue_);
-  descriptor->setDestination(MTL::CaptureDestinationGPUTraceDocument);
-
-  const char* capture_dir = std::getenv("XENIA_GPU_CAPTURE_DIR");
-  std::string filename =
-      capture_dir ? (std::string(capture_dir) + "/metal_capture.gputrace")
-                  : std::string("./metal_capture.gputrace");
-  auto* url = NS::URL::fileURLWithPath(
-      NS::String::string(filename.c_str(), NS::UTF8StringEncoding));
-  descriptor->setOutputURL(url);
-
-  NS::Error* error = nullptr;
-  if (capture_manager_->startCapture(descriptor, &error)) {
-    capture_active_ = true;
-    XELOGI("Metal capture started: {}", filename);
-  } else {
-    XELOGE("Metal capture start failed: {} (set MTL_CAPTURE_ENABLED=1)",
-           error ? error->localizedDescription()->utf8String() : "unknown");
-  }
-  descriptor->release();
-}
-
-void MetalCommandProcessor::StopCaptureIfActive() {
-  if (!capture_active_ || !capture_manager_) {
-    return;
-  }
-  capture_manager_->stopCapture();
-  capture_active_ = false;
-  XELOGI("Metal capture completed");
-}
 
 void MetalCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
                                                      uint32_t length) {
@@ -1067,66 +1019,6 @@ bool MetalCommandProcessor::InitializeShaderTranslation() {
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   return true;
-}
-
-void MetalCommandProcessor::PrepareForWait() {
-  // Flush any pending Metal command buffers before entering wait state.
-  // This is critical because:
-  // 1. The worker thread's autorelease pool will be drained when it exits
-  // 2. Metal objects in that pool might still be referenced by in-flight
-  // commands
-  // 3. Releasing those objects during pool drain can hang waiting for GPU
-  // completion
-  //
-  // By submitting and waiting for all GPU work now, we ensure clean pool
-  // drainage.
-
-  EndRenderEncoder();
-
-  if (submission_open_ || current_command_buffer_) {
-    uint64_t submission_to_wait =
-        current_command_buffer_ ? GetCurrentSubmission() : 0;
-    if (!submission_open_) {
-      XELOGW(
-          "MetalCommandProcessor::PrepareForWait: command buffer without "
-          "open submission");
-      submission_open_ = true;
-    }
-    EndSubmission(false);
-    if (submission_to_wait) {
-      CheckSubmissionCompletion(submission_to_wait);
-    }
-    current_command_buffer_->release();
-    current_command_buffer_ = nullptr;
-    submission_has_draws_ = false;
-    copy_resolve_writes_pending_ = false;
-  }
-  DrainCommandBufferAutoreleasePool();
-
-  // Phase 2: submit a dummy command buffer to ensure ALL previously committed
-  // GPU work completes before the caller tears down resources.
-  if (command_queue_) {
-    NS::AutoreleasePool* pool = NS::AutoreleasePool::alloc()->init();
-    MTL::CommandBuffer* sync_cmd = command_queue_->commandBuffer();
-    if (sync_cmd) {
-      uint64_t wait_value = 0;
-      if (wait_shared_event_) {
-        wait_value = ++wait_shared_event_value_;
-        sync_cmd->encodeSignalEvent(wait_shared_event_, wait_value);
-      }
-      sync_cmd->commit();
-      if (wait_shared_event_) {
-        bool signaled =
-            wait_shared_event_->waitUntilSignaledValue(wait_value, timeout_ns);
-        if (!signaled) {
-          XELOGE("{}: GPU sync timeout (possible GPU hang)", context);
-        }
-      } else {
-        sync_cmd->waitUntilCompleted();
-      }
-    }
-    pool->release();
-  }
 }
 
 void MetalCommandProcessor::PrepareForWait() {
