@@ -108,8 +108,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   using ProfileServicesReadyCallback = std::function<void()>;
   using SignInUIPromptCallback = std::function<bool(uint32_t, uint32_t)>;
   using ControllerStateCallback = std::function<bool(uint32_t, hid::X_INPUT_STATE*)>;
-  using AchievementsListCallback =
-      std::function<std::optional<IOSAchievementsData>(uint32_t)>;
+  using AchievementsListCallback = std::function<std::optional<IOSAchievementsData>(uint32_t)>;
   using AchievementsResetCallback = std::function<bool(uint32_t, std::string*)>;
   using MessageBoxPromptCallback =
       std::function<bool(const std::string&, const std::string&, const std::vector<std::string>&,
