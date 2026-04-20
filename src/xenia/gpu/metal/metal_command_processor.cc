@@ -3655,6 +3655,7 @@ bool MetalCommandProcessor::DispatchDraw(
 XELOGE("MSC draw path not available");
 return false;
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 }
 
 // ==========================================================================
@@ -4144,8 +4145,6 @@ bool MetalCommandProcessor::IssueDrawMsl(
   ++current_draw_index_;
   return true;
 }
-
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
 MTL::CommandBuffer* MetalCommandProcessor::BeginResolveOrdering() {
   // End any in-flight rendering so render target contents are visible to
