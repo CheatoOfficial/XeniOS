@@ -285,6 +285,13 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+  // Unhandled: restore the original disposition so the kernel re-delivers
+  // the signal to it on instruction retry, otherwise we loop forever.
+  sigaction(signal_number,
+            signal_number == SIGSEGV ? &original_sigsegv_handler_
+                                     : &original_sigill_handler_,
+            nullptr);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {
