@@ -18,9 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-#if METAL_SHADER_CONVERTER_AVAILABLE
 #include "xenia/gpu/dxbc_shader.h"
-#endif
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/texture_cache.h"

@@ -57,6 +57,7 @@ project("xenia-gpu-metal")
       "msl_shader.h",
     }
     includedirs {
+      path.join(project_root, "third_party/glslang"),
       spirvcross_root,
     }
     defines {
