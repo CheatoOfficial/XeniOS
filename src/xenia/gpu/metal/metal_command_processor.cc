@@ -121,6 +121,7 @@ void ClampScissorToBounds(draw_util::Scissor& scissor, uint32_t width,
 }
 
 constexpr size_t kResolvedMemoryRangesMax = 8192;
+#if METAL_SHADER_CONVERTER_AVAILABLE
 PipelineAttachmentFormats ResolvePipelineAttachmentFormats(
     const MetalRenderTargetCache* render_target_cache,
     MTL::RenderPassDescriptor* pass_descriptor, bool pixel_shader_writes_depth,
@@ -258,6 +259,7 @@ PipelineAttachmentFormats ResolvePipelineAttachmentFormats(
 
   return result;
 }
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
 MTL::ComputePipelineState* CreateComputePipelineFromEmbeddedLibrary(
     MTL::Device* device, const void* metallib_data, size_t metallib_size,
