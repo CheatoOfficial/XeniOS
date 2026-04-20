@@ -50,7 +50,10 @@
 #include "xenia/gpu/shaders/bytecode/metal/resolve_full_8bpp_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/resolve_full_8bpp_scaled_cs.h"
 
+// clang-format off
+#define IR_RUNTIME_METALCPP
 #include "third_party/metal-shader-converter/include/metal_irconverter_runtime.h"
+// clang-format on
 #include "xenia/gpu/metal/metal_command_processor.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/texture_util.h"
