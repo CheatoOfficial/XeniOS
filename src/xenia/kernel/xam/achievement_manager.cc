@@ -17,6 +17,8 @@
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
 #if !XE_PLATFORM_IOS
 #include "xenia/ui/audio_helper.h"
+#else
+#include "xenia/ui/windowed_app_context_ios.h"
 #endif
 #include "xenia/ui/imgui_guest_notification.h"
 

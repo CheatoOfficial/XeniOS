@@ -235,7 +235,7 @@ project("xenia-app")
     })
   filter({})
 
-  filter("system:macosx")
+  filter("system:ios")
     links({
       "xenia-gpu-metal",
       "xenia-ui-metal",
