@@ -345,6 +345,83 @@ MTL::StencilOperation ToMetalStencilOperation(xenos::StencilOp op) {
   return kStencilOpMap[uint32_t(op) & 0x7];
 }
 
+MTL::ColorWriteMask ToMetalColorWriteMask(uint32_t write_mask) {
+  MTL::ColorWriteMask mtl_mask = MTL::ColorWriteMaskNone;
+  if (write_mask & 0x1) {
+    mtl_mask |= MTL::ColorWriteMaskRed;
+  }
+  if (write_mask & 0x2) {
+    mtl_mask |= MTL::ColorWriteMaskGreen;
+  }
+  if (write_mask & 0x4) {
+    mtl_mask |= MTL::ColorWriteMaskBlue;
+  }
+  if (write_mask & 0x8) {
+    mtl_mask |= MTL::ColorWriteMaskAlpha;
+  }
+  return mtl_mask;
+}
+
+MTL::BlendOperation ToMetalBlendOperation(xenos::BlendOp blend_op) {
+  static const MTL::BlendOperation kBlendOpMap[8] = {
+      MTL::BlendOperationAdd,              // 0
+      MTL::BlendOperationSubtract,         // 1
+      MTL::BlendOperationMin,              // 2
+      MTL::BlendOperationMax,              // 3
+      MTL::BlendOperationReverseSubtract,  // 4
+      MTL::BlendOperationAdd,              // 5
+      MTL::BlendOperationAdd,              // 6
+      MTL::BlendOperationAdd,              // 7
+  };
+  return kBlendOpMap[uint32_t(blend_op) & 0x7];
+}
+
+MTL::BlendFactor ToMetalBlendFactorRgb(xenos::BlendFactor blend_factor) {
+  static const MTL::BlendFactor kBlendFactorMap[32] = {
+      /*  0 */ MTL::BlendFactorZero,
+      /*  1 */ MTL::BlendFactorOne,
+      /*  2 */ MTL::BlendFactorZero,
+      /*  3 */ MTL::BlendFactorZero,
+      /*  4 */ MTL::BlendFactorSourceColor,
+      /*  5 */ MTL::BlendFactorOneMinusSourceColor,
+      /*  6 */ MTL::BlendFactorSourceAlpha,
+      /*  7 */ MTL::BlendFactorOneMinusSourceAlpha,
+      /*  8 */ MTL::BlendFactorDestinationColor,
+      /*  9 */ MTL::BlendFactorOneMinusDestinationColor,
+      /* 10 */ MTL::BlendFactorDestinationAlpha,
+      /* 11 */ MTL::BlendFactorOneMinusDestinationAlpha,
+      /* 12 */ MTL::BlendFactorBlendColor,
+      /* 13 */ MTL::BlendFactorOneMinusBlendColor,
+      /* 14 */ MTL::BlendFactorBlendAlpha,
+      /* 15 */ MTL::BlendFactorOneMinusBlendAlpha,
+      /* 16 */ MTL::BlendFactorSourceAlphaSaturated,
+  };
+  return kBlendFactorMap[uint32_t(blend_factor) & 0x1F];
+}
+
+MTL::BlendFactor ToMetalBlendFactorAlpha(xenos::BlendFactor blend_factor) {
+  static const MTL::BlendFactor kBlendFactorAlphaMap[32] = {
+      /*  0 */ MTL::BlendFactorZero,
+      /*  1 */ MTL::BlendFactorOne,
+      /*  2 */ MTL::BlendFactorZero,
+      /*  3 */ MTL::BlendFactorZero,
+      /*  4 */ MTL::BlendFactorSourceAlpha,
+      /*  5 */ MTL::BlendFactorOneMinusSourceAlpha,
+      /*  6 */ MTL::BlendFactorSourceAlpha,
+      /*  7 */ MTL::BlendFactorOneMinusSourceAlpha,
+      /*  8 */ MTL::BlendFactorDestinationAlpha,
+      /*  9 */ MTL::BlendFactorOneMinusDestinationAlpha,
+      /* 10 */ MTL::BlendFactorDestinationAlpha,
+      /* 11 */ MTL::BlendFactorOneMinusDestinationAlpha,
+      /* 12 */ MTL::BlendFactorBlendAlpha,
+      /* 13 */ MTL::BlendFactorOneMinusBlendAlpha,
+      /* 14 */ MTL::BlendFactorBlendAlpha,
+      /* 15 */ MTL::BlendFactorOneMinusBlendAlpha,
+      /* 16 */ MTL::BlendFactorSourceAlphaSaturated,
+  };
+  return kBlendFactorAlphaMap[uint32_t(blend_factor) & 0x1F];
+}
+
 }  // namespace
 
 MetalCommandProcessor::MetalCommandProcessor(
@@ -1019,6 +1096,154 @@ bool MetalCommandProcessor::InitializeShaderTranslation() {
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
   return true;
+}
+
+uint64_t MetalCommandProcessor::GetBindlessDescriptorRetirementSubmission()
+    const {
+  if (!submission_current_) {
+    return 0;
+  }
+  if (current_command_buffer_ ||
+      completed_command_buffers_.load(std::memory_order_relaxed) <
+          submission_current_) {
+    return submission_current_;
+  }
+  return 0;
+}
+
+uint32_t MetalCommandProcessor::AllocateViewBindlessIndex() {
+  if (!view_bindless_heap_) {
+    XELOGE("AllocateViewBindlessIndex: heap is null");
+    return UINT32_MAX;
+  }
+  if (!view_bindless_heap_free_.empty()) {
+    uint32_t idx = view_bindless_heap_free_.back();
+    view_bindless_heap_free_.pop_back();
+    view_bindless_heap_exhausted_logged_ = false;
+    return idx;
+  }
+  if (view_bindless_heap_next_ >= kViewBindlessHeapSize) {
+    if (!view_bindless_heap_exhausted_logged_) {
+      uint64_t completed =
+          completed_command_buffers_.load(std::memory_order_relaxed);
+      XELOGE(
+          "View bindless heap exhausted ({} allocated, {} free, {} retired, "
+          "submissions: current={} completed={})",
+          view_bindless_heap_next_, view_bindless_heap_free_.size(),
+          retired_view_bindless_indices_.size(), submission_current_,
+          completed);
+      view_bindless_heap_exhausted_logged_ = true;
+    }
+    return UINT32_MAX;
+  }
+  return view_bindless_heap_next_++;
+}
+
+void MetalCommandProcessor::ReleaseViewBindlessIndex(uint32_t index) {
+  if (index >= kViewBindlessHeapSize || !view_bindless_heap_) {
+    return;
+  }
+  FreeViewBindlessIndexNow(index);
+}
+
+void MetalCommandProcessor::RetireViewBindlessIndex(uint32_t index) {
+  if (index >= kViewBindlessHeapSize || !view_bindless_heap_) {
+    return;
+  }
+  uint64_t retirement_submission = GetBindlessDescriptorRetirementSubmission();
+  if (!retirement_submission) {
+    FreeViewBindlessIndexNow(index);
+  } else {
+    retired_view_bindless_indices_.push_back({index, retirement_submission});
+  }
+}
+
+uint32_t MetalCommandProcessor::GetViewBindlessHeapAvailableCount() const {
+  return uint32_t(kViewBindlessHeapSize - view_bindless_heap_next_) +
+         uint32_t(view_bindless_heap_free_.size());
+}
+
+uint32_t MetalCommandProcessor::AllocateSamplerBindlessIndex() {
+  if (!sampler_bindless_heap_free_.empty()) {
+    uint32_t idx = sampler_bindless_heap_free_.back();
+    sampler_bindless_heap_free_.pop_back();
+    sampler_bindless_heap_exhausted_logged_ = false;
+    return idx;
+  }
+  if (sampler_bindless_heap_next_ >= kSamplerBindlessHeapSize) {
+    if (!sampler_bindless_heap_exhausted_logged_) {
+      XELOGE("Sampler bindless heap exhausted");
+      sampler_bindless_heap_exhausted_logged_ = true;
+    }
+    return UINT32_MAX;
+  }
+  return sampler_bindless_heap_next_++;
+}
+
+void MetalCommandProcessor::ReleaseSamplerBindlessIndex(uint32_t index) {
+  if (index >= kSamplerBindlessHeapSize || !sampler_bindless_heap_) {
+    return;
+  }
+  uint64_t retirement_submission = GetBindlessDescriptorRetirementSubmission();
+  if (!retirement_submission) {
+    FreeSamplerBindlessIndexNow(index);
+  } else {
+    retired_sampler_bindless_indices_.push_back({index, retirement_submission});
+  }
+}
+
+void MetalCommandProcessor::FreeViewBindlessIndexNow(uint32_t index) {
+  if (index >= kViewBindlessHeapSize || !view_bindless_heap_) {
+    return;
+  }
+  if (IRDescriptorTableEntry* entry = GetViewBindlessHeapEntry(index)) {
+    std::memset(entry, 0, sizeof(IRDescriptorTableEntry));
+  }
+  view_bindless_heap_free_.push_back(index);
+  view_bindless_heap_exhausted_logged_ = false;
+}
+
+void MetalCommandProcessor::FreeSamplerBindlessIndexNow(uint32_t index) {
+  if (index >= kSamplerBindlessHeapSize || !sampler_bindless_heap_) {
+    return;
+  }
+  if (IRDescriptorTableEntry* entry = GetSamplerBindlessHeapEntry(index)) {
+    std::memset(entry, 0, sizeof(IRDescriptorTableEntry));
+  }
+  sampler_bindless_heap_free_.push_back(index);
+  sampler_bindless_heap_exhausted_logged_ = false;
+}
+
+IRDescriptorTableEntry* MetalCommandProcessor::GetViewBindlessHeapEntry(
+    uint32_t index) {
+  if (!view_bindless_heap_) {
+    XELOGE("GetViewBindlessHeapEntry: heap is null");
+    return nullptr;
+  }
+  if (index >= kViewBindlessHeapSize) {
+    XELOGE("GetViewBindlessHeapEntry: index {} >= heap size {}", index,
+           kViewBindlessHeapSize);
+    return nullptr;
+  }
+  return reinterpret_cast<IRDescriptorTableEntry*>(
+             view_bindless_heap_->contents()) +
+         index;
+}
+
+IRDescriptorTableEntry* MetalCommandProcessor::GetSamplerBindlessHeapEntry(
+    uint32_t index) {
+  if (!sampler_bindless_heap_) {
+    XELOGE("GetSamplerBindlessHeapEntry: heap is null");
+    return nullptr;
+  }
+  if (index >= kSamplerBindlessHeapSize) {
+    XELOGE("GetSamplerBindlessHeapEntry: index {} >= heap size {}", index,
+           kSamplerBindlessHeapSize);
+    return nullptr;
+  }
+  return reinterpret_cast<IRDescriptorTableEntry*>(
+             sampler_bindless_heap_->contents()) +
+         index;
 }
 
 void MetalCommandProcessor::PrepareForWait() {

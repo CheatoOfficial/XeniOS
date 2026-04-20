@@ -125,6 +125,7 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
     return current_command_buffer_;
   }
+  uint32_t current_draw_index() const { return current_draw_index_; }
 
   // Submission coordination helpers — callers use these to query or obtain
   // command buffers for transfer/upload work without reaching into internal
@@ -167,6 +168,7 @@ class MetalCommandProcessor : public CommandProcessor {
                                 MTL::ResourceUsage usage);
   void EnsureCommandBufferAutoreleasePool();
   void DrainCommandBufferAutoreleasePool();
+  MTL::RenderPassDescriptor* GetCurrentRenderPassDescriptor();
 
   // Force issue a swap to push render target to presenter (for trace dumps)
   void ForceIssueSwap();
@@ -354,6 +356,9 @@ class MetalCommandProcessor : public CommandProcessor {
 
   void UseRenderEncoderAttachmentHeaps(MTL::RenderPassDescriptor* descriptor);
   void UseRenderEncoderHeap(MTL::Heap* heap);
+  uint64_t GetBindlessDescriptorRetirementSubmission() const;
+  void FreeViewBindlessIndexNow(uint32_t index);
+  void FreeSamplerBindlessIndexNow(uint32_t index);
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
   // Pipeline state management (MSC path)
@@ -540,6 +545,7 @@ class MetalCommandProcessor : public CommandProcessor {
   // Current command buffer and encoder
   MTL::CommandBuffer* current_command_buffer_ = nullptr;
   MTL::RenderCommandEncoder* current_render_encoder_ = nullptr;
+  MTL::RenderPassDescriptor* render_pass_descriptor_ = nullptr;
   MTL::RenderPassDescriptor* current_render_pass_descriptor_ = nullptr;
   NS::AutoreleasePool* command_buffer_autorelease_pool_ = nullptr;
 
@@ -741,6 +747,19 @@ class MetalCommandProcessor : public CommandProcessor {
   // when the written register is in the current shader's bitmap.
   // Matches D3D12's current_float_constant_map_vertex_/pixel_ at
   // d3d12_command_processor.h:829-830.
+  struct ConstantBufferBinding {
+    MTL::Buffer* buffer = nullptr;
+    NS::UInteger offset = 0;
+    uint64_t gpu_address = 0;
+    bool up_to_date = false;
+  };
+  bool cbuffer_binding_system_up_to_date_ = false;
+  ConstantBufferBinding cbuffer_binding_float_vertex_;
+  ConstantBufferBinding cbuffer_binding_float_pixel_;
+  ConstantBufferBinding cbuffer_binding_bool_loop_;
+  ConstantBufferBinding cbuffer_binding_fetch_;
+  bool cbuffer_binding_descriptor_indices_vertex_up_to_date_ = false;
+  bool cbuffer_binding_descriptor_indices_pixel_up_to_date_ = false;
   uint64_t current_float_constant_map_vertex_[4] = {};
   uint64_t current_float_constant_map_pixel_[4] = {};
   size_t current_texture_layout_uid_vertex_ = 0;
@@ -780,6 +799,7 @@ class MetalCommandProcessor : public CommandProcessor {
   std::atomic<uint32_t> pending_completion_handlers_{0};
   uint64_t submission_current_ = 0;
   uint64_t submission_completed_processed_ = 0;
+  uint32_t current_draw_index_ = 0;
 
   bool submission_has_draws_ = false;
   bool copy_resolve_writes_pending_ = false;
