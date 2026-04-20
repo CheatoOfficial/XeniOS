@@ -21,9 +21,9 @@
 #include "xenia/gpu/shader_translator.h"
 #include "xenia/gpu/spirv_builder.h"
 #include "xenia/gpu/xenos.h"
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
 #include "xenia/ui/vulkan/vulkan_device.h"
-#endif  // !XE_PLATFORM_MAC
+#endif  // !XE_PLATFORM_APPLE
 
 namespace xe {
 namespace ui {
