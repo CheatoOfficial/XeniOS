@@ -791,7 +791,6 @@ workspace("xenia")
         files({
           ffmpeg_dir .. "/libavformat/network.c",
           ffmpeg_dir .. "/libavformat/riffdec.c",
-          ffmpeg_dir .. "/libavformat/wavdec.c",
           ffmpeg_dir .. "/libavformat/pcm.c",
         })
       filter({})
