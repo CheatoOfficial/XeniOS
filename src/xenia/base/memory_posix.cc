@@ -509,15 +509,22 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
 
   void* result = mmap(base_address, length, prot, flags, handle, file_offset);
 
-  if (result != MAP_FAILED) {
-    std::lock_guard guard(g_mapped_file_ranges_mutex);
-    mapped_file_ranges.push_back(
-        {reinterpret_cast<uintptr_t>(result),
-         reinterpret_cast<uintptr_t>(result) + length});
-    return result;
+  if (result == MAP_FAILED) {
+    return nullptr;
   }
 
-  return nullptr;
+  // Without MAP_FIXED_NOREPLACE (e.g. macOS), a non-null base_address is just
+  // a hint. Enforce the caller's contract by failing on address mismatch so
+  // callers can retry at a different base, matching AllocFixed's behavior.
+  if (base_address != nullptr && result != base_address) {
+    munmap(result, length);
+    return nullptr;
+  }
+
+  std::lock_guard guard(g_mapped_file_ranges_mutex);
+  mapped_file_ranges.push_back({reinterpret_cast<uintptr_t>(result),
+                                reinterpret_cast<uintptr_t>(result) + length});
+  return result;
 }
 
 bool UnmapFileView(FileMappingHandle handle, void* base_address,
