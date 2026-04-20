@@ -1067,15 +1067,6 @@ void MetalCommandProcessor::ShutdownContext() {
   DrainCommandBufferAutoreleasePool();
 
   ClearReadbackBuffers();
-  if (resolve_downscale_buffer_) {
-    resolve_downscale_buffer_->release();
-    resolve_downscale_buffer_ = nullptr;
-    resolve_downscale_buffer_size_ = 0;
-  }
-  if (resolve_downscale_pipeline_) {
-    resolve_downscale_pipeline_->release();
-    resolve_downscale_pipeline_ = nullptr;
-  }
 #if METAL_SHADER_CONVERTER_AVAILABLE
   {
     std::lock_guard<std::mutex> lock(draw_ring_mutex_);
