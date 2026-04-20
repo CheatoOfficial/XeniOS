@@ -94,6 +94,15 @@ DEFINE_int32(occlusion_query_fake_upper_threshold, 100,
              "GPU");
 DEFINE_bool(occlusion_query_log, false,
             "Log occlusion query lifetime and summary stats.", "GPU");
+DEFINE_double(
+    occlusion_query_sample_count_saturation, 1.0,
+    "Compress higher occlusion query sample counts before guest writeback.\n"
+    "This can be useful if effects such as lens flares appear too bright\n"
+    "or too strong.\n"
+    "1.0 = default behavior\n"
+    "0.0 = collapse all nonzero sample counts to 1\n"
+    "Values around 0.90 are a good starting point for subtle tuning.",
+    "GPU");
 
 uint32_t GetGuestVblankRateHz() { return cvars::use_50Hz_mode ? 50 : 60; }
 

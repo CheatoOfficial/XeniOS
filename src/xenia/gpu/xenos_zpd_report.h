@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/xenos.h"
 
 namespace xe {
@@ -90,6 +91,8 @@ struct XenosZPDReport {
   // only provide a passing count. This is still enough to satisfy most titles.
   static void WriteSampleCount(xenos::xe_gpu_depth_sample_counts* report,
                                uint32_t sample_count) {
+    sample_count = SaturateSampleCount(sample_count);
+
     report->Total_A = sample_count;
     report->Total_B = 0;
     report->ZFail_A = 0;
@@ -98,6 +101,35 @@ struct XenosZPDReport {
     report->ZPass_B = 0;
     report->StencilFail_A = 0;
     report->StencilFail_B = 0;
+  }
+
+  static uint32_t SaturateSampleCount(uint32_t sample_count) {
+    double saturation = std::clamp(
+        static_cast<double>(cvars::occlusion_query_sample_count_saturation),
+        0.0, 1.0);
+
+    if (sample_count == 0 || saturation >= 1.0) {
+      return sample_count;
+    }
+    if (saturation <= 0.0) {
+      return 1;
+    }
+
+    // Preserve lower sample counts and only compress the higher range. A knee
+    // of 32 is a conservative, non-authoritative threshold, acting as a safety
+    // valve for titles using occlusion culling. May need to be revisited.
+    const double knee = 32.0;
+    if (static_cast<double>(sample_count) <= knee) {
+      return sample_count;
+    }
+
+    const double attenuation = 1.0 - saturation;
+    const double exponent = 1.0 - (1.0 - 0.35) * (attenuation * attenuation *
+                                                  (3.0 - 2.0 * attenuation));
+    double saturated_count =
+        knee + std::pow(static_cast<double>(sample_count) - knee, exponent);
+
+    return static_cast<uint32_t>(saturated_count + 0.5);
   }
 
   // Fake mode for titles (425307EC, 4D5309B1) that use QueryBatch and expect
