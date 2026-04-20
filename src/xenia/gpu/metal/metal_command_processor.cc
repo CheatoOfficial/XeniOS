@@ -1053,8 +1053,7 @@ bool MetalCommandProcessor::InitializeShaderTranslation() {
         false,  // edram_fragment_shader_interlock (host RT path)
         render_target_cache_->draw_resolution_scale_x(),
         render_target_cache_->draw_resolution_scale_y(),
-        nullptr,  // spirv_tools_context
-        false);   // spirv_optimize
+        false);  // spirv_optimize
 
     XELOGI(
         "SpirvShaderTranslator init (SPIRV-Cross MSL path): msaa_2x={}, "
