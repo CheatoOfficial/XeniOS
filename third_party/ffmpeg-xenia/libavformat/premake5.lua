@@ -54,7 +54,7 @@ project("libavformat")
     "../../FFmpeg/libavformat/asf_tags.c",
     "../../FFmpeg/libavformat/to_upper4.c",
   })
-  filter({"platforms:Windows"})
+  filter({"platforms:Windows-*"})
   files({
     "../../FFmpeg/libavformat/file_open.c",
   })

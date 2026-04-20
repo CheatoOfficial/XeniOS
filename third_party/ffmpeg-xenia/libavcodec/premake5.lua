@@ -114,7 +114,7 @@ project("libavcodec")
     "../../FFmpeg/libavcodec/mpegaudiotabs.c",
     "../../FFmpeg/libavcodec/tiff_common.c",
   })
-  filter({"platforms:Windows"})
+  filter({"platforms:Windows-*"})
   files({
     "../../FFmpeg/libavcodec/file_open.c",
   })
@@ -138,7 +138,7 @@ project("libavcodec")
 
   -- libavcodec/x86/Makefile:
   --   OBJS:
-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
+  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows-*"})
   files({
     "../../FFmpeg/libavcodec/x86/constants.c",
     "../../FFmpeg/libavcodec/x86/fdctdsp_init.c",
@@ -147,7 +147,7 @@ project("libavcodec")
   })
   filter({})
   --   MMX-OBJS:
-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
+  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows-*"})
   files({
     "../../FFmpeg/libavcodec/x86/fdct.c",
   })

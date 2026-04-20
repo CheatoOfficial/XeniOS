@@ -214,7 +214,7 @@ project("libavutil")
 
   -- libavutil/x86/Makefile:
   --   OBJS:
-  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows"})
+  filter({"platforms:Android-x86_64 or platforms:Linux or platforms:Windows-*"})
   files({
     "../../FFmpeg/libavutil/x86/cpu.c",
     "../../FFmpeg/libavutil/x86/fixed_dsp_init.c",

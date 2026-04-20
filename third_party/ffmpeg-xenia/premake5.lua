@@ -16,16 +16,22 @@ function ffmpeg_common()
     "..",           -- ffmpeg-xenia/ (config.h, avconfig.h, ffversion.h)
     "../../FFmpeg", -- FFmpeg source headers
   })
-  filter({"platforms:Windows", "configurations:Debug or configurations:Checked"})
+  filter({"platforms:Windows-*", "configurations:Debug or configurations:Checked"})
     optimize("Size") -- dead code elimination is mandatory
     removebuildoptions({
       "/RTCsu",      -- '/O1' and '/RTCs' command-line options are incompatible
     })
-  filter({"platforms:Windows", "configurations:Release"})
+  filter({"platforms:Windows-*", "configurations:Release"})
     linktimeoptimization("Off")
-  filter("platforms:Windows")
+  filter("platforms:Windows-*")
     includedirs({
       "../../FFmpeg/compat/atomics/win32",
+    })
+    -- MSVC enables C17 parsing separately from the C11 atomics implementation.
+    -- FFmpeg's libavutil includes <stdatomic.h>, so opt into the atomics support
+    -- explicitly for the Windows FFmpeg projects.
+    buildoptions({
+      "/experimental:c11atomics",
     })
     links({
       "bcrypt",

@@ -27,7 +27,7 @@ improvements are intended to flow back upstream over time.
 - macOS (Intel)
 
 Current published releases focus on iOS and macOS.
-For Windows or Linux builds, use [Xenia Edge](https://github.com/has207/xenia-edge) or [Xenia Canary](https://github.com/xenia-canary/xenia-canary).
+For Windows or Linux builds, use [Xenia Edge](https://github.com/has207/xenia-edge).
 
 ## Why This Fork Exists
 
@@ -42,7 +42,7 @@ The goal is not to keep good work siloed here forever. The goal is to iterate
 quickly, build a more polished user-facing experience for Apple platforms, and
 then contribute the useful technical improvements back upstream into the
 broader Xenia community, especially
-[Xenia Canary](https://github.com/xenia-canary/xenia-canary).
+[Xenia Edge](https://github.com/has207/xenia-edge).
 
 ## Downloads
 
