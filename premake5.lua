@@ -788,6 +788,10 @@ workspace("xenia")
       filter("platforms:iOS-ARM64")
         buildoptions({ "-include config.h" })
         includedirs({ ffmpeg_dir .. "/compat/atomics/gcc" })
+        defines({
+          "CONFIG_NETWORK=1",
+          "HAVE_CLOSESOCKET=0",
+        })
         files({
           ffmpeg_dir .. "/libavformat/network.c",
           ffmpeg_dir .. "/libavformat/riffdec.c",
