@@ -473,66 +473,6 @@ MetalCommandProcessor::DrawRingBuffers::~DrawRingBuffers() {
 }
 #endif  // METAL_SHADER_CONVERTER_AVAILABLE
 
-void MetalCommandProcessor::UpdateDebugMarkersEnabled() {
-  // Enable debug markers if the CVAR is set (RenderDoc auto-detect disabled on
-  // macOS).
-  debug_markers_enabled_ = IsGpuDebugMarkersEnabled();
-}
-
-void MetalCommandProcessor::PushDebugMarker(const char* format, ...) {
-  if (!debug_markers_enabled_) {
-    return;
-  }
-  char label[256];
-  va_list args;
-  va_start(args, format);
-  vsnprintf(label, sizeof(label), format, args);
-  va_end(args);
-  auto* ns_label = NS::String::string(label, NS::UTF8StringEncoding);
-  if (current_render_encoder_) {
-    current_render_encoder_->pushDebugGroup(ns_label);
-    debug_marker_stack_.push_back(DebugMarkerTarget::kRenderEncoder);
-  } else if (current_command_buffer_) {
-    current_command_buffer_->pushDebugGroup(ns_label);
-    debug_marker_stack_.push_back(DebugMarkerTarget::kCommandBuffer);
-  }
-}
-
-void MetalCommandProcessor::PopDebugMarker() {
-  if (!debug_markers_enabled_ || debug_marker_stack_.empty()) {
-    return;
-  }
-  DebugMarkerTarget target = debug_marker_stack_.back();
-  debug_marker_stack_.pop_back();
-  if (target == DebugMarkerTarget::kRenderEncoder) {
-    if (current_render_encoder_) {
-      current_render_encoder_->popDebugGroup();
-    }
-  } else {
-    if (current_command_buffer_) {
-      current_command_buffer_->popDebugGroup();
-    }
-  }
-}
-
-void MetalCommandProcessor::InsertDebugMarker(const char* format, ...) {
-  if (!debug_markers_enabled_) {
-    return;
-  }
-  char label[256];
-  va_list args;
-  va_start(args, format);
-  vsnprintf(label, sizeof(label), format, args);
-  va_end(args);
-  auto* ns_label = NS::String::string(label, NS::UTF8StringEncoding);
-  if (current_render_encoder_) {
-    current_render_encoder_->insertDebugSignpost(ns_label);
-  } else if (current_command_buffer_) {
-    current_command_buffer_->pushDebugGroup(ns_label);
-    current_command_buffer_->popDebugGroup();
-  }
-}
-
 void MetalCommandProcessor::RequestCapture() {
   capture_requested_.store(true, std::memory_order_release);
 }
