@@ -5356,62 +5356,6 @@ void MetalRenderTargetCache::PerformTransfersAndResolveClears(
             }
           };
 
-          std::vector<TransferTileBatch> tile_batches;
-          bool use_tile_instancing = false;
-          if (::cvars::metal_transfer_tile_instancing) {
-            use_tile_instancing = build_tile_batches(
-                rectangles, rectangle_count, constants,
-                mode_info.uses_host_depth,
-                shader_key.host_depth_source_is_copy != 0, tile_batches);
-          }
-
-          MTL::RenderPipelineState* pipeline = GetOrCreateTransferPipelines(
-              shader_key, dest_pixel_format, dest_is_uint, use_tile_instancing);
-          if (!pipeline) {
-            continue;
-          }
-
-          encoder->setRenderPipelineState(pipeline);
-
-          bool use_sample_id_for_invocation =
-              shader_key.dest_sample_id_from_sample != 0;
-          auto draw_transfer_samples = [&](auto&& draw_fn) {
-            if (use_sample_id_for_invocation || dest_sample_count <= 1) {
-              draw_fn(0);
-              return;
-            }
-            for (uint32_t sample_id = 0; sample_id < dest_sample_count;
-                 ++sample_id) {
-              draw_fn(sample_id);
-            }
-          };
-
-          auto draw_transfer = [&](uint32_t sample_id) {
-            constants.dest_sample_id = sample_id;
-            if (use_tile_instancing) {
-              set_full_transfer_viewport();
-              encoder->setVertexBytes(&constants, sizeof(constants), 0);
-              encoder->setFragmentBytes(&constants, sizeof(constants), 0);
-              for (const auto& batch : tile_batches) {
-                encoder->setScissorRect(batch.scissor);
-                encoder->setVertexBuffer(batch.buffer, batch.buffer_offset, 1);
-                encoder->drawPrimitives(MTL::PrimitiveTypeTriangleStrip,
-                                        NS::UInteger(0), NS::UInteger(4),
-                                        NS::UInteger(batch.instance_count));
-              }
-            } else {
-              encoder->setFragmentBytes(&constants, sizeof(constants), 0);
-              for (uint32_t rect_index = 0; rect_index < rectangle_count;
-                   ++rect_index) {
-                if (!set_rect_viewport(encoder, rectangles[rect_index])) {
-                  continue;
-                }
-                encoder->drawPrimitives(MTL::PrimitiveTypeTriangle,
-                                        NS::UInteger(0), NS::UInteger(3));
-              }
-            }
-          };
-
           if (is_stencil_bit) {
             for (uint32_t bit = 0; bit < 8; ++bit) {
               MTL::DepthStencilState* stencil_state =

@@ -110,6 +110,7 @@ jobs:
               src/xenia/apu/xaudio2/premake5.lua
               src/xenia/cpu/backend/x64/premake5.lua
               src/xenia/debug/ui/premake5.lua
+              src/xenia/gpu/metal
               src/xenia/helper/sdl/premake5.lua
               src/xenia/hid/nop/premake5.lua
               src/xenia/hid/premake5.lua
@@ -119,6 +120,7 @@ jobs:
               src/xenia/hid/xinput/premake5.lua
               src/xenia/patcher/premake5.lua
               src/xenia/premake5.lua
+              src/xenia/ui/metal
               src/xenia/ui/vulkan/spirv_tools_context.cc
               src/xenia/ui/vulkan/spirv_tools_context.h
               src/xenia/vfs/premake5.lua
