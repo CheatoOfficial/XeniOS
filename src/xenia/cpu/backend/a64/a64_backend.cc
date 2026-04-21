@@ -367,6 +367,12 @@ bool A64Backend::Initialize(Processor* processor) {
         thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
   }
 
+  // Wire up reservation helpers used by RESERVED_LOAD/STORE codegen.
+  try_acquire_reservation_helper_ =
+      reinterpret_cast<void*>(&TryAcquireReservationHelper);
+  reserved_store_32_helper = reinterpret_cast<void*>(&ReservedStore32Helper);
+  reserved_store_64_helper = reinterpret_cast<void*>(&ReservedStore64Helper);
+
   // Set the indirection table default to point at the resolve thunk.
   // Use 64-bit encoding: the resolve thunk address is encoded as a rel32
   // offset if it lands inside the code cache, or as a tagged external-table
