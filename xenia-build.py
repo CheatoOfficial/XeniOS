@@ -276,7 +276,7 @@ def setup_qt(target_arch=None):
                 dirs.sort(reverse=True)
                 return os.path.join(qt_version_dir, dirs[0])
 
-            is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
+            is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
             native_arch = "arm64" if is_native_arm64 else "x64"
             effective_target = target_arch or native_arch
             qt_dir = _pick(_is_arm64 if effective_target == "arm64" else _is_x64)
@@ -733,7 +733,7 @@ def get_build_dir(target_arch=None):
 
     Uses a separate directory when cross-compiling to avoid cache conflicts.
     """
-    is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
+    is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
     if target_arch == "arm64" and not is_native_arm64:
         return "build-arm64"
     if target_arch == "x64" and is_native_arm64:
@@ -750,20 +750,21 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     detected Visual Studio toolchain wins. build_tests toggles
     -DXENIA_BUILD_TESTS=ON; disable_lto toggles -DXENIA_ENABLE_LTO=OFF
     (faster Release link, at the cost of LTO's whole-program opts).
-    target_arch enables cross-compilation on Windows (arm64 target from
-    an x64 host, or x64 target from an arm64 host) into a separate
-    build-<arch>/ tree; off-Windows hosts reject non-native target_arch.
+    target_arch enables cross-compilation on Windows (arm64↔x64 via the
+    MSVC cross-compiler) and macOS (arm64↔x86_64 via clang's -arch and
+    CMAKE_OSX_ARCHITECTURES) into a separate build-<arch>/ tree; Linux
+    rejects non-native target_arch.
     """
-    # Cross-compilation via --target-arch is only supported on Windows where
-    # we can locate the MSVC cross-compiler automatically.  On Linux it would
+    # Cross-compilation via --target-arch is only supported on Windows
+    # (MSVC cross toolchain) and macOS (universal clang). On Linux it would
     # silently produce a native build in a differently-named directory.
-    if target_arch is not None and sys.platform != "win32":
-        is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
+    if target_arch is not None and sys.platform not in ("win32", "darwin"):
+        is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
         native_arch = "arm64" if is_native_arm64 else "x64"
         if target_arch != native_arch:
             print_error(
                 f"Cross-compilation (--target-arch {target_arch}) is only "
-                f"supported on Windows.\n"
+                f"supported on Windows and macOS.\n"
                 f"  The current host architecture is {native_arch}.")
             return 1
 
@@ -785,13 +786,21 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
             f"-DCMAKE_C_COMPILER={c_compiler}",
             f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
         ]
-    elif platform.machine() in ("ARM64", "aarch64") or target_arch == "arm64":
+    if sys.platform == "darwin" and target_arch is not None:
+        # Apple clang is universal; CMAKE_OSX_ARCHITECTURES drives -arch.
+        # We don't set CMAKE_SYSTEM_PROCESSOR here — without
+        # CMAKE_SYSTEM_NAME, CMake re-derives it from the host. Our
+        # XE_TARGET_* detect reads CMAKE_OSX_ARCHITECTURES on Apple.
+        osx_arch = "arm64" if target_arch == "arm64" else "x86_64"
+        args += [f"-DCMAKE_OSX_ARCHITECTURES={osx_arch}"]
+    if sys.platform == "win32" and (
+            platform.machine() in ("ARM64", "aarch64", "arm64") or target_arch == "arm64"):
         # Determine the effective target and the appropriate compiler/environment.
         # This covers both native ARM64 builds and x64→ARM64 cross-compilation.
         # Without this, native ARM64 hosts (e.g. Parallels on Apple Silicon)
         # may pick up x64-hosted cl.exe via PATH emulation, which defines
         # _M_AMD64 instead of _M_ARM64.
-        is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
+        is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
         if target_arch == "x64" and is_native_arm64:
             # Cross-compiling from ARM64 to x64
             target = "x64"
@@ -977,8 +986,8 @@ class SetupCommand(Command):
         self.parser.add_argument(
             "--target-arch", type=normalize_target_arch, default=None,
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
-                 "On Windows, non-native values enable cross-compilation into a "
-                 "separate build-<arch>/ tree.")
+                 "On Windows and macOS, non-native values enable cross-compilation "
+                 "into a separate build-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
         print("Setting up the build environment...\n")
@@ -1056,8 +1065,8 @@ class BaseBuildCommand(Command):
         self.parser.add_argument(
             "--target-arch", type=normalize_target_arch, default=None,
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
-                 "On Windows, non-native values enable cross-compilation into a "
-                 "separate build-<arch>/ tree.")
+                 "On Windows and macOS, non-native values enable cross-compilation "
+                 "into a separate build-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
         if not os.environ.get("QT_DIR"):
@@ -1740,7 +1749,7 @@ class DevenvCommand(Command):
         # Kept separate from build/ (Ninja Multi-Config) because CMake
         # refuses to change generators on an existing tree — mixing the
         # two workflows in one dir would force a full wipe each time.
-        is_native_arm64 = platform.machine() in ("ARM64", "aarch64")
+        is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
         effective_arch = target_arch or ("arm64" if is_native_arm64 else "x64")
         vs_arch = "ARM64" if effective_arch == "arm64" else "x64"
         vs_build_dir = "build-vs" if effective_arch == ("arm64" if is_native_arm64 else "x64") else f"build-vs-{effective_arch}"

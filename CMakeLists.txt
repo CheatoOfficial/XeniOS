@@ -14,10 +14,24 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Detect target architecture.
 # - VS generator: CMAKE_GENERATOR_PLATFORM (from -A flag) takes priority.
+# - macOS: CMAKE_OSX_ARCHITECTURES — single-arch only (universal builds
+#   would need both backends compiled, which we don't support).
 # - Ninja/Makefiles: CMAKE_SYSTEM_PROCESSOR (set via -DCMAKE_SYSTEM_NAME
 #   + -DCMAKE_SYSTEM_PROCESSOR for cross-compile, or auto-detected natively).
 if(CMAKE_GENERATOR_PLATFORM)
   if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
+    set(XE_TARGET_AARCH64 TRUE)
+    set(XE_TARGET_X86_64 FALSE)
+  else()
+    set(XE_TARGET_AARCH64 FALSE)
+    set(XE_TARGET_X86_64 TRUE)
+  endif()
+elseif(APPLE AND CMAKE_OSX_ARCHITECTURES)
+  list(LENGTH CMAKE_OSX_ARCHITECTURES _xe_osx_arch_count)
+  if(_xe_osx_arch_count GREATER 1)
+    message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES='${CMAKE_OSX_ARCHITECTURES}': universal builds are not supported, set a single arch.")
+  endif()
+  if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
     set(XE_TARGET_AARCH64 TRUE)
     set(XE_TARGET_X86_64 FALSE)
   else()
@@ -31,7 +45,14 @@ else()
   set(XE_TARGET_AARCH64 FALSE)
   set(XE_TARGET_X86_64 TRUE)
 endif()
-message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_TARGET_X86_64=${XE_TARGET_X86_64} (CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})")
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+  set(_xe_arch_source "CMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+elseif(CMAKE_GENERATOR_PLATFORM)
+  set(_xe_arch_source "CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}")
+else()
+  set(_xe_arch_source "CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_TARGET_X86_64=${XE_TARGET_X86_64} (${_xe_arch_source})")
 
 option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
@@ -362,6 +383,22 @@ else()
     if(LLVM_RANLIB)
       set(CMAKE_RANLIB "${LLVM_RANLIB}" CACHE FILEPATH "" FORCE)
     endif()
+  endif()
+
+  # Silence Apple ar/ranlib's "has no symbols" warnings (e.g. zlib-ng's
+  # CRC32 SIMD TUs that compile empty when the CPU-feature guard is
+  # inactive). ar warns at archive-create time and ranlib warns again at
+  # finish; ar's `S` flag skips the symtab so only ranlib writes it, and
+  # ranlib's -no_warning_for_no_symbols silences that pass.
+  # Only applies when we'll actually use Apple's tools — llvm-ranlib
+  # rejects this Apple-specific flag.
+  if(APPLE AND NOT CMAKE_RANLIB MATCHES "llvm-ranlib")
+    set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> Scr <TARGET> <OBJECTS>")
+    set(CMAKE_CXX_ARCHIVE_CREATE "<CMAKE_AR> Scr <TARGET> <OBJECTS>")
+    set(CMAKE_C_ARCHIVE_FINISH
+        "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
+    set(CMAKE_CXX_ARCHIVE_FINISH
+        "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
   endif()
 
   # Valgrind: -Og for debuggability without the pathological debug perf
