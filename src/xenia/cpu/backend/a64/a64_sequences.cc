@@ -37,6 +37,10 @@ namespace a64 {
 using namespace xe::cpu::hir;
 using namespace Xbyak_aarch64;
 
+namespace oaknut {
+using Label = Xbyak_aarch64::Label;
+}
+
 std::unordered_map<uint32_t, SequenceSelectFn>& SequenceTable() {
   static auto* sequence_table =
       new std::unordered_map<uint32_t, SequenceSelectFn>();
@@ -96,30 +100,30 @@ inline void EmitPropagateInputNanF64Binary(A64Emitter& e, DReg dest, DReg src1,
   oaknut::Label src1_qnan;
   oaknut::Label src2_qnan;
 
-  e.FCMP(src1, src1);
-  e.B(Cond::VC, check_src2);
-  e.FMOV(X0, src1);
-  e.TST(X0, kF64QuietBit);
-  e.B(Cond::NE, src1_qnan);
-  e.ORR(X0, X0, kF64QuietBit);
-  e.FMOV(dest, X0);
-  e.B(done);
-  e.l(src1_qnan);
-  e.FMOV(dest, src1);
-  e.B(done);
+  e.fcmp(src1, src1);
+  e.b(VC, check_src2);
+  e.fmov(e.x0, src1);
+  e.tst(e.x0, kF64QuietBit);
+  e.b(NE, src1_qnan);
+  e.orr(e.x0, e.x0, kF64QuietBit);
+  e.fmov(dest, e.x0);
+  e.b(done);
+  e.L(src1_qnan);
+  e.fmov(dest, src1);
+  e.b(done);
 
-  e.l(check_src2);
-  e.FCMP(src2, src2);
-  e.B(Cond::VC, no_nan);
-  e.FMOV(X0, src2);
-  e.TST(X0, kF64QuietBit);
-  e.B(Cond::NE, src2_qnan);
-  e.ORR(X0, X0, kF64QuietBit);
-  e.FMOV(dest, X0);
-  e.B(done);
-  e.l(src2_qnan);
-  e.FMOV(dest, src2);
-  e.B(done);
+  e.L(check_src2);
+  e.fcmp(src2, src2);
+  e.b(VC, no_nan);
+  e.fmov(e.x0, src2);
+  e.tst(e.x0, kF64QuietBit);
+  e.b(NE, src2_qnan);
+  e.orr(e.x0, e.x0, kF64QuietBit);
+  e.fmov(dest, e.x0);
+  e.b(done);
+  e.L(src2_qnan);
+  e.fmov(dest, src2);
+  e.b(done);
 }
 
 inline void EmitPropagateInputNanF64Ternary(A64Emitter& e, DReg dest, DReg src1,
@@ -134,43 +138,43 @@ inline void EmitPropagateInputNanF64Ternary(A64Emitter& e, DReg dest, DReg src1,
   oaknut::Label src2_qnan;
   oaknut::Label src3_qnan;
 
-  e.FCMP(src1, src1);
-  e.B(Cond::VC, check_src2);
-  e.FMOV(X0, src1);
-  e.TST(X0, kF64QuietBit);
-  e.B(Cond::NE, src1_qnan);
-  e.ORR(X0, X0, kF64QuietBit);
-  e.FMOV(dest, X0);
-  e.B(done);
-  e.l(src1_qnan);
-  e.FMOV(dest, src1);
-  e.B(done);
+  e.fcmp(src1, src1);
+  e.b(VC, check_src2);
+  e.fmov(e.x0, src1);
+  e.tst(e.x0, kF64QuietBit);
+  e.b(NE, src1_qnan);
+  e.orr(e.x0, e.x0, kF64QuietBit);
+  e.fmov(dest, e.x0);
+  e.b(done);
+  e.L(src1_qnan);
+  e.fmov(dest, src1);
+  e.b(done);
 
-  e.l(check_src2);
-  e.FCMP(src2, src2);
-  e.B(Cond::VC, check_src3);
-  e.FMOV(X0, src2);
-  e.TST(X0, kF64QuietBit);
-  e.B(Cond::NE, src2_qnan);
-  e.ORR(X0, X0, kF64QuietBit);
-  e.FMOV(dest, X0);
-  e.B(done);
-  e.l(src2_qnan);
-  e.FMOV(dest, src2);
-  e.B(done);
+  e.L(check_src2);
+  e.fcmp(src2, src2);
+  e.b(VC, check_src3);
+  e.fmov(e.x0, src2);
+  e.tst(e.x0, kF64QuietBit);
+  e.b(NE, src2_qnan);
+  e.orr(e.x0, e.x0, kF64QuietBit);
+  e.fmov(dest, e.x0);
+  e.b(done);
+  e.L(src2_qnan);
+  e.fmov(dest, src2);
+  e.b(done);
 
-  e.l(check_src3);
-  e.FCMP(src3, src3);
-  e.B(Cond::VC, no_nan);
-  e.FMOV(X0, src3);
-  e.TST(X0, kF64QuietBit);
-  e.B(Cond::NE, src3_qnan);
-  e.ORR(X0, X0, kF64QuietBit);
-  e.FMOV(dest, X0);
-  e.B(done);
-  e.l(src3_qnan);
-  e.FMOV(dest, src3);
-  e.B(done);
+  e.L(check_src3);
+  e.fcmp(src3, src3);
+  e.b(VC, no_nan);
+  e.fmov(e.x0, src3);
+  e.tst(e.x0, kF64QuietBit);
+  e.b(NE, src3_qnan);
+  e.orr(e.x0, e.x0, kF64QuietBit);
+  e.fmov(dest, e.x0);
+  e.b(done);
+  e.L(src3_qnan);
+  e.fmov(dest, src3);
+  e.b(done);
 }
 
 inline void EmitSelectFirstNanLanesF32x4(A64Emitter& e, QReg result, QReg src1,
