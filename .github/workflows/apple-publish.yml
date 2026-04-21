@@ -247,7 +247,10 @@ jobs:
             echo "QT_DIR=$HOME/Qt/6.10.1/macos" >> "$GITHUB_ENV"
           fi
 
-          mapfile -t tracked_submodules < <(
+          tracked_submodules=()
+          while IFS= read -r path; do
+            tracked_submodules+=("$path")
+          done < <(
             git config --file .gitmodules --get-regexp '^submodule\\..*\\.path$' |
               awk '{print $2}' |
               while read -r path; do
