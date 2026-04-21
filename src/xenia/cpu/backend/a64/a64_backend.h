@@ -58,7 +58,12 @@ struct ReserveHelper {
 
 enum : uint32_t {
   kA64BackendHasReserveBit = 0,
+  kA64BackendNJMOn = 1,
+  kA64BackendNonIEEEMode = 2,
 };
+
+constexpr uint32_t DEFAULT_FPU_FPCR = 0;
+constexpr uint32_t DEFAULT_VMX_FPCR = (1u << 24);
 
 struct A64BackendContext {
   A64BackendStackpoint* stackpoints = nullptr;
@@ -71,6 +76,8 @@ struct A64BackendContext {
   uint32_t cached_reserve_bit = 0;
   uint32_t current_stackpoint_depth = 0;
   uint32_t pending_stack_sync = 0;
+  uint32_t fpcr_fpu = DEFAULT_FPU_FPCR;
+  uint32_t fpcr_vmx = DEFAULT_VMX_FPCR;
   uint32_t flags = 0;
   uint32_t njm_enabled = 1;
   uint32_t non_ieee_mode = 0;

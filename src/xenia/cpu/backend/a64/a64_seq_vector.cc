@@ -9,18 +9,13 @@
 
 #include "xenia/cpu/backend/a64/a64_sequences.h"
 
-#include <arm_neon.h>
-#include <algorithm>
-#include <cstddef>
 #include <cstring>
 
-// clang-format off
-#include "xenia/cpu/backend/a64/a64_backend.h"
-#include "xenia/cpu/backend/a64/a64_seq_util.h"
-#include "xenia/cpu/backend/a64/a64_oaknut_compat.h"
+#include "xenia/base/math.h"
+#include "xenia/cpu/backend/a64/a64_emitter.h"
 #include "xenia/cpu/backend/a64/a64_op.h"
+#include "xenia/cpu/backend/a64/a64_seq_util.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
-// clang-format on
 #include "xenia/cpu/hir/instr.h"
 
 namespace xe {
@@ -28,27 +23,7 @@ namespace cpu {
 namespace backend {
 namespace a64 {
 
-using namespace Xbyak_aarch64;
-
 volatile int anchor_vector = 0;
-
-inline void EmitPreferQNaNLanesF32x4(A64Emitter& e, QReg result, QReg src1,
-                                     QReg src2) {
-  // vaddfp/vsubfp keep the first NaN payload encountered per lane and
-  // quiet signaling NaNs.
-  e.LoadConstantV(Q6, vec128i(0x00400000u));
-
-  e.FCMEQ(Q7.S4(), src1.S4(), src1.S4());
-  e.MVN(Q7.B16(), Q7.B16());
-  e.ORR(Q4.B16(), src1.B16(), Q6.B16());
-  e.BIT(result.B16(), Q4.B16(), Q7.B16());
-
-  e.FCMEQ(Q0.S4(), src2.S4(), src2.S4());
-  e.MVN(Q0.B16(), Q0.B16());
-  e.BIC(Q0.B16(), Q0.B16(), Q7.B16());
-  e.ORR(Q4.B16(), src2.B16(), Q6.B16());
-  e.BIT(result.B16(), Q4.B16(), Q0.B16());
-}
 
 // ============================================================================
 // OPCODE_SPLAT
@@ -238,15 +213,15 @@ struct VECTOR_CONVERT_I2F
     : Sequence<VECTOR_CONVERT_I2F,
                I<OPCODE_VECTOR_CONVERT_I2F, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const QReg src = i.src1.is_constant ? Q0 : i.src1;
-    if (i.src1.is_constant) {
-      e.LoadConstantV(src, i.src1.constant());
-    }
     EmitWithVmxFpcr(e, [&] {
+      int s = SrcVReg(e, i.src1, 0);
+      int d = i.dest.reg().getIdx();
       if (i.instr->flags & ARITHMETIC_UNSIGNED) {
-        e.UCVTF(i.dest.reg().S4(), src.S4());
+        // ARM64 ucvtf does a single-step unsigned int->float conversion,
+        // avoiding the double-rounding issue that x64 has to work around.
+        e.ucvtf(VReg(d).s4, VReg(s).s4);
       } else {
-        e.SCVTF(i.dest.reg().S4(), src.S4());
+        e.scvtf(VReg(d).s4, VReg(s).s4);
       }
     });
   }
@@ -260,15 +235,15 @@ struct VECTOR_CONVERT_F2I
     : Sequence<VECTOR_CONVERT_F2I,
                I<OPCODE_VECTOR_CONVERT_F2I, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    const QReg src = i.src1.is_constant ? Q0 : i.src1;
-    if (i.src1.is_constant) {
-      e.LoadConstantV(src, i.src1.constant());
-    }
     EmitWithVmxFpcr(e, [&] {
+      int s = SrcVReg(e, i.src1, 0);
+      int d = i.dest.reg().getIdx();
       if (i.instr->flags & ARITHMETIC_UNSIGNED) {
-        e.FCVTZU(i.dest.reg().S4(), src.S4());
+        // ARM64 fcvtzu: NaN->0, negative->0, overflow->UINT_MAX.
+        e.fcvtzu(VReg(d).s4, VReg(s).s4);
       } else {
-        e.FCVTZS(i.dest.reg().S4(), src.S4());
+        // ARM64 fcvtzs: NaN->0, overflow saturates to INT_MIN/INT_MAX.
+        e.fcvtzs(VReg(d).s4, VReg(s).s4);
       }
     });
   }
@@ -498,24 +473,27 @@ struct VECTOR_COMPARE_EQ_V128
     : Sequence<VECTOR_COMPARE_EQ_V128,
                I<OPCODE_VECTOR_COMPARE_EQ, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAssociativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-          switch (i.instr->flags) {
-            case INT8_TYPE:
-              e.CMEQ(dest.B16(), src1.B16(), src2.B16());
-              break;
-            case INT16_TYPE:
-              e.CMEQ(dest.H8(), src1.H8(), src2.H8());
-              break;
-            case INT32_TYPE:
-              e.CMEQ(dest.S4(), src1.S4(), src2.S4());
-              break;
-            case FLOAT32_TYPE:
-              EmitWithVmxFpcr(
-                  e, [&] { e.FCMEQ(dest.S4(), src1.S4(), src2.S4()); });
-              break;
-          }
-        });
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    switch (i.instr->flags) {
+      case INT8_TYPE:
+        e.cmeq(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        e.cmeq(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        e.cmeq(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case FLOAT32_TYPE:
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmeq(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
+        break;
+      default:
+        assert_unhandled_case(i.instr->flags);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_COMPARE_EQ, VECTOR_COMPARE_EQ_V128);
@@ -527,24 +505,27 @@ struct VECTOR_COMPARE_SGT_V128
     : Sequence<VECTOR_COMPARE_SGT_V128,
                I<OPCODE_VECTOR_COMPARE_SGT, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAssociativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-          switch (i.instr->flags) {
-            case INT8_TYPE:
-              e.CMGT(dest.B16(), src1.B16(), src2.B16());
-              break;
-            case INT16_TYPE:
-              e.CMGT(dest.H8(), src1.H8(), src2.H8());
-              break;
-            case INT32_TYPE:
-              e.CMGT(dest.S4(), src1.S4(), src2.S4());
-              break;
-            case FLOAT32_TYPE:
-              EmitWithVmxFpcr(
-                  e, [&] { e.FCMGT(dest.S4(), src1.S4(), src2.S4()); });
-              break;
-          }
-        });
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    switch (i.instr->flags) {
+      case INT8_TYPE:
+        e.cmgt(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        e.cmgt(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        e.cmgt(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case FLOAT32_TYPE:
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmgt(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
+        break;
+      default:
+        assert_unhandled_case(i.instr->flags);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_COMPARE_SGT, VECTOR_COMPARE_SGT_V128);
@@ -556,24 +537,27 @@ struct VECTOR_COMPARE_SGE_V128
     : Sequence<VECTOR_COMPARE_SGE_V128,
                I<OPCODE_VECTOR_COMPARE_SGE, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAssociativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-          switch (i.instr->flags) {
-            case INT8_TYPE:
-              e.CMGE(dest.B16(), src1.B16(), src2.B16());
-              break;
-            case INT16_TYPE:
-              e.CMGE(dest.H8(), src1.H8(), src2.H8());
-              break;
-            case INT32_TYPE:
-              e.CMGE(dest.S4(), src1.S4(), src2.S4());
-              break;
-            case FLOAT32_TYPE:
-              EmitWithVmxFpcr(
-                  e, [&] { e.FCMGE(dest.S4(), src1.S4(), src2.S4()); });
-              break;
-          }
-        });
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    switch (i.instr->flags) {
+      case INT8_TYPE:
+        e.cmge(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        e.cmge(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        e.cmge(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case FLOAT32_TYPE:
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmge(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
+        break;
+      default:
+        assert_unhandled_case(i.instr->flags);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_COMPARE_SGE, VECTOR_COMPARE_SGE_V128);
@@ -585,27 +569,28 @@ struct VECTOR_COMPARE_UGT_V128
     : Sequence<VECTOR_COMPARE_UGT_V128,
                I<OPCODE_VECTOR_COMPARE_UGT, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAssociativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-          switch (i.instr->flags) {
-            case INT8_TYPE:
-              e.CMHI(dest.B16(), src1.B16(), src2.B16());
-              break;
-            case INT16_TYPE:
-              e.CMHI(dest.H8(), src1.H8(), src2.H8());
-              break;
-            case INT32_TYPE:
-              e.CMHI(dest.S4(), src1.S4(), src2.S4());
-              break;
-            case FLOAT32_TYPE:
-              EmitWithVmxFpcr(e, [&] {
-                e.FABS(Q0.S4(), src1.S4());
-                e.FABS(Q1.S4(), src2.S4());
-                e.FCMGT(dest.S4(), Q0.S4(), Q1.S4());
-              });
-              break;
-          }
-        });
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    switch (i.instr->flags) {
+      case INT8_TYPE:
+        e.cmhi(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        e.cmhi(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        e.cmhi(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case FLOAT32_TYPE:
+        // Unsigned FP compare = ordered GT.
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmgt(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
+        break;
+      default:
+        assert_unhandled_case(i.instr->flags);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_COMPARE_UGT, VECTOR_COMPARE_UGT_V128);
@@ -617,162 +602,30 @@ struct VECTOR_COMPARE_UGE_V128
     : Sequence<VECTOR_COMPARE_UGE_V128,
                I<OPCODE_VECTOR_COMPARE_UGE, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAssociativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-          switch (i.instr->flags) {
-            case INT8_TYPE:
-              e.CMHS(dest.B16(), src1.B16(), src2.B16());
-              break;
-            case INT16_TYPE:
-              e.CMHS(dest.H8(), src1.H8(), src2.H8());
-              break;
-            case INT32_TYPE:
-              e.CMHS(dest.S4(), src1.S4(), src2.S4());
-              break;
-            case FLOAT32_TYPE:
-              EmitWithVmxFpcr(e, [&] {
-                e.FABS(Q0.S4(), src1.S4());
-                e.FABS(Q1.S4(), src2.S4());
-                e.FCMGE(dest.S4(), Q0.S4(), Q1.S4());
-              });
-              break;
-          }
-        });
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    switch (i.instr->flags) {
+      case INT8_TYPE:
+        e.cmhs(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        e.cmhs(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        e.cmhs(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      case FLOAT32_TYPE:
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmge(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
+        break;
+      default:
+        assert_unhandled_case(i.instr->flags);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_COMPARE_UGE, VECTOR_COMPARE_UGE_V128);
-
-// ============================================================================
-// OPCODE_VECTOR_ADD
-// ============================================================================
-struct VECTOR_ADD
-    : Sequence<VECTOR_ADD, I<OPCODE_VECTOR_ADD, V128Op, V128Op, V128Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitCommutativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, const QReg& dest, QReg src1, QReg src2) {
-          const TypeName part_type =
-              static_cast<TypeName>(i.instr->flags & 0xFF);
-          const uint32_t arithmetic_flags = i.instr->flags >> 8;
-          bool is_unsigned = !!(arithmetic_flags & ARITHMETIC_UNSIGNED);
-          bool saturate = !!(arithmetic_flags & ARITHMETIC_SATURATE);
-          switch (part_type) {
-            case INT8_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQADD(dest.B16(), src1.B16(), src2.B16());
-                } else {
-                  e.SQADD(dest.B16(), src1.B16(), src2.B16());
-                }
-              } else {
-                e.ADD(dest.B16(), src1.B16(), src2.B16());
-              }
-              break;
-            case INT16_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQADD(dest.H8(), src1.H8(), src2.H8());
-                } else {
-                  e.SQADD(dest.H8(), src1.H8(), src2.H8());
-                }
-              } else {
-                e.ADD(dest.H8(), src1.H8(), src2.H8());
-              }
-              break;
-            case INT32_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQADD(dest.S4(), src1.S4(), src2.S4());
-                } else {
-                  e.SQADD(dest.S4(), src1.S4(), src2.S4());
-                }
-              } else {
-                e.ADD(dest.S4(), src1.S4(), src2.S4());
-              }
-              break;
-            case FLOAT32_TYPE:
-              assert_false(is_unsigned);
-              assert_false(saturate);
-              EmitWithVmxFpcr(e, [&] {
-                e.MOV(Q2.B16(), src1.B16());
-                e.MOV(Q3.B16(), src2.B16());
-                e.FADD(dest.S4(), Q2.S4(), Q3.S4());
-                EmitPreferQNaNLanesF32x4(e, dest, Q2, Q3);
-              });
-              break;
-            default:
-              assert_unhandled_case(part_type);
-              break;
-          }
-        });
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_VECTOR_ADD, VECTOR_ADD);
-
-// ============================================================================
-// OPCODE_VECTOR_SUB
-// ============================================================================
-struct VECTOR_SUB
-    : Sequence<VECTOR_SUB, I<OPCODE_VECTOR_SUB, V128Op, V128Op, V128Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitCommutativeBinaryVOp(
-        e, i, [&i](A64Emitter& e, const QReg& dest, QReg src1, QReg src2) {
-          const TypeName part_type =
-              static_cast<TypeName>(i.instr->flags & 0xFF);
-          const uint32_t arithmetic_flags = i.instr->flags >> 8;
-          bool is_unsigned = !!(arithmetic_flags & ARITHMETIC_UNSIGNED);
-          bool saturate = !!(arithmetic_flags & ARITHMETIC_SATURATE);
-          switch (part_type) {
-            case INT8_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQSUB(dest.B16(), src1.B16(), src2.B16());
-                } else {
-                  e.SQSUB(dest.B16(), src1.B16(), src2.B16());
-                }
-              } else {
-                e.SUB(dest.B16(), src1.B16(), src2.B16());
-              }
-              break;
-            case INT16_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQSUB(dest.H8(), src1.H8(), src2.H8());
-                } else {
-                  e.SQSUB(dest.H8(), src1.H8(), src2.H8());
-                }
-              } else {
-                e.SUB(dest.H8(), src1.H8(), src2.H8());
-              }
-              break;
-            case INT32_TYPE:
-              if (saturate) {
-                if (is_unsigned) {
-                  e.UQSUB(dest.S4(), src1.S4(), src2.S4());
-                } else {
-                  e.SQSUB(dest.S4(), src1.S4(), src2.S4());
-                }
-              } else {
-                e.SUB(dest.S4(), src1.S4(), src2.S4());
-              }
-              break;
-            case FLOAT32_TYPE:
-              assert_false(is_unsigned);
-              assert_false(saturate);
-              EmitWithVmxFpcr(e, [&] {
-                e.MOV(Q2.B16(), src1.B16());
-                e.MOV(Q3.B16(), src2.B16());
-                e.FSUB(dest.S4(), Q2.S4(), Q3.S4());
-                EmitPreferQNaNLanesF32x4(e, dest, Q2, Q3);
-              });
-              break;
-            default:
-              assert_unhandled_case(part_type);
-              break;
-          }
-        });
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_VECTOR_SUB, VECTOR_SUB);
 
 // ============================================================================
 // OPCODE_VECTOR_SHL
@@ -953,41 +806,36 @@ struct VECTOR_AVERAGE
     : Sequence<VECTOR_AVERAGE,
                I<OPCODE_VECTOR_AVERAGE, V128Op, V128Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitCommutativeBinaryVOp(
-        e, i,
-        [&i](A64Emitter& e, const QReg& dest, const QReg& src1,
-             const QReg& src2) {
-          const TypeName part_type =
-              static_cast<TypeName>(i.instr->flags & 0xFF);
-          const uint32_t arithmetic_flags = i.instr->flags >> 8;
-          bool is_unsigned = !!(arithmetic_flags & ARITHMETIC_UNSIGNED);
-          switch (part_type) {
-            case INT8_TYPE:
-              if (is_unsigned) {
-                e.URHADD(dest.B16(), src1.B16(), src2.B16());
-              } else {
-                e.SRHADD(dest.B16(), src1.B16(), src2.B16());
-              }
-              break;
-            case INT16_TYPE:
-              if (is_unsigned) {
-                e.URHADD(dest.H8(), src1.H8(), src2.H8());
-              } else {
-                e.SRHADD(dest.H8(), src1.H8(), src2.H8());
-              }
-              break;
-            case INT32_TYPE:
-              if (is_unsigned) {
-                e.URHADD(dest.S4(), src1.S4(), src2.S4());
-              } else {
-                e.SRHADD(dest.S4(), src1.S4(), src2.S4());
-              }
-              break;
-            default:
-              assert_unhandled_case(part_type);
-              break;
-          }
-        });
+    const TypeName part_type = static_cast<TypeName>(i.instr->flags & 0xFF);
+    const uint32_t arith = i.instr->flags >> 8;
+    bool is_unsigned = !!(arith & hir::ARITHMETIC_UNSIGNED);
+    int s1 = SrcVReg(e, i.src1, 0);
+    int s2 = SrcVReg(e, i.src2, 1);
+    int d = i.dest.reg().getIdx();
+    // ARM64 has native rounding halving add: (a + b + 1) >> 1.
+    switch (part_type) {
+      case INT8_TYPE:
+        if (is_unsigned)
+          e.urhadd(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        else
+          e.srhadd(VReg(d).b16, VReg(s1).b16, VReg(s2).b16);
+        break;
+      case INT16_TYPE:
+        if (is_unsigned)
+          e.urhadd(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        else
+          e.srhadd(VReg(d).h8, VReg(s1).h8, VReg(s2).h8);
+        break;
+      case INT32_TYPE:
+        if (is_unsigned)
+          e.urhadd(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        else
+          e.srhadd(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        break;
+      default:
+        assert_unhandled_case(part_type);
+        break;
+    }
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_VECTOR_AVERAGE, VECTOR_AVERAGE);
@@ -1215,7 +1063,7 @@ struct LOAD_VECTOR_SHL_I8
     //   {3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12}
     e.mov(e.x0, static_cast<uint64_t>(0x0405060700010203ull));
     e.mov(e.x1, static_cast<uint64_t>(0x0C0D0E0F08090A0Bull));
-    e.fmov(Xbyak_aarch64::DReg(d), e.x0);
+    e.fmov(DReg(d), e.x0);
     e.ins(VReg(d).d2[1], e.x1);
     // Add shift amount (splatted).
     if (i.src1.is_constant) {
@@ -1243,7 +1091,7 @@ struct LOAD_VECTOR_SHR_I8
     //   {19,18,17,16, 23,22,21,20, 27,26,25,24, 31,30,29,28}
     e.mov(e.x0, static_cast<uint64_t>(0x1415161710111213ull));
     e.mov(e.x1, static_cast<uint64_t>(0x1C1D1E1F18191A1Bull));
-    e.fmov(Xbyak_aarch64::DReg(d), e.x0);
+    e.fmov(DReg(d), e.x0);
     e.ins(VReg(d).d2[1], e.x1);
     // Subtract shift amount (splatted).
     if (i.src1.is_constant) {
@@ -1964,15 +1812,6 @@ struct UNPACK : Sequence<UNPACK, I<OPCODE_UNPACK, V128Op, V128Op>> {
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_UNPACK, UNPACK);
-
-namespace {
-uint64_t SetNJMForwarder(void* raw_context, uint64_t value) {
-  auto* backend_context = reinterpret_cast<A64BackendContext*>(
-      reinterpret_cast<std::byte*>(raw_context) - sizeof(A64BackendContext));
-  backend_context->njm_enabled = value != 0;
-  return 0;
-}
-}  // namespace
 
 // ============================================================================
 // OPCODE_LVL (Load Vector Left)

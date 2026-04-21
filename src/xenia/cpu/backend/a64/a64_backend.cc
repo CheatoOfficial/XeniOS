@@ -532,7 +532,9 @@ void A64Backend::InitializeBackendContext(void* ctx) {
   bctx->cached_reserve_value = 0;
   bctx->cached_reserve_offset = 0;
   bctx->cached_reserve_bit = 0;
-  bctx->flags = 0;
+  bctx->fpcr_fpu = DEFAULT_FPU_FPCR;
+  bctx->fpcr_vmx = DEFAULT_VMX_FPCR;
+  bctx->flags = (1u << kA64BackendNJMOn);
   if (cvars::a64_enable_host_guest_stack_synchronization &&
       cvars::max_stackpoints > 0) {
     bctx->stackpoints = new (std::nothrow)
@@ -564,6 +566,8 @@ void A64Backend::DeinitializeBackendContext(void* ctx) {
   bctx->cached_reserve_offset = 0;
   bctx->cached_reserve_bit = 0;
   bctx->flags = 0;
+  bctx->fpcr_fpu = DEFAULT_FPU_FPCR;
+  bctx->fpcr_vmx = DEFAULT_VMX_FPCR;
   delete[] bctx->stackpoints;
   bctx->stackpoints = nullptr;
   bctx->current_stackpoint_depth = 0;
@@ -586,6 +590,7 @@ void A64Backend::PrepareForReentry(void* ctx) {
 
 void A64Backend::SetGuestRoundingMode(void* ctx, unsigned int mode) {
   uint32_t control = mode & 7;
+  uint32_t stored_fpcr = DEFAULT_FPU_FPCR;
 
 #if XE_ARCH_ARM64
   // Map PPC rounding+non-IEEE to ARM FPCR bits (same mapping as in sequences).
@@ -604,6 +609,11 @@ void A64Backend::SetGuestRoundingMode(void* ctx, unsigned int mode) {
   fpcr &= ~(uint64_t(0x7) << 23);
   fpcr |= (uint64_t(fpcr_table[control]) << 23);
   asm volatile("msr fpcr, %0" ::"r"(fpcr));
+#if XE_ARCH_ARM64
+  stored_fpcr = static_cast<uint32_t>(fpcr);
+#endif
+#else
+  stored_fpcr = (control >> 2) ? DEFAULT_VMX_FPCR : DEFAULT_FPU_FPCR;
 #endif
 
   if (!ctx) {
@@ -618,6 +628,17 @@ void A64Backend::SetGuestRoundingMode(void* ctx, unsigned int mode) {
 
   auto* bctx = BackendContextForGuestContext(ctx);
   bctx->non_ieee_mode = (control >> 2) & 1;
+  bctx->fpcr_fpu = stored_fpcr;
+  if (bctx->non_ieee_mode) {
+    bctx->flags |= (1u << kA64BackendNonIEEEMode);
+  } else {
+    bctx->flags &= ~(1u << kA64BackendNonIEEEMode);
+  }
+  if (bctx->njm_enabled) {
+    bctx->flags |= (1u << kA64BackendNJMOn);
+  } else {
+    bctx->flags &= ~(1u << kA64BackendNJMOn);
+  }
 
   auto ppc_context = reinterpret_cast<ppc::PPCContext*>(ctx);
   ppc_context->fpscr.bits.rn = control & 3;
