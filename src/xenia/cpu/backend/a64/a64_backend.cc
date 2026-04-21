@@ -205,7 +205,8 @@ uint64_t ReservedStore64Helper(void* raw_context, uint64_t guest_address,
 
 class A64ThunkEmitter : public A64Emitter {
  public:
-  A64HelperEmitter(A64Backend* backend, XbyakA64Allocator* allocator);
+  A64ThunkEmitter(A64Backend* backend, XbyakA64Allocator* allocator);
+  ~A64ThunkEmitter() override;
 
   HostToGuestThunk EmitHostToGuestThunk();
   GuestToHostThunk EmitGuestToHostThunk();
@@ -262,7 +263,7 @@ static void EmitGuestTrampoline(uint8_t* dst, backend::GuestTrampolineProc proc,
   EmitMovSequence(out, 16, reinterpret_cast<uint64_t>(thunk));     // X16
   *out++ = 0xD61F0000 | (16 << 5);                                 // BR X16
 #if XE_PLATFORM_APPLE
-  sys_icache_invalidate(dst, kGuestTrampolineCodeSize);
+  Xbyak_aarch64::sys_icache_invalidate(dst, kGuestTrampolineCodeSize);
 #else
   __builtin___clear_cache(
       reinterpret_cast<char*>(dst),
@@ -311,15 +312,12 @@ bool A64Backend::Initialize(Processor* processor) {
     return false;
   }
 
-  // Fast indirection is only viable if trampolines made it under 4GB.
-  code_cache_->set_allow_fast_indirection(guest_trampolines_sub4gb_);
-  if (!code_cache_->Initialize()) {
+  code_cache_ = A64CodeCache::Create();
+  Backend::code_cache_ = code_cache_.get();
+  if (!code_cache_ || !code_cache_->Initialize()) {
     XELOGE("A64Backend: Failed to initialize code cache");
     return false;
   }
-
-  // Expose the code cache to the base Backend class.
-  Backend::code_cache_ = code_cache_.get();
 
   // Set up machine info for the register allocator.
   machine_info_.supports_extended_load_store = true;
@@ -339,7 +337,7 @@ bool A64Backend::Initialize(Processor* processor) {
 
   // Generate thunks using ARM64 assembler.
   XbyakA64Allocator allocator;
-  A64HelperEmitter thunk_emitter(this, &allocator);
+  A64ThunkEmitter thunk_emitter(this, &allocator);
 
   host_to_guest_thunk_ = thunk_emitter.EmitHostToGuestThunk();
   guest_to_host_thunk_ = thunk_emitter.EmitGuestToHostThunk();
@@ -362,36 +360,11 @@ bool A64Backend::Initialize(Processor* processor) {
       uint32_t(uint64_t(resolve_function_thunk_)));
 #endif
 
-  if (cvars::a64_enable_host_guest_stack_synchronization) {
-    synchronize_guest_and_host_stack_helper_ =
-        thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
-  }
-
-  // Wire up reservation helpers used by RESERVED_LOAD/STORE codegen.
-  try_acquire_reservation_helper_ =
-      reinterpret_cast<void*>(&TryAcquireReservationHelper);
-  reserved_store_32_helper = reinterpret_cast<void*>(&ReservedStore32Helper);
-  reserved_store_64_helper = reinterpret_cast<void*>(&ReservedStore64Helper);
-
-  // Set the indirection table default to point at the resolve thunk.
-  // Use 64-bit encoding: the resolve thunk address is encoded as a rel32
-  // offset if it lands inside the code cache, or as a tagged external-table
-  // index otherwise.
-  static_cast<A64CodeCache*>(code_cache_.get())
-      ->set_indirection_default_64(
-          reinterpret_cast<uint64_t>(resolve_function_thunk_));
-
-  // Commit the indirection table range used by guest trampolines so that
-  // CreateGuestTrampoline can call AddIndirection without faulting.
-  code_cache_->CommitExecutableRange(GUEST_TRAMPOLINE_BASE,
-                                     GUEST_TRAMPOLINE_END);
-
   // Commit special indirection ranges (force return address, etc.).
   code_cache_->CommitExecutableRange(0x9FFF0000, 0x9FFFFFFF);
   code_cache_->CommitExecutableRange(kGuestTrampolineBase, kGuestTrampolineEnd);
 
-  // Allocate emitter constant data.
-  emitter_data_ = A64Emitter::PlaceConstData();
+  emitter_data_ = 0;
 
   // Setup exception callback
   ExceptionHandler::Install(&ExceptionCallbackThunk, this);
@@ -415,6 +388,183 @@ std::unique_ptr<Assembler> A64Backend::CreateAssembler() {
 std::unique_ptr<GuestFunction> A64Backend::CreateGuestFunction(
     Module* module, uint32_t address) {
   return std::make_unique<A64Function>(module, address);
+}
+
+uint64_t ReadCapstoneReg(HostThreadContext* context, aarch64_reg reg) {
+  switch (reg) {
+    case ARM64_REG_X0:
+      return context->x[0];
+    case ARM64_REG_X1:
+      return context->x[1];
+    case ARM64_REG_X2:
+      return context->x[2];
+    case ARM64_REG_X3:
+      return context->x[3];
+    case ARM64_REG_X4:
+      return context->x[4];
+    case ARM64_REG_X5:
+      return context->x[5];
+    case ARM64_REG_X6:
+      return context->x[6];
+    case ARM64_REG_X7:
+      return context->x[7];
+    case ARM64_REG_X8:
+      return context->x[8];
+    case ARM64_REG_X9:
+      return context->x[9];
+    case ARM64_REG_X10:
+      return context->x[10];
+    case ARM64_REG_X11:
+      return context->x[11];
+    case ARM64_REG_X12:
+      return context->x[12];
+    case ARM64_REG_X13:
+      return context->x[13];
+    case ARM64_REG_X14:
+      return context->x[14];
+    case ARM64_REG_X15:
+      return context->x[15];
+    case ARM64_REG_X16:
+      return context->x[16];
+    case ARM64_REG_X17:
+      return context->x[17];
+    case ARM64_REG_X18:
+      return context->x[18];
+    case ARM64_REG_X19:
+      return context->x[19];
+    case ARM64_REG_X20:
+      return context->x[20];
+    case ARM64_REG_X21:
+      return context->x[21];
+    case ARM64_REG_X22:
+      return context->x[22];
+    case ARM64_REG_X23:
+      return context->x[23];
+    case ARM64_REG_X24:
+      return context->x[24];
+    case ARM64_REG_X25:
+      return context->x[25];
+    case ARM64_REG_X26:
+      return context->x[26];
+    case ARM64_REG_X27:
+      return context->x[27];
+    case ARM64_REG_X28:
+      return context->x[28];
+    case ARM64_REG_X29:
+      return context->x[29];
+    case ARM64_REG_X30:
+      return context->x[30];
+    case ARM64_REG_W0:
+      return uint32_t(context->x[0]);
+    case ARM64_REG_W1:
+      return uint32_t(context->x[1]);
+    case ARM64_REG_W2:
+      return uint32_t(context->x[2]);
+    case ARM64_REG_W3:
+      return uint32_t(context->x[3]);
+    case ARM64_REG_W4:
+      return uint32_t(context->x[4]);
+    case ARM64_REG_W5:
+      return uint32_t(context->x[5]);
+    case ARM64_REG_W6:
+      return uint32_t(context->x[6]);
+    case ARM64_REG_W7:
+      return uint32_t(context->x[7]);
+    case ARM64_REG_W8:
+      return uint32_t(context->x[8]);
+    case ARM64_REG_W9:
+      return uint32_t(context->x[9]);
+    case ARM64_REG_W10:
+      return uint32_t(context->x[10]);
+    case ARM64_REG_W11:
+      return uint32_t(context->x[11]);
+    case ARM64_REG_W12:
+      return uint32_t(context->x[12]);
+    case ARM64_REG_W13:
+      return uint32_t(context->x[13]);
+    case ARM64_REG_W14:
+      return uint32_t(context->x[14]);
+    case ARM64_REG_W15:
+      return uint32_t(context->x[15]);
+    case ARM64_REG_W16:
+      return uint32_t(context->x[16]);
+    case ARM64_REG_W17:
+      return uint32_t(context->x[17]);
+    case ARM64_REG_W18:
+      return uint32_t(context->x[18]);
+    case ARM64_REG_W19:
+      return uint32_t(context->x[19]);
+    case ARM64_REG_W20:
+      return uint32_t(context->x[20]);
+    case ARM64_REG_W21:
+      return uint32_t(context->x[21]);
+    case ARM64_REG_W22:
+      return uint32_t(context->x[22]);
+    case ARM64_REG_W23:
+      return uint32_t(context->x[23]);
+    case ARM64_REG_W24:
+      return uint32_t(context->x[24]);
+    case ARM64_REG_W25:
+      return uint32_t(context->x[25]);
+    case ARM64_REG_W26:
+      return uint32_t(context->x[26]);
+    case ARM64_REG_W27:
+      return uint32_t(context->x[27]);
+    case ARM64_REG_W28:
+      return uint32_t(context->x[28]);
+    case ARM64_REG_W29:
+      return uint32_t(context->x[29]);
+    case ARM64_REG_W30:
+      return uint32_t(context->x[30]);
+    default:
+      assert_unhandled_case(reg);
+      return 0;
+  }
+}
+
+bool TestCapstonePstate(arm64_cc cond, uint32_t pstate) {
+  // Upper 4 bits of pstate are NZCV.
+  const bool n = !!(pstate & 0x80000000);
+  const bool z = !!(pstate & 0x40000000);
+  const bool c = !!(pstate & 0x20000000);
+  const bool v = !!(pstate & 0x10000000);
+  switch (cond) {
+    case ARM64CC_EQ:
+      return z;
+    case ARM64CC_NE:
+      return !z;
+    case ARM64CC_HS:
+      return c;
+    case ARM64CC_LO:
+      return !c;
+    case ARM64CC_MI:
+      return n;
+    case ARM64CC_PL:
+      return !n;
+    case ARM64CC_VS:
+      return v;
+    case ARM64CC_VC:
+      return !v;
+    case ARM64CC_HI:
+      return c && !z;
+    case ARM64CC_LS:
+      return !c || z;
+    case ARM64CC_GE:
+      return n == v;
+    case ARM64CC_LT:
+      return n != v;
+    case ARM64CC_GT:
+      return !z && (n == v);
+    case ARM64CC_LE:
+      return z || (n != v);
+    case ARM64CC_AL:
+      return true;
+    case ARM64CC_NV:
+      return false;
+    default:
+      assert_unhandled_case(cond);
+      return false;
+  }
 }
 
 uint64_t A64Backend::CalculateNextHostInstruction(ThreadDebugInfo* thread_info,
@@ -963,7 +1113,9 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
   return processor()->OnThreadBreakpointHit(ex);
 }
 
-A64ThunkEmitter::A64ThunkEmitter(A64Backend* backend) : A64Emitter(backend) {}
+A64ThunkEmitter::A64ThunkEmitter(A64Backend* backend,
+                                 XbyakA64Allocator* allocator)
+    : A64Emitter(backend, allocator) {}
 
 A64ThunkEmitter::~A64ThunkEmitter() {}
 
