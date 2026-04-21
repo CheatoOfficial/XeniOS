@@ -162,12 +162,12 @@ uint64_t ReservedStoreHelper(void* raw_context, uint64_t guest_address,
   bool exchange_succeeded = false;
   if constexpr (sizeof(T) == sizeof(uint64_t)) {
     exchange_succeeded =
-        xe::atomic_cas(backend_context->cached_reserve_value, uint64_t(value),
+        xe::atomic_cas(backend_context->cached_reserve_value_, uint64_t(value),
                        reinterpret_cast<volatile uint64_t*>(
                            static_cast<uintptr_t>(host_address)));
   } else {
     exchange_succeeded = xe::atomic_cas(
-        uint32_t(backend_context->cached_reserve_value), uint32_t(value),
+        uint32_t(backend_context->cached_reserve_value_), uint32_t(value),
         reinterpret_cast<volatile uint32_t*>(
             static_cast<uintptr_t>(host_address)));
   }
@@ -529,7 +529,7 @@ void A64Backend::UninstallBreakpoint(Breakpoint* breakpoint) {
 void A64Backend::InitializeBackendContext(void* ctx) {
   auto* bctx = BackendContextForGuestContext(ctx);
   bctx->reserve_helper = &reserve_helper_;
-  bctx->cached_reserve_value = 0;
+  bctx->cached_reserve_value_ = 0;
   bctx->cached_reserve_offset = 0;
   bctx->cached_reserve_bit = 0;
   bctx->fpcr_fpu = DEFAULT_FPU_FPCR;
@@ -562,7 +562,7 @@ void A64Backend::InitializeBackendContext(void* ctx) {
 void A64Backend::DeinitializeBackendContext(void* ctx) {
   auto* bctx = BackendContextForGuestContext(ctx);
   bctx->reserve_helper = nullptr;
-  bctx->cached_reserve_value = 0;
+  bctx->cached_reserve_value_ = 0;
   bctx->cached_reserve_offset = 0;
   bctx->cached_reserve_bit = 0;
   bctx->flags = 0;

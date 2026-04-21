@@ -68,7 +68,7 @@ constexpr uint32_t DEFAULT_VMX_FPCR = (1u << 24);
 struct A64BackendContext {
   A64BackendStackpoint* stackpoints = nullptr;
   ReserveHelper* reserve_helper = nullptr;
-  uint64_t cached_reserve_value = 0;
+  uint64_t cached_reserve_value_ = 0;
   uint64_t cached_reserve_offset = 0;
   uint64_t pending_stack_sync_sp = 0;
   uint64_t pending_stack_sync_fp = 0;
