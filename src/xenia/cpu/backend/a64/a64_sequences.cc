@@ -6459,110 +6459,112 @@ struct SET_NJM : Sequence<SET_NJM, I<OPCODE_SET_NJM, VoidOp, I8Op>> {
     // each vector FP operation.
     auto bctx = e.GetBackendCtxReg();
 
-// ============================================================================
-// OPCODE_SET_ROUNDING_MODE
-// ============================================================================
-// Input: FPSCR (PPC format)
-// Convert from PPC rounding mode to ARM
-// PPC | ARM |
-// 00  | 00  | nearest
-// 01  | 11  | toward zero
-// 10  | 01  | toward +infinity
-// 11  | 10  | toward -infinity
-static const uint8_t fpcr_table[] = {
-    0b0'00,  // |--|nearest
-    0b0'11,  // |--|toward zero
-    0b0'01,  // |--|toward +infinity
-    0b0'10,  // |--|toward -infinity
-    0b1'00,  // |FZ|nearest
-    0b1'11,  // |FZ|toward zero
-    0b1'01,  // |FZ|toward +infinity
-    0b1'10,  // |FZ|toward -infinity
-};
+    // ============================================================================
+    // OPCODE_SET_ROUNDING_MODE
+    // ============================================================================
+    // Input: FPSCR (PPC format)
+    // Convert from PPC rounding mode to ARM
+    // PPC | ARM |
+    // 00  | 00  | nearest
+    // 01  | 11  | toward zero
+    // 10  | 01  | toward +infinity
+    // 11  | 10  | toward -infinity
+    static const uint8_t fpcr_table[] = {
+        0b0'00,  // |--|nearest
+        0b0'11,  // |--|toward zero
+        0b0'01,  // |--|toward +infinity
+        0b0'10,  // |--|toward -infinity
+        0b1'00,  // |FZ|nearest
+        0b1'11,  // |FZ|toward zero
+        0b1'01,  // |FZ|toward +infinity
+        0b1'10,  // |FZ|toward -infinity
+    };
 
-uint64_t SetNonIEEEModeForwarder(void* raw_context, uint64_t control) {
-  control &= 0b111;
-  auto* backend_context = reinterpret_cast<A64BackendContext*>(
-      reinterpret_cast<std::byte*>(raw_context) - sizeof(A64BackendContext));
-  backend_context->non_ieee_mode = (control >> 2) & 1;
-  return control;
-}
-
-struct SET_ROUNDING_MODE_I32
-    : Sequence<SET_ROUNDING_MODE_I32,
-               I<OPCODE_SET_ROUNDING_MODE, VoidOp, I32Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // Low 3 bits are |Non-IEEE:1|RoundingMode:2|
-    // Non-IEEE bit is flush-to-zero
-    if (i.src1.is_constant) {
-      const uint32_t control = static_cast<uint32_t>(i.src1.constant()) & 0b111;
-      e.CallNative(SetNonIEEEModeForwarder, control);
-      e.MOV(W1, control);
-    } else {
-      e.AND(W1, i.src1.reg(), 0b111);
-      e.CallNativeSafe(reinterpret_cast<void*>(SetNonIEEEModeForwarder));
-      e.MOV(W1, W0);
+    uint64_t SetNonIEEEModeForwarder(void* raw_context, uint64_t control) {
+      control &= 0b111;
+      auto* backend_context = reinterpret_cast<A64BackendContext*>(
+          reinterpret_cast<std::byte*>(raw_context) -
+          sizeof(A64BackendContext));
+      backend_context->non_ieee_mode = (control >> 2) & 1;
+      return control;
     }
 
-    // Update kA64BackendNJMOn flag.
-    e.ldr(e.w0,
-          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
-    if (i.src1.is_constant) {
-      if (i.src1.constant()) {
-        e.orr(e.w0, e.w0, 1u << kA64BackendNJMOn);
-      } else {
-        e.mov(e.w1, 1u << kA64BackendNJMOn);
-        e.bic(e.w0, e.w0, e.w1);
+    struct SET_ROUNDING_MODE_I32
+        : Sequence<SET_ROUNDING_MODE_I32,
+                   I<OPCODE_SET_ROUNDING_MODE, VoidOp, I32Op>> {
+      static void Emit(A64Emitter& e, const EmitArgType& i) {
+        // Low 3 bits are |Non-IEEE:1|RoundingMode:2|
+        // Non-IEEE bit is flush-to-zero
+        if (i.src1.is_constant) {
+          const uint32_t control =
+              static_cast<uint32_t>(i.src1.constant()) & 0b111;
+          e.CallNative(SetNonIEEEModeForwarder, control);
+          e.MOV(W1, control);
+        } else {
+          e.AND(W1, i.src1.reg(), 0b111);
+          e.CallNativeSafe(reinterpret_cast<void*>(SetNonIEEEModeForwarder));
+          e.MOV(W1, W0);
+        }
+
+        // Update kA64BackendNJMOn flag.
+        e.ldr(e.w0, ptr(bctx, static_cast<uint32_t>(
+                                  offsetof(A64BackendContext, flags))));
+        if (i.src1.is_constant) {
+          if (i.src1.constant()) {
+            e.orr(e.w0, e.w0, 1u << kA64BackendNJMOn);
+          } else {
+            e.mov(e.w1, 1u << kA64BackendNJMOn);
+            e.bic(e.w0, e.w0, e.w1);
+          }
+        } else {
+          e.mov(e.w1, 1u << kA64BackendNJMOn);
+          e.bic(e.w0, e.w0, e.w1);
+          e.tst(i.src1, 0xFF);
+          e.csel(e.w1, e.w1, e.wzr, Xbyak_aarch64::Cond::NE);
+          e.orr(e.w0, e.w0, e.w1);
+        }
+        e.str(e.w0, ptr(bctx, static_cast<uint32_t>(
+                                  offsetof(A64BackendContext, flags))));
+
+        e.ForgetFpcrMode();
       }
-    } else {
-      e.mov(e.w1, 1u << kA64BackendNJMOn);
-      e.bic(e.w0, e.w0, e.w1);
-      e.tst(i.src1, 0xFF);
-      e.csel(e.w1, e.w1, e.wzr, Xbyak_aarch64::Cond::NE);
-      e.orr(e.w0, e.w0, e.w1);
+    };
+    EMITTER_OPCODE_TABLE(OPCODE_SET_NJM, SET_NJM);
+
+    // Force-link the split sequence files so their static initializers run.
+    extern volatile int anchor_control;
+    static int anchor_control_dest = anchor_control;
+
+    extern volatile int anchor_memory;
+    static int anchor_memory_dest = anchor_memory;
+
+    extern volatile int anchor_vector;
+    static int anchor_vector_dest = anchor_vector;
+
+    // ============================================================================
+    // SelectSequence — dispatch an instruction to its sequence handler
+    // ============================================================================
+    bool SelectSequence(A64Emitter * e, const hir::Instr* i,
+                        const hir::Instr** new_tail) {
+      const InstrKey key(i);
+      auto& sequence_table = SequenceTable();
+      auto it = sequence_table.find(key);
+      if (it != sequence_table.end()) {
+        if (it->second(*e, i, InstrKeyValue(key))) {
+          *new_tail = i->next;
+          return true;
+        }
+      }
+      XELOGE("A64: No sequence match for opcode: {} ({})",
+             hir::GetOpcodeName(i->GetOpcodeInfo()),
+             static_cast<int>(i->GetOpcodeInfo()->num));
+      fprintf(stderr, "A64: No sequence match for opcode: %s (%d)\n",
+              hir::GetOpcodeName(i->GetOpcodeInfo()),
+              static_cast<int>(i->GetOpcodeInfo()->num));
+      return false;
     }
-    e.str(e.w0,
-          ptr(bctx, static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
 
-    e.ForgetFpcrMode();
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_SET_NJM, SET_NJM);
-
-// Force-link the split sequence files so their static initializers run.
-extern volatile int anchor_control;
-static int anchor_control_dest = anchor_control;
-
-extern volatile int anchor_memory;
-static int anchor_memory_dest = anchor_memory;
-
-extern volatile int anchor_vector;
-static int anchor_vector_dest = anchor_vector;
-
-// ============================================================================
-// SelectSequence — dispatch an instruction to its sequence handler
-// ============================================================================
-bool SelectSequence(A64Emitter* e, const hir::Instr* i,
-                    const hir::Instr** new_tail) {
-  const InstrKey key(i);
-  auto& sequence_table = SequenceTable();
-  auto it = sequence_table.find(key);
-  if (it != sequence_table.end()) {
-    if (it->second(*e, i, InstrKeyValue(key))) {
-      *new_tail = i->next;
-      return true;
-    }
-  }
-  XELOGE("A64: No sequence match for opcode: {} ({})",
-         hir::GetOpcodeName(i->GetOpcodeInfo()),
-         static_cast<int>(i->GetOpcodeInfo()->num));
-  fprintf(stderr, "A64: No sequence match for opcode: %s (%d)\n",
-          hir::GetOpcodeName(i->GetOpcodeInfo()),
-          static_cast<int>(i->GetOpcodeInfo()->num));
-  return false;
-}
-
-}  // namespace a64
+  }  // namespace a64
 }  // namespace backend
 }  // namespace cpu
 }  // namespace xe

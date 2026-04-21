@@ -484,9 +484,9 @@ const size_t A64CodeCache::kIndirectionTableSize;
 // On ARM64 platforms, this will be set dynamically during initialization
 uintptr_t A64CodeCache::kIndirectionTableBase = 0x80000000;
 #else
-  __builtin___clear_cache(
-      reinterpret_cast<char*>(address),
-      reinterpret_cast<char*>(static_cast<uint8_t*>(address) + size));
+__builtin___clear_cache(reinterpret_cast<char*>(address),
+                        reinterpret_cast<char*>(static_cast<uint8_t*>(address) +
+                                                size));
 #endif
 
 A64CodeCache::A64CodeCache() = default;

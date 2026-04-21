@@ -266,12 +266,12 @@ static const vec128_t kStvlShuffle =
     vec128b(3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12);
 static const vec128_t kStvrSwapMask = vec128b(static_cast<uint8_t>(0x83));
 
-  auto* guest_module = e.GuestModule();
-  if (!guest_module) {
-    return false;
-  }
-  auto* flags = guest_module->GetInstructionAddressFlags(guest_address);
-  return flags && flags->accessed_mmio;
+auto* guest_module = e.GuestModule();
+if (!guest_module) {
+  return false;
+}
+auto* flags = guest_module->GetInstructionAddressFlags(guest_address);
+return flags && flags->accessed_mmio;
 }
 
 // ============================================================================
