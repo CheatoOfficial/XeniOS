@@ -175,17 +175,15 @@ jobs:
           tools/build/bin/premake5 --version
 
           # Create a sentinel file so premake Lua scripts can reliably
-          # detect an iOS build even if --os=ios handling is broken.
+          # detect an iOS build when xb build runs premake.
           touch .ios_target
-          ./xenia-build.py premake --target_os=ios
 
       - name: Build
         env:
           IPHONEOS_DEPLOYMENT_TARGET: 16.0
         run: |
           # Build the full iOS app target (no code signing on CI).
-          # Use --no_premake since premake was already run in the Setup step.
-          ./xenia-build.py build --config=Release --target_os=ios --no_premake -- \
+          ./xenia-build.py build --config=Release --target_os=ios -- \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_STYLE=Manual \
