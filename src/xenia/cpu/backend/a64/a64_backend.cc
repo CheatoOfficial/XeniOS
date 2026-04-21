@@ -1237,7 +1237,24 @@ GuestToHostThunk A64ThunkEmitter::EmitGuestToHostThunk() {
 }
 
 // A64Emitter handles actually resolving functions.
-uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
+uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
+  auto guest_context = reinterpret_cast<ppc::PPCContext*>(raw_context);
+  auto thread_state = guest_context->thread_state;
+  assert_not_zero(target_address);
+
+  auto fn = thread_state->processor()->ResolveFunction(
+      static_cast<uint32_t>(target_address));
+  if (!fn) {
+    return 0;
+  }
+
+  auto guest_fn = static_cast<GuestFunction*>(fn);
+  auto code = guest_fn->machine_code();
+  if (!code) {
+    return 0;
+  }
+  return reinterpret_cast<uint64_t>(code);
+}
 
 ResolveFunctionThunk A64ThunkEmitter::EmitResolveFunctionThunk() {
   // Entry:

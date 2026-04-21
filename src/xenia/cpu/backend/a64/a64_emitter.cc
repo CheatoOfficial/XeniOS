@@ -27,7 +27,7 @@
 #include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/cpu/processor.h"
 
-DECLARE_int64(a64_max_stackpoints);
+DECLARE_int64(max_stackpoints);
 DECLARE_bool(a64_enable_host_guest_stack_synchronization);
 
 namespace {
@@ -676,7 +676,7 @@ void A64Emitter::PushStackpoint() {
                        offsetof(A64BackendContext, current_stackpoint_depth))));
 
   // Check for overflow.
-  mov(w10, static_cast<uint32_t>(cvars::a64_max_stackpoints));
+  mov(w10, static_cast<uint32_t>(cvars::max_stackpoints));
   cmp(w9, w10);
   auto& overflow_label =
       AddToTail([](A64Emitter& e, Xbyak_aarch64::Label& lbl) {
