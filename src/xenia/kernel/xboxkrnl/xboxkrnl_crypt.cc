@@ -694,14 +694,12 @@ DECLARE_XBOXKRNL_EXPORT1(XeCryptBnQw_SwapDwQwLeBe, kNone, kImplemented);
 dword_result_t XeCryptBnQwNeRsaPubCrypt_entry(pointer_t<uint64_t> qw_a,
                                               pointer_t<uint64_t> qw_b,
                                               pointer_t<XECRYPT_RSA> rsa) {
-  // 0 indicates failure (but not a BOOL return value)
-#ifndef XE_PLATFORM_WIN32
-  XELOGW(
-      "XeCryptBnQwNeRsaPubCrypt called but no implementation available for "
-      "this platform!");
-  return 1;
-#else
-  uint32_t modulus_size = rsa->size * 8;
+  uint32_t num_qwords = rsa->size;
+  uint32_t exponent = rsa->public_exponent;
+  const uint8_t* input_bytes = reinterpret_cast<const uint8_t*>(&qw_a[0]);
+  uint8_t* output_bytes = reinterpret_cast<uint8_t*>(&qw_b[0]);
+  const uint8_t* mod_bytes =
+      reinterpret_cast<const uint8_t*>(&rsa[1]);  // modulus follows header
 
   return XeCryptBnQwNeRsaPubCrypt(input_bytes, output_bytes, mod_bytes,
                                   num_qwords, exponent);
