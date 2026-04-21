@@ -60,7 +60,9 @@ class A64VReg : public Xbyak_aarch64::QReg {
 
   Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
   Xbyak_aarch64::VReg toV() const { return Xbyak_aarch64::VReg(getIdx()); }
-  Xbyak_aarch64::VReg16B B16() const { return Xbyak_aarch64::VReg16B(getIdx()); }
+  Xbyak_aarch64::VReg16B B16() const {
+    return Xbyak_aarch64::VReg16B(getIdx());
+  }
   Xbyak_aarch64::VReg8H H8() const { return Xbyak_aarch64::VReg8H(getIdx()); }
   Xbyak_aarch64::VReg4S S4() const { return Xbyak_aarch64::VReg4S(getIdx()); }
   Xbyak_aarch64::VReg2D D2() const { return Xbyak_aarch64::VReg2D(getIdx()); }
