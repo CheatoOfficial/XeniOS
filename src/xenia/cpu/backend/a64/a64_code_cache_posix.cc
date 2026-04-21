@@ -162,40 +162,11 @@ void PosixA64CodeCache::PlaceCode(uint32_t guest_address, void* machine_code,
   InitializeUnwindEntry(unwind_reservation.entry_address, code_execute_address,
                         func_info);
 
-  // Add entry to unwind table at the reserved slot only
-  UnwindInfo unwind_info;
-  unwind_info.begin_address = reinterpret_cast<uintptr_t>(code_execute_address);
-  unwind_info.end_address =
-      unwind_info.begin_address + func_info.code_size.total;
-
-  // Store in the reserved slot
-  unwind_table_[unwind_reservation.table_slot] = unwind_info;
-
-  // Validate address alignment before cache flushing
-  if (reinterpret_cast<uintptr_t>(code_execute_address) % 4 != 0) {
-    XELOGW(
-        "PosixA64CodeCache::PlaceCode: WARNING - code address 0x{:016X} is not "
-        "4-byte aligned",
-        reinterpret_cast<uintptr_t>(code_execute_address));
-  }
-
-  if (func_info.code_size.total % 4 != 0) {
-    XELOGW(
-        "PosixA64CodeCache::PlaceCode: WARNING - code size {} is not 4-byte "
-        "aligned",
-        func_info.code_size.total);
-  }
-
-  // Flush instruction cache
-#ifdef XE_PLATFORM_APPLE
-  // On macOS, use sys_icache_invalidate
-  sys_icache_invalidate(code_execute_address, func_info.code_size.total);
-#else
-  // On Linux and other POSIX systems, use GCC builtin
-  __builtin___clear_cache(
-      static_cast<char*>(code_execute_address),
-      static_cast<char*>(code_execute_address) + func_info.code_size.total);
-#endif
+  void* unwind_execute_address = unwind_reservation.entry_address -
+                                 generated_code_write_base_ +
+                                 generated_code_execute_base_;
+  __register_frame(unwind_execute_address);
+  registered_frames_.push_back(unwind_execute_address);
 }
 
 void PosixA64CodeCache::InitializeUnwindEntry(
