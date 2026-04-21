@@ -100,6 +100,68 @@ jobs:
             done <<< "${overlap}"
           fi
 
+          restore_local_ios_build_surface() {
+            local preserve_paths=()
+            while IFS= read -r path; do
+              [ -n "${path}" ] || continue
+              preserve_paths+=("${path}")
+            done <<'EOF'
+.github/workflows
+.gitmodules
+premake5.lua
+src/xenia/apu/nop/premake5.lua
+src/xenia/apu/sdl/premake5.lua
+src/xenia/apu/xaudio2/premake5.lua
+src/xenia/cpu/backend/x64/premake5.lua
+src/xenia/debug/ui/premake5.lua
+src/xenia/helper/sdl/premake5.lua
+src/xenia/hid/nop/premake5.lua
+src/xenia/hid/premake5.lua
+src/xenia/hid/sdl/premake5.lua
+src/xenia/hid/skylander
+src/xenia/hid/winkey/premake5.lua
+src/xenia/hid/xinput/premake5.lua
+src/xenia/patcher/premake5.lua
+src/xenia/premake5.lua
+src/xenia/ui/vulkan/spirv_tools_context.cc
+src/xenia/ui/vulkan/spirv_tools_context.h
+src/xenia/vfs/premake5.lua
+src/xenia/vfs/testing/premake5.lua
+third_party/FFmpeg
+third_party/SDL2-static.lua
+third_party/aes_128.lua
+third_party/asio.lua
+third_party/capstone.lua
+third_party/cxxopts.lua
+third_party/discord-rpc.lua
+third_party/disruptorplus
+third_party/dxbc.lua
+third_party/fmt.lua
+third_party/glslang-spirv.lua
+third_party/imgui.lua
+third_party/metal-shader-converter.lua
+third_party/miniaudio
+third_party/miniaudio.lua
+third_party/oaknut
+third_party/premake-androidndk
+third_party/premake-cmake
+third_party/premake-core
+third_party/premake-export-compile-commands
+third_party/pugixml.lua
+third_party/snappy.lua
+third_party/tomlplusplus.lua
+third_party/xxhash.lua
+third_party/zlib-ng.lua
+third_party/zstd.lua
+tools/build
+EOF
+
+            # Keep this fork's iOS/premake build surface authoritative so
+            # upstream CMake-focused syncs can't delete the files CI still
+            # needs to generate and build iOS projects.
+            git checkout origin/main -- "${preserve_paths[@]}"
+          }
+
           merge_upstream() {
             local remote_name="$1"
             local branch_name="$2"
@@ -139,9 +201,7 @@ jobs:
               return 0
             fi
 
-            # Keep this fork's workflow definitions authoritative on main so
-            # scheduled syncs cannot overwrite CI/publish behavior.
-            git checkout origin/main -- .github/workflows
+            restore_local_ios_build_surface
 
             if git diff --cached --quiet && git diff --quiet; then
               git merge --abort || true
