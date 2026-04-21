@@ -381,6 +381,7 @@ class MetalCommandProcessor : public CommandProcessor {
   bool EndSubmission(bool is_swap);
   void StopCaptureIfActive();
   bool CanEndSubmissionImmediately() const;
+  void EnsureDrawRingCapacity();
   void WaitForPendingCompletionHandlers();
   void ProcessCompletedSubmissions();
 
@@ -452,6 +453,12 @@ class MetalCommandProcessor : public CommandProcessor {
 
     ~DrawRingBuffers();
   };
+
+  std::shared_ptr<DrawRingBuffers> CreateDrawRingBuffers();
+  std::shared_ptr<DrawRingBuffers> AcquireDrawRingBuffers();
+  void SetActiveDrawRing(const std::shared_ptr<DrawRingBuffers>& ring);
+  void EnsureActiveDrawRing();
+  void ScheduleDrawRingRelease(MTL::CommandBuffer* command_buffer);
 
   GeometryPipelineState* GetOrCreateGeometryPipelineState(
       MetalShader::MetalTranslation* vertex_translation,

@@ -79,6 +79,15 @@ void MetalPrimitiveProcessor::Shutdown(bool from_destructor) {
   }
 }
 
+void MetalPrimitiveProcessor::CompletedSubmissionUpdated() {
+  // Metal keeps primitive-conversion buffers CPU-visible, so there's no
+  // per-submission cleanup required here.
+}
+
+void MetalPrimitiveProcessor::BeginSubmission() {
+  // No submission-scoped bookkeeping is needed for Metal today.
+}
+
 void MetalPrimitiveProcessor::BeginFrame() {
   converted_index_buffers_.clear();
 

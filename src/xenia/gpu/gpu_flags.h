@@ -32,6 +32,7 @@ DECLARE_bool(half_pixel_offset);
 DECLARE_string(occlusion_query);
 
 DECLARE_int32(occlusion_query_fake_lower_threshold);
+DECLARE_int32(occlusion_query_fake_upper_threshold);
 
 DECLARE_bool(metal_shader_disk_cache);
 DECLARE_bool(metal_pipeline_binary_archive);

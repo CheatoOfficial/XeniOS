@@ -33,6 +33,8 @@ class MetalPrimitiveProcessor : public PrimitiveProcessor {
   bool Initialize();
   void Shutdown(bool from_destructor = false);
 
+  void CompletedSubmissionUpdated();
+  void BeginSubmission();
   void BeginFrame();
   void EndFrame();
 
