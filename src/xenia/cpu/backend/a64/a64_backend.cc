@@ -1149,8 +1149,8 @@ HostToGuestThunk A64ThunkEmitter::EmitHostToGuestThunk() {
   sub(GetBackendCtxReg(), GetBackendCtxReg(), sizeof(A64BackendContext));
   // Ensure membase is set for guest memory accesses.
   ldr(GetMembaseReg(),
-      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                         virtual_membase))));
+      ptr(GetContextReg(),
+          static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
   mov(x0, x2);  // return address
   blr(x16);
 
@@ -1211,8 +1211,8 @@ GuestToHostThunk A64ThunkEmitter::EmitGuestToHostThunk() {
   EmitLoadVolatileRegs();
   // Reload membase in case the host clobbered it.
   ldr(GetMembaseReg(),
-      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                         virtual_membase))));
+      ptr(GetContextReg(),
+          static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
 
   code_offsets.epilog = getSize();
 
@@ -1280,8 +1280,8 @@ ResolveFunctionThunk A64ThunkEmitter::EmitResolveFunctionThunk() {
   EmitLoadVolatileRegs();
   // Reload membase in case ResolveFunction clobbered it.
   ldr(GetMembaseReg(),
-      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                         virtual_membase))));
+      ptr(GetContextReg(),
+          static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
 
   code_offsets.epilog = getSize();
 
@@ -1353,8 +1353,8 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncThunk() {
   mov(GetBackendCtxReg(), x1);
   mov(GetContextReg(), x0);
   ldr(GetMembaseReg(),
-      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                         virtual_membase))));
+      ptr(GetContextReg(),
+          static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
 
   // Restore host frame and stack.
   mov(x29, x5);
@@ -1406,25 +1406,25 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   Xbyak_aarch64::Label scan_found;
 
   mov(x2, GetBackendCtxReg());
-  ldr(x3, ptr(x2, static_cast<int32_t>(offsetof(A64BackendContext,
-                                                stackpoints))));
+  ldr(x3,
+      ptr(x2, static_cast<int32_t>(offsetof(A64BackendContext, stackpoints))));
   cbz(x3, done);
-  ldr(w4, ptr(x2, static_cast<int32_t>(offsetof(
-                     A64BackendContext, current_stackpoint_depth))));
+  ldr(w4, ptr(x2, static_cast<int32_t>(
+                      offsetof(A64BackendContext, current_stackpoint_depth))));
   cbz(w4, done);
   sub(w4, w4, 1);  // current index = depth - 1
 
   // guest_sp
-  ldr(w5, ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                             r[1]))));
+  ldr(w5, ptr(GetContextReg(),
+              static_cast<int32_t>(offsetof(ppc::PPCContext, r[1]))));
   mov(w6, 0);  // num_frames_bigger
 
   L(loop);
   // entry = stackpoints + (index * sizeof(A64BackendStackpoint))
   lsl(x7, x4, 5);  // sizeof(A64BackendStackpoint) == 32
   add(x7, x3, x7);
-  ldr(w10, ptr(x7, static_cast<int32_t>(
-                       offsetof(A64BackendStackpoint, guest_sp))));
+  ldr(w10,
+      ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, guest_sp))));
   cmp(w10, w5);
   b(GE, check_lr);
   add(w6, w6, 1);
@@ -1437,19 +1437,19 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   b(LE, done);
 
   // Disambiguate same-guest-sp frames via guest LR.
-  ldr(w11, ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                              lr))));
+  ldr(w11, ptr(GetContextReg(),
+               static_cast<int32_t>(offsetof(ppc::PPCContext, lr))));
   mov(w12, w4);  // scan index
 
   L(scan_loop);
   lsl(x7, x12, 5);
   add(x7, x3, x7);
-  ldr(w13, ptr(x7, static_cast<int32_t>(
-                       offsetof(A64BackendStackpoint, guest_sp))));
+  ldr(w13,
+      ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, guest_sp))));
   cmp(w13, w5);
   b(NE, scan_done);
-  ldr(w14, ptr(x7, static_cast<int32_t>(offsetof(
-                       A64BackendStackpoint, guest_return_address))));
+  ldr(w14, ptr(x7, static_cast<int32_t>(
+                       offsetof(A64BackendStackpoint, guest_return_address))));
   cmp(w14, w11);
   b(EQ, scan_found);
   cbz(w12, scan_done);
@@ -1463,21 +1463,21 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   // Restore host frame and stack.
   lsl(x7, x4, 5);
   add(x7, x3, x7);
-  ldr(x15, ptr(x7, static_cast<int32_t>(
-                       offsetof(A64BackendStackpoint, host_sp))));
-  ldr(x16, ptr(x7, static_cast<int32_t>(
-                       offsetof(A64BackendStackpoint, host_fp))));
+  ldr(x15,
+      ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, host_sp))));
+  ldr(x16,
+      ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, host_fp))));
   mov(sp, x15);
   mov(x29, x16);
   // Adjust for caller stack size.
   sub(sp, sp, x9, UXTX);
 
   add(w4, w4, 1);
-  str(w4, ptr(x2, static_cast<int32_t>(offsetof(
-                     A64BackendContext, current_stackpoint_depth))));
+  str(w4, ptr(x2, static_cast<int32_t>(
+                      offsetof(A64BackendContext, current_stackpoint_depth))));
   ldr(GetMembaseReg(),
-      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
-                                                         virtual_membase))));
+      ptr(GetContextReg(),
+          static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
 
   L(done);
   br(x8);
