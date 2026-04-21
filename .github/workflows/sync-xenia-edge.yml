@@ -58,7 +58,7 @@ jobs:
 
           git checkout -B "${sync_branch}" origin/xenios
 
-          if ! git merge --no-ff -X ours --no-edit "xeniaedge/${upstream_branch}"; then
+          if ! git merge --no-ff -X ours --no-commit "xeniaedge/${upstream_branch}"; then
             echo "::error::Automatic merge from xeniaedge/${upstream_branch} failed"
             git status --short
             git merge --abort || true
@@ -68,6 +68,7 @@ jobs:
           # Keep the fork's workflow definitions authoritative on xenios. This
           # avoids GitHub App push restrictions around workflow-file changes.
           git checkout origin/xenios -- .github/workflows
+          git commit --no-edit
 
           if git diff --quiet origin/xenios...HEAD; then
             echo "has_changes=false" >> "${GITHUB_OUTPUT}"
