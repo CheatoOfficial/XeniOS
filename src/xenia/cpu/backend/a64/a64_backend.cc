@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <cstring>
 
+#include "xenia/base/assert.h"
+#include "xenia/base/atomic.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/exception_handler.h"
 #include "xenia/base/logging.h"
@@ -483,6 +485,130 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
 }
 
 // ==========================================================================
+// Reservation helpers — implement PPC lwarx/stwcx semantics with a global
+// per-cache-line bitmap so cross-thread stores invalidate other threads'
+// reservations (data-based CAS alone is ABA-vulnerable).
+// ==========================================================================
+namespace {
+
+A64BackendContext* BackendContextFromRawContext(void* raw_context) {
+  return reinterpret_cast<A64BackendContext*>(
+      reinterpret_cast<uint8_t*>(raw_context) - sizeof(A64BackendContext));
+}
+
+void ReserveOffsetAndBit(ReserveHelper* reserve_helper, uint32_t guest_address,
+                         volatile uint64_t*& out_block, uint32_t& out_bit) {
+  const uint32_t block_idx = guest_address >> A64_RESERVE_BLOCK_SHIFT;
+  out_block = &reserve_helper->blocks[block_idx >> 6];
+  out_bit = block_idx & 63;
+}
+
+extern "C" uint64_t TryAcquireReservationHelper(void* raw_context,
+                                                uint64_t guest_address) {
+  auto* bctx = BackendContextFromRawContext(raw_context);
+  const uint32_t reserve_flag = 1u << kA64BackendHasReserveBit;
+  // PPC lwarx implicitly drops any prior reservation.
+  bctx->flags &= ~reserve_flag;
+
+  volatile uint64_t* block;
+  uint32_t bit;
+  ReserveOffsetAndBit(bctx->reserve_helper_, uint32_t(guest_address), block,
+                      bit);
+  const uint64_t mask = uint64_t(1) << bit;
+
+  bool acquired = false;
+  while (true) {
+    const uint64_t old = *block;
+    if (old & mask) {
+      // Another thread already holds the reservation.
+      break;
+    }
+    if (xe::atomic_cas(old, old | mask,
+                       reinterpret_cast<volatile uint64_t*>(block))) {
+      acquired = true;
+      break;
+    }
+  }
+
+  bctx->cached_reserve_offset = reinterpret_cast<uintptr_t>(block);
+  bctx->cached_reserve_bit = bit;
+  if (acquired) {
+    bctx->flags |= reserve_flag;
+  }
+  return acquired ? 1 : 0;
+}
+
+template <typename T>
+uint64_t ReservedStoreImpl(void* raw_context, uint64_t guest_address,
+                           uint64_t host_address, uint64_t value) {
+  auto* bctx = BackendContextFromRawContext(raw_context);
+  const uint32_t reserve_flag = 1u << kA64BackendHasReserveBit;
+  const bool had_reservation = (bctx->flags & reserve_flag) != 0;
+  // PPC stwcx. unconditionally clears the reservation.
+  bctx->flags &= ~reserve_flag;
+  if (!had_reservation) {
+    return 0;
+  }
+
+  volatile uint64_t* block;
+  uint32_t bit;
+  ReserveOffsetAndBit(bctx->reserve_helper_, uint32_t(guest_address), block,
+                      bit);
+  // Sanity: the cached offset/bit from the matching lwarx must match.
+  if (bctx->cached_reserve_offset != reinterpret_cast<uintptr_t>(block) ||
+      bctx->cached_reserve_bit != bit) {
+    assert_always();
+    return 0;
+  }
+
+  bool exchange_ok;
+  if constexpr (sizeof(T) == sizeof(uint64_t)) {
+    exchange_ok = xe::atomic_cas(
+        bctx->cached_reserve_value_, uint64_t(value),
+        reinterpret_cast<volatile uint64_t*>(uintptr_t(host_address)));
+  } else {
+    exchange_ok = xe::atomic_cas(
+        uint32_t(bctx->cached_reserve_value_), uint32_t(value),
+        reinterpret_cast<volatile uint32_t*>(uintptr_t(host_address)));
+  }
+
+  // Clear our reservation bit even if exchange failed — PPC stwcx. always
+  // releases. If it's already clear (another thread invalidated us), the
+  // exchange will have failed and we'll return 0.
+  const uint64_t mask = uint64_t(1) << bit;
+  while (true) {
+    const uint64_t old = *block;
+    if ((old & mask) == 0) {
+      break;
+    }
+    if (xe::atomic_cas(old, old & ~mask,
+                       reinterpret_cast<volatile uint64_t*>(block))) {
+      break;
+    }
+  }
+
+  return exchange_ok ? 1 : 0;
+}
+
+extern "C" uint64_t ReservedStore32Helper(void* raw_context,
+                                          uint64_t guest_address,
+                                          uint64_t host_address,
+                                          uint64_t value) {
+  return ReservedStoreImpl<uint32_t>(raw_context, guest_address, host_address,
+                                     value);
+}
+
+extern "C" uint64_t ReservedStore64Helper(void* raw_context,
+                                          uint64_t guest_address,
+                                          uint64_t host_address,
+                                          uint64_t value) {
+  return ReservedStoreImpl<uint64_t>(raw_context, guest_address, host_address,
+                                     value);
+}
+
+}  // namespace
+
+// ==========================================================================
 // ResolveFunction — runtime function resolution.
 // ==========================================================================
 uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
@@ -695,6 +821,12 @@ bool A64Backend::Initialize(Processor* processor) {
     synchronize_guest_and_host_stack_helper_ =
         thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
   }
+
+  // Wire up reservation helpers used by RESERVED_LOAD/STORE codegen.
+  try_acquire_reservation_helper_ =
+      reinterpret_cast<void*>(&TryAcquireReservationHelper);
+  reserved_store_32_helper = reinterpret_cast<void*>(&ReservedStore32Helper);
+  reserved_store_64_helper = reinterpret_cast<void*>(&ReservedStore64Helper);
 
   // Set the indirection table default to point at the resolve thunk.
   // Use 64-bit encoding: the resolve thunk address is encoded as a rel32
