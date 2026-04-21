@@ -29,13 +29,6 @@ on:
         description: "Build number override (optional)"
         required: false
         type: string
-  push:
-    branches:
-      - "preview"
-      - "xenios"
-    tags:
-      - "v*"
-      - "release-*"
 
 permissions:
   contents: write
