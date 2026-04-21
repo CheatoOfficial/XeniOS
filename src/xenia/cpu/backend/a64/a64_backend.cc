@@ -1426,7 +1426,7 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   ldr(w10,
       ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, guest_sp))));
   cmp(w10, w5);
-  b(GE, check_lr);
+  b(Xbyak_aarch64::GE, check_lr);
   add(w6, w6, 1);
   cbz(w4, done);
   sub(w4, w4, 1);
@@ -1434,7 +1434,7 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
 
   L(check_lr);
   cmp(w6, 1);
-  b(LE, done);
+  b(Xbyak_aarch64::LE, done);
 
   // Disambiguate same-guest-sp frames via guest LR.
   ldr(w11, ptr(GetContextReg(),
@@ -1447,11 +1447,11 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   ldr(w13,
       ptr(x7, static_cast<int32_t>(offsetof(A64BackendStackpoint, guest_sp))));
   cmp(w13, w5);
-  b(NE, scan_done);
+  b(Xbyak_aarch64::NE, scan_done);
   ldr(w14, ptr(x7, static_cast<int32_t>(
                        offsetof(A64BackendStackpoint, guest_return_address))));
   cmp(w14, w11);
-  b(EQ, scan_found);
+  b(Xbyak_aarch64::EQ, scan_found);
   cbz(w12, scan_done);
   sub(w12, w12, 1);
   b(scan_loop);
@@ -1470,7 +1470,7 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
   mov(sp, x15);
   mov(x29, x16);
   // Adjust for caller stack size.
-  sub(sp, sp, x9, UXTX);
+  sub(sp, sp, x9, Xbyak_aarch64::UXTX);
 
   add(w4, w4, 1);
   str(w4, ptr(x2, static_cast<int32_t>(
