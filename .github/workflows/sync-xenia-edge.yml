@@ -14,7 +14,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  workflows: write
 
 concurrency:
   group: sync-xenia-edge
@@ -65,6 +64,10 @@ jobs:
             git merge --abort || true
             exit 1
           fi
+
+          # Keep the fork's workflow definitions authoritative on xenios. This
+          # avoids GitHub App push restrictions around workflow-file changes.
+          git checkout origin/xenios -- .github/workflows
 
           if git diff --quiet origin/xenios...HEAD; then
             echo "has_changes=false" >> "${GITHUB_OUTPUT}"
