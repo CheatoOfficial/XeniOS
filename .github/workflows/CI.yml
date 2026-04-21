@@ -160,7 +160,7 @@ jobs:
               grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler' || true
           )
           if [ "${#tracked_submodules[@]}" -gt 0 ]; then
-            retry git submodule update --init --depth=1 -j"$(sysctl -n hw.ncpu)" "${tracked_submodules[@]}"
+            retry git submodule update --init --checkout --force --depth=1 -j"$(sysctl -n hw.ncpu)" "${tracked_submodules[@]}"
           fi
           # Restore non-submodule files in third_party/ that the submodule
           # cache may have overwritten with stale versions.

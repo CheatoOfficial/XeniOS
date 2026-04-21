@@ -261,7 +261,7 @@ jobs:
               grep -v 'premake-androidndk\|premake-export-compile-commands' || true
           )
           if [ "${#tracked_submodules[@]}" -gt 0 ]; then
-            retry git submodule update --init --depth=1 -j"$(sysctl -n hw.ncpu)" \
+            retry git submodule update --init --checkout --force --depth=1 -j"$(sysctl -n hw.ncpu)" \
               "${tracked_submodules[@]}"
           fi
           retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 \
