@@ -23,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "xenia/base/platform.h"
@@ -52,6 +53,7 @@
 #include "xenia/ui/metal/metal_provider.h"
 
 namespace MTL {
+class CaptureManager;
 class Heap;
 class SharedEvent;
 }  // namespace MTL
@@ -244,7 +246,6 @@ class MetalCommandProcessor : public CommandProcessor {
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                  uint32_t frontbuffer_height) override;
-  void OnPrimaryBufferEnd() override;
 
   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
                      const uint32_t* host_address,
@@ -350,8 +351,14 @@ class MetalCommandProcessor : public CommandProcessor {
   virtual void EndResolveOrdering();
 
  private:
+  enum class DebugMarkerTarget {
+    kRenderEncoder,
+    kCommandBuffer,
+  };
+
   // Initialize shader translation pipeline
   bool InitializeShaderTranslation();
+  void MaybeStartCapture();
 
 #if METAL_SHADER_CONVERTER_AVAILABLE
   // Request shared-memory ranges needed for the current draw, mirroring
@@ -822,6 +829,11 @@ class MetalCommandProcessor : public CommandProcessor {
 
   ResolveOrderingPolicy resolve_ordering_policy_ =
       ResolveOrderingPolicy::kSubmissionBoundary;
+
+  bool debug_markers_enabled_ = false;
+  std::vector<DebugMarkerTarget> debug_marker_stack_;
+  std::atomic<bool> capture_requested_{false};
+  MTL::CaptureManager* capture_manager_ = nullptr;
 
   // Memexport tracking for shared memory invalidation.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
