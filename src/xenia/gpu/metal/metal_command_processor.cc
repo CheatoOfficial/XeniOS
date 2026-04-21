@@ -1056,8 +1056,24 @@ bool MetalCommandProcessor::SetupContext() {
   sampler_bindless_heap_next_ = 0;
   sampler_bindless_heap_exhausted_logged_ = false;
 
-  texture_cache_ = std::make_unique<MetalTextureCache>(this, *register_file_,
-                                                       *shared_memory_, 1, 1);
+  uint32_t draw_resolution_scale_x = 1;
+  uint32_t draw_resolution_scale_y = 1;
+  bool draw_resolution_scale_not_clamped =
+      TextureCache::GetConfigDrawResolutionScale(draw_resolution_scale_x,
+                                                 draw_resolution_scale_y);
+  if (!draw_resolution_scale_not_clamped) {
+    XELOGW(
+        "The requested draw resolution scale is not supported by the emulator "
+        "or config, reducing to {}x{}",
+        draw_resolution_scale_x, draw_resolution_scale_y);
+  }
+  XELOGI("Metal: draw resolution scale {}x{} (supported={})",
+         draw_resolution_scale_x, draw_resolution_scale_y,
+         draw_resolution_scale_not_clamped);
+
+  texture_cache_ = std::make_unique<MetalTextureCache>(
+      this, *register_file_, *shared_memory_, draw_resolution_scale_x,
+      draw_resolution_scale_y);
   if (!texture_cache_->Initialize()) {
     XELOGE("Failed to initialize Metal texture cache");
     return false;
@@ -2298,32 +2314,6 @@ void MetalCommandProcessor::OnPrimaryBufferEnd() {
       CanEndSubmissionImmediately()) {
     EndSubmission(false);
   }
-}
-
-void MetalCommandProcessor::OnPrimaryBufferEnd() {
-  if (!current_command_buffer_) {
-    return;
-  }
-
-  if (!cvars::submit_on_primary_buffer_end) {
-    return;
-  }
-
-  if (!copy_resolve_writes_pending_ && !CanEndSubmissionImmediately()) {
-    return;
-  }
-  EndCommandBuffer();
-}
-
-bool MetalCommandProcessor::CanEndSubmissionImmediately() {
-  if (!current_command_buffer_) return false;
-#if METAL_SHADER_CONVERTER_AVAILABLE
-  if (pipeline_cache_manager_ &&
-      pipeline_cache_manager_->IsCreatingPipelines()) {
-    return false;
-  }
-#endif  // METAL_SHADER_CONVERTER_AVAILABLE
-  return true;
 }
 
 Shader* MetalCommandProcessor::LoadShader(xenos::ShaderType shader_type,

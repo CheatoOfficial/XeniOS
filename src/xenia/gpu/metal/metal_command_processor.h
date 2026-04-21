@@ -144,6 +144,8 @@ class MetalCommandProcessor : public CommandProcessor {
   bool debug_markers_enabled() const { return debug_markers_enabled_; }
   void RequestCapture();
   uint32_t current_draw_index() const { return current_draw_index_; }
+  uint64_t GetCurrentFrame() const { return frame_current_; }
+  uint64_t GetCompletedFrame() const { return frame_completed_; }
 
   // Submission coordination helpers — callers use these to query or obtain
   // command buffers for transfer/upload work without reaching into internal
@@ -374,7 +376,11 @@ class MetalCommandProcessor : public CommandProcessor {
   void FlushCommandBufferAndWait(uint64_t timeout_ns, const char* context);
   void BeginCommandBuffer();
   void EndCommandBuffer();
-  bool CanEndSubmissionImmediately();
+  void CheckSubmissionCompletion(uint64_t await_submission);
+  bool BeginSubmission(bool is_guest_command);
+  bool EndSubmission(bool is_swap);
+  void StopCaptureIfActive();
+  bool CanEndSubmissionImmediately() const;
   void WaitForPendingCompletionHandlers();
   void ProcessCompletedSubmissions();
 
@@ -818,6 +824,32 @@ class MetalCommandProcessor : public CommandProcessor {
   // Track which heap buffer binds have been set on the current encoder.
   bool heap_binds_set_on_encoder_ = false;
 
+  MTL::Library* depth_only_pixel_library_ = nullptr;
+  std::string depth_only_pixel_function_name_;
+
+  static constexpr uint32_t kQueueFrames = 3;
+  std::unique_ptr<ui::metal::MetalGPUCompletionTimeline> completion_timeline_;
+  bool submission_open_ = false;
+  bool frame_open_ = false;
+  uint64_t frame_current_ = 1;
+  uint64_t frame_completed_ = 0;
+  uint64_t closed_frame_submissions_[kQueueFrames] = {};
+
+  MTL::ComputePipelineState* resolve_downscale_pipeline_ = nullptr;
+  MTL::Buffer* resolve_downscale_buffer_ = nullptr;
+  uint32_t resolve_downscale_buffer_size_ = 0;
+
+  struct ReadbackBuffer {
+    MTL::Buffer* buffers[2] = {nullptr, nullptr};
+    uint32_t sizes[2] = {0, 0};
+    uint64_t submission_ids[2] = {0, 0};
+    uint32_t current_index = 0;
+    uint64_t last_used_frame = 0;
+  };
+  void EvictOldReadbackBuffers(
+      std::unordered_map<uint64_t, ReadbackBuffer>& buffer_map);
+  std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
+
   std::atomic<uint64_t> completed_command_buffers_{0};
   std::atomic<uint32_t> pending_completion_handlers_{0};
   uint64_t submission_current_ = 0;
@@ -834,6 +866,7 @@ class MetalCommandProcessor : public CommandProcessor {
   std::vector<DebugMarkerTarget> debug_marker_stack_;
   std::atomic<bool> capture_requested_{false};
   MTL::CaptureManager* capture_manager_ = nullptr;
+  bool capture_active_ = false;
 
   // Memexport tracking for shared memory invalidation.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
