@@ -238,7 +238,7 @@ jobs:
   publish-ios-release:
     name: Publish iOS Release Asset
     needs: build-ios-arm64
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

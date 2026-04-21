@@ -22,6 +22,7 @@ on:
     - cron: "0 * * * *"
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -172,3 +173,13 @@ jobs:
         run: |
           set -euo pipefail
           git push --force-with-lease origin HEAD:main
+
+      - name: Trigger CI for synced main
+        if: steps.merge.outputs.has_changes == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run CI.yml --ref main
