@@ -11,7 +11,6 @@
 
 #include <sys/sysctl.h>
 #include <unistd.h>
-#include <iostream>
 
 #include <iostream>
 
@@ -29,10 +28,6 @@ bool IsDebuggerAttached() {
 }
 
 void Break() { __builtin_debugtrap(); }
-
-namespace internal {
-void DebugPrint(const char* s) { std::clog << s << std::endl; }
-}  // namespace internal
 
 namespace internal {
 void DebugPrint(const char* s) { std::clog << s << std::endl; }
