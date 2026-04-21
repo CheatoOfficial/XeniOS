@@ -105,11 +105,32 @@ jobs:
             local label="$3"
 
             if ! git merge --no-ff -X ours --no-commit "${remote_name}/${branch_name}"; then
-              echo "::error::Automatic merge from ${label} failed"
-              git status --short
-              git diff --name-only --diff-filter=U | sed 's/^/::error::conflict file: /'
-              git merge --abort || true
-              exit 1
+              echo "::warning::Automatic merge from ${label} had conflicts; keeping main for conflicted files"
+              mapfile -t conflict_files < <(git diff --name-only --diff-filter=U)
+              if [ "${#conflict_files[@]}" -eq 0 ]; then
+                echo "::error::Merge from ${label} failed without reporting conflicted files"
+                git status --short
+                git merge --abort || true
+                exit 1
+              fi
+
+              for path in "${conflict_files[@]}"; do
+                echo "::warning::conflict file: ${path}"
+                if git cat-file -e ":2:${path}" 2>/dev/null; then
+                  git checkout --ours -- "${path}" || true
+                  git add -- "${path}"
+                else
+                  git rm -f -- "${path}" >/dev/null 2>&1 || true
+                  git add -A -- "${path}" >/dev/null 2>&1 || true
+                fi
+              done
+
+              if git diff --name-only --diff-filter=U | grep -q .; then
+                echo "::error::Some merge conflicts from ${label} could not be resolved automatically"
+                git status --short
+                git merge --abort || true
+                exit 1
+              fi
             fi
 
             if [ ! -f .git/MERGE_HEAD ]; then
