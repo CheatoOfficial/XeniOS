@@ -247,8 +247,20 @@ jobs:
             echo "QT_DIR=$HOME/Qt/6.10.1/macos" >> "$GITHUB_ENV"
           fi
 
-          retry git submodule update --init --depth=1 -j"$(sysctl -n hw.ncpu)" \
-            $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands')
+          mapfile -t tracked_submodules < <(
+            git config --file .gitmodules --get-regexp '^submodule\\..*\\.path$' |
+              awk '{print $2}' |
+              while read -r path; do
+                if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+                  echo "$path"
+                fi
+              done |
+              grep -v 'premake-androidndk\|premake-export-compile-commands' || true
+          )
+          if [ "${#tracked_submodules[@]}" -gt 0 ]; then
+            retry git submodule update --init --depth=1 -j"$(sysctl -n hw.ncpu)" \
+              "${tracked_submodules[@]}"
+          fi
           retry git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 \
             external/SPIRV-Headers external/SPIRV-Tools
 

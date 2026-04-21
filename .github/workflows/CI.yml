@@ -146,7 +146,19 @@ jobs:
           git config --global http.postBuffer 524288000
 
           # No SDL2/Qt/Vulkan/DirectXShaderCompiler needed for iOS library builds.
-          retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler')
+          mapfile -t tracked_submodules < <(
+            git config --file .gitmodules --get-regexp '^submodule\\..*\\.path$' |
+              awk '{print $2}' |
+              while read -r path; do
+                if git ls-files --error-unmatch "$path" >/dev/null 2>&1; then
+                  echo "$path"
+                fi
+              done |
+              grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler' || true
+          )
+          if [ "${#tracked_submodules[@]}" -gt 0 ]; then
+            retry git submodule update --init --depth=1 -j"$(sysctl -n hw.ncpu)" "${tracked_submodules[@]}"
+          fi
           # Restore non-submodule files in third_party/ that the submodule
           # cache may have overwritten with stale versions.
           git ls-files -z 'third_party/*.lua' | xargs -0 git checkout --
