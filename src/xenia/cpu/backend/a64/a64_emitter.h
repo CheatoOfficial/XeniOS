@@ -208,6 +208,8 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   XexModule* GuestModule() { return guest_module_; }
 
+  Xbyak_aarch64::Label& AddToTail(TailEmitCallback callback,
+                                  uint32_t alignment = 0);
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
   Xbyak_aarch64::Label& NewCachedLabel();
