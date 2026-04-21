@@ -105,18 +105,6 @@ void CrashDump() {
   --in_crash_dump;
 }
 
-static inline bool ShouldSkipHostCommit(const BaseHeap& heap) {
-  // When the host page size is larger than 4 KB (e.g. 16 KB on macOS ARM64,
-  // 64 KB on some ARM64 Linux kernels), mprotect on 4 KB guest page boundaries
-  // fails with EINVAL. All heaps are backed by a shared file mapping
-  // (MapFileView) that is already mapped RW, so the commit is a no-op — skip
-  // it.
-  if (xe::memory::page_size() > 0x1000) {
-    return true;
-  }
-  return false;
-}
-
 xe::memory::PageAccess ToPageAccess(uint32_t protect) {
   bool is_writable = IsWritableProtect(protect);
 
