@@ -247,8 +247,8 @@ struct F64Op : ValueOp<F64Op, KEY_TYPE_V_F64, DReg, double> {
     return BASE::value->constant.f64;
   }
 };
-struct V128Op : ValueOp<V128Op, KEY_TYPE_V_V128, QReg, vec128_t> {
-  typedef ValueOp<V128Op, KEY_TYPE_V_V128, QReg, vec128_t> BASE;
+struct V128Op : ValueOp<V128Op, KEY_TYPE_V_V128, A64VReg, vec128_t> {
+  typedef ValueOp<V128Op, KEY_TYPE_V_V128, A64VReg, vec128_t> BASE;
   const vec128_t& constant() const {
     assert_true(BASE::is_constant);
     return BASE::value->constant.v128;

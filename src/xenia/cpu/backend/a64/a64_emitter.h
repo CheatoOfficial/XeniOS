@@ -47,6 +47,34 @@ class A64CodeCache;
 
 enum class FPCRMode : uint32_t { Unknown, Fpu, Vmx };
 
+// A narrow compatibility wrapper for synced Oaknut-era vector sequence code.
+// It still behaves like a Q register for ldr/str APIs, but exposes the lane
+// views and helpers the older sequence files still reference.
+class A64VReg : public Xbyak_aarch64::QReg {
+ public:
+  explicit A64VReg(uint32_t index) : Xbyak_aarch64::QReg(index) {}
+  explicit A64VReg(const Xbyak_aarch64::QReg& reg)
+      : Xbyak_aarch64::QReg(reg.getIdx()) {}
+  explicit A64VReg(const Xbyak_aarch64::VReg& reg)
+      : Xbyak_aarch64::QReg(reg.getIdx()) {}
+
+  Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
+  Xbyak_aarch64::VReg toV() const { return Xbyak_aarch64::VReg(getIdx()); }
+  Xbyak_aarch64::VReg16B B16() const {
+    return Xbyak_aarch64::VReg16B(getIdx());
+  }
+  Xbyak_aarch64::VReg8H H8() const {
+    return Xbyak_aarch64::VReg8H(getIdx());
+  }
+  Xbyak_aarch64::VReg4S S4() const {
+    return Xbyak_aarch64::VReg4S(getIdx());
+  }
+  Xbyak_aarch64::VReg2D D2() const {
+    return Xbyak_aarch64::VReg2D(getIdx());
+  }
+  uint32_t index() const { return getIdx(); }
+};
+
 // Unfortunately due to the design of xbyak we have to pass this to the ctor.
 class XbyakA64Allocator : public Xbyak_aarch64::Allocator {
  public:
@@ -104,6 +132,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     auto idx = vec_reg_map_[v->reg.index];
     r = Xbyak_aarch64::QReg(idx);
   }
+  static void SetupReg(const hir::Value* v, A64VReg& r) {
+    auto idx = vec_reg_map_[v->reg.index];
+    r = A64VReg(idx);
+  }
   static void SetupReg(const hir::Value* v, Xbyak_aarch64::VReg& r) {
     auto idx = vec_reg_map_[v->reg.index];
     r = Xbyak_aarch64::VReg(idx);
@@ -157,6 +189,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
   Xbyak_aarch64::Label& NewCachedLabel();
+  void LoadConstantV(const Xbyak_aarch64::QReg& reg, const vec128_t& value,
+                     int gpr_scratch_idx = 0);
+  void LoadConstantV(const Xbyak_aarch64::VReg& reg, const vec128_t& value,
+                     int gpr_scratch_idx = 0);
 
  protected:
   void* Emplace(const EmitFunctionInfo& func_info,

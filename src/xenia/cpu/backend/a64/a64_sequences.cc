@@ -26,6 +26,7 @@
 #include "xenia/cpu/backend/a64/a64_seq_util.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
 #include "xenia/cpu/backend/a64/a64_tracers.h"
+#include "xenia/cpu/backend/a64/a64_oaknut_compat.h"
 #include "xenia/cpu/hir/instr.h"
 #include "xenia/cpu/ppc/ppc_context.h"
 
@@ -40,98 +41,6 @@ using namespace Xbyak_aarch64;
 namespace oaknut {
 using Label = Xbyak_aarch64::Label;
 }
-
-// This translation unit still contains a large amount of Oaknut-era A64
-// emitter syntax. Provide a narrow file-local compatibility layer so the
-// upstream xbyak_aarch64 emitter API can compile the preserved logic without
-// rewriting the entire backend in one sync.
-#define Cond Xbyak_aarch64
-
-#define X0 XReg(0)
-#define X1 XReg(1)
-#define X2 XReg(2)
-#define W0 WReg(0)
-#define W1 WReg(1)
-#define W2 WReg(2)
-#define W3 WReg(3)
-#define W4 WReg(4)
-#define WZR WReg(31)
-#define XZR XReg(31)
-#define SP XReg(31)
-#define S0 SReg(0)
-#define S1 SReg(1)
-#define S2 SReg(2)
-#define S3 SReg(3)
-#define D0 DReg(0)
-#define D1 DReg(1)
-#define D2 DReg(2)
-#define D3 DReg(3)
-#define Q0 VReg(0)
-#define Q1 VReg(1)
-#define Q2 VReg(2)
-#define Q3 VReg(3)
-#define Q4 VReg(4)
-#define Q6 VReg(6)
-#define Q7 VReg(7)
-
-#define B16() b16
-#define S4() s4
-
-#define MOV mov
-#define CMP cmp
-#define ADD add
-#define B b
-#define FMOV fmov
-#define CSEL csel
-#define CSET cset
-#define FCMP fcmp
-#define SDIV sdiv
-#define ASR asr
-#define UDIV udiv
-#define MVN mvn
-#define FCMEQ fcmeq
-#define BIT bit
-#define CBZ cbz
-#define FDIV fdiv
-#define FSUB fsub
-#define BIC bic
-#define FCVT fcvt
-#define ORR orr
-#define AND and_
-#define SXTB sxtb
-#define FMUL fmul
-#define FNEG fneg
-#define FRINTP frintp
-#define FRINTN frintn
-#define FRINTM frintm
-#define MRS mrs
-#define FRINTZ frintz
-#define FMIN fmin
-#define FMAX fmax
-#define FCVTZS fcvtzs
-#define FCVTNS fcvtns
-#define FADD fadd
-#define FMLA fmla
-#define SXTH sxth
-#define BSL bsl
-#define SCVTF scvtf
-#define ROR ror
-#define NEG neg
-#define ADC adc
-#define FSQRT fsqrt
-#define FMADD fmadd
-#define FCSEL fcsel
-#define UBFX ubfx
-#define MUL mul
-#define BFI bfi
-#define LSRV lsrv
-#define DUP dup
-#define LSLV lslv
-#define FRSQRTE frsqrte
-#define CSETM csetm
-#define SUB sub
-#define CMN cmn
-#define MSR msr
 
 std::unordered_map<uint32_t, SequenceSelectFn>& SequenceTable() {
   static auto* sequence_table =

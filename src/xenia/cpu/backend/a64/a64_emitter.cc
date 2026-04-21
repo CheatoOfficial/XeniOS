@@ -25,6 +25,7 @@
 #include "xenia/cpu/backend/a64/a64_backend.h"
 #include "xenia/cpu/backend/a64/a64_code_cache.h"
 #include "xenia/cpu/backend/a64/a64_function.h"
+#include "xenia/cpu/backend/a64/a64_seq_util.h"
 #include "xenia/cpu/backend/a64/a64_sequences.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
 #include "xenia/cpu/cpu_flags.h"
@@ -104,6 +105,16 @@ A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
       feature_flags_(arm64::GetFeatureFlags()) {}
 
 A64Emitter::~A64Emitter() = default;
+
+void A64Emitter::LoadConstantV(const Xbyak_aarch64::QReg& reg,
+                               const vec128_t& value, int gpr_scratch_idx) {
+  LoadV128Const(*this, reg.getIdx(), value, gpr_scratch_idx);
+}
+
+void A64Emitter::LoadConstantV(const Xbyak_aarch64::VReg& reg,
+                               const vec128_t& value, int gpr_scratch_idx) {
+  LoadV128Const(*this, reg.getIdx(), value, gpr_scratch_idx);
+}
 
 bool A64Emitter::Emit(GuestFunction* function, hir::HIRBuilder* builder,
                       uint32_t debug_info_flags, FunctionDebugInfo* debug_info,
