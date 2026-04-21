@@ -1,7 +1,7 @@
--- SDL2 static library build for iOS.
+-- SDL2 static library build for Apple platforms (macOS + iOS).
 -- Only compiles subsystems needed by Xenia: audio (CoreAudio) and
--- gamecontroller/joystick (MFi). Does NOT compile the UIKit video driver
--- to avoid conflicting with Xenia's own UIKit window management.
+-- joystick (IOKit on macOS, MFi on iOS). Video is dummy-only; Xenia
+-- does its own Cocoa/UIKit/Metal window management.
 
 group("third_party")
 project("SDL2")
@@ -15,19 +15,31 @@ project("SDL2")
     "SDL_RENDER_DISABLED",
     "SDL_VIDEO_DRIVER_DUMMY",
     "USING_PREMAKE_CONFIG_H",
-    -- Use the iOS-specific SDL config.
     "SDL_config_h_",
   })
   buildoptions({
     "-fobjc-arc",
-    -- Keep SDL on the dummy-only path for Xenia by undefining
-    -- backends enabled by SDL_config_iphoneos.h.
-    "-include", "SDL_config_xenia_ios.h",
+    -- Keep SDL on the dummy-only video path and strip GL/Vulkan/X11 by
+    -- force-including our override of SDL_config_{iphoneos,macosx}.h.
+    "-include", "SDL_config_xenia_apple.h",
   })
   includedirs({
     "SDL2/include",
     "SDL2/src",
   })
+
+  -- macOS-only: disable SDL's dynapi trampoline layer. It's there so a
+  -- shipped app can dlopen a replacement libSDL2 at runtime; we static-link,
+  -- so the extra indirection and _REAL/trampoline machinery buys nothing.
+  -- iOS auto-disables dynapi (SDL_dynapi.h line 46 via TARGET_OS_IPHONE);
+  -- for macOS we borrow the same back door SDL uses for its static analyzer
+  -- (SDL_dynapi.h line 62), which avoids the #error that blocks a direct
+  -- `-DSDL_DYNAMIC_API=0`. Side effects are trivial: two SDL_*_lock globals
+  -- lose `static` linkage, and the SDL_GUARDED_BY family expands to real
+  -- clang thread-safety attributes which are silent without -Wthread-safety.
+  filter("system:macosx")
+    defines({ "SDL_THREAD_SAFETY_ANALYSIS" })
+  filter({})
 
   -- Core SDL files.
   files({
@@ -48,7 +60,7 @@ project("SDL2")
     "SDL2/src/atomic/SDL_spinlock.c",
   })
 
-  -- Audio: core + CoreAudio backend.
+  -- Audio: core + CoreAudio + dummy (+ disk on macOS).
   files({
     "SDL2/src/audio/SDL_audio.c",
     "SDL2/src/audio/SDL_audiocvt.c",
@@ -59,6 +71,9 @@ project("SDL2")
     "SDL2/src/audio/coreaudio/SDL_coreaudio.m",
     "SDL2/src/audio/dummy/SDL_dummyaudio.c",
   })
+  filter("system:macosx")
+    files({ "SDL2/src/audio/disk/SDL_diskaudio.c" })
+  filter({})
 
   -- CPU info.
   files({
@@ -95,7 +110,8 @@ project("SDL2")
     "SDL2/src/filesystem/cocoa/SDL_sysfilesystem.m",
   })
 
-  -- Haptic (dummy - we only need gamecontroller).
+  -- Haptic (dummy - Xenia rumbles via SDL_GameControllerRumble, which
+  -- goes through the joystick driver, not the SDL_Haptic API).
   files({
     "SDL2/src/haptic/SDL_haptic.c",
     "SDL2/src/haptic/dummy/SDL_syshaptic.c",
@@ -106,14 +122,15 @@ project("SDL2")
     "SDL2/src/hidapi/SDL_hidapi.c",
   })
 
-  -- Joystick: core + MFi (iOS GameController framework) backend.
+  -- Joystick: core + virtual + MFi (GameController) + hidapi.
+  -- macOS additionally uses the IOKit (darwin) backend.
   files({
     "SDL2/src/joystick/SDL_joystick.c",
     "SDL2/src/joystick/SDL_gamecontroller.c",
     "SDL2/src/joystick/SDL_steam_virtual_gamepad.c",
     "SDL2/src/joystick/controller_type.c",
-    "SDL2/src/joystick/virtual/SDL_virtualjoystick.c",
     "SDL2/src/joystick/iphoneos/SDL_mfijoystick.m",
+    "SDL2/src/joystick/virtual/SDL_virtualjoystick.c",
     "SDL2/src/joystick/hidapi/SDL_hidapijoystick.c",
     "SDL2/src/joystick/hidapi/SDL_hidapi_combined.c",
     "SDL2/src/joystick/hidapi/SDL_hidapi_gamecube.c",
@@ -132,6 +149,14 @@ project("SDL2")
     "SDL2/src/joystick/hidapi/SDL_hidapi_xbox360w.c",
     "SDL2/src/joystick/hidapi/SDL_hidapi_xboxone.c",
   })
+  filter("system:macosx")
+    files({ "SDL2/src/joystick/darwin/SDL_iokitjoystick.c" })
+  -- SDL_mfijoystick.m uses the GameController framework, which is weakly
+  -- linked on macOS 10.8+ but mandatory on iOS; on macOS we need
+  -- -fobjc-weak so the ObjC symbols resolve weakly.
+  filter({ "system:macosx", "files:**/joystick/iphoneos/SDL_mfijoystick.m" })
+    buildoptions({ "-fobjc-weak" })
+  filter({})
 
   -- Math library.
   files({
@@ -168,17 +193,25 @@ project("SDL2")
     "SDL2/src/locale/macosx/SDL_syslocale.m",
   })
 
-  -- Misc.
+  -- Misc (URL backend differs per-OS).
   files({
     "SDL2/src/misc/SDL_url.c",
-    "SDL2/src/misc/ios/SDL_sysurl.m",
   })
+  filter("system:ios")
+    files({ "SDL2/src/misc/ios/SDL_sysurl.m" })
+  filter("system:macosx")
+    files({ "SDL2/src/misc/macosx/SDL_sysurl.m" })
+  filter({})
 
-  -- Power.
+  -- Power (UIKit on iOS, IOKit-based on macOS).
   files({
     "SDL2/src/power/SDL_power.c",
-    "SDL2/src/power/uikit/SDL_syspower.m",
   })
+  filter("system:ios")
+    files({ "SDL2/src/power/uikit/SDL_syspower.m" })
+  filter("system:macosx")
+    files({ "SDL2/src/power/macosx/SDL_syspower.c" })
+  filter({})
 
   -- Sensor (dummy).
   files({
@@ -198,6 +231,9 @@ project("SDL2")
     "SDL2/src/stdlib/SDL_string.c",
     "SDL2/src/stdlib/SDL_strtokr.c",
   })
+  filter("system:macosx")
+    files({ "SDL2/src/stdlib/SDL_mslibc.c" })
+  filter({})
 
   -- Thread (pthreads).
   files({
@@ -215,16 +251,11 @@ project("SDL2")
     "SDL2/src/timer/unix/SDL_systimer.c",
   })
 
-  -- Video (dummy only - Xenia has its own UIKit/Metal window management).
-  -- Keep SDL render core available because SDL_video.c references
-  -- SDL_GetRenderer/SDL_DestroyRendererWithoutFreeing even with rendering
+  -- Video (dummy only). Keep SDL_render.c because SDL_video.c references
+  -- SDL_GetRenderer / SDL_DestroyRendererWithoutFreeing even with rendering
   -- disabled.
   files({
     "SDL2/src/render/SDL_render.c",
-  })
-
-  -- Video (dummy only - Xenia has its own UIKit/Metal window management).
-  files({
     "SDL2/src/video/SDL_blit.c",
     "SDL2/src/video/SDL_blit_0.c",
     "SDL2/src/video/SDL_blit_1.c",

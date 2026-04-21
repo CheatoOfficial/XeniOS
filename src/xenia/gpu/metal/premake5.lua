@@ -5,8 +5,6 @@ local dxilconv_root = path.join(project_root, "third_party/DirectXShaderCompiler
 local dxilconv_libdir_arm64 = path.join(dxilconv_root, "build_dxilconv_macos/lib")
 local dxilconv_libdir_x86_64 =
     path.join(dxilconv_root, "build_dxilconv_macos_x86_64/lib")
-local sdl2_libdir_arm64 = "/opt/homebrew/opt/sdl2/lib"
-local sdl2_libdir_x86_64 = "/usr/local/opt/sdl2/lib"
 local dxilconv_includes = {
   path.join(dxilconv_root, "include"),
   path.join(dxilconv_root, "projects/dxilconv/include"),
@@ -57,15 +55,20 @@ project("xenia-gpu-metal")
       "metal_shader_cache.h",
       "metal_texture_cache.cc",
       "metal_texture_cache.h",
-      "msl_bindings.h",
-      "msl_shader.cc",
-      "msl_shader.h",
+      "metal_upload_buffer_pool.cc",
+      "metal_upload_buffer_pool.h",
     }
     includedirs {
       spirvcross_root,
+      -- metal_command_processor.h transitively includes metal_irconverter_runtime.h;
+      -- that header has two modes and we need metal-cpp mode on both Apple
+      -- targets so it parses as C++. The MSC *.cc sources that call into
+      -- libmetalirconverter are macOS-only (filter "system:macosx" below),
+      -- so iOS gets the declarations without a link dependency.
+      path.join(project_root, "third_party/metal-shader-converter/include"),
     }
     defines {
-      -- Exceptions are enabled for SPIRV-Cross (see spirv-cross.lua).
+      "IR_RUNTIME_METALCPP",
     }
     links {
       "Metal.framework",
@@ -80,6 +83,8 @@ project("xenia-gpu-metal")
       "ir_runtime_impl.mm",
       "metal_geometry_shader.cc",
       "metal_geometry_shader.h",
+      "metal_pipeline_cache.cc",
+      "metal_pipeline_cache.h",
       "metal_shader.cc",
       "metal_shader.h",
       "metal_shader_converter.cc",
@@ -112,11 +117,11 @@ project("xenia-gpu-metal")
       "LLVMDxcSupport",
     }
   filter {"system:macosx", "architecture:ARM64"}
-    libdirs     { dxilconv_libdir_arm64, sdl2_libdir_arm64 }
-    runpathdirs { dxilconv_libdir_arm64, sdl2_libdir_arm64 }
+    libdirs     { dxilconv_libdir_arm64 }
+    runpathdirs { dxilconv_libdir_arm64 }
   filter {"system:macosx", "architecture:x86_64"}
-    libdirs     { dxilconv_libdir_x86_64, sdl2_libdir_x86_64 }
-    runpathdirs { dxilconv_libdir_x86_64, sdl2_libdir_x86_64 }
+    libdirs     { dxilconv_libdir_x86_64 }
+    runpathdirs { dxilconv_libdir_x86_64 }
     removelinks { "LLVMDxcSupport" }
     linkoptions {
       path.getabsolute(path.join(dxilconv_libdir_x86_64, "libdxilconv.dylib")),
@@ -200,6 +205,14 @@ project("xenia-gpu-metal-trace-viewer")
       "MetalKit.framework",
       "QuartzCore.framework",
       "SDL2",
+      -- Frameworks pulled in by the static SDL2 build on macOS.
+      "CoreAudio.framework",
+      "AudioToolbox.framework",
+      "AVFoundation.framework",
+      "CoreHaptics.framework",
+      "ForceFeedback.framework",
+      "GameController.framework",
+      "IOKit.framework",
       "metalirconverter",
       "dxilconv",
       "LLVMDxcSupport",
@@ -211,8 +224,7 @@ project("xenia-gpu-metal-trace-viewer")
       ["CODE_SIGN_STYLE"] = "Automatic",
       ["LD_RUNPATH_SEARCH_PATHS"] =
           "@executable_path/../Frameworks @loader_path/../Frameworks "
-          .. "@loader_path/../../../../third_party/metal-shader-converter/lib "
-          .. "/opt/homebrew/opt/sdl2/lib /usr/local/opt/sdl2/lib",
+          .. "@loader_path/../../../../third_party/metal-shader-converter/lib",
     })
   filter {"system:macosx", "architecture:ARM64"}
     libdirs     { dxilconv_libdir_arm64 }
@@ -225,25 +237,22 @@ project("xenia-gpu-metal-trace-viewer")
       ["LD_RUNPATH_SEARCH_PATHS"] =
           "@executable_path/../Frameworks @loader_path/../Frameworks "
           .. "@loader_path/../../../../third_party/metal-shader-converter/lib "
-          .. "@loader_path/../../../../third_party/DirectXShaderCompiler/build_dxilconv_macos/lib "
-          .. "/opt/homebrew/opt/sdl2/lib",
+          .. "@loader_path/../../../../third_party/DirectXShaderCompiler/build_dxilconv_macos/lib",
     })
   filter {"system:macosx", "architecture:x86_64"}
     libdirs     { dxilconv_libdir_x86_64 }
     runpathdirs { dxilconv_libdir_x86_64 }
-    removelinks { "SDL2", "LLVMDxcSupport" }
+    removelinks { "LLVMDxcSupport" }
     linkoptions {
       path.getabsolute(path.join(dxilconv_libdir_x86_64,
                                  "libLLVMDxcSupport.a")),
-      path.getabsolute("/usr/local/opt/sdl2/lib/libSDL2-2.0.0.dylib"),
     }
     xcodebuildsettings({
       ["MACOSX_DEPLOYMENT_TARGET"] = "15.0",
       ["LD_RUNPATH_SEARCH_PATHS"] =
           "@executable_path/../Frameworks @loader_path/../Frameworks "
           .. "@loader_path/../../../../third_party/metal-shader-converter/lib "
-          .. "@loader_path/../../../../third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib "
-          .. "/usr/local/opt/sdl2/lib",
+          .. "@loader_path/../../../../third_party/DirectXShaderCompiler/build_dxilconv_macos_x86_64/lib",
     })
   filter {}
 
@@ -282,6 +291,9 @@ project("xenia-gpu-metal-trace-dump")
 
   files {
     "metal_trace_dump_main.cc",
+  }
+  includedirs {
+    path.join(project_root, "third_party/glslang"),
   }
   
   -- Check if mac-specific file exists, otherwise use posix
@@ -323,6 +335,7 @@ project("xenia-gpu-metal-trace-dump")
       "MetalFX.framework",
       "MetalKit.framework",
       "QuartzCore.framework",
+      "iconv",
       "metalirconverter",
       "dxilconv",
       "LLVMDxcSupport",

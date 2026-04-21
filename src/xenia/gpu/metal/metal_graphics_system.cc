@@ -9,13 +9,8 @@
 
 #include "xenia/gpu/metal/metal_graphics_system.h"
 
-#include <algorithm>
-
 #include "xenia/base/logging.h"
-#include "xenia/base/math.h"
-#include "xenia/gpu/draw_util.h"
 #include "xenia/gpu/metal/metal_command_processor.h"
-#include "xenia/ui/metal/metal_util.h"
 #include "xenia/xbox.h"
 
 namespace xe {

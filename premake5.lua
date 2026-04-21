@@ -827,8 +827,9 @@ workspace("xenia")
   end
 
   if not os.istarget("android") then
-    -- SDL2 requires sdl2-config on desktop; Android still uses native paths.
-    -- iOS is handled inside third_party/SDL2.lua by building SDL2 from source.
+    -- Windows / macOS / iOS build SDL2 from source in third_party/. Linux
+    -- uses sdl2-config against the system libsdl2-dev. Android still uses
+    -- its own native paths.
     include("third_party/SDL2.lua")
   else
     -- Provide a no-op stub so callers don't need to guard every call.

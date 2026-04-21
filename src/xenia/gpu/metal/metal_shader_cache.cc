@@ -17,6 +17,7 @@
 
 #include "third_party/xxhash/xxhash.h"
 #include "xenia/base/logging.h"
+#include "xenia/gpu/gpu_flags.h"
 
 namespace xe {
 namespace gpu {
@@ -28,8 +29,6 @@ std::unique_ptr<MetalShaderCache> g_metal_shader_cache =
 namespace {
 
 constexpr uint32_t kCacheFileMagic = 0x4D4C4358;  // 'XCLM'
-constexpr uint32_t kCacheFileVersion = 1;
-
 struct CacheFileHeader {
   uint32_t magic;
   uint32_t version;
@@ -65,13 +64,11 @@ void MetalShaderCache::Shutdown() {
 
 uint64_t MetalShaderCache::GetCacheKey(uint64_t ucode_hash,
                                        uint64_t modification, uint32_t stage) {
-  struct KeyData {
-    uint64_t ucode_hash;
-    uint64_t modification;
-    uint32_t stage;
-    uint32_t reserved;
-  } key_data = {ucode_hash, modification, stage, 0};
-  return XXH3_64bits(&key_data, sizeof(key_data));
+  const uint64_t header =
+      (uint64_t(MetalShaderCache::kStorageVersion) << 32) | 1ull;
+  const uint64_t key_words[] = {header, ucode_hash, modification,
+                                uint64_t(stage)};
+  return XXH3_64bits(key_words, sizeof(key_words));
 }
 
 MetalShaderCache::CacheStats MetalShaderCache::GetStats() const {
@@ -174,7 +171,8 @@ bool MetalShaderCache::LoadFromDisk(uint64_t cache_key, CachedMetallib* out) {
   CacheFileHeader hdr = {};
   file.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
   if (!file || hdr.magic != kCacheFileMagic ||
-      hdr.version != kCacheFileVersion || hdr.cache_key != cache_key) {
+      hdr.version != MetalShaderCache::kStorageVersion ||
+      hdr.cache_key != cache_key) {
     return false;
   }
 
@@ -223,7 +221,7 @@ bool MetalShaderCache::StoreToDisk(uint64_t cache_key,
 
   CacheFileHeader hdr = {};
   hdr.magic = kCacheFileMagic;
-  hdr.version = kCacheFileVersion;
+  hdr.version = MetalShaderCache::kStorageVersion;
   hdr.cache_key = cache_key;
   hdr.function_name_length = static_cast<uint32_t>(in.function_name.size());
   hdr.metallib_size = static_cast<uint32_t>(in.metallib_data.size());

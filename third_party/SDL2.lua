@@ -1,6 +1,8 @@
 --
--- On Linux we build against the system version (libsdl2-dev for building),
--- since SDL2 is our robust API there like DirectX is on Windows.
+-- SDL2 dispatch:
+--   Windows / macOS / iOS: build from source as a static library under
+--     third_party/, matching how DirectX works on Windows.
+--   Linux: build against the system libsdl2-dev via sdl2-config.
 --
 
 -- iOS detection: on iOS we build SDL2 from source as a static library.
@@ -14,7 +16,7 @@ local _ios =
     or (_OPTIONS and _OPTIONS["os"] == "ios")
 if _ios then
   print("SDL2.lua: iOS target detected, building from source")
-  include("SDL2-static-ios.lua")
+  include("SDL2-static-apple.lua")
   local third_party_path = os.getcwd()
   function sdl2_include()
     includedirs({
@@ -27,27 +29,18 @@ end
 local sdl2_sys_includedirs = {}
 local sdl2_sys_libdirs = {}
 local third_party_path = os.getcwd()
-local sdl2_config = os.getenv("SDL2_CONFIG") or "sdl2-config"
 
 if os.istarget("windows") then
-  -- build ourselves
+  -- Build ourselves from third_party/SDL2.
   include("SDL2-static.lua")
+elseif os.istarget("macosx") then
+  -- Build ourselves from third_party/SDL2, same as Windows. Xenia only uses
+  -- SDL for audio (CoreAudio) and joystick (IOKit + MFi) on macOS.
+  print("SDL2.lua: macOS target detected, building from source")
+  include("SDL2-static-apple.lua")
 else
-  -- use system libraries
-  if os.istarget("macosx") then
-    local target_arch = os.targetarch() or ""
-    local option_arch = _OPTIONS and _OPTIONS["arch"] or ""
-    local want_x86 =
-        _OPTIONS and _OPTIONS["mac-x86_64"] or
-        target_arch == "x86_64" or target_arch == "x64" or
-        option_arch == "x86_64" or option_arch == "x64"
-    local want_arm = target_arch == "arm64" or option_arch == "arm64"
-    if want_x86 and os.isfile("/usr/local/bin/sdl2-config") then
-      sdl2_config = "/usr/local/bin/sdl2-config"
-    elseif want_arm and os.isfile("/opt/homebrew/bin/sdl2-config") then
-      sdl2_config = "/opt/homebrew/bin/sdl2-config"
-    end
-  end
+  -- Linux: use system libsdl2-dev via sdl2-config.
+  local sdl2_config = os.getenv("SDL2_CONFIG") or "sdl2-config"
   local result, code, what = os.outputof(sdl2_config .. " --cflags")
   if result then
     print("SDL2: sdl2-config --cflags returned: " .. result)
@@ -71,30 +64,15 @@ else
   end
 end
 
-if os.istarget("macosx") then
-  local target_arch = os.targetarch() or ""
-  local option_arch = _OPTIONS and _OPTIONS["arch"] or ""
-  local want_x86 =
-      _OPTIONS and _OPTIONS["mac-x86_64"] or
-      target_arch == "x86_64" or target_arch == "x64" or
-      option_arch == "x86_64" or option_arch == "x64"
-  local want_arm = target_arch == "arm64" or option_arch == "arm64"
-  if want_x86 and os.isdir("/usr/local/opt/sdl2/lib") then
-    table.insert(sdl2_sys_libdirs, "/usr/local/opt/sdl2/lib")
-  elseif want_arm and os.isdir("/opt/homebrew/opt/sdl2/lib") then
-    table.insert(sdl2_sys_libdirs, "/opt/homebrew/opt/sdl2/lib")
-  end
-end
-
 --
 -- Call this function in project scope to include the SDL2 headers.
 --
 function sdl2_include()
-  filter("platforms:Windows-*")
+  filter("platforms:Windows-* or Mac-*")
     includedirs({
       path.getrelative(".", third_party_path) .. "/SDL2/include",
     })
-  filter("platforms:Linux-* or Mac-*")
+  filter("platforms:Linux-*")
     includedirs(sdl2_sys_includedirs)
     libdirs(sdl2_sys_libdirs)
   filter({})

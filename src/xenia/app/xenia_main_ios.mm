@@ -27,6 +27,7 @@
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
 #include "xenia/emulator.h"
+#include "xenia/storage_flags.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/window_ios.h"
 #include "xenia/ui/windowed_app.h"
@@ -45,25 +46,6 @@
 #include "xenia/kernel/xam/xam.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_state.h"
-
-// CVars normally defined in xenia_main.cc (excluded on iOS).
-DEFINE_path(
-    storage_root, "",
-    "Root path for persistent internal data storage (config, etc.), or empty "
-    "to use the path preferred for the OS.",
-    "Storage");
-DEFINE_path(
-    content_root, "",
-    "Root path for guest content storage (saves, etc.), or empty to use the "
-    "content folder under the storage root.",
-    "Storage");
-DEFINE_path(
-    cache_root, "",
-    "Root path for cache files. If empty, the cache folder under the storage "
-    "root will be used.",
-    "Storage");
-DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
-DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 
 // CVar normally defined in windowed_app_main_qt.cc (excluded on iOS).
 DEFINE_transient_path(target, "", "Specifies the target file to run.",

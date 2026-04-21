@@ -11,7 +11,6 @@
 #define XENIA_GPU_METAL_METAL_RENDER_TARGET_CACHE_H_
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -24,6 +23,8 @@
 #include "xenia/memory.h"
 
 #include "third_party/metal-cpp/Metal/Metal.hpp"
+
+struct IRDescriptorTableEntry;
 
 namespace xe {
 namespace gpu {
@@ -184,6 +185,10 @@ class MetalRenderTargetCache final : public gpu::RenderTargetCache {
   void RestoreEdramSnapshot(const void* snapshot);
 
   MTL::Buffer* GetEdramBuffer() const { return edram_buffer_; }
+  bool WriteEdramUintPow2BindlessDescriptor(
+      IRDescriptorTableEntry* entry, uint32_t element_size_bytes_pow2) const;
+  void UseBindlessResources(MetalCommandProcessor& command_processor,
+                            MTL::ResourceUsage usage) const;
 
   // Resolve (copy) render targets to shared memory
   bool Resolve(Memory& memory, uint32_t& written_address,
@@ -201,30 +206,31 @@ class MetalRenderTargetCache final : public gpu::RenderTargetCache {
       xenos::DepthRenderTargetFormat format) const override;
 
  private:
-  void RecordRenderTargetViewCreated();
-
   static uint32_t GetMetalEdramDumpFormat(RenderTargetKey key);
   MTL::Library* GetOrCreateEdramLoadLibrary(bool msaa);
   MTL::RenderPipelineState* GetOrCreateEdramLoadPipeline(
       MTL::PixelFormat dest_format, uint32_t sample_count);
+  bool InitializeEdramBufferViews();
+  void ReleaseEdramBufferViews();
+  MTL::Texture* GetEdramUintPow2BufferView(
+      uint32_t element_size_bytes_pow2) const;
 
   MetalCommandProcessor& command_processor_;
   TraceWriter* trace_writer_;
 
-  std::atomic<uint64_t> render_target_views_created_{0};
-
   // Metal device reference
   MTL::Device* device_ = nullptr;
-  bool gamma_render_target_as_srgb_ = false;
   bool gamma_render_target_as_unorm16_ = false;
 
   std::unique_ptr<MetalHeapPool> render_target_heap_pool_;
 
   // EDRAM buffer (10MB embedded DRAM)
   MTL::Buffer* edram_buffer_ = nullptr;
+  MTL::Texture* edram_r32_uint_buffer_view_ = nullptr;
+  MTL::Texture* edram_r32g32_uint_buffer_view_ = nullptr;
+  MTL::Texture* edram_r32g32b32a32_uint_buffer_view_ = nullptr;
 
   // EDRAM compute shaders for tile operations
-  MTL::ComputePipelineState* edram_load_pipeline_ = nullptr;   // Tiled → Linear
   MTL::ComputePipelineState* edram_store_pipeline_ = nullptr;  // Linear → Tiled
   std::unordered_map<uint64_t, MTL::RenderPipelineState*> edram_load_pipelines_;
   MTL::Library* edram_load_library_ = nullptr;
@@ -492,17 +498,19 @@ class MetalRenderTargetCache final : public gpu::RenderTargetCache {
 
   // EDRAM tile operations
 
-  void LoadTiledData(MTL::CommandBuffer* command_buffer, MTL::Texture* texture,
-                     uint32_t edram_base, uint32_t pitch_tiles,
-                     uint32_t height_tiles, bool is_depth);
-
   void StoreTiledData(MTL::CommandBuffer* command_buffer, MTL::Texture* texture,
                       uint32_t edram_base, uint32_t pitch_tiles,
                       uint32_t height_tiles, bool is_depth);
 
-  // Ownership transfer support - copies data between render targets when
-  // EDRAM regions are aliased between different RT configurations.
-  // This mirrors D3D12/Vulkan's PerformTransfersAndResolveClears.
+  // Host render backend transfer/resolve boundary.
+  //
+  // Ownership transfer support -- copies data between render targets when
+  // EDRAM regions are aliased between different RT configurations.  This
+  // mirrors D3D12/Vulkan's PerformTransfersAndResolveClears and is the sole
+  // transfer execution entry point used by both the draw path (via Update)
+  // and the copy path (via Resolve).  All host-side transfer and resolve-
+  // clear work flows through this method; no transfer operations bypass the
+  // render target cache.
   void PerformTransfersAndResolveClears(
       uint32_t render_target_count, RenderTarget* const* render_targets,
       const std::vector<Transfer>* render_target_transfers,

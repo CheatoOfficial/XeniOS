@@ -43,12 +43,8 @@ class DxbcToDxilConverter {
   // Check if the converter is available
   bool IsAvailable() const { return is_available_; }
 
-  // Get the dxilconv library path (if resolved).
-  const std::string& GetDxbc2DxilPath() const { return dxilconv_path_; }
-
  private:
   bool is_available_ = false;
-  std::string dxilconv_path_;
   std::wstring extra_options_;
 
   // Lazily created per-thread converter instance.

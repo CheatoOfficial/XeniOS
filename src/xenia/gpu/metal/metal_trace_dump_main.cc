@@ -131,19 +131,8 @@ class MetalTraceDump : public TraceDump {
 
  public:
   int Main(const std::vector<std::string>& args) {
-    // Store args for PNG path generation since base class members are private
-    png_output_path_ = "trace_output.png";  // Default
-    if (args.size() >= 2) {
-      png_output_path_ =
-          std::filesystem::path(args[1]).replace_extension(".png");
-    }
-
-    // Use base implementation to set up, but our overridden Run() method
     return TraceDump::Main(args);
   }
-
- private:
-  std::filesystem::path png_output_path_;
 };
 
 int trace_dump_main(const std::vector<std::string>& args) {

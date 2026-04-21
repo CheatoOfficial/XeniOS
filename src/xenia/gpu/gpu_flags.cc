@@ -107,12 +107,6 @@ DEFINE_bool(metal_pipeline_disk_cache, true,
             "archive can be prewarmed on the next run.",
             "GPU");
 
-DEFINE_int32(
-    metal_draw_ring_count, 128,
-    "Metal per-command-buffer draw ring size (descriptor-table pages). "
-    "Higher reduces ring churn but uses more memory.",
-    "GPU");
-
 DEFINE_bool(metal_use_heaps, true,
             "Use MTLHeap-backed texture allocations in Metal to reduce "
             "allocation overhead and fragmentation.",
@@ -132,24 +126,6 @@ DEFINE_bool(metal_texture_upload_via_blit, true,
             "Upload textures via staging buffers and GPU blit copies instead "
             "of CPU replaceRegion.",
             "GPU");
-
-// On iOS, Metal Shader Converter is unavailable, so use SPIRV-Cross.
-// On macOS, prefer the MSC path by default.
-#if XE_PLATFORM_IOS
-#define SPIRVCROSS_DEFAULT true
-#elif XE_PLATFORM_APPLE
-#define SPIRVCROSS_DEFAULT false
-#elif METAL_SHADER_CONVERTER_AVAILABLE
-#define SPIRVCROSS_DEFAULT false
-#else
-#define SPIRVCROSS_DEFAULT true
-#endif
-DEFINE_bool(metal_use_spirvcross, SPIRVCROSS_DEFAULT,
-            "Use the SPIR-V -> SPIRV-Cross -> MSL shader translation path "
-            "instead of the DXBC -> DXIL -> Metal Shader Converter path. "
-            "Required for iOS support. Experimental.",
-            "GPU");
-#undef SPIRVCROSS_DEFAULT
 
 DEFINE_bool(occlusion_query_enable, false,
             "Use hardware occlusion queries instead of fake results. More "

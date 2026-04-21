@@ -28,8 +28,12 @@ project("dxilconv")
       path.getabsolute("third_party/DirectX-Headers/include/directx", _MAIN_SCRIPT_DIR)
   local directx_wsl_dir =
       path.getabsolute("third_party/DirectX-Headers/include/wsl", _MAIN_SCRIPT_DIR)
+  -- macOS 26.4 SDK libc++ marks std::is_nothrow_constructible with the
+  -- no_specializations attribute, which DXC's bundled LLVM specializes in
+  -- llvm/ADT/StringRef.h. Silence -Winvalid-specialization so DXC still
+  -- builds on this and newer SDKs.
   local cxx_flags = "-stdlib=libc++ -Wno-deprecated-declarations "
-      .. "-Wno-deprecated"
+      .. "-Wno-deprecated -Wno-invalid-specialization"
 
   local function quote(value)
     return "\"" .. value .. "\""

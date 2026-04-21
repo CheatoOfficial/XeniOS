@@ -45,12 +45,20 @@ class MetalShader : public DxbcShader {
     // Check if translation succeeded
     bool is_valid() const { return metal_function_ != nullptr; }
 
+    // Thread-safe translation claiming for async pipeline compilation.
+    // Returns true if this thread successfully claimed translation rights.
+    // Returns false if another thread already claimed it.
+    bool TryClaimTranslation() {
+      return !translation_claimed_.test_and_set(std::memory_order_acq_rel);
+    }
+
     // Get intermediate data for debugging
     const std::vector<uint8_t>& dxil_data() const { return dxil_data_; }
     const std::vector<uint8_t>& metallib_data() const { return metallib_data_; }
     const std::string& function_name() const { return function_name_; }
 
    private:
+    std::atomic_flag translation_claimed_ = ATOMIC_FLAG_INIT;
     MTL::Library* metal_library_ = nullptr;
     MTL::Function* metal_function_ = nullptr;
     std::vector<uint8_t> dxil_data_;

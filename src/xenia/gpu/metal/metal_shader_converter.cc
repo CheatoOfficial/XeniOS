@@ -12,6 +12,7 @@
 #include "metal_irconverter.h"
 
 #include "xenia/base/logging.h"
+#include "xenia/gpu/gpu_flags.h"
 
 namespace xe {
 namespace gpu {
@@ -55,7 +56,8 @@ bool MetalShaderConverter::Initialize() {
 
 // Create Xbox 360 root signature matching xbox360_rootsig_helper.h
 void* MetalShaderConverter::CreateXbox360RootSignature(
-    MetalShaderStage stage, bool force_all_visibility) {
+    MetalShaderStage stage, bool force_all_visibility,
+    bool bindless_resources_used) {
   auto stage_name = [](MetalShaderStage value) -> const char* {
     switch (value) {
       case MetalShaderStage::kVertex:
@@ -103,11 +105,11 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   int rangeIdx = 0;
 
   // SRVs in spaces 0-3
-  // Use 1025 descriptors (1024 + 1 padding) to match heap allocation
   for (int space = 0; space < 4; space++) {
     ranges[rangeIdx].RangeType = IRDescriptorRangeTypeSRV;
-    ranges[rangeIdx].NumDescriptors =
-        1025;  // Match kResourceHeapSlots (1024 + 1)
+    ranges[rangeIdx].NumDescriptors = bindless_resources_used
+                                          ? UINT32_MAX
+                                          : 1025;  // Match kResourceHeapSlots.
     ranges[rangeIdx].BaseShaderRegister = 0;
     ranges[rangeIdx].RegisterSpace = space;
     ranges[rangeIdx].Flags = IRDescriptorRangeFlagNone;
@@ -117,8 +119,7 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
 
   // SRV in space 10 for hull shaders
   ranges[rangeIdx].RangeType = IRDescriptorRangeTypeSRV;
-  ranges[rangeIdx].NumDescriptors =
-      1025;  // Match kResourceHeapSlots (1024 + 1)
+  ranges[rangeIdx].NumDescriptors = bindless_resources_used ? UINT32_MAX : 1025;
   ranges[rangeIdx].BaseShaderRegister = 0;
   ranges[rangeIdx].RegisterSpace = 10;
   ranges[rangeIdx].Flags = IRDescriptorRangeFlagNone;
@@ -126,11 +127,10 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   rangeIdx++;
 
   // UAVs in spaces 0-3
-  // Use 1025 descriptors (1024 + 1 padding) to match heap allocation
   for (int space = 0; space < 4; space++) {
     ranges[rangeIdx].RangeType = IRDescriptorRangeTypeUAV;
     ranges[rangeIdx].NumDescriptors =
-        1025;  // Match kResourceHeapSlots (1024 + 1)
+        bindless_resources_used ? UINT32_MAX : 1025;
     ranges[rangeIdx].BaseShaderRegister = 0;
     ranges[rangeIdx].RegisterSpace = space;
     ranges[rangeIdx].Flags = IRDescriptorRangeFlagNone;
@@ -139,9 +139,8 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   }
 
   // Samplers in space 0
-  // Use 257 descriptors (256 + 1 padding) to match heap allocation
   ranges[rangeIdx].RangeType = IRDescriptorRangeTypeSampler;
-  ranges[rangeIdx].NumDescriptors = 257;  // Match kSamplerHeapSlots (256 + 1)
+  ranges[rangeIdx].NumDescriptors = bindless_resources_used ? UINT32_MAX : 257;
   ranges[rangeIdx].BaseShaderRegister = 0;
   ranges[rangeIdx].RegisterSpace = 0;
   ranges[rangeIdx].Flags = IRDescriptorRangeFlagNone;
@@ -200,21 +199,6 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   versionedDesc.version = IRRootSignatureVersion_1_1;
   versionedDesc.desc_1_1 = desc;
 
-  static bool logged_root_sig = false;
-  if (!logged_root_sig) {
-    logged_root_sig = true;
-    const char* json =
-        IRVersionedRootSignatureDescriptorCopyJSONString(&versionedDesc);
-    if (json) {
-      XELOGI(
-          "MetalShaderConverter: root signature (stage={}, visibility={}, "
-          "force_all_visibility={}): {}",
-          stage_name(stage), static_cast<int>(visibility), force_all_visibility,
-          json);
-      IRVersionedRootSignatureDescriptorReleaseString(json);
-    }
-  }
-
   // Create the root signature
   IRError* error = nullptr;
   IRRootSignature* rootSig =
@@ -229,12 +213,6 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   }
 
   return rootSig;
-}
-
-void MetalShaderConverter::DestroyRootSignature(void* root_sig) {
-  if (root_sig) {
-    IRRootSignatureDestroy(static_cast<IRRootSignature*>(root_sig));
-  }
 }
 
 bool MetalShaderConverter::Convert(xenos::ShaderType shader_type,
@@ -307,9 +285,10 @@ bool MetalShaderConverter::ConvertWithStageEx(
   // 2. MSC 3.0+ defaults to non-array texture types
   // 3. Our Metal textures are created as MTLTextureType2DArray
   IRCompilerSetCompatibilityFlags(
-      compiler,
-      static_cast<IRCompatibilityFlags>(IRCompatibilityFlagForceTextureArray |
-                                        IRCompatibilityFlagBoundsCheck));
+      compiler, static_cast<IRCompatibilityFlags>(
+                    IRCompatibilityFlagForceTextureArray |
+                    IRCompatibilityFlagBoundsCheck |
+                    IRCompatibilityFlagVertexPositionInfToNan));
 
   if (input_topology != IRInputTopologyUndefined) {
     IRCompilerSetInputTopology(compiler,
@@ -332,8 +311,8 @@ bool MetalShaderConverter::ConvertWithStageEx(
   }
 
   // Create and set Xbox 360 root signature
-  IRRootSignature* rootSig =
-      static_cast<IRRootSignature*>(CreateXbox360RootSignature(stage, true));
+  IRRootSignature* rootSig = static_cast<IRRootSignature*>(
+      CreateXbox360RootSignature(stage, true, true));
   if (!rootSig) {
     IRCompilerDestroy(compiler);
     IRObjectDestroy(dxilObject);

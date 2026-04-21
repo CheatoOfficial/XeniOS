@@ -46,6 +46,8 @@ class MetalShaderCache {
   bool IsInitialized() const { return initialized_; }
   std::filesystem::path cache_dir() const { return cache_dir_; }
 
+  static constexpr uint32_t kStorageVersion = 3;
+
   static uint64_t GetCacheKey(uint64_t ucode_hash, uint64_t modification,
                               uint32_t stage);
 
