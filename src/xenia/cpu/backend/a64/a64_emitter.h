@@ -47,6 +47,30 @@ class A64CodeCache;
 
 enum class FPCRMode : uint32_t { Unknown, Fpu, Vmx };
 
+class A64SReg : public Xbyak_aarch64::SReg {
+ public:
+  explicit A64SReg(uint32_t index) : Xbyak_aarch64::SReg(index) {}
+  explicit A64SReg(const Xbyak_aarch64::SReg& reg)
+      : Xbyak_aarch64::SReg(reg.getIdx()) {}
+
+  Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
+  Xbyak_aarch64::DReg toD() const { return Xbyak_aarch64::DReg(getIdx()); }
+  Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
+  uint32_t index() const { return getIdx(); }
+};
+
+class A64DReg : public Xbyak_aarch64::DReg {
+ public:
+  explicit A64DReg(uint32_t index) : Xbyak_aarch64::DReg(index) {}
+  explicit A64DReg(const Xbyak_aarch64::DReg& reg)
+      : Xbyak_aarch64::DReg(reg.getIdx()) {}
+
+  Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
+  Xbyak_aarch64::DReg toD() const { return Xbyak_aarch64::DReg(getIdx()); }
+  Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
+  uint32_t index() const { return getIdx(); }
+};
+
 // A narrow compatibility wrapper for synced Oaknut-era vector sequence code.
 // It still behaves like a Q register for ldr/str APIs, but exposes the lane
 // views and helpers the older sequence files still reference.
@@ -118,9 +142,17 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     auto idx = vec_reg_map_[v->reg.index];
     r = Xbyak_aarch64::SReg(idx);
   }
+  static void SetupReg(const hir::Value* v, A64SReg& r) {
+    auto idx = vec_reg_map_[v->reg.index];
+    r = A64SReg(idx);
+  }
   static void SetupReg(const hir::Value* v, Xbyak_aarch64::DReg& r) {
     auto idx = vec_reg_map_[v->reg.index];
     r = Xbyak_aarch64::DReg(idx);
+  }
+  static void SetupReg(const hir::Value* v, A64DReg& r) {
+    auto idx = vec_reg_map_[v->reg.index];
+    r = A64DReg(idx);
   }
   static void SetupReg(const hir::Value* v, Xbyak_aarch64::QReg& r) {
     auto idx = vec_reg_map_[v->reg.index];
@@ -183,6 +215,8 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
   Xbyak_aarch64::Label& NewCachedLabel();
+  void LoadConstantV(const Xbyak_aarch64::QReg& reg, float value);
+  void LoadConstantV(const Xbyak_aarch64::QReg& reg, double value);
   void LoadConstantV(const Xbyak_aarch64::QReg& reg, const vec128_t& value,
                      int gpr_scratch_idx = 0);
   void LoadConstantV(const Xbyak_aarch64::VReg& reg, const vec128_t& value,

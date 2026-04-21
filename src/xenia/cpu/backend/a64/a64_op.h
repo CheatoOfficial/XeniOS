@@ -233,15 +233,15 @@ struct I64Op : ValueOp<I64Op, KEY_TYPE_V_I64, XReg, int64_t> {
 };
 
 // ARM64 float/vector operands use SReg, DReg, QReg.
-struct F32Op : ValueOp<F32Op, KEY_TYPE_V_F32, SReg, float> {
-  typedef ValueOp<F32Op, KEY_TYPE_V_F32, SReg, float> BASE;
+struct F32Op : ValueOp<F32Op, KEY_TYPE_V_F32, A64SReg, float> {
+  typedef ValueOp<F32Op, KEY_TYPE_V_F32, A64SReg, float> BASE;
   float constant() const {
     assert_true(BASE::is_constant);
     return BASE::value->constant.f32;
   }
 };
-struct F64Op : ValueOp<F64Op, KEY_TYPE_V_F64, DReg, double> {
-  typedef ValueOp<F64Op, KEY_TYPE_V_F64, DReg, double> BASE;
+struct F64Op : ValueOp<F64Op, KEY_TYPE_V_F64, A64DReg, double> {
+  typedef ValueOp<F64Op, KEY_TYPE_V_F64, A64DReg, double> BASE;
   double constant() const {
     assert_true(BASE::is_constant);
     return BASE::value->constant.f64;

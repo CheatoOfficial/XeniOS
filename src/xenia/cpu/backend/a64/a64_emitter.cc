@@ -106,6 +106,26 @@ A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
 
 A64Emitter::~A64Emitter() = default;
 
+void A64Emitter::LoadConstantV(const Xbyak_aarch64::QReg& reg, float value) {
+  union {
+    float f;
+    uint32_t u;
+  } c;
+  c.f = value;
+  mov(w17, static_cast<uint64_t>(c.u));
+  fmov(Xbyak_aarch64::SReg(reg.getIdx()), w17);
+}
+
+void A64Emitter::LoadConstantV(const Xbyak_aarch64::QReg& reg, double value) {
+  union {
+    double d;
+    uint64_t u;
+  } c;
+  c.d = value;
+  mov(x17, c.u);
+  fmov(Xbyak_aarch64::DReg(reg.getIdx()), x17);
+}
+
 void A64Emitter::LoadConstantV(const Xbyak_aarch64::QReg& reg,
                                const vec128_t& value, int gpr_scratch_idx) {
   LoadV128Const(*this, reg.getIdx(), value, gpr_scratch_idx);

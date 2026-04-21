@@ -13,6 +13,8 @@
 // File-local compatibility shims for sequence files that still use the older
 // Oaknut-style register aliases and uppercase mnemonic names.
 #define Cond Xbyak_aarch64
+#define SReg ::xe::cpu::backend::a64::A64SReg
+#define DReg ::xe::cpu::backend::a64::A64DReg
 #define QReg ::xe::cpu::backend::a64::A64VReg
 
 #define X0 XReg(0)
