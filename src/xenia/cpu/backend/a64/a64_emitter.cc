@@ -216,7 +216,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   code_offsets.body = getSize();
 
   // Allocate the epilog label (owned by label_cache_ for cleanup).
-  auto epilog_label_ptr = new Label();
+  auto epilog_label_ptr = new Xbyak_aarch64::Label();
   label_cache_.push_back(epilog_label_ptr);
   epilog_label_ = epilog_label_ptr;
 
@@ -399,8 +399,8 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
       ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
     } else {
       // Encoded path: see A64CodeCache for the entry format.
-      Label external_target;
-      Label indirection_ready;
+      Xbyak_aarch64::Label external_target;
+      Xbyak_aarch64::Label indirection_ready;
 
       mov(x14, code_cache_->indirection_table_base_bias());
       add(x14, x14, w16, UXTW);
@@ -473,8 +473,8 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
       ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
     } else {
       // Encoded path: see A64CodeCache for the entry format.
-      Label external_target;
-      Label indirection_ready;
+      Xbyak_aarch64::Label external_target;
+      Xbyak_aarch64::Label indirection_ready;
 
       mov(x14, code_cache_->indirection_table_base_bias());
       add(x14, x14, w16, UXTW);
@@ -602,7 +602,8 @@ bool A64Emitter::ChangeFpcrMode(FPCRMode new_mode, bool already_set) {
   return true;
 }
 
-Label& A64Emitter::AddToTail(TailEmitCallback callback, uint32_t alignment) {
+Xbyak_aarch64::Label& A64Emitter::AddToTail(TailEmitCallback callback,
+                                           uint32_t alignment) {
   TailEmitter tail;
   tail.alignment = alignment;
   tail.func = std::move(callback);
@@ -610,18 +611,18 @@ Label& A64Emitter::AddToTail(TailEmitCallback callback, uint32_t alignment) {
   return tail_code_.back().label;
 }
 
-Label& A64Emitter::NewCachedLabel() {
-  auto* label = new Label();
+Xbyak_aarch64::Label& A64Emitter::NewCachedLabel() {
+  auto* label = new Xbyak_aarch64::Label();
   label_cache_.push_back(label);
   return *label;
 }
 
-Label& A64Emitter::GetLabel(uint32_t label_id) {
+Xbyak_aarch64::Label& A64Emitter::GetLabel(uint32_t label_id) {
   auto it = label_map_.find(label_id);
   if (it != label_map_.end()) {
     return *it->second;
   }
-  auto* label = new Label();
+  auto* label = new Xbyak_aarch64::Label();
   label_map_[label_id] = label;
   return *label;
 }
@@ -653,15 +654,21 @@ void A64Emitter::PushStackpoint() {
   // Store host SP.
   mov(x10, sp);
   str(x10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, host_stack_))));
+                       offsetof(A64BackendStackpoint, host_sp))));
+  mov(x10, x29);
+  str(x10, ptr(x8, static_cast<uint32_t>(
+                       offsetof(A64BackendStackpoint, host_fp))));
   // Store guest r1 (32-bit).
   ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, r[1]))));
   str(w10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, guest_stack_))));
+                       offsetof(A64BackendStackpoint, guest_sp))));
   // Store guest LR (32-bit).
   ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, lr))));
   str(w10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, guest_return_address_))));
+                       offsetof(A64BackendStackpoint, guest_return_address))));
+  mov(w10, static_cast<uint32_t>(stack_size()));
+  str(w10, ptr(x8, static_cast<uint32_t>(
+                       offsetof(A64BackendStackpoint, stack_size))));
 
   // Increment depth.
   add(w9, w9, 1);
@@ -671,7 +678,8 @@ void A64Emitter::PushStackpoint() {
   // Check for overflow.
   mov(w10, static_cast<uint32_t>(cvars::a64_max_stackpoints));
   cmp(w9, w10);
-  auto& overflow_label = AddToTail([](A64Emitter& e, Label& lbl) {
+  auto& overflow_label =
+      AddToTail([](A64Emitter& e, Xbyak_aarch64::Label& lbl) {
     e.CallNativeSafe(
         reinterpret_cast<void*>(A64Emitter::HandleStackpointOverflowError));
   });
@@ -705,14 +713,16 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
                        StackLayout::GUEST_SAVED_STACKPOINT_DEPTH)));
   cmp(w17, w16);
 
-  auto& sync_label = AddToTail([&return_from_sync](A64Emitter& e, Label& lbl) {
+  auto& sync_label =
+      AddToTail([&return_from_sync](A64Emitter& e,
+                                   Xbyak_aarch64::Label& lbl) {
     // Set up arguments for the sync helper:
     //   x8 = return address (where to resume after fixup)
     //   x9 = this function's stack size
     e.adr(e.x8, return_from_sync);
     e.mov(e.x9, static_cast<uint64_t>(e.stack_size()));
     e.mov(e.x10, reinterpret_cast<uint64_t>(
-                     e.backend()->synchronize_guest_and_host_stack_helper()));
+                     e.backend()->stack_sync_helper()));
     e.br(e.x10);
   });
   b(NE, sync_label);

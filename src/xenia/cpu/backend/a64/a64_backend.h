@@ -106,6 +106,9 @@ class A64Backend : public Backend {
   }
   StackSyncThunk stack_sync_thunk() const { return stack_sync_thunk_; }
   StackSyncThunk stack_sync_helper() const { return stack_sync_helper_; }
+  StackSyncThunk synchronize_guest_and_host_stack_helper() const {
+    return synchronize_guest_and_host_stack_helper_;
+  }
 
   bool Initialize(Processor* processor) override;
 
@@ -155,6 +158,7 @@ class A64Backend : public Backend {
   ResolveFunctionThunk resolve_function_thunk_;
   StackSyncThunk stack_sync_thunk_ = nullptr;
   StackSyncThunk stack_sync_helper_ = nullptr;
+  StackSyncThunk synchronize_guest_and_host_stack_helper_ = nullptr;
 
   alignas(64) ReserveHelper reserve_helper_;
   uint8_t* guest_trampoline_memory_ = nullptr;
