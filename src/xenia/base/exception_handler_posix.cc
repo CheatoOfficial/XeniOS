@@ -51,6 +51,31 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
   HostThreadContext thread_context;
 
 #if XE_ARCH_AMD64
+#if XE_PLATFORM_MAC
+  // Darwin: mcontext is a pointer; integer state in __ss, FP/XMM in __fs.
+  // __fpu_xmm0..__fpu_xmm15 are laid out contiguously in
+  // __darwin_x86_float_state64.
+  thread_context.rip = mcontext->__ss.__rip;
+  thread_context.eflags = uint32_t(mcontext->__ss.__rflags);
+  thread_context.rax = mcontext->__ss.__rax;
+  thread_context.rcx = mcontext->__ss.__rcx;
+  thread_context.rdx = mcontext->__ss.__rdx;
+  thread_context.rbx = mcontext->__ss.__rbx;
+  thread_context.rsp = mcontext->__ss.__rsp;
+  thread_context.rbp = mcontext->__ss.__rbp;
+  thread_context.rsi = mcontext->__ss.__rsi;
+  thread_context.rdi = mcontext->__ss.__rdi;
+  thread_context.r8 = mcontext->__ss.__r8;
+  thread_context.r9 = mcontext->__ss.__r9;
+  thread_context.r10 = mcontext->__ss.__r10;
+  thread_context.r11 = mcontext->__ss.__r11;
+  thread_context.r12 = mcontext->__ss.__r12;
+  thread_context.r13 = mcontext->__ss.__r13;
+  thread_context.r14 = mcontext->__ss.__r14;
+  thread_context.r15 = mcontext->__ss.__r15;
+  std::memcpy(thread_context.xmm_registers, &mcontext->__fs.__fpu_xmm0,
+              sizeof(thread_context.xmm_registers));
+#else
   thread_context.rip = uint64_t(mcontext.gregs[REG_RIP]);
   thread_context.eflags = uint32_t(mcontext.gregs[REG_EFL]);
   // The REG_ order may be different than the register indices in the
@@ -73,6 +98,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
   thread_context.r15 = uint64_t(mcontext.gregs[REG_R15]);
   std::memcpy(thread_context.xmm_registers, mcontext.fpregs->_xmm,
               sizeof(thread_context.xmm_registers));
+#endif  // XE_PLATFORM_MAC
 #elif XE_ARCH_ARM64
 #if XE_PLATFORM_MAC
   // Darwin: mcontext is a pointer, registers in __ss and __ns.
@@ -135,10 +161,17 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
 #if XE_ARCH_AMD64
       // x86_pf_error_code::X86_PF_WRITE
       constexpr uint64_t kX86PageFaultErrorCodeWrite = UINT64_C(1) << 1;
+#if XE_PLATFORM_MAC
+      access_violation_operation =
+          (uint64_t(mcontext->__es.__err) & kX86PageFaultErrorCodeWrite)
+              ? Exception::AccessViolationOperation::kWrite
+              : Exception::AccessViolationOperation::kRead;
+#else
       access_violation_operation =
           (uint64_t(mcontext.gregs[REG_ERR]) & kX86PageFaultErrorCodeWrite)
               ? Exception::AccessViolationOperation::kWrite
               : Exception::AccessViolationOperation::kRead;
+#endif
 #elif XE_ARCH_ARM64
 #if XE_PLATFORM_MAC
       {
@@ -207,9 +240,51 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
     if (handlers_[i].first(&ex, handlers_[i].second)) {
       // Exception handled.
 #if XE_ARCH_AMD64
+      uint32_t modified_register_index;
+#if XE_PLATFORM_MAC
+      mcontext->__ss.__rip = thread_context.rip;
+      mcontext->__ss.__rflags = thread_context.eflags;
+      // Pointer-to-member map; order must match X64Register.
+      using GprPtr = __uint64_t __darwin_x86_thread_state64::*;
+      static constexpr GprPtr kIntRegisterMap[] = {
+          &__darwin_x86_thread_state64::__rax,
+          &__darwin_x86_thread_state64::__rcx,
+          &__darwin_x86_thread_state64::__rdx,
+          &__darwin_x86_thread_state64::__rbx,
+          &__darwin_x86_thread_state64::__rsp,
+          &__darwin_x86_thread_state64::__rbp,
+          &__darwin_x86_thread_state64::__rsi,
+          &__darwin_x86_thread_state64::__rdi,
+          &__darwin_x86_thread_state64::__r8,
+          &__darwin_x86_thread_state64::__r9,
+          &__darwin_x86_thread_state64::__r10,
+          &__darwin_x86_thread_state64::__r11,
+          &__darwin_x86_thread_state64::__r12,
+          &__darwin_x86_thread_state64::__r13,
+          &__darwin_x86_thread_state64::__r14,
+          &__darwin_x86_thread_state64::__r15,
+      };
+      uint16_t modified_int_registers_remaining = ex.modified_int_registers();
+      while (xe::bit_scan_forward(modified_int_registers_remaining,
+                                  &modified_register_index)) {
+        modified_int_registers_remaining &=
+            ~(UINT16_C(1) << modified_register_index);
+        mcontext->__ss.*kIntRegisterMap[modified_register_index] =
+            thread_context.int_registers[modified_register_index];
+      }
+      uint16_t modified_xmm_registers_remaining = ex.modified_xmm_registers();
+      while (xe::bit_scan_forward(modified_xmm_registers_remaining,
+                                  &modified_register_index)) {
+        modified_xmm_registers_remaining &=
+            ~(UINT16_C(1) << modified_register_index);
+        std::memcpy(reinterpret_cast<uint8_t*>(&mcontext->__fs.__fpu_xmm0) +
+                        modified_register_index * sizeof(vec128_t),
+                    &thread_context.xmm_registers[modified_register_index],
+                    sizeof(vec128_t));
+      }
+#else
       mcontext.gregs[REG_RIP] = greg_t(thread_context.rip);
       mcontext.gregs[REG_EFL] = greg_t(thread_context.eflags);
-      uint32_t modified_register_index;
       // The order must match the order in X64Register.
       static constexpr size_t kIntRegisterMap[] = {
           REG_RAX, REG_RCX, REG_RDX, REG_RBX, REG_RSP, REG_RBP,
@@ -233,6 +308,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                     &thread_context.xmm_registers[modified_register_index],
                     sizeof(vec128_t));
       }
+#endif  // XE_PLATFORM_MAC
 #elif XE_ARCH_ARM64
       uint32_t modified_register_index;
 #if XE_PLATFORM_MAC
