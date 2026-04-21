@@ -1040,11 +1040,8 @@ def normalize_target_arch(value):
         f"unknown architecture '{value}' (expected: arm64, aarch64, a64, x64, amd64, x86_64, x86)")
 
 
-def get_build_dir(target_arch=None):
-    """Returns the Ninja build directory for the given target architecture.
-
-    Uses a separate directory when cross-compiling to avoid cache conflicts.
-    """
+def get_premake_target_os(target_os_override=None):
+    """Gets the target --os to pass to premake for the host or cross-target."""
     if sys.platform == "darwin":
         target_os = "macosx"
     elif sys.platform == "win32":
@@ -1065,6 +1062,26 @@ def get_build_dir(target_arch=None):
     return target_os
 
 
+def get_build_dir(target_arch=None):
+    """Returns the Ninja build directory for the given target architecture.
+
+    Uses a separate directory when cross-compiling to avoid cache conflicts.
+    """
+    normalized_arch = target_arch
+    if normalized_arch == "x86_64":
+        normalized_arch = "x64"
+    elif normalized_arch == "amd64":
+        normalized_arch = "x64"
+    elif normalized_arch in ("aarch64", "a64"):
+        normalized_arch = "arm64"
+    is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
+    if normalized_arch == "arm64" and not is_native_arm64:
+        return "build-arm64"
+    if normalized_arch == "x64" and is_native_arm64:
+        return "build-x64"
+    return "build"
+
+
 def run_premake(target_os, action, cc=None, enable_tests=False,
                 extra_premake_args=None):
     """Runs premake on the main project with the given format.
@@ -1074,10 +1091,13 @@ def run_premake(target_os, action, cc=None, enable_tests=False,
       action: action to perform.
     """
     args = [
-        "cmake",
-        "-S", ".",
-        "-B", build_dir,
-        "-G", generator,
+        sys.executable,
+        os.path.join("tools", "build", "premake.py"),
+        "--file=premake5.lua",
+        f"--os={target_os}",
+        "--test-suite-mode=combined",
+        "--verbose",
+        action,
     ]
     if not cc:
         cc = get_cc(cc=cc)
@@ -1517,7 +1537,6 @@ class BaseBuildCommand(Command):
             # Keep build/version.h current for Xcode and no-premake incremental builds.
             generate_version_h()
 
-        build_dir = get_build_dir(target_arch)
         print("- building (%s):%s..." % (
             "all" if not len(args["target"]) else ", ".join(args["target"]),
             args["config"]))
