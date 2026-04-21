@@ -50,8 +50,7 @@ enum class FPCRMode : uint32_t { Unknown, Fpu, Vmx };
 class A64SReg : public Xbyak_aarch64::SReg {
  public:
   A64SReg(uint32_t index) : Xbyak_aarch64::SReg(index) {}
-  A64SReg(const Xbyak_aarch64::SReg& reg)
-      : Xbyak_aarch64::SReg(reg.getIdx()) {}
+  A64SReg(const Xbyak_aarch64::SReg& reg) : Xbyak_aarch64::SReg(reg.getIdx()) {}
 
   Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
   Xbyak_aarch64::DReg toD() const { return Xbyak_aarch64::DReg(getIdx()); }
@@ -62,8 +61,7 @@ class A64SReg : public Xbyak_aarch64::SReg {
 class A64DReg : public Xbyak_aarch64::DReg {
  public:
   A64DReg(uint32_t index) : Xbyak_aarch64::DReg(index) {}
-  A64DReg(const Xbyak_aarch64::DReg& reg)
-      : Xbyak_aarch64::DReg(reg.getIdx()) {}
+  A64DReg(const Xbyak_aarch64::DReg& reg) : Xbyak_aarch64::DReg(reg.getIdx()) {}
 
   Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
   Xbyak_aarch64::DReg toD() const { return Xbyak_aarch64::DReg(getIdx()); }
@@ -77,10 +75,8 @@ class A64DReg : public Xbyak_aarch64::DReg {
 class A64VReg : public Xbyak_aarch64::QReg {
  public:
   A64VReg(uint32_t index) : Xbyak_aarch64::QReg(index) {}
-  A64VReg(const Xbyak_aarch64::QReg& reg)
-      : Xbyak_aarch64::QReg(reg.getIdx()) {}
-  A64VReg(const Xbyak_aarch64::VReg& reg)
-      : Xbyak_aarch64::QReg(reg.getIdx()) {}
+  A64VReg(const Xbyak_aarch64::QReg& reg) : Xbyak_aarch64::QReg(reg.getIdx()) {}
+  A64VReg(const Xbyak_aarch64::VReg& reg) : Xbyak_aarch64::QReg(reg.getIdx()) {}
 
   Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
   Xbyak_aarch64::VReg toV() const { return Xbyak_aarch64::VReg(getIdx()); }

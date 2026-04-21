@@ -611,8 +611,8 @@ struct Sequence {
     if (i.src1.is_constant) {
       assert_true(!i.src2.is_constant);
       if (i.src1.ConstantFitsIn32Reg()) {
-        reg_const_fn(e, i.dest, i.src2,
-                     static_cast<int32_t>(i.src1.constant()), true);
+        reg_const_fn(e, i.dest, i.src2, static_cast<int32_t>(i.src1.constant()),
+                     true);
       } else {
         auto temp = GetTempReg<typename decltype(i.src1)::reg_type>(e);
         e.mov(temp, i.src1.constant());
@@ -621,8 +621,8 @@ struct Sequence {
     } else if (i.src2.is_constant) {
       assert_true(!i.src1.is_constant);
       if (i.src2.ConstantFitsIn32Reg()) {
-        reg_const_fn(e, i.dest, i.src1,
-                     static_cast<int32_t>(i.src2.constant()), false);
+        reg_const_fn(e, i.dest, i.src1, static_cast<int32_t>(i.src2.constant()),
+                     false);
       } else {
         auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
         e.mov(temp, i.src2.constant());
