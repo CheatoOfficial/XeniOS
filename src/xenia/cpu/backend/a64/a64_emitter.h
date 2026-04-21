@@ -141,12 +141,6 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void PopStackpoint();
   void EnsureSynchronizedGuestAndHostStack();
 
-  void PushStackpoint();
-  void PopStackpoint();
-  void EnsureSynchronizedGuestAndHostStack();
-
-  static void HandleStackpointOverflowError(ppc::PPCContext* context);
-
   void ForgetFpcrMode() {
     if (fpcr_mode_ == FPCRMode::Vmx) {
       ChangeFpcrMode(FPCRMode::Fpu);
@@ -158,13 +152,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     return (feature_flags_ & feature_flag) == feature_flag;
   }
 
-  FunctionDebugInfo* debug_info() const { return debug_info_; }
   XexModule* GuestModule() { return guest_module_; }
 
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
-
-  XexModule* GuestModule() { return guest_module_; }
 
  protected:
   void* Emplace(const EmitFunctionInfo& func_info,
@@ -187,7 +178,6 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   FunctionDebugInfo* debug_info_ = nullptr;
   uint32_t debug_info_flags_ = 0;
   FunctionTraceData* trace_data_ = nullptr;
-  XexModule* guest_module_ = nullptr;
   Arena source_map_arena_;
 
   size_t stack_size_ = 0;
