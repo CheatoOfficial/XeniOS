@@ -19,8 +19,7 @@ namespace xe {
 namespace hid {
 namespace sdl {
 
-void SetVirtualControllerState(uint32_t user_index,
-                               const X_INPUT_STATE& state);
+void SetVirtualControllerState(uint32_t user_index, const X_INPUT_STATE& state);
 void ClearVirtualControllerState(uint32_t user_index);
 bool AnyPhysicalControllerConnected();
 

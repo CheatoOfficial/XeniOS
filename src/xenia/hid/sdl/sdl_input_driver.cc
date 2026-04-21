@@ -416,8 +416,8 @@ X_RESULT SDLInputDriver::GetKeystroke(uint32_t users, uint32_t flags,
     // If input is not active (e.g. due to a dialog overlay), force buttons to
     // "unpressed". The algorithm will automatically send UP events when
     // `is_active()` goes low and DOWN events when it goes high again.
-    const uint64_t curr_butts = current_state.gamepad.buttons |
-                                AnalogToKeyfield(current_state.gamepad);
+    const uint64_t curr_butts =
+        current_state.gamepad.buttons | AnalogToKeyfield(current_state.gamepad);
     KeystrokeState& last = keystroke_states_.at(user_index);
 
     // Handle repeating
@@ -866,7 +866,6 @@ inline uint64_t SDLInputDriver::AnalogToKeyfield(
   }
   return f;
 }
-
 
 void SetVirtualControllerState(uint32_t user_index,
                                const X_INPUT_STATE& state) {

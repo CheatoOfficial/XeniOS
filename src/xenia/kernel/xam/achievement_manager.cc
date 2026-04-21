@@ -161,8 +161,10 @@ void AchievementManager::ShowAchievementEarnedNotification(
     return utf8;
   };
 
-  const std::string achievement_name = sanitize_utf16(achievement->achievement_name);
-  const std::string achievement_detail = sanitize_utf16(achievement->unlocked_description);
+  const std::string achievement_name =
+      sanitize_utf16(achievement->achievement_name);
+  const std::string achievement_detail =
+      sanitize_utf16(achievement->unlocked_description);
   const std::string description =
       fmt::format("{}G - {}", achievement->gamerscore, achievement_name);
 
