@@ -395,11 +395,11 @@ template <typename T>
 static const T GetTempReg(A64Emitter& e);
 template <>
 [[maybe_unused]] inline const WReg GetTempReg<WReg>(A64Emitter& e) {
-  return W0;
+  return WReg(0);
 }
 template <>
 [[maybe_unused]] inline const XReg GetTempReg<XReg>(A64Emitter& e) {
-  return X0;
+  return XReg(0);
 }
 
 // ============================================================================
@@ -545,14 +545,14 @@ struct Sequence {
   static void EmitCommutativeBinaryVOp(A64Emitter& e, const EmitArgType& i,
                                        const FN& fn) {
     if (i.src1.is_constant && i.src2.is_constant) {
-      e.LoadConstantV(Q0, i.src1.constant());
-      e.LoadConstantV(Q1, i.src2.constant());
+      e.LoadConstantV(QReg(0), i.src1.constant());
+      e.LoadConstantV(QReg(1), i.src2.constant());
       fn(e, i.dest, REG(0), REG(1));
     } else if (i.src1.is_constant) {
-      e.LoadConstantV(Q0, i.src1.constant());
+      e.LoadConstantV(QReg(0), i.src1.constant());
       fn(e, i.dest, REG(0), i.src2);
     } else if (i.src2.is_constant) {
-      e.LoadConstantV(Q0, i.src2.constant());
+      e.LoadConstantV(QReg(0), i.src2.constant());
       fn(e, i.dest, i.src1, REG(0));
     } else {
       fn(e, i.dest, i.src1, i.src2);
@@ -563,14 +563,14 @@ struct Sequence {
   static void EmitAssociativeBinaryVOp(A64Emitter& e, const EmitArgType& i,
                                        const FN& fn) {
     if (i.src1.is_constant && i.src2.is_constant) {
-      e.LoadConstantV(Q0, i.src1.constant());
-      e.LoadConstantV(Q1, i.src2.constant());
+      e.LoadConstantV(QReg(0), i.src1.constant());
+      e.LoadConstantV(QReg(1), i.src2.constant());
       fn(e, i.dest, REG(0), REG(1));
     } else if (i.src1.is_constant) {
-      e.LoadConstantV(Q0, i.src1.constant());
+      e.LoadConstantV(QReg(0), i.src1.constant());
       fn(e, i.dest, REG(0), i.src2);
     } else if (i.src2.is_constant) {
-      e.LoadConstantV(Q0, i.src2.constant());
+      e.LoadConstantV(QReg(0), i.src2.constant());
       fn(e, i.dest, i.src1, REG(0));
     } else {
       fn(e, i.dest, i.src1, i.src2);

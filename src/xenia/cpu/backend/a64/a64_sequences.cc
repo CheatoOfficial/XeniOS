@@ -1367,7 +1367,7 @@ struct SELECT_I8
     } else {
       src2 = i.src2;
     }
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.CSEL(i.dest, src2, i.src3, Cond::NE);
   }
 };
@@ -1381,7 +1381,7 @@ struct SELECT_I16
     } else {
       src2 = i.src2;
     }
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.CSEL(i.dest, src2, i.src3, Cond::NE);
   }
 };
@@ -1395,7 +1395,7 @@ struct SELECT_I32
     } else {
       src2 = i.src2;
     }
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.CSEL(i.dest, src2, i.src3, Cond::NE);
   }
 };
@@ -1409,7 +1409,7 @@ struct SELECT_I64
     } else {
       src2 = i.src2;
     }
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.CSEL(i.dest, src2, i.src3, Cond::NE);
   }
 };
@@ -1428,7 +1428,7 @@ struct SELECT_F32
       e.LoadConstantV(src3.toQ(), i.src3.constant());
     }
 
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.FCSEL(i.dest, src2, src3, Cond::NE);
   }
 };
@@ -1447,7 +1447,7 @@ struct SELECT_F64
       e.LoadConstantV(src3.toQ(), i.src3.constant());
     }
 
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.FCSEL(i.dest, src2, src3, Cond::NE);
   }
 };
@@ -1466,7 +1466,7 @@ struct SELECT_V128_I8
       e.LoadConstantV(src3, i.src3.constant());
     }
 
-    e.CMP(i.src1.reg().toX(), 0);
+    e.CMP(i.src1.reg(), 0);
     e.CSETM(W0, Cond::NE);
     e.DUP(i.dest.reg().S4(), W0);
     e.BSL(i.dest.reg().B16(), src2.B16(), src3.B16());
@@ -1860,7 +1860,7 @@ void EmitAddCarryXX(A64Emitter& e, const ARGS& i) {
     }
   } else {
     // If src3 is non-zero, set the carry flag
-    e.CMP(i.src3.reg().toW(), 0);
+    e.CMP(i.src3.reg(), 0);
     e.CSET(X0, Cond::NE);
 
     e.mrs(X1, 3, 3, 4, 2, 0);
@@ -6216,7 +6216,7 @@ struct SHA_I64 : Sequence<SHA_I64, I<OPCODE_SHA, I64Op, I64Op, I8Op>> {
     Sequence::EmitAssociativeBinaryOp(
         e, i,
         [](A64Emitter& e, XReg dest_src, WReg src) {
-          e.ASR(dest_src, dest_src, src.toX());
+          e.ASR(dest_src, dest_src, XReg(src.getIdx()));
         },
         [](A64Emitter& e, XReg dest_src, int8_t constant) {
           e.ASR(dest_src, dest_src, constant);
@@ -6237,7 +6237,7 @@ void EmitRotateLeftNarrow(A64Emitter& e, const ARGS& i, uint32_t width) {
   if (i.src1.is_constant) {
     e.MOV(W0, uint32_t(i.src1.constant()));
   } else {
-    e.MOV(W0, i.src1.reg().toW());
+    e.MOV(W0, i.src1.reg());
   }
   e.MOV(W4, value_mask);
   e.AND(W0, W0, W4);
@@ -6245,7 +6245,7 @@ void EmitRotateLeftNarrow(A64Emitter& e, const ARGS& i, uint32_t width) {
   if (i.src2.is_constant) {
     e.MOV(W1, uint32_t(i.src2.constant()));
   } else {
-    e.MOV(W1, i.src2.reg().toW());
+    e.MOV(W1, i.src2.reg());
   }
   e.MOV(W4, shift_mask);
   e.AND(W1, W1, W4);
@@ -6302,7 +6302,7 @@ struct ROTATE_LEFT_I64
     if (i.src2.is_constant) {
       e.MOV(X1, i.src2.constant());
     } else {
-      e.SXTB(X1, i.src2.reg().toW());
+      e.SXTB(X1, i.src2.reg());
     }
     e.NEG(X1, X1);
 
