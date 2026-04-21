@@ -80,18 +80,6 @@ static void EmitBinaryConstLhs(A64Emitter& e, const REG& dest,
   }
 }
 
-template <typename Fn>
-void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
-  // Altivec vector FP runs with non-IEEE flush-to-zero and round-to-nearest.
-  e.MRS(X13, SystemReg::FPCR);
-  e.MOV(X14, X13);
-  e.BFI(X14, XZR, 22, 2);
-  e.ORR(X14, X14, uint64_t(1) << 24);
-  e.MSR(SystemReg::FPCR, X14);
-  emit_op();
-  e.MSR(SystemReg::FPCR, X13);
-}
-
 inline bool IsMulAddOrMulSubDef(const Value* value) {
   if (!value || !value->def || !value->def->opcode) {
     return false;

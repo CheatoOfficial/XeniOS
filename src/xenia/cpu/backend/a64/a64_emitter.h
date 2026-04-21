@@ -156,6 +156,7 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
+  Xbyak_aarch64::Label& NewCachedLabel();
 
  protected:
   void* Emplace(const EmitFunctionInfo& func_info,
