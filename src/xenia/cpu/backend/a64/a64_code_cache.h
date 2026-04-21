@@ -25,9 +25,10 @@ namespace a64 {
 
 class A64CodeCache : public CodeCacheBase<A64CodeCache> {
  public:
-  ~A64CodeCache() override = default;
+  ~A64CodeCache() override;
 
   static std::unique_ptr<A64CodeCache> Create();
+  bool Initialize() override;
 
   void* LookupUnwindInfo(uint64_t host_pc) override { return nullptr; }
 
@@ -65,6 +66,8 @@ class A64CodeCache : public CodeCacheBase<A64CodeCache> {
                       void*& code_execute_address_out,
                       void*& code_write_address_out);
   uint32_t PlaceData(const void* data, size_t length);
+  void FillCode(void* write_address, size_t size);
+  void FlushCodeRange(void* address, size_t size);
 
   GuestFunction* LookupFunction(uint64_t host_pc) override;
 

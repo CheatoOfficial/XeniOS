@@ -63,6 +63,7 @@ bool ShouldLogIndirectionTable() {
   if (!cvars::a64_indirection_table_log) {
     return false;
   }
+  return true;
 }
 
 #if XE_PLATFORM_IOS && XE_ARCH_ARM64
@@ -484,9 +485,7 @@ const size_t A64CodeCache::kIndirectionTableSize;
 // On ARM64 platforms, this will be set dynamically during initialization
 uintptr_t A64CodeCache::kIndirectionTableBase = 0x80000000;
 #else
-__builtin___clear_cache(reinterpret_cast<char*>(address),
-                        reinterpret_cast<char*>(static_cast<uint8_t*>(address) +
-                                                size));
+const uintptr_t A64CodeCache::kIndirectionTableBase;
 #endif
 
 A64CodeCache::A64CodeCache() = default;
@@ -1516,6 +1515,27 @@ GuestFunction* A64CodeCache::LookupFunction(uint64_t host_pc) {
   } else {
     return nullptr;
   }
+}
+
+void A64CodeCache::FillCode(void* write_address, size_t size) {
+  // Fill with BRK #0 (0xD4200000), 4-byte aligned.
+  constexpr uint32_t kBrk0 = 0xD4200000;
+  auto* p = reinterpret_cast<uint32_t*>(write_address);
+  auto* end =
+      reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(write_address) + size);
+  for (; p < end; ++p) {
+    *p = kBrk0;
+  }
+}
+
+void A64CodeCache::FlushCodeRange(void* address, size_t size) {
+#if XE_PLATFORM_WIN32
+  FlushInstructionCache(GetCurrentProcess(), address, size);
+#else
+  __builtin___clear_cache(
+      reinterpret_cast<char*>(address),
+      reinterpret_cast<char*>(static_cast<uint8_t*>(address) + size));
+#endif
 }
 
 }  // namespace a64
