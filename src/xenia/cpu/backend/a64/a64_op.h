@@ -391,6 +391,17 @@ struct I<OPCODE, DEST, SRC1, SRC2, SRC3> : DestField<DEST> {
   }
 };
 
+template <typename T>
+static const T GetTempReg(A64Emitter& e);
+template <>
+[[maybe_unused]] inline const WReg GetTempReg<WReg>(A64Emitter& e) {
+  return W0;
+}
+template <>
+[[maybe_unused]] inline const XReg GetTempReg<XReg>(A64Emitter& e) {
+  return X0;
+}
+
 // ============================================================================
 // Sequence<> — base for all ARM64 instruction sequences
 // ============================================================================
@@ -408,6 +419,218 @@ struct Sequence {
     }
     SEQ::Emit(e, args);
     return true;
+  }
+
+  template <typename REG_FN>
+  static void EmitUnaryOp(A64Emitter& e, const EmitArgType& i,
+                          const REG_FN& reg_fn) {
+    if (i.src1.is_constant) {
+      e.mov(i.dest, i.src1.constant());
+      reg_fn(e, i.dest);
+    } else {
+      if (i.dest != i.src1) {
+        e.mov(i.dest, i.src1);
+      }
+      reg_fn(e, i.dest);
+    }
+  }
+
+  template <typename REG_REG_FN, typename REG_CONST_FN>
+  static void EmitCommutativeBinaryOp(A64Emitter& e, const EmitArgType& i,
+                                      const REG_REG_FN& reg_reg_fn,
+                                      const REG_CONST_FN& reg_const_fn) {
+    if (i.src1.is_constant) {
+      if (i.src2.is_constant) {
+        if (i.src1.ConstantFitsIn32Reg()) {
+          e.mov(i.dest, i.src2.constant());
+          reg_const_fn(e, i.dest, static_cast<int32_t>(i.src1.constant()));
+        } else if (i.src2.ConstantFitsIn32Reg()) {
+          e.mov(i.dest, i.src1.constant());
+          reg_const_fn(e, i.dest, static_cast<int32_t>(i.src2.constant()));
+        } else {
+          e.mov(i.dest, i.src1.constant());
+          auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+          e.mov(temp, i.src2.constant());
+          reg_reg_fn(e, i.dest, temp);
+        }
+      } else {
+        if (i.dest == i.src2) {
+          if (i.src1.ConstantFitsIn32Reg()) {
+            reg_const_fn(e, i.dest, static_cast<int32_t>(i.src1.constant()));
+          } else {
+            auto temp = GetTempReg<typename decltype(i.src1)::reg_type>(e);
+            e.mov(temp, i.src1.constant());
+            reg_reg_fn(e, i.dest, temp);
+          }
+        } else {
+          e.mov(i.dest, i.src1.constant());
+          reg_reg_fn(e, i.dest, i.src2);
+        }
+      }
+    } else if (i.src2.is_constant) {
+      if (i.dest == i.src1) {
+        if (i.src2.ConstantFitsIn32Reg()) {
+          reg_const_fn(e, i.dest, static_cast<int32_t>(i.src2.constant()));
+        } else {
+          auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+          e.mov(temp, i.src2.constant());
+          reg_reg_fn(e, i.dest, temp);
+        }
+      } else {
+        e.mov(i.dest, i.src2.constant());
+        reg_reg_fn(e, i.dest, i.src1);
+      }
+    } else {
+      if (i.dest == i.src1) {
+        reg_reg_fn(e, i.dest, i.src2);
+      } else if (i.dest == i.src2) {
+        reg_reg_fn(e, i.dest, i.src1);
+      } else {
+        e.mov(i.dest, i.src1);
+        reg_reg_fn(e, i.dest, i.src2);
+      }
+    }
+  }
+
+  template <typename REG_REG_FN, typename REG_CONST_FN>
+  static void EmitAssociativeBinaryOp(A64Emitter& e, const EmitArgType& i,
+                                      const REG_REG_FN& reg_reg_fn,
+                                      const REG_CONST_FN& reg_const_fn) {
+    if (i.src1.is_constant) {
+      assert_true(!i.src2.is_constant);
+      if (i.dest == i.src2) {
+        auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+        e.mov(temp, i.src2);
+        e.mov(i.dest, i.src1.constant());
+        reg_reg_fn(e, i.dest, temp);
+      } else {
+        e.mov(i.dest, i.src1.constant());
+        reg_reg_fn(e, i.dest, i.src2);
+      }
+    } else if (i.src2.is_constant) {
+      if (i.dest == i.src1) {
+        if (i.src2.ConstantFitsIn32Reg()) {
+          reg_const_fn(e, i.dest, static_cast<int32_t>(i.src2.constant()));
+        } else {
+          auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+          e.mov(temp, i.src2.constant());
+          reg_reg_fn(e, i.dest, temp);
+        }
+      } else {
+        e.mov(i.dest, i.src1);
+        if (i.src2.ConstantFitsIn32Reg()) {
+          reg_const_fn(e, i.dest, static_cast<int32_t>(i.src2.constant()));
+        } else {
+          auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+          e.mov(temp, i.src2.constant());
+          reg_reg_fn(e, i.dest, temp);
+        }
+      }
+    } else {
+      if (i.dest == i.src1) {
+        reg_reg_fn(e, i.dest, i.src2);
+      } else if (i.dest == i.src2) {
+        auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+        e.mov(temp, i.src2);
+        e.mov(i.dest, i.src1);
+        reg_reg_fn(e, i.dest, temp);
+      } else {
+        e.mov(i.dest, i.src1);
+        reg_reg_fn(e, i.dest, i.src2);
+      }
+    }
+  }
+
+  template <typename REG = QReg, typename FN>
+  static void EmitCommutativeBinaryVOp(A64Emitter& e, const EmitArgType& i,
+                                       const FN& fn) {
+    if (i.src1.is_constant && i.src2.is_constant) {
+      e.LoadConstantV(Q0, i.src1.constant());
+      e.LoadConstantV(Q1, i.src2.constant());
+      fn(e, i.dest, REG(0), REG(1));
+    } else if (i.src1.is_constant) {
+      e.LoadConstantV(Q0, i.src1.constant());
+      fn(e, i.dest, REG(0), i.src2);
+    } else if (i.src2.is_constant) {
+      e.LoadConstantV(Q0, i.src2.constant());
+      fn(e, i.dest, i.src1, REG(0));
+    } else {
+      fn(e, i.dest, i.src1, i.src2);
+    }
+  }
+
+  template <typename REG = QReg, typename FN>
+  static void EmitAssociativeBinaryVOp(A64Emitter& e, const EmitArgType& i,
+                                       const FN& fn) {
+    if (i.src1.is_constant && i.src2.is_constant) {
+      e.LoadConstantV(Q0, i.src1.constant());
+      e.LoadConstantV(Q1, i.src2.constant());
+      fn(e, i.dest, REG(0), REG(1));
+    } else if (i.src1.is_constant) {
+      e.LoadConstantV(Q0, i.src1.constant());
+      fn(e, i.dest, REG(0), i.src2);
+    } else if (i.src2.is_constant) {
+      e.LoadConstantV(Q0, i.src2.constant());
+      fn(e, i.dest, i.src1, REG(0));
+    } else {
+      fn(e, i.dest, i.src1, i.src2);
+    }
+  }
+
+  template <typename REG_REG_FN, typename REG_CONST_FN>
+  static void EmitCommutativeCompareOp(A64Emitter& e, const EmitArgType& i,
+                                       const REG_REG_FN& reg_reg_fn,
+                                       const REG_CONST_FN& reg_const_fn) {
+    if (i.src1.is_constant) {
+      assert_true(!i.src2.is_constant);
+      if (i.src1.ConstantFitsIn32Reg()) {
+        reg_const_fn(e, i.src2, static_cast<int32_t>(i.src1.constant()));
+      } else {
+        auto temp = GetTempReg<typename decltype(i.src1)::reg_type>(e);
+        e.mov(temp, i.src1.constant());
+        reg_reg_fn(e, i.src2, temp);
+      }
+    } else if (i.src2.is_constant) {
+      assert_true(!i.src1.is_constant);
+      if (i.src2.ConstantFitsIn32Reg()) {
+        reg_const_fn(e, i.src1, static_cast<int32_t>(i.src2.constant()));
+      } else {
+        auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+        e.mov(temp, i.src2.constant());
+        reg_reg_fn(e, i.src1, temp);
+      }
+    } else {
+      reg_reg_fn(e, i.src1, i.src2);
+    }
+  }
+
+  template <typename REG_REG_FN, typename REG_CONST_FN>
+  static void EmitAssociativeCompareOp(A64Emitter& e, const EmitArgType& i,
+                                       const REG_REG_FN& reg_reg_fn,
+                                       const REG_CONST_FN& reg_const_fn) {
+    if (i.src1.is_constant) {
+      assert_true(!i.src2.is_constant);
+      if (i.src1.ConstantFitsIn32Reg()) {
+        reg_const_fn(e, i.dest, i.src2,
+                     static_cast<int32_t>(i.src1.constant()), true);
+      } else {
+        auto temp = GetTempReg<typename decltype(i.src1)::reg_type>(e);
+        e.mov(temp, i.src1.constant());
+        reg_reg_fn(e, i.dest, i.src2, temp, true);
+      }
+    } else if (i.src2.is_constant) {
+      assert_true(!i.src1.is_constant);
+      if (i.src2.ConstantFitsIn32Reg()) {
+        reg_const_fn(e, i.dest, i.src1,
+                     static_cast<int32_t>(i.src2.constant()), false);
+      } else {
+        auto temp = GetTempReg<typename decltype(i.src2)::reg_type>(e);
+        e.mov(temp, i.src2.constant());
+        reg_reg_fn(e, i.dest, i.src1, temp, false);
+      }
+    } else {
+      reg_reg_fn(e, i.dest, i.src1, i.src2, false);
+    }
   }
 };
 

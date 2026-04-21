@@ -32,18 +32,6 @@ using namespace Xbyak_aarch64;
 
 volatile int anchor_vector = 0;
 
-template <typename Fn>
-void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
-  // Altivec vector FP runs with non-IEEE flush-to-zero and round-to-nearest.
-  e.MRS(X13, SystemReg::FPCR);
-  e.MOV(X14, X13);
-  e.BFI(X14, XZR, 22, 2);
-  e.ORR(X14, X14, uint64_t(1) << 24);
-  e.MSR(SystemReg::FPCR, X14);
-  emit_op();
-  e.MSR(SystemReg::FPCR, X13);
-}
-
 inline void EmitPreferQNaNLanesF32x4(A64Emitter& e, QReg result, QReg src1,
                                      QReg src2) {
   // vaddfp/vsubfp keep the first NaN payload encountered per lane and

@@ -1205,49 +1205,6 @@ struct ROUND_V128 : Sequence<ROUND_V128, I<OPCODE_ROUND, V128Op, V128Op>> {
 EMITTER_OPCODE_TABLE(OPCODE_ROUND, ROUND_F32, ROUND_F64, ROUND_V128);
 
 // ============================================================================
-// OPCODE_LOAD_CLOCK
-// ============================================================================
-struct LOAD_CLOCK : Sequence<LOAD_CLOCK, I<OPCODE_LOAD_CLOCK, I64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // When scaling is disabled and the raw clock source is selected, the code
-    // in the Clock class is actually just forwarding tick counts after one
-    // simple multiply and division. In that case we rather bake the scaling in
-    // here to cut extra function calls with CPU cache misses and stack frame
-    // overhead.
-    if (cvars::clock_no_scaling && cvars::clock_source_raw) {
-      auto ratio = Clock::guest_tick_ratio();
-      // The 360 CPU is an in-order CPU, ARM64 usually isn't. Since it's
-      // resolution however is much higher than the 360's mftb instruction this
-      // can safely be ignored.
-
-      // Read clock cycle count
-      e.MRS(i.dest, SystemReg::CNTVCT_EL0);
-      // Apply tick frequency scaling.
-      e.MOV(X0, ratio.first);
-      e.MUL(i.dest, i.dest, X0);
-      e.MOV(X0, ratio.second);
-      e.UDIV(i.dest, i.dest, X0);
-    } else {
-      e.CallNative(LoadClock);
-      e.MOV(i.dest, X0);
-    }
-  }
-  static uint64_t LoadClock(void* raw_context) {
-    return Clock::QueryGuestTickCount();
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_LOAD_CLOCK, LOAD_CLOCK);
-
-// ============================================================================
-// OPCODE_CONTEXT_BARRIER
-// ============================================================================
-struct CONTEXT_BARRIER
-    : Sequence<CONTEXT_BARRIER, I<OPCODE_CONTEXT_BARRIER, VoidOp>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {}
-};
-EMITTER_OPCODE_TABLE(OPCODE_CONTEXT_BARRIER, CONTEXT_BARRIER);
-
-// ============================================================================
 // OPCODE_MAX
 // ============================================================================
 struct MAX_F32 : Sequence<MAX_F32, I<OPCODE_MAX, F32Op, F32Op, F32Op>> {
@@ -1801,7 +1758,7 @@ struct DID_SATURATE
     : Sequence<DID_SATURATE, I<OPCODE_DID_SATURATE, I8Op, V128Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
     // Bit 27 in the FPSR is the QC bit
-    e.MRS(X0, SystemReg::FPSR);
+    e.mrs(X0, 3, 3, 4, 4, 1);
     e.UBFX(i.dest, W0, 27, 1);
   }
 };
@@ -1906,10 +1863,10 @@ void EmitAddCarryXX(A64Emitter& e, const ARGS& i) {
     e.CMP(i.src3.reg().toW(), 0);
     e.CSET(X0, Cond::NE);
 
-    e.MRS(X1, SystemReg::NZCV);
+    e.mrs(X1, 3, 3, 4, 2, 0);
     // Assign carry bit
     e.BFI(X1, X0, 29, 1);
-    e.MSR(SystemReg::NZCV, X1);
+    e.msr(3, 3, 4, 2, 0, X1);
   }
   SEQ::EmitCommutativeBinaryOp(
       e, i,

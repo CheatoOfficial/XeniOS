@@ -49,8 +49,8 @@ enum class FPCRMode : uint32_t { Unknown, Fpu, Vmx };
 
 class A64SReg : public Xbyak_aarch64::SReg {
  public:
-  explicit A64SReg(uint32_t index) : Xbyak_aarch64::SReg(index) {}
-  explicit A64SReg(const Xbyak_aarch64::SReg& reg)
+  A64SReg(uint32_t index) : Xbyak_aarch64::SReg(index) {}
+  A64SReg(const Xbyak_aarch64::SReg& reg)
       : Xbyak_aarch64::SReg(reg.getIdx()) {}
 
   Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
@@ -61,8 +61,8 @@ class A64SReg : public Xbyak_aarch64::SReg {
 
 class A64DReg : public Xbyak_aarch64::DReg {
  public:
-  explicit A64DReg(uint32_t index) : Xbyak_aarch64::DReg(index) {}
-  explicit A64DReg(const Xbyak_aarch64::DReg& reg)
+  A64DReg(uint32_t index) : Xbyak_aarch64::DReg(index) {}
+  A64DReg(const Xbyak_aarch64::DReg& reg)
       : Xbyak_aarch64::DReg(reg.getIdx()) {}
 
   Xbyak_aarch64::SReg toS() const { return Xbyak_aarch64::SReg(getIdx()); }
@@ -76,10 +76,10 @@ class A64DReg : public Xbyak_aarch64::DReg {
 // views and helpers the older sequence files still reference.
 class A64VReg : public Xbyak_aarch64::QReg {
  public:
-  explicit A64VReg(uint32_t index) : Xbyak_aarch64::QReg(index) {}
-  explicit A64VReg(const Xbyak_aarch64::QReg& reg)
+  A64VReg(uint32_t index) : Xbyak_aarch64::QReg(index) {}
+  A64VReg(const Xbyak_aarch64::QReg& reg)
       : Xbyak_aarch64::QReg(reg.getIdx()) {}
-  explicit A64VReg(const Xbyak_aarch64::VReg& reg)
+  A64VReg(const Xbyak_aarch64::VReg& reg)
       : Xbyak_aarch64::QReg(reg.getIdx()) {}
 
   Xbyak_aarch64::QReg toQ() const { return Xbyak_aarch64::QReg(getIdx()); }
