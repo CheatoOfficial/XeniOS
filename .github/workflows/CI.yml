@@ -18,7 +18,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v4
       - name: Setup
         env:
           LLVM_VERSION: 21
@@ -36,20 +36,20 @@ jobs:
     needs: lint
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Cache premake5
         id: cache-premake5
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           path: tools/build/bin/premake5
           key: ${{ runner.os }}-${{ runner.arch }}-macos26-premake5-ios-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build-ios
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: build/DerivedData
           key: ${{ runner.os }}-${{ runner.arch }}-macos26-ios-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua', 'assets/apple/**') }}
@@ -58,7 +58,7 @@ jobs:
 
       - name: Cache submodules
         id: cache-submodules-ios
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             third_party
@@ -215,7 +215,7 @@ jobs:
           fi
 
           mkdir -p artifacts/release
-          ipa_out="$PWD/artifacts/release/xenios_ios_iphone_ipad.ipa"
+          ipa_out="$PWD/artifacts/release/xenios.ipa"
           tmp="$(mktemp -d "${TMPDIR:-/tmp}/xenios_ci_ipa.XXXXXX")"
           mkdir -p "$tmp/Payload"
           ditto "$app_bundle" "$tmp/Payload/$(basename "$app_bundle")"
@@ -227,8 +227,56 @@ jobs:
 
       - name: Upload iOS ARM64 artifacts
         if: steps.prepare_artifacts.outcome == 'success'
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
-          name: xenios_ios_arm64
-          path: artifacts/release
+          name: xenios_ipa
+          path: artifacts/release/xenios.ipa
           if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  publish-ios-release:
+    name: Publish iOS Release Asset
+    needs: build-ios-arm64
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xenios_ipa
+          path: artifacts/release
+
+      - name: Create or update rolling iOS release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="main-ios-latest"
+          title="main iOS latest"
+
+          {
+            printf 'Rolling iOS build from `main`.\n\n'
+            printf -- '- Commit: `%s`\n' "${GITHUB_SHA}"
+            printf -- '- Workflow: `%s`\n' "${GITHUB_WORKFLOW}"
+            printf -- '- Run: `%s`\n' "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > release-notes.md
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" \
+              --title "${title}" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "${tag}" \
+              --target "${GITHUB_SHA}" \
+              --title "${title}" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
+
+          gh release upload "${tag}" artifacts/release/xenios.ipa --clobber

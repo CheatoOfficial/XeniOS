@@ -70,7 +70,7 @@ jobs:
           }
 
           is_release_ref() {
-            [[ "${1}" == "refs/heads/xenios" || "${1}" == refs/tags/v* || "${1}" == refs/tags/release-* ]]
+            [[ "${1}" == "refs/heads/main" || "${1}" == refs/tags/v* || "${1}" == refs/tags/release-* ]]
           }
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
@@ -82,7 +82,7 @@ jobs:
               }
             elif [[ "${channel}" == "release" ]]; then
               is_release_ref "${GITHUB_REF}" || {
-                echo "::error::Manual release publishes must run from refs/heads/xenios or release tags (got ${GITHUB_REF})"
+                echo "::error::Manual release publishes must run from refs/heads/main or release tags (got ${GITHUB_REF})"
                 exit 1
               }
             fi
@@ -187,8 +187,8 @@ jobs:
         include:
           - label: "iOS arm64"
             runner: "macos-15"
-            artifact_name: "xenios_ios_iphone_ipad"
-            artifact_path: "scratch/artifacts/xenios_ios_iphone_ipad.ipa"
+            artifact_name: "xenios_ipa"
+            artifact_path: "scratch/artifacts/xenios.ipa"
             script_args: "--skip-macos-arm64 --skip-macos-x86_64"
             needs_qt: false
           - label: "macOS Apple Silicon"
@@ -308,7 +308,7 @@ jobs:
       - name: Download iOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: "xenios_ios_iphone_ipad"
+          name: "xenios_ipa"
           path: "artifacts/ios"
 
       - name: Download macOS Apple Silicon artifact
@@ -389,7 +389,7 @@ jobs:
           fi
 
           gh release upload "${RELEASE_TAG}" \
-            artifacts/ios/xenios_ios_iphone_ipad.ipa \
+            artifacts/ios/xenios.ipa \
             artifacts/macos-arm64/xenios_macos_apple_silicon.dmg \
             artifacts/macos-x86_64/xenios_macos_intel.dmg \
             --clobber
@@ -397,7 +397,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > release.json
 
           echo "html_url=$(jq -r '.html_url' release.json)" >> "$GITHUB_OUTPUT"
-          echo "ios_download_url=$(jq -r '.assets[] | select(.name == \"xenios_ios_iphone_ipad.ipa\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
+          echo "ios_download_url=$(jq -r '.assets[] | select(.name == \"xenios.ipa\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
           echo "macos_arm64_download_url=$(jq -r '.assets[] | select(.name == \"xenios_macos_apple_silicon.dmg\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
           echo "macos_x86_64_download_url=$(jq -r '.assets[] | select(.name == \"xenios_macos_intel.dmg\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
 
@@ -425,7 +425,7 @@ jobs:
             --metadata-file build-metadata.env \
             --channel "${CHANNEL}" \
             --release-url "${RELEASE_URL}" \
-            --ios-ipa "${GITHUB_WORKSPACE}/artifacts/ios/xenios_ios_iphone_ipad.ipa" \
+            --ios-ipa "${GITHUB_WORKSPACE}/artifacts/ios/xenios.ipa" \
             --ios-download-url "${IOS_DOWNLOAD_URL}" \
             --macos-arm64-dmg "${GITHUB_WORKSPACE}/artifacts/macos-arm64/xenios_macos_apple_silicon.dmg" \
             --macos-arm64-download-url "${MACOS_ARM64_DOWNLOAD_URL}" \

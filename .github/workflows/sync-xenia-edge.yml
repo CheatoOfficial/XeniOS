@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_branch:
-        description: xenia-edge branch to merge into xenios
+        description: xenia-edge branch to merge into main
         required: false
         default: metal/msc-pre-strict-clean-localized
         type: string
@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: sync-xenia-edge
@@ -24,11 +23,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out xenios
+      - name: Check out main
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: xenios
+          ref: main
 
       - name: Configure Git
         shell: bash
@@ -48,15 +47,13 @@ jobs:
             upstream_branch="metal/msc-pre-strict-clean-localized"
           fi
 
-          sync_branch="automation/xeniaedge-sync"
-
           git remote remove xeniaedge 2>/dev/null || true
           git remote add xeniaedge https://github.com/has207/xenia-edge.git
 
-          git fetch origin xenios
+          git fetch origin main
           git fetch xeniaedge "${upstream_branch}"
 
-          git checkout -B "${sync_branch}" origin/xenios
+          git checkout -B main origin/main
 
           if ! git merge --no-ff -X ours --no-commit "xeniaedge/${upstream_branch}"; then
             echo "::error::Automatic merge from xeniaedge/${upstream_branch} failed"
@@ -65,62 +62,37 @@ jobs:
             exit 1
           fi
 
-          # Keep the fork's workflow definitions authoritative on xenios. This
+          if [ ! -f .git/MERGE_HEAD ]; then
+            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
+            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          # Keep the fork's workflow definitions authoritative on main. This
           # avoids GitHub App push restrictions around workflow-file changes.
-          git checkout origin/xenios -- .github/workflows
+          git checkout origin/main -- .github/workflows
+
+          if git diff --cached --quiet && git diff --quiet; then
+            git merge --abort || true
+            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
+            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
           git commit --no-edit
 
-          if git diff --quiet origin/xenios...HEAD; then
+          if git diff --quiet origin/main...HEAD; then
             echo "has_changes=false" >> "${GITHUB_OUTPUT}"
             echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           echo "has_changes=true" >> "${GITHUB_OUTPUT}"
-          echo "sync_branch=${sync_branch}" >> "${GITHUB_OUTPUT}"
           echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
 
-      - name: Push sync branch
+      - name: Push synced main
         if: steps.merge.outputs.has_changes == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          git push --force-with-lease origin "${{ steps.merge.outputs.sync_branch }}"
-
-      - name: Create or update PR
-        if: steps.merge.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sync_branch="${{ steps.merge.outputs.sync_branch }}"
-          upstream_branch="${{ steps.merge.outputs.upstream_branch }}"
-          title="Sync xenia-edge: ${upstream_branch}"
-          body=$(cat <<EOF
-          Automated merge of \`has207/xenia-edge:${upstream_branch}\` into \`xenios\`.
-
-          Notes:
-          - Uses \`git merge -X ours\` so iOS-specific fork changes win on conflicting hunks.
-          - Non-conflicting xenia-edge updates are still pulled in automatically.
-          - CI on this PR is the gate before anything should be merged back to \`xenios\`.
-          EOF
-          )
-
-          pr_number="$(gh pr list \
-            --base xenios \
-            --head "${sync_branch}" \
-            --json number \
-            --jq '.[0].number')"
-
-          if [ -n "${pr_number}" ]; then
-            gh pr edit "${pr_number}" --title "${title}" --body "${body}"
-          else
-            gh pr create \
-              --base xenios \
-              --head "${sync_branch}" \
-              --title "${title}" \
-              --body "${body}" \
-              --draft
-          fi
+          git push --force-with-lease origin HEAD:main

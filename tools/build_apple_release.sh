@@ -877,7 +877,7 @@ if [ "$build_ios" -eq 1 ]; then
   # Re-signing tools will preserve these when applying a real identity.
   codesign --force --sign - --entitlements "$root/xenia_ios.entitlements" "$app_bundle"
 
-  package_ios_ipa "$app_bundle" "$out_dir/xenios_ios_iphone_ipad.ipa"
+  package_ios_ipa "$app_bundle" "$out_dir/xenios.ipa"
 fi
 
 echo ""
