@@ -603,7 +603,7 @@ bool A64Emitter::ChangeFpcrMode(FPCRMode new_mode, bool already_set) {
 }
 
 Xbyak_aarch64::Label& A64Emitter::AddToTail(TailEmitCallback callback,
-                                           uint32_t alignment) {
+                                            uint32_t alignment) {
   TailEmitter tail;
   tail.alignment = alignment;
   tail.func = std::move(callback);
@@ -653,15 +653,15 @@ void A64Emitter::PushStackpoint() {
 
   // Store host SP.
   mov(x10, sp);
-  str(x10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, host_sp))));
+  str(x10,
+      ptr(x8, static_cast<uint32_t>(offsetof(A64BackendStackpoint, host_sp))));
   mov(x10, x29);
-  str(x10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, host_fp))));
+  str(x10,
+      ptr(x8, static_cast<uint32_t>(offsetof(A64BackendStackpoint, host_fp))));
   // Store guest r1 (32-bit).
   ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, r[1]))));
-  str(w10, ptr(x8, static_cast<uint32_t>(
-                       offsetof(A64BackendStackpoint, guest_sp))));
+  str(w10,
+      ptr(x8, static_cast<uint32_t>(offsetof(A64BackendStackpoint, guest_sp))));
   // Store guest LR (32-bit).
   ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, lr))));
   str(w10, ptr(x8, static_cast<uint32_t>(
@@ -680,9 +680,9 @@ void A64Emitter::PushStackpoint() {
   cmp(w9, w10);
   auto& overflow_label =
       AddToTail([](A64Emitter& e, Xbyak_aarch64::Label& lbl) {
-    e.CallNativeSafe(
-        reinterpret_cast<void*>(A64Emitter::HandleStackpointOverflowError));
-  });
+        e.CallNativeSafe(
+            reinterpret_cast<void*>(A64Emitter::HandleStackpointOverflowError));
+      });
   b(GE, overflow_label);
 }
 
@@ -713,16 +713,14 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
                        StackLayout::GUEST_SAVED_STACKPOINT_DEPTH)));
   cmp(w17, w16);
 
-  auto& sync_label =
-      AddToTail([&return_from_sync](A64Emitter& e,
-                                   Xbyak_aarch64::Label& lbl) {
+  auto& sync_label = AddToTail([&return_from_sync](A64Emitter& e,
+                                                   Xbyak_aarch64::Label& lbl) {
     // Set up arguments for the sync helper:
     //   x8 = return address (where to resume after fixup)
     //   x9 = this function's stack size
     e.adr(e.x8, return_from_sync);
     e.mov(e.x9, static_cast<uint64_t>(e.stack_size()));
-    e.mov(e.x10, reinterpret_cast<uint64_t>(
-                     e.backend()->stack_sync_helper()));
+    e.mov(e.x10, reinterpret_cast<uint64_t>(e.backend()->stack_sync_helper()));
     e.br(e.x10);
   });
   b(NE, sync_label);
