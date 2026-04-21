@@ -490,6 +490,53 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
   auto thread_state = guest_context->thread_state;
   assert_not_zero(target_address);
 
+  // Longjmp re-entry: resume inside an existing function frame instead of
+  // re-running its prolog. Mirrors x64_emitter.cc::ResolveFunction.
+  auto* processor = thread_state->processor();
+  if (cvars::a64_enable_host_guest_stack_synchronization &&
+      target_address <= 0xFFFFFFFFu) {
+    auto* module_for_address =
+        processor->LookupModule(static_cast<uint32_t>(target_address));
+    auto* xexmod = dynamic_cast<XexModule*>(module_for_address);
+    if (xexmod) {
+      InfoCacheFlags* flags = xexmod->GetInstructionAddressFlags(
+          static_cast<uint32_t>(target_address));
+      if (flags && flags->is_return_site) {
+        uintptr_t host_address = 0;
+        for (auto* entry : processor->FindFunctionsWithAddress(
+                 static_cast<uint32_t>(target_address))) {
+          auto* afunc = static_cast<A64Function*>(entry);
+          host_address = afunc->MapGuestAddressToMachineCode(
+              static_cast<uint32_t>(target_address));
+          if (host_address &&
+              afunc->machine_code() !=
+                  reinterpret_cast<const uint8_t*>(host_address)) {
+            auto* backend = static_cast<A64Backend*>(processor->backend());
+            auto* backend_context =
+                backend->BackendContextForGuestContext(guest_context);
+            if (backend_context->stackpoints &&
+                backend_context->current_stackpoint_depth > 0) {
+              uint32_t idx = backend_context->current_stackpoint_depth - 1;
+              uint32_t guest_sp = static_cast<uint32_t>(guest_context->r[1]);
+              uint32_t frames_skipped = 0;
+              while (idx != 0xFFFFFFFFu &&
+                     guest_sp >
+                         backend_context->stackpoints[idx].guest_stack_) {
+                --idx;
+                ++frames_skipped;
+              }
+              // >1 frames skipped = real longjmp, not an early SP restore.
+              if (frames_skipped > 1) {
+                return host_address;
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
   auto fn = thread_state->processor()->ResolveFunction(
       static_cast<uint32_t>(target_address));
   if (!fn) {
