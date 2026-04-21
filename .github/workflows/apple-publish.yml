@@ -1,6 +1,6 @@
 name: Apple Publish
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       channel:
@@ -81,7 +81,7 @@ jobs:
           }
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            channel="${{ inputs.channel }}"
+            channel="${{ github.event.inputs.channel }}"
             if [[ "${channel}" == "preview" ]]; then
               is_preview_ref "${GITHUB_REF}" || {
                 echo "::error::Manual preview publishes must run from refs/heads/preview (got ${GITHUB_REF})"
@@ -116,9 +116,9 @@ jobs:
         shell: bash
         env:
           CHANNEL: "${{ steps.channel.outputs.channel }}"
-          VERSION_OVERRIDE: "${{ inputs.version }}"
-          BUILD_NUMBER_OVERRIDE: "${{ inputs.build_number }}"
-          STAGE_OVERRIDE: "${{ inputs.stage }}"
+          VERSION_OVERRIDE: "${{ github.event.inputs.version }}"
+          BUILD_NUMBER_OVERRIDE: "${{ github.event.inputs.build_number }}"
+          STAGE_OVERRIDE: "${{ github.event.inputs.stage }}"
         run: |
           set -euo pipefail
           args=(--channel "${CHANNEL}")
@@ -241,12 +241,10 @@ jobs:
             done
           }
 
-          brew install sdl2 ninja pipx
-
           if [[ "${{ matrix.needs_qt }}" == "true" ]]; then
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$(python3 -m site --user-base)/bin:$PATH"
             if ! command -v aqt >/dev/null 2>&1; then
-              pipx install aqtinstall
+              python3 -m pip install --user --break-system-packages aqtinstall
             fi
             if [ ! -d "$HOME/Qt/6.10.1/macos" ]; then
               aqt install-qt mac desktop 6.10.1 clang_64 -O "$HOME/Qt"
