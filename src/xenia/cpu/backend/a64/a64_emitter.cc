@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -18,35 +18,26 @@
 #include <climits>
 #include <cstring>
 
-#include "third_party/fmt/include/fmt/format.h"
-#include "xenia/base/assert.h"
-#include "xenia/base/atomic.h"
-#include "xenia/base/byte_order.h"
 #include "xenia/base/debugging.h"
-#include "xenia/base/literals.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
-#include "xenia/base/memory.h"
 #include "xenia/base/profiling.h"
-#include "xenia/base/string_buffer.h"
-#include "xenia/base/vec128.h"
 #include "xenia/cpu/backend/a64/a64_backend.h"
 #include "xenia/cpu/backend/a64/a64_code_cache.h"
 #include "xenia/cpu/backend/a64/a64_function.h"
 #include "xenia/cpu/backend/a64/a64_sequences.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
 #include "xenia/cpu/cpu_flags.h"
-#include "xenia/cpu/function.h"
-#include "xenia/cpu/function_debug_info.h"
-#include "xenia/cpu/ppc/ppc_opcode_info.h"
+#include "xenia/cpu/hir/hir_builder.h"
+#include "xenia/cpu/hir/label.h"
+#include "xenia/cpu/ppc/ppc_context.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/symbol.h"
 #include "xenia/cpu/thread_state.h"
 #include "xenia/cpu/xex_module.h"
 
-#include "oaknut/feature_detection/cpu_feature.hpp"
-#include "oaknut/feature_detection/feature_detection.hpp"
-#include "oaknut/feature_detection/feature_detection_idregs.hpp"
+DECLARE_int64(a64_max_stackpoints);
+DECLARE_bool(a64_enable_host_guest_stack_synchronization);
 
 DEFINE_bool(debugprint_trap_log, false,
             "Log debugprint traps to the active debugger", "CPU");
@@ -76,98 +67,45 @@ namespace cpu {
 namespace backend {
 namespace a64 {
 
-using xe::cpu::hir::HIRBuilder;
-using xe::cpu::hir::Instr;
-using namespace xe::literals;
-using namespace oaknut::util;
+using namespace Xbyak_aarch64;
 
-namespace {
+// Defined in a64_backend.cc.
+extern uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
 
-bool ShouldLogResolveFailure() {
-  if (!cvars::a64_resolve_function_log) {
-    return false;
-  }
-  const int32_t limit = cvars::a64_resolve_function_log_limit;
-  if (limit <= 0) {
-    return false;
-  }
-  static std::atomic<int32_t> log_count{0};
-  const int32_t count = log_count.fetch_add(1, std::memory_order_relaxed);
-  return count < limit;
+static uint64_t UndefinedCallExtern(void* raw_context, uint64_t function_ptr) {
+  auto function = reinterpret_cast<Function*>(function_ptr);
+  XELOGE("undefined extern call to {:08X} {}", function->address(),
+         function->name());
+  return 0;
 }
 
-void AdjustStackPointer(A64Emitter& emitter, size_t stack_size, bool add) {
-  if (!stack_size) {
-    return;
-  }
-  const uint64_t size_u64 = static_cast<uint64_t>(stack_size);
-  const bool imm_valid = size_u64 <= 0xFFF ||
-                         ((size_u64 & 0xFFF) == 0 && (size_u64 >> 12) <= 0xFFF);
-  if (imm_valid) {
-    if (add) {
-      emitter.ADD(SP, SP, size_u64);
-    } else {
-      emitter.SUB(SP, SP, size_u64);
-    }
-    return;
-  }
-  emitter.MOV(X15, size_u64);
-  if (add) {
-    emitter.ADD(SP, SP, X15);
-  } else {
-    emitter.SUB(SP, SP, X15);
-  }
-}
+static constexpr size_t kMaxCodeSize = 1_MiB;
 
-}  // namespace
-
-static const size_t kStashOffset = 32;
-// static const size_t kStashOffsetHigh = 32 + 32;
-
-// Register indices that the HIR is allowed to use for operands
-const uint8_t A64Emitter::gpr_reg_map_[A64Emitter::GPR_COUNT] = {
-    19, 20, 21, 22, 23, 24, 25, 26,
+// Register maps:
+// GPR allocatable registers: x22, x23, x24, x25, x26, x27, x28
+// (x19=backend context, x20=context, x21=membase are reserved)
+const uint32_t A64Emitter::gpr_reg_map_[GPR_COUNT] = {
+    22, 23, 24, 25, 26, 27, 28,
 };
 
-const uint8_t A64Emitter::fpr_reg_map_[A64Emitter::FPR_COUNT] = {
-    8, 9, 10, 11, 12, 13, 14, 15,
+// VEC allocatable registers: v4-v15, v16-v31
+// (v0-v3 are scratch)
+const uint32_t A64Emitter::vec_reg_map_[VEC_COUNT] = {
+    4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17,
+    18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 };
 
-A64Emitter::A64Emitter(A64Backend* backend)
-    : VectorCodeGenerator(assembly_buffer),
+A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
+    : CodeGenerator(kMaxCodeSize, Xbyak_aarch64::DontSetProtectRWE, allocator),
       processor_(backend->processor()),
       backend_(backend),
-      code_cache_(backend->code_cache()) {
-  oaknut::CpuFeatures cpu_ = oaknut::detect_features();
-
-  // Combine with id register detection
-#if OAKNUT_SUPPORTS_READING_ID_REGISTERS > 0
-#if OAKNUT_SUPPORTS_READING_ID_REGISTERS == 1
-  const std::optional<oaknut::id::IdRegisters> id_registers =
-      oaknut::read_id_registers();
-#elif OAKNUT_SUPPORTS_READING_ID_REGISTERS == 2
-  const std::optional<oaknut::id::IdRegisters> id_registers =
-      oaknut::read_id_registers(0);
-#endif
-  if (id_registers.has_value()) {
-    cpu_ = cpu_ | oaknut::detect_features_via_id_registers(*id_registers);
-  }
-#endif
-
-#define TEST_EMIT_FEATURE(emit, ext)                \
-  if ((cvars::a64_extension_mask & emit) == emit) { \
-    feature_flags_ |= (cpu_.has(ext) ? emit : 0);   \
-  }
-
-  TEST_EMIT_FEATURE(kA64EmitLSE, oaknut::CpuFeature::LSE);
-  TEST_EMIT_FEATURE(kA64EmitF16C, oaknut::CpuFeature::FP16Conv);
-
-#undef TEST_EMIT_FEATURE
-}
+      code_cache_(backend->code_cache()),
+      allocator_(allocator),
+      feature_flags_(arm64::GetFeatureFlags()) {}
 
 A64Emitter::~A64Emitter() = default;
 
-bool A64Emitter::Emit(GuestFunction* function, HIRBuilder* builder,
+bool A64Emitter::Emit(GuestFunction* function, hir::HIRBuilder* builder,
                       uint32_t debug_info_flags, FunctionDebugInfo* debug_info,
                       void** out_code_address, size_t* out_code_size,
                       std::vector<SourceMapEntry>* out_source_map) {
@@ -179,22 +117,29 @@ bool A64Emitter::Emit(GuestFunction* function, HIRBuilder* builder,
   debug_info_ = debug_info;
   debug_info_flags_ = debug_info_flags;
   trace_data_ = &function->trace_data();
-  source_map_arena_.Reset();
 
-  // Fill the generator with code.
+  current_guest_function_ = function->address();
+
+  // Reset state.
+  stack_size_ = StackLayout::GUEST_STACK_SIZE;
+  source_map_arena_.Reset();
+  tail_code_.clear();
+  fpcr_mode_ = FPCRMode::Unknown;
+
+  // Try to emit.
   EmitFunctionInfo func_info = {};
   if (!Emit(builder, func_info)) {
     return false;
   }
 
-  // Copy the final code to the cache and relocate it.
-  *out_code_size = offset();
+  // Emplace the code into the code cache.
   *out_code_address = Emplace(func_info, function);
+  *out_code_size = func_info.code_size.total;
 
-  // Stash source map.
+  // Copy source map.
   source_map_arena_.CloneContents(out_source_map);
 
-  return true;
+  return *out_code_address != nullptr;
 }
 
 void* A64Emitter::Emplace(const EmitFunctionInfo& func_info,
@@ -237,41 +182,52 @@ bool A64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
   size_t stack_offset = StackLayout::GUEST_STACK_SIZE;
   for (auto it = locals.begin(); it != locals.end(); ++it) {
     auto slot = *it;
-    size_t type_size = GetTypeSize(slot->type);
-
-    // Align to natural size.
-    stack_offset = xe::align(stack_offset, type_size);
-    slot->set_constant((uint32_t)stack_offset);
+    size_t type_size = hir::GetTypeSize(slot->type);
+    // Align to natural size (at least 4 bytes for ARM64 alignment).
+    size_t align_size = xe::round_up(type_size, static_cast<size_t>(4));
+    stack_offset = xe::align(stack_offset, align_size);
+    slot->set_constant(static_cast<uint32_t>(stack_offset));
     stack_offset += type_size;
   }
-
-  // Ensure 16b alignment.
+  // Align total stack offset to 16 bytes (ARM64 ABI requirement).
   stack_offset -= StackLayout::GUEST_STACK_SIZE;
   stack_offset = xe::align(stack_offset, static_cast<size_t>(16));
 
-  struct _code_offsets {
+  const size_t stack_size = StackLayout::GUEST_STACK_SIZE + stack_offset;
+  // ARM64 ABI: SP must always be 16-byte aligned.
+  assert_true(stack_size % 16 == 0);
+  func_info.stack_size = stack_size;
+  func_info.lr_save_offset = StackLayout::HOST_RET_ADDR;
+  stack_size_ = stack_size;
+
+  struct {
     size_t prolog;
-    size_t prolog_stack_alloc;
     size_t body;
     size_t epilog;
     size_t tail;
+    size_t prolog_stack_alloc;
   } code_offsets = {};
 
-  code_offsets.prolog = offset();
+  // ========================================================================
+  // PROLOG
+  // ========================================================================
+  code_offsets.prolog = getSize();
 
-  // Function prolog.
-  // Must be 16b aligned.
-  // Windows is very strict about the form of this and the epilog:
-  // https://docs.microsoft.com/en-us/cpp/build/prolog-and-epilog?view=vs-2017
-  // IMPORTANT: any changes to the prolog must be kept in sync with
-  //     A64CodeCache, which dynamically generates exception information.
-  //     Adding or changing anything here must be matched!
-  const size_t stack_size = StackLayout::GUEST_STACK_SIZE + stack_offset;
-  assert_true(stack_size % 16 == 0);
-  func_info.stack_size = stack_size;
-  stack_size_ = stack_size;
+  // sub sp, sp, #stack_size
+  if (stack_size <= 4095) {
+    sub(sp, sp, static_cast<uint32_t>(stack_size));
+  } else {
+    mov(x17, static_cast<uint64_t>(stack_size));
+    sub(sp, sp, x17, UXTX);
+  }
+  code_offsets.prolog_stack_alloc = getSize();
 
-  EmitBtiJc();
+  // Store host return address (x30/LR) so the epilog can restore it.
+  str(x30, ptr(sp, static_cast<uint32_t>(StackLayout::HOST_RET_ADDR)));
+  // Store guest PPC return address (passed in x0 by convention).
+  str(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
+  // Store zero for call return address (we haven't made a call yet).
+  str(xzr, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
 
   STP(X29, X30, SP, PRE_INDEXED, -16);
   MOV(X29, SP);
@@ -320,34 +276,50 @@ bool A64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
     LDSET(W0, WZR, X5);
   }
 
-  // Load membase.
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
+  // ========================================================================
+  // BODY
+  // ========================================================================
+  code_offsets.body = getSize();
 
-  // Body.
+  // Allocate the epilog label (owned by label_cache_ for cleanup).
+  auto epilog_label_ptr = new Label();
+  label_cache_.push_back(epilog_label_ptr);
+  epilog_label_ = epilog_label_ptr;
+
+  // Walk HIR blocks and emit ARM64 instructions.
   auto block = builder->first_block();
-  [[maybe_unused]] int block_count = 0;
+  synchronize_stack_on_next_instruction_ = false;
   while (block) {
-    // Mark block labels.
+    // Reset FPCR tracking on each block entry (we don't know which
+    // predecessor ran, so mode is unknown).
+    ForgetFpcrMode();
+
+    // Bind all labels targeting this block.
     auto label = block->label_head;
     while (label) {
-      l(*lookup_label(label));
+      L(GetLabel(label->id));
       label = label->next;
     }
 
-    // Process instructions.
-    const Instr* instr = block->instr_head;
-    [[maybe_unused]] int instr_count = 0;
+    // Process each instruction in the block.
+    const hir::Instr* instr = block->instr_head;
     while (instr) {
-      const Instr* new_tail = instr;
+      // After a guest call, check for longjmp on the next real instruction.
+      // Skip SOURCE_OFFSET because the return address from the call would
+      // point past the check, so it would never execute.
+      if (synchronize_stack_on_next_instruction_) {
+        if (instr->GetOpcodeNum() != hir::OPCODE_SOURCE_OFFSET) {
+          synchronize_stack_on_next_instruction_ = false;
+          EnsureSynchronizedGuestAndHostStack();
+        }
+      }
+      const hir::Instr* new_tail = instr;
       if (!SelectSequence(this, instr, &new_tail)) {
-        // No sequence found!
-        // NOTE: If you encounter this after adding a new instruction, do a full
-        // rebuild!
-        XELOGE("Unable to process HIR opcode {}",
-               hir::GetOpcodeName(instr->opcode));
-        assert_always();
-        break;
+        // No sequence matched — this is expected in Phase 1 before
+        // sequences are implemented.
+        XELOGE("A64: Unable to process HIR opcode {}",
+               hir::GetOpcodeName(instr->GetOpcodeInfo()));
+        return false;
       }
       instr = new_tail;
     }
@@ -355,73 +327,99 @@ bool A64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
     block = block->next;
   }
 
-  // Function epilog.
-  l(epilog_label);
+  // ========================================================================
+  // EPILOG
+  // ========================================================================
+  L(*epilog_label_);
   epilog_label_ = nullptr;
   EmitTraceUserCallReturn();
   LDR(GetContextReg(), SP, StackLayout::GUEST_CTX_HOME);
   PopStackpoint();
 
-  code_offsets.epilog = offset();
+  // Pop stackpoint before leaving.
+  PopStackpoint();
 
-  AdjustStackPointer(*this, stack_size, true);
-
-  MOV(SP, X29);
-  LDP(X29, X30, SP, POST_INDEXED, 16);
-
-  RET();
-
-  code_offsets.tail = offset();
-
-  if (cvars::emit_source_annotations) {
-    NOP();
-    NOP();
-    NOP();
-    NOP();
-    NOP();
+  // Restore host return address and deallocate stack.
+  ldr(x30, ptr(sp, static_cast<uint32_t>(StackLayout::HOST_RET_ADDR)));
+  if (stack_size <= 4095) {
+    add(sp, sp, static_cast<uint32_t>(stack_size));
+  } else {
+    mov(x17, static_cast<uint64_t>(stack_size));
+    add(sp, sp, x17, UXTX);
   }
+  ret();
 
+  // ========================================================================
+  // TAIL CODE
+  // ========================================================================
+  for (auto& tail_item : tail_code_) {
+    // ARM64 instructions are always 4-byte aligned, so alignment is mostly
+    // a no-op unless we want cache-line alignment for hot paths.
+    L(tail_item.label);
+    tail_item.func(*this, tail_item.label);
+  }
+  code_offsets.tail = getSize();
+
+  // Fill in EmitFunctionInfo metrics.
   assert_zero(code_offsets.prolog);
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
 
   return true;
 }
 
-void A64Emitter::MarkSourceOffset(const Instr* i) {
+void* A64Emitter::Emplace(const EmitFunctionInfo& func_info,
+                          GuestFunction* function) {
+  assert_true(func_info.code_size.total == getSize());
+
+  void* new_execute_address;
+  void* new_write_address;
+
+  if (function) {
+    code_cache_->PlaceGuestCode(
+        function->address(),
+        const_cast<void*>(static_cast<const void*>(getCode())), func_info,
+        function, new_execute_address, new_write_address);
+  } else {
+    code_cache_->PlaceHostCode(
+        0, const_cast<void*>(static_cast<const void*>(getCode())), func_info,
+        new_execute_address, new_write_address);
+  }
+
+  // In xbyak_aarch64, labels are resolved at define time (backpatching),
+  // so all relative offsets are already correct. We just need to reset
+  // the codegen state for the next function.
+  reset();
+  tail_code_.clear();
+
+  // Clean up cached labels.
+  for (auto* cached_label : label_cache_) {
+    delete cached_label;
+  }
+  label_cache_.clear();
+
+  // Clean up HIR->xbyak label map.
+  for (auto& pair : label_map_) {
+    delete pair.second;
+  }
+  label_map_.clear();
+
+  return new_execute_address;
+}
+
+void A64Emitter::MarkSourceOffset(const hir::Instr* i) {
   auto entry = source_map_arena_.Alloc<SourceMapEntry>();
   entry->guest_address = static_cast<uint32_t>(i->src1.offset);
   entry->hir_offset = uint32_t(i->block->ordinal << 16) | i->ordinal;
-  entry->code_offset = static_cast<uint32_t>(offset());
-
-  if (cvars::emit_source_annotations) {
-    NOP();
-    NOP();
-    MOV(X0, entry->guest_address);
-    NOP();
-    NOP();
-  }
-
-  if (debug_info_flags_ & DebugInfoFlags::kDebugInfoTraceFunctionCoverage) {
-    const uint32_t instruction_index =
-        (entry->guest_address - trace_data_->start_address()) / 4;
-    MOV(X0, 1);
-    MOV(X1, reinterpret_cast<uintptr_t>(
-                low_address(trace_data_->instruction_execute_counts() +
-                            instruction_index * 8)));
-    LDADDAL(X0, ZR, X1);
-  }
+  entry->code_offset = static_cast<uint32_t>(getSize());
 }
 
-void A64Emitter::EmitGetCurrentThreadId() {
-  // X27 must point to context. We could fetch from the stack if needed.
-  LDRH(W0, GetContextReg(), offsetof(ppc::PPCContext, thread_id));
-}
+void A64Emitter::DebugBreak() { brk(0xF000); }
 
 void A64Emitter::EmitTraceUserCallReturn() {}
 
@@ -1080,8 +1078,9 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
 
 void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   assert_not_null(function);
+  ForgetFpcrMode();
   auto fn = static_cast<A64Function*>(function);
-  // Resolve address to the function to call and store in X16.
+
   if (fn->machine_code()) {
     // TODO(benvanik): is it worth it to do this? It removes the need for
     // a ResolveFunction call, but makes the table less useful.
@@ -1122,19 +1121,19 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
         A64CodeCache::kIndirectionTableBase) {
       LDR(W16, X17);
     } else {
-      MOV(W16, static_cast<uint32_t>(A64CodeCache::kIndirectionTableBase));
-      SUB(W17, W17, W16);
-      MOV(X16, code_cache_->indirection_table_base_address());
-      ADD(X16, X16, W17, UXTW);
-      LDR(W16, X16);
+      // Tail call: pass our return address to the callee.
+      PopStackpoint();
+      ldr(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
+      ldr(x30, ptr(sp, static_cast<uint32_t>(StackLayout::HOST_RET_ADDR)));
+      if (stack_size() <= 4095) {
+        add(sp, sp, static_cast<uint32_t>(stack_size()));
+      } else {
+        mov(x17, static_cast<uint64_t>(stack_size()));
+        add(sp, sp, x17, UXTX);
+      }
+      br(x9);
     }
-#endif
-  } else {
-    // Old-style resolve.
-    // Not too important because indirection table is almost always available.
-    // TODO: Overwrite the call-site with a straight call.
-    CallNative(&ResolveFunction, function->address());
-    MOV(X16, X0);
+    return;
   }
 
   // Actually jump/call to X16.
@@ -1225,7 +1224,6 @@ void A64Emitter::CallIndirect(const hir::Instr* instr,
     MOV(X16, X0);
   }
 
-  // Actually jump/call to X16.
   if (instr->flags & hir::CALL_TAIL) {
     // Since we skip the prolog we need to mark the return here.
     EmitTraceUserCallReturn();
@@ -1269,118 +1267,144 @@ uint64_t UndefinedCallExtern(void* raw_context, uint64_t function_ptr) {
           context->r[6], context->r[7], context->r[8], context->r[9],
           context->r[10]);
     }
-  }
-  if (!cvars::ignore_undefined_externs) {
-    xe::FatalError(fmt::format("undefined extern call to {:08X} {}",
-                               function->address(), function->name().c_str()));
+    br(x9);
   } else {
-    XELOGE("undefined extern call to {:08X} {}", function->address(),
-           function->name());
+    ldr(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
+    blr(x9);
+    synchronize_stack_on_next_instruction_ = true;
   }
-  return 0;
 }
+
+void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
+  ForgetFpcrMode();
+  auto target_w = WReg(reg_index);
+
+  // Check if this is a possible return (e.g., PPC blr).
+  if (instr->flags & hir::CALL_POSSIBLE_RETURN) {
+    // Compare target guest address with our function's return address.
+    ldr(w0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
+    cmp(target_w, w0);
+    b(EQ, epilog_label());
+  }
+
+  // Load host code address from indirection table.
+  if (code_cache_->has_indirection_table()) {
+    // Must leave the guest address in w16 for the resolve thunk to read.
+    if (target_w.getIdx() != w16.getIdx()) {
+      mov(w16, target_w);
+    }
+    if (!code_cache_->encoded_indirection()) {
+      // Fast path: table mapped at host VA == guest addr; slot holds raw
+      // 32-bit host target.
+      ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
+    } else {
+      // Encoded path: see A64CodeCache for the entry format.
+      Label external_target;
+      Label indirection_ready;
+
+      mov(x14, code_cache_->indirection_table_base_bias());
+      add(x14, x14, w16, UXTW);
+      ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+      tbnz(w9, 31, external_target);
+
+      // Internal: rel32 from code cache base.
+      mov(x14, code_cache_->execute_base_address());
+      add(x9, x14, w9, UXTW);
+      b(indirection_ready);
+
+      // External: tagged index into the side table.
+      L(external_target);
+      and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
+      mov(x14, code_cache_->external_indirection_table_base_address());
+      lsl(x15, x15, 3);
+      add(x14, x14, x15);
+      ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
+
+      L(indirection_ready);
+    }
+  } else {
+    // No indirection table: resolve at runtime.
+    mov(w16, target_w);
+    mov(x0, x20);  // context
+    mov(x1, x16);  // guest address
+    mov(x9, reinterpret_cast<uint64_t>(&ResolveFunction));
+    blr(x9);
+    mov(x9, x0);  // resolved address
+  }
+
+  if (instr->flags & hir::CALL_TAIL) {
+    // Tail call: pass our return address to the callee.
+    PopStackpoint();
+    ldr(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
+    ldr(x30, ptr(sp, static_cast<uint32_t>(StackLayout::HOST_RET_ADDR)));
+    if (stack_size() <= 4095) {
+      add(sp, sp, static_cast<uint32_t>(stack_size()));
+    } else {
+      mov(x17, static_cast<uint64_t>(stack_size()));
+      add(sp, sp, x17, UXTX);
+    }
+    br(x9);
+  } else {
+    // Regular call: pass the next call's return address.
+    ldr(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
+    blr(x9);
+    synchronize_stack_on_next_instruction_ = true;
+  }
+}
+
 void A64Emitter::CallExtern(const hir::Instr* instr, const Function* function) {
+  ForgetFpcrMode();
   bool undefined = true;
   if (function->behavior() == Function::Behavior::kBuiltin) {
     auto builtin_function = static_cast<const BuiltinFunction*>(function);
     if (builtin_function->handler()) {
       undefined = false;
-      // x0 = target function
-      // x1 = arg0
-      // x2 = arg1
-      // x3 = arg2
-      MOV(X0, reinterpret_cast<uint64_t>(builtin_function->handler()));
-      MOV(X1, reinterpret_cast<uint64_t>(builtin_function->arg0()));
-      MOV(X2, reinterpret_cast<uint64_t>(builtin_function->arg1()));
-
-      auto thunk = backend()->guest_to_host_thunk();
-      MOV(X16, reinterpret_cast<uint64_t>(thunk));
-      BLR(X16);
-
-      // x0 = host return
+      // GuestToHostThunk: x0=target, x1=arg0, x2=arg1
+      // Thunk rearranges to: x0=context, x1=arg0, x2=arg1, calls target
+      mov(x0, reinterpret_cast<uint64_t>(builtin_function->handler()));
+      mov(x1, reinterpret_cast<uint64_t>(builtin_function->arg0()));
+      mov(x2, reinterpret_cast<uint64_t>(builtin_function->arg1()));
+      mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+      blr(x9);
     }
   } else if (function->behavior() == Function::Behavior::kExtern) {
     auto extern_function = static_cast<const GuestFunction*>(function);
     if (extern_function->extern_handler()) {
       undefined = false;
-      // x0 = target function
-      // x1 = arg0
-      // x2 = arg1
-      // x3 = arg2
-      MOV(X0, reinterpret_cast<uint64_t>(extern_function->extern_handler()));
-      LDR(X1, GetContextReg(), offsetof(ppc::PPCContext, kernel_state));
-
-      auto thunk = backend()->guest_to_host_thunk();
-      MOV(X16, reinterpret_cast<uint64_t>(thunk));
-      BLR(X16);
-
-      // x0 = host return
+      // GuestToHostThunk: x0=target, x1=arg0
+      mov(x0, reinterpret_cast<uint64_t>(extern_function->extern_handler()));
+      ldr(x1, ptr(GetContextReg(), static_cast<int32_t>(offsetof(
+                                       ppc::PPCContext, kernel_state))));
+      mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+      blr(x9);
     }
   }
   if (undefined) {
-    CallNative(UndefinedCallExtern, reinterpret_cast<uint64_t>(function));
+    // Set arg0 = function pointer, then call UndefinedCallExtern via thunk.
+    mov(x1, reinterpret_cast<uint64_t>(function));
+    CallNativeSafe(reinterpret_cast<void*>(&UndefinedCallExtern));
   }
 }
 
 void A64Emitter::CallNative(void* fn) { CallNativeSafe(fn); }
 
-void A64Emitter::CallNative(uint64_t (*fn)(void* raw_context)) {
-  CallNativeSafe(reinterpret_cast<void*>(fn));
-}
-
-void A64Emitter::CallNative(uint64_t (*fn)(void* raw_context, uint64_t arg0)) {
-  CallNativeSafe(reinterpret_cast<void*>(fn));
-}
-
-void A64Emitter::CallNative(uint64_t (*fn)(void* raw_context, uint64_t arg0),
-                            uint64_t arg0) {
-  MOV(GetNativeParam(0), arg0);
-  CallNativeSafe(reinterpret_cast<void*>(fn));
-}
-
 void A64Emitter::CallNativeSafe(void* fn) {
-  // X0 = target function
-  // X1 = arg0
-  // X2 = arg1
-  // X3 = arg2
-  auto thunk = backend()->guest_to_host_thunk();
-
-  MOV(X0, reinterpret_cast<uint64_t>(fn));
-
-  MOV(X16, reinterpret_cast<uint64_t>(thunk));
-  BLR(X16);
-
-  // X0 = host return
+  // GuestToHostThunk: x0=target function, x1/x2=args (set by caller).
+  // The thunk rearranges: saves x0 in x9, sets x0=context, calls x9.
+  mov(x0, reinterpret_cast<uint64_t>(fn));
+  mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+  blr(x9);
 }
 
 void A64Emitter::SetReturnAddress(uint64_t value) {
-  MOV(X0, value);
-  STR(X0, SP, StackLayout::GUEST_CALL_RET_ADDR);
-}
-
-oaknut::XReg A64Emitter::GetNativeParam(uint32_t param) {
-  if (param == 0)
-    return X1;
-  else if (param == 1)
-    return X2;
-  else if (param == 2)
-    return X3;
-
-  assert_always();
-  return X3;
-}
-
-// Important: If you change these, you must update the thunks in a64_backend.cc!
-oaknut::XReg A64Emitter::GetContextReg() { return X27; }
-oaknut::XReg A64Emitter::GetMembaseReg() { return X28; }
-
-void A64Emitter::ReloadContext() {
-  LDR(GetContextReg(), SP, StackLayout::GUEST_CTX_HOME);
+  mov(x0, value);
+  str(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
 }
 
 void A64Emitter::ReloadMembase() {
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
+  // Reload x21 from context->virtual_membase.
+  ldr(x21, ptr(x20, static_cast<int32_t>(
+                        offsetof(ppc::PPCContext, virtual_membase))));
 }
 
 void A64Emitter::PushStackpoint() {
@@ -1689,227 +1713,139 @@ static bool f32_to_fimm8(uint32_t u32, oaknut::FImm8& fp8) {
   if (mantissa & 0x7ffff) {
     return false;
   }
-  // Too many exp bits
-  if (exp < -3 || exp > 4) {
-    return false;
+  fpcr_mode_ = new_mode;
+  if (!already_set) {
+    // Load the pre-computed FPCR value from the backend context.
+    // This avoids an expensive MRS + read-modify-write cycle.
+    auto bctx = GetBackendCtxReg();
+    if (new_mode == FPCRMode::Vmx) {
+      ldr(w0, Xbyak_aarch64::ptr(bctx, static_cast<uint32_t>(offsetof(
+                                           A64BackendContext, fpcr_vmx))));
+    } else {
+      ldr(w0, Xbyak_aarch64::ptr(bctx, static_cast<uint32_t>(offsetof(
+                                           A64BackendContext, fpcr_fpu))));
+    }
+    msr(3, 3, 4, 4, 0, x0);  // msr FPCR, x0
   }
-
-  // mantissa = (16 + e:f:g:h) / 16.
-  mantissa >>= 19;
-  if ((mantissa & 0b1111) != mantissa) {
-    return false;
-  }
-
-  // exp = (NOT(b):c:d) - 3
-  exp = ((exp + 3) & 0b111) ^ 0b100;
-
-  fp8 = oaknut::FImm8(sign, exp, uint8_t(mantissa));
   return true;
 }
 
-// Attempts to convert an fp64 bit-value into an fp8-immediate value for FMOV
-// returns false if the value cannot be represented
-// C2.2.3 Modified immediate constants in A64 floating-point instructions
-// abcdefgh
-//    V
-// aBbbbbbb bbcdefgh 00000000 00000000 00000000 00000000 00000000 00000000
-// B = NOT(b)
-static bool f64_to_fimm8(uint64_t u64, oaknut::FImm8& fp8) {
-  const uint32_t sign = (u64 >> 63) & 1;
-  int32_t exp = ((u64 >> 52) & 0x7ff) - 1023;
-  int64_t mantissa = u64 & 0xfffffffffffffULL;
+Label& A64Emitter::AddToTail(TailEmitCallback callback, uint32_t alignment) {
+  TailEmitter tail;
+  tail.alignment = alignment;
+  tail.func = std::move(callback);
+  tail_code_.push_back(std::move(tail));
+  return tail_code_.back().label;
+}
 
-  // Too many mantissa bits
-  if (mantissa & 0xffffffffffffULL) {
-    return false;
+Label& A64Emitter::NewCachedLabel() {
+  auto* label = new Label();
+  label_cache_.push_back(label);
+  return *label;
+}
+
+Label& A64Emitter::GetLabel(uint32_t label_id) {
+  auto it = label_map_.find(label_id);
+  if (it != label_map_.end()) {
+    return *it->second;
   }
-  // Too many exp bits
-  if (exp < -3 || exp > 4) {
-    return false;
+  auto* label = new Label();
+  label_map_[label_id] = label;
+  return *label;
+}
+
+void A64Emitter::HandleStackpointOverflowError(ppc::PPCContext* context) {
+  if (debugging::IsDebuggerAttached()) {
+    debugging::Break();
   }
+  xe::FatalError(
+      "Overflowed stackpoints! Please report this error for this title to "
+      "Xenia developers.");
+}
 
-  // mantissa = (16 + e:f:g:h) / 16.
-  mantissa >>= 48;
-  if ((mantissa & 0b1111) != mantissa) {
-    return false;
+void A64Emitter::PushStackpoint() {
+  if (!cvars::a64_enable_host_guest_stack_synchronization) {
+    return;
   }
+  // x8 = stackpoints array, w9 = current depth
+  ldr(x8, ptr(x19,
+              static_cast<uint32_t>(offsetof(A64BackendContext, stackpoints))));
+  ldr(w9, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, current_stackpoint_depth))));
 
-  // exp = (NOT(b):c:d) - 3
-  exp = ((exp + 3) & 0b111) ^ 0b100;
+  // Compute offset into array: x10 = w9 * sizeof(A64BackendStackpoint)
+  mov(w10, static_cast<uint32_t>(sizeof(A64BackendStackpoint)));
+  umull(x10, w9, w10);
+  add(x8, x8, x10);
 
-  fp8 = oaknut::FImm8(sign, exp, uint8_t(mantissa));
-  return true;
+  // Store host SP.
+  mov(x10, sp);
+  str(x10, ptr(x8, static_cast<uint32_t>(
+                       offsetof(A64BackendStackpoint, host_stack_))));
+  // Store guest r1 (32-bit).
+  ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, r[1]))));
+  str(w10, ptr(x8, static_cast<uint32_t>(
+                       offsetof(A64BackendStackpoint, guest_stack_))));
+  // Store guest LR (32-bit).
+  ldr(w10, ptr(x20, static_cast<int32_t>(offsetof(ppc::PPCContext, lr))));
+  str(w10, ptr(x8, static_cast<uint32_t>(
+                       offsetof(A64BackendStackpoint, guest_return_address_))));
+
+  // Increment depth.
+  add(w9, w9, 1);
+  str(w9, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, current_stackpoint_depth))));
+
+  // Check for overflow.
+  mov(w10, static_cast<uint32_t>(cvars::a64_max_stackpoints));
+  cmp(w9, w10);
+  auto& overflow_label = AddToTail([](A64Emitter& e, Label& lbl) {
+    e.CallNativeSafe(
+        reinterpret_cast<void*>(A64Emitter::HandleStackpointOverflowError));
+  });
+  b(GE, overflow_label);
 }
 
-// Implies possible StashV(0, ...)!
-void A64Emitter::LoadConstantV(oaknut::QReg dest, const vec128_t& v) {
-  if (!v.low && !v.high) {
-    // 0000...
-    // MOVI is implemented as a register-rename while EOR(x, x, x) is not
-    // https://dougallj.github.io/applecpu/firestorm.html
-    MOVI(dest.B16(), 0);
-  } else if (v.low == ~uint64_t(0) && v.high == ~uint64_t(0)) {
-    // 1111...
-    MOVI(dest.B16(), 0xFF);
-  } else {
-    // Try to figure out some common splat-patterns to utilize MOVI rather than
-    // stashing to memory.
-    const bool all_same_u8 =
-        std::adjacent_find(std::cbegin(v.u8), std::cend(v.u8),
-                           std::not_equal_to<>()) == std::cend(v.u8);
-
-    if (all_same_u8) {
-      // 0xXX, 0xXX, 0xXX...
-      MOVI(dest.B16(), v.u8[0]);
-      return;
-    }
-
-    const bool all_same_u16 =
-        std::adjacent_find(std::cbegin(v.u16), std::cend(v.u16),
-                           std::not_equal_to<>()) == std::cend(v.u16);
-
-    if (all_same_u16) {
-      if ((v.u16[0] & 0xFF00) == 0) {
-        // 0x00XX, 0x00XX, 0x00XX...
-        MOVI(dest.H8(), uint8_t(v.u16[0]));
-        return;
-      } else if ((v.u16[0] & 0x00FF) == 0) {
-        // 0xXX00, 0xXX00, 0xXX00...
-        MOVI(dest.H8(), uint8_t(v.u16[0] >> 8), oaknut::util::LSL, 8);
-        return;
-      }
-    }
-
-    const bool all_same_u32 =
-        std::adjacent_find(std::cbegin(v.u32), std::cend(v.u32),
-                           std::not_equal_to<>()) == std::cend(v.u32);
-
-    if (all_same_u32) {
-      if ((v.u32[0] & 0x00FFFFFF) == 0) {
-        // This is used a lot for certain float-splats and should be checked
-        // first before the others
-        // 0xXX000000, 0xXX000000, 0xXX000000...
-        MOVI(dest.S4(), uint8_t(v.u32[0] >> 24), oaknut::util::LSL, 24);
-        return;
-      } else if ((v.u32[0] & 0xFFFFFF00) == 0) {
-        // 0x000000XX, 0x000000XX, 0x000000XX...
-        MOVI(dest.S4(), uint8_t(v.u32[0]));
-        return;
-      } else if ((v.u32[0] & 0xFFFF00FF) == 0) {
-        // 0x0000XX00, 0x0000XX00, 0x0000XX00...
-        MOVI(dest.S4(), uint8_t(v.u32[0] >> 8), oaknut::util::LSL, 8);
-        return;
-      } else if ((v.u32[0] & 0xFF00FFFF) == 0) {
-        // 0x00XX0000, 0x00XX0000, 0x00XX0000...
-        MOVI(dest.S4(), uint8_t(v.u32[0] >> 16), oaknut::util::LSL, 16);
-        return;
-      }
-
-      // Try to utilize FMOV if possible
-      oaknut::FImm8 fp8(0);
-      if (f32_to_fimm8(v.u32[0], fp8)) {
-        FMOV(dest.S4(), fp8);
-        return;
-      }
-    }
-
-    // TODO(benvanik): see what other common values are.
-    // TODO(benvanik): build constant table - 99% are reused.
-    MovMem64(SP, kStashOffset, v.low);
-    MovMem64(SP, kStashOffset + 8, v.high);
-    LDR(dest, SP, kStashOffset);
+void A64Emitter::PopStackpoint() {
+  if (!cvars::a64_enable_host_guest_stack_synchronization) {
+    return;
   }
+  // Decrement current_stackpoint_depth.
+  ldr(w8, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, current_stackpoint_depth))));
+  sub(w8, w8, 1);
+  str(w8, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, current_stackpoint_depth))));
 }
 
-void A64Emitter::LoadConstantV(oaknut::QReg dest, float v) {
-  union {
-    float f;
-    uint32_t i;
-  } x = {v};
-  if (!x.i) {
-    // +0.0f (but not -0.0f because it may be used to flip the sign via xor).
-    MOVI(dest.B16(), 0);
-  } else if (x.i == ~uint32_t(0)) {
-    // 1111...
-    MOVI(dest.B16(), 0xFF);
-  } else {
-    // TODO(benvanik): see what other common values are.
-    // TODO(benvanik): build constant table - 99% are reused.
-
-    // Try to utilize FMOV if possible
-    oaknut::FImm8 fp8(0);
-    if (f32_to_fimm8(x.i, fp8)) {
-      FMOV(dest.toS(), fp8);
-      return;
-    }
-
-    MOV(W0, x.i);
-    FMOV(dest.toS(), W0);
+void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
+  if (!cvars::a64_enable_host_guest_stack_synchronization) {
+    return;
   }
-}
+  // Compare current stackpoint depth against the value saved after
+  // PushStackpoint in the prolog. If different, a longjmp occurred and
+  // some frames' PopStackpoint never ran.
+  auto& return_from_sync = NewCachedLabel();
 
-void A64Emitter::LoadConstantV(oaknut::QReg dest, double v) {
-  union {
-    double d;
-    uint64_t i;
-  } x = {v};
-  if (!x.i) {
-    // +0.0 (but not -0.0 because it may be used to flip the sign via xor).
-    MOVI(dest.toD(), oaknut::RepImm(0));
-  } else if (x.i == ~uint64_t(0)) {
-    // 1111...
-    MOVI(dest.toD(), oaknut::RepImm(0xFF));
-  } else {
-    // TODO(benvanik): see what other common values are.
-    // TODO(benvanik): build constant table - 99% are reused.
+  ldr(w17, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
+                                                   current_stackpoint_depth))));
+  ldr(w16, ptr(sp, static_cast<uint32_t>(
+                       StackLayout::GUEST_SAVED_STACKPOINT_DEPTH)));
+  cmp(w17, w16);
 
-    // Try to utilize FMOV if possible
-    oaknut::FImm8 fp8(0);
-    if (f64_to_fimm8(x.i, fp8)) {
-      FMOV(dest.toD(), fp8);
-      return;
-    }
+  auto& sync_label = AddToTail([&return_from_sync](A64Emitter& e, Label& lbl) {
+    // Set up arguments for the sync helper:
+    //   x8 = return address (where to resume after fixup)
+    //   x9 = this function's stack size
+    e.adr(e.x8, return_from_sync);
+    e.mov(e.x9, static_cast<uint64_t>(e.stack_size()));
+    e.mov(e.x10, reinterpret_cast<uint64_t>(
+                     e.backend()->synchronize_guest_and_host_stack_helper()));
+    e.br(e.x10);
+  });
+  b(NE, sync_label);
 
-    MOV(X0, x.i);
-    FMOV(dest.toD(), X0);
-  }
-}
-
-uintptr_t A64Emitter::StashV(int index, const oaknut::QReg& r) {
-  // auto addr = ptr[rsp + kStashOffset + (index * 16)];
-  // vmovups(addr, r);
-  const auto addr = kStashOffset + (index * 16);
-  STR(r, SP, addr);
-  return addr;
-}
-
-uintptr_t A64Emitter::StashConstantV(int index, float v) {
-  union {
-    float f;
-    uint32_t i;
-  } x = {v};
-  const auto addr = kStashOffset + (index * 16);
-  MovMem64(SP, addr, x.i);
-  MovMem64(SP, addr + 8, 0);
-  return addr;
-}
-
-uintptr_t A64Emitter::StashConstantV(int index, double v) {
-  union {
-    double d;
-    uint64_t i;
-  } x = {v};
-  const auto addr = kStashOffset + (index * 16);
-  MovMem64(SP, addr, x.i);
-  MovMem64(SP, addr + 8, 0);
-  return addr;
-}
-
-uintptr_t A64Emitter::StashConstantV(int index, const vec128_t& v) {
-  const auto addr = kStashOffset + (index * 16);
-  MovMem64(SP, addr, v.low);
-  MovMem64(SP, addr + 8, v.high);
-  return addr;
+  L(return_from_sync);
 }
 
 }  // namespace a64

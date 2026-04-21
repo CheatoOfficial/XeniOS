@@ -514,6 +514,22 @@ TEST_CASE("create_and_close_file_mapping", "Virtual Memory Mapping") {
   xe::memory::CloseFileMappingHandle(memory, path);
 }
 
+// Try to map a file view at one of the candidate addresses xe::Memory would
+// probe. Returns the {view, address} pair on success, or {nullptr, 0}.
+static std::pair<void*, uintptr_t> TryMapFileViewAtAvailableAddress(
+    xe::memory::FileMappingHandle memory, size_t length) {
+  for (size_t n = 32; n < 64; ++n) {
+    uintptr_t address = uintptr_t(1) << n;
+    void* view =
+        xe::memory::MapFileView(memory, reinterpret_cast<void*>(address),
+                                length, xe::memory::PageAccess::kReadWrite, 0);
+    if (view) {
+      return {view, address};
+    }
+  }
+  return {nullptr, 0};
+}
+
 TEST_CASE("map_view", "[virtual_memory_mapping]") {
   auto path = fmt::format("xenia_test_{}", Clock::QueryHostTickCount());
   constexpr size_t length = 0x100;

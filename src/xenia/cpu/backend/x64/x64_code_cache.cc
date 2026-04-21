@@ -9,23 +9,14 @@
 
 #include "xenia/cpu/backend/x64/x64_code_cache.h"
 
-#include <cstdlib>
 #include <cstring>
 
 #if ENABLE_VTUNE
+#include "third_party/fmt/include/fmt/format.h"
 #include "third_party/vtune/include/jitprofiling.h"
 #pragma comment(lib, "../third_party/vtune/lib64/jitprofiling.lib")
-#endif
-
-#include "third_party/fmt/include/fmt/format.h"
-#include "xenia/base/assert.h"
-#include "xenia/base/clock.h"
-#include "xenia/base/literals.h"
-#include "xenia/base/logging.h"
-#include "xenia/base/math.h"
-#include "xenia/base/memory.h"
-#include "xenia/cpu/function.h"
 #include "xenia/cpu/module.h"
+#endif
 
 namespace xe {
 namespace cpu {
@@ -168,145 +159,16 @@ bool X64CodeCache::Initialize() {
   return true;
 }
 
-void X64CodeCache::set_indirection_default(uint32_t default_value) {
-  indirection_default_value_ = default_value;
-}
-
-void X64CodeCache::AddIndirection(uint32_t guest_address,
-                                  uint32_t host_address) {
-  if (!indirection_table_base_) {
-    return;
-  }
-
-  uint32_t* indirection_slot = reinterpret_cast<uint32_t*>(
-      indirection_table_base_ + (guest_address - kIndirectionTableBase));
-  *indirection_slot = host_address;
-}
-
-void X64CodeCache::CommitExecutableRange(uint32_t guest_low,
-                                         uint32_t guest_high) {
-  if (!indirection_table_base_) {
-    return;
-  }
-
-  // Commit the memory.
-  xe::memory::AllocFixed(
-      indirection_table_base_ + (guest_low - kIndirectionTableBase),
-      guest_high - guest_low, xe::memory::AllocationType::kCommit,
-      xe::memory::PageAccess::kReadWrite);
-
-  // Fill memory with the default value.
-  uint32_t* p = reinterpret_cast<uint32_t*>(indirection_table_base_);
-  for (uint32_t address = guest_low; address < guest_high; ++address) {
-    p[(address - kIndirectionTableBase) / 4] = indirection_default_value_;
-  }
-}
-
-void X64CodeCache::PlaceHostCode(uint32_t guest_address, void* machine_code,
-                                 const EmitFunctionInfo& func_info,
-                                 void*& code_execute_address_out,
-                                 void*& code_write_address_out) {
-  // Same for now. We may use different pools or whatnot later on, like when
-  // we only want to place guest code in a serialized cache on disk.
-  PlaceGuestCode(guest_address, machine_code, func_info, nullptr,
-                 code_execute_address_out, code_write_address_out);
-}
-
-void X64CodeCache::PlaceGuestCode(uint32_t guest_address, void* machine_code,
-                                  const EmitFunctionInfo& func_info,
-                                  GuestFunction* function_info,
-                                  void*& code_execute_address_out,
-                                  void*& code_write_address_out) {
-  // Hold a lock while we bump the pointers up. This is important as the
-  // unwind table requires entries AND code to be sorted in order.
-  size_t low_mark;
-  size_t high_mark;
-  uint8_t* code_execute_address;
-  UnwindReservation unwind_reservation;
-  {
-    auto global_lock = global_critical_region_.Acquire();
-
-    low_mark = generated_code_offset_;
-
-    // Reserve code.
-    // Always move the code to land on 16b alignment.
-    code_execute_address =
-        generated_code_execute_base_ + generated_code_offset_;
-    code_execute_address_out = code_execute_address;
-    uint8_t* code_write_address =
-        generated_code_write_base_ + generated_code_offset_;
-    code_write_address_out = code_write_address;
-    generated_code_offset_ += xe::round_up(func_info.code_size.total, 16);
-
-    auto tail_write_address =
-        generated_code_write_base_ + generated_code_offset_;
-
-    // Reserve unwind info.
-    // We go on the high size of the unwind info as we don't know how big we
-    // need it, and a few extra bytes of padding isn't the worst thing.
-    unwind_reservation = RequestUnwindReservation(generated_code_write_base_ +
-                                                  generated_code_offset_);
-    generated_code_offset_ += xe::round_up(unwind_reservation.data_size, 16);
-
-    auto end_write_address =
-        generated_code_write_base_ + generated_code_offset_;
-
-    high_mark = generated_code_offset_;
-
-    // Store in map. It is maintained in sorted order of host PC dependent on
-    // us also being append-only.
-    generated_code_map_.emplace_back(
-        (uint64_t(code_execute_address - generated_code_execute_base_) << 32) |
-            generated_code_offset_,
-        function_info);
-
-    // TODO(DrChat): The following code doesn't really need to be under the
-    // global lock except for PlaceCode (but it depends on the previous code
-    // already being ran)
-
-    // If we are going above the high water mark of committed memory, commit
-    // some more. It's ok if multiple threads do this, as redundant commits
-    // aren't harmful.
-    size_t old_commit_mark, new_commit_mark;
-    do {
-      old_commit_mark = generated_code_commit_mark_;
-      if (high_mark <= old_commit_mark) break;
-
-      new_commit_mark = old_commit_mark + 16_MiB;
-      if (generated_code_execute_base_ == generated_code_write_base_) {
-        xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kExecuteReadWrite);
-      } else {
-        xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kExecuteReadOnly);
-        xe::memory::AllocFixed(generated_code_write_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kReadWrite);
-      }
-    } while (generated_code_commit_mark_.compare_exchange_weak(
-        old_commit_mark, new_commit_mark));
-
-    // Copy code.
-    std::memcpy(code_write_address, machine_code, func_info.code_size.total);
-
-    // Fill unused slots with 0xCC
-    std::memset(tail_write_address, 0xCC,
-                static_cast<size_t>(end_write_address - tail_write_address));
-
-    // Notify subclasses of placed code.
-    PlaceCode(guest_address, machine_code, func_info, code_execute_address,
-              unwind_reservation);
-  }
-
+void X64CodeCache::OnCodePlaced(uint32_t guest_address,
+                                GuestFunction* function_info,
+                                void* code_execute_address, size_t code_size) {
 #if ENABLE_VTUNE
   if (iJIT_IsProfilingActive() == iJIT_SAMPLING_ON) {
     std::string method_name;
     if (function_info && function_info->name().size() != 0) {
       method_name = function_info->name();
     } else {
-      method_name = xe::format_string("sub_%.8X", guest_address);
+      method_name = fmt::format("sub_{:08X}", guest_address);
     }
 
     iJIT_Method_Load_V2 method = {0};

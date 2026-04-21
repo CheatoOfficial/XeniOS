@@ -6,10 +6,9 @@
 
 Run with --help or no arguments for possible commands.
 """
-from datetime import datetime
 from multiprocessing import Pool
 from functools import partial
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentTypeError
 from glob import glob
 from json import loads as jsonloads
 import os
@@ -219,8 +218,15 @@ def setup_vulkan_sdk():
         return False
 
 
-def setup_qt():
+def setup_qt(target_arch=None):
     """Setup Qt environment variables if not already set.
+
+    Args:
+      target_arch: Normalized target architecture ("arm64", "x64", or None).
+        When None or "x64", picks the x64 Qt tree (msvc*_64).
+        When "arm64", picks the ARM64 Qt tree (msvc*_arm64) — requires
+        the ARM64 Qt binaries to be installed (via aqtinstall or the
+        official installer).
 
     Returns:
         True if Qt is available and valid, False otherwise.
@@ -291,22 +297,51 @@ def setup_qt():
         qt_version_dir = os.path.join(qt_base, version_dirs[0])
 
         if sys.platform == "win32":
-            # Look for msvc compiler directory (e.g., msvc2026_64, msvc2022_64, msvc2019_64)
-            compiler_dirs = [d for d in os.listdir(qt_version_dir)
-                             if os.path.isdir(os.path.join(qt_version_dir, d)) and d.startswith("msvc")]
-            if not compiler_dirs:
+            # Qt install dir names: msvc<year>_64 (x64), msvc<year>_arm64 or
+            # msvc<year>_arm64_cross_compiled (ARM64).
+            def _is_arm64(name):
+                return name.startswith("msvc") and "arm64" in name
+            def _is_x64(name):
+                return name.startswith("msvc") and "_64" in name and "arm64" not in name
+            def _pick(predicate):
+                dirs = [d for d in os.listdir(qt_version_dir)
+                        if os.path.isdir(os.path.join(qt_version_dir, d)) and predicate(d)]
+                if not dirs:
+                    return None
+                dirs.sort(reverse=True)
+                return os.path.join(qt_version_dir, dirs[0])
+
+            is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
+            native_arch = "arm64" if is_native_arm64 else "x64"
+            effective_target = target_arch or native_arch
+            qt_dir = _pick(_is_arm64 if effective_target == "arm64" else _is_x64)
+            if not qt_dir:
+                if effective_target == "arm64":
+                    print_error(
+                        f"No ARM64 Qt build found in {qt_version_dir}.\n"
+                        f"  Install via: python -m aqt install-qt windows desktop "
+                        f"{version_dirs[0]} win64_msvc2022_arm64_cross_compiled "
+                        f"-m qtmultimedia -O C:\\Qt")
+                    sys.exit(1)
                 return False
 
-            # Prefer msvc2026_64 if available, then msvc2022_64, otherwise use the latest available
-            if "msvc2026_64" in compiler_dirs:
-                compiler_dir = "msvc2026_64"
-            elif "msvc2022_64" in compiler_dirs:
-                compiler_dir = "msvc2022_64"
-            else:
-                compiler_dirs.sort(reverse=True)
-                compiler_dir = compiler_dirs[0]
-
-            qt_dir = os.path.join(qt_version_dir, compiler_dir)
+            # Qt cross-compile needs QT_HOST_PATH pointing at the host-arch
+            # install (moc/rcc/uic run on the build machine).
+            if target_arch and target_arch != native_arch:
+                host_dir = _pick(_is_arm64 if is_native_arm64 else _is_x64)
+                if not host_dir:
+                    print_error(
+                        f"Cross-compiling to {target_arch} needs a host ({native_arch}) Qt "
+                        f"install at {qt_version_dir} for QT_HOST_PATH, but none was found.")
+                    sys.exit(1)
+                os.environ["QT_HOST_PATH"] = host_dir
+                print(f"Found host Qt at {host_dir} (QT_HOST_PATH)")
+        elif sys.platform == "darwin":
+            # macOS: look for "macos" directory
+            macos_dir = os.path.join(qt_version_dir, "macos")
+            if not os.path.isdir(macos_dir):
+                return False
+            qt_dir = macos_dir
         else:
             # On Linux, look for gcc_64 or similar compiler directories
             compiler_dirs = [d for d in os.listdir(qt_version_dir)
@@ -521,9 +556,6 @@ def main():
     # Setup Vulkan SDK and check if available
     vulkan_sdk_available = setup_vulkan_sdk()
 
-    # Setup Qt (optional, only needed for Qt-based UI)
-    qt_available = setup_qt()
-
     # Augment path to include our fancy things.
     os.environ["PATH"] += os.pathsep + os.pathsep.join([
         self_path,
@@ -537,7 +569,7 @@ def main():
         print("WARNING: The source tree is unversioned. Version info will be omitted from all binaries!\n")
 
     # Check python version.
-    python_minimum_ver = 3,9
+    python_minimum_ver = 3,6
     if not sys.version_info[:2] >= (python_minimum_ver[0], python_minimum_ver[1]) or not sys.maxsize > 2**32:
         print(f"ERROR: Python {python_minimum_ver[0]}.{python_minimum_ver[1]}+ 64-bit must be installed and on PATH")
         sys.exit(1)
@@ -575,6 +607,8 @@ def main():
     # Parse command name and dispatch.
     args = vars(parser.parse_args(command_args))
     command_name = args["subcommand"]
+
+    qt_available = setup_qt(args.get("target_arch"))
     try:
         command = commands[command_name]
         return_code = command.execute(args, pass_args, os.getcwd())
@@ -662,10 +696,15 @@ def shell_call(command, throw_on_error=True, stdout_path=None, stderr_path=None,
     return result
 
 
-def generate_version_h():
-    """Generates a build/version.h file that contains current git info.
+def generate_version_h(build_dir="build"):
+    """Writes <build_dir>/version.h with the current branch/commit/PR info.
+    The file is included by source files via `#include "version.h"`; the
+    relevant build directory is added to the project include path by the
+    root CMakeLists.txt, so different build trees (build/, build-vs/, ...)
+    each get their own copy.
     """
-    header_file = "build/version.h"
+    os.makedirs(build_dir, exist_ok=True)
+    header_file = os.path.join(build_dir, "version.h")
     pr_number = None
 
     if git_is_repository():
@@ -683,7 +722,7 @@ def generate_version_h():
         build_number = "0"
 
     # header
-    contents_new = f"""// Autogenerated by `xb premake`.
+    contents_new = f"""// Autogenerated by xenia-build.py.
 #ifndef GENERATED_VERSION_H_
 #define GENERATED_VERSION_H_
 #define XE_BUILD_BRANCH "{branch_name}"
@@ -990,18 +1029,21 @@ def get_clang_format_binary():
     sys.exit(1)
 
 
-def get_premake_target_os(target_os_override=None):
-    """Gets the target --os to pass to premake, either for the current platform
-    or for the user-specified cross-compilation target.
+def normalize_target_arch(value):
+    """Normalizes --target-arch values to canonical names (arm64, x64, or None)."""
+    v = value.lower()
+    if v in ("arm64", "aarch64", "a64"):
+        return "arm64"
+    if v in ("x64", "x86_64", "amd64", "x86"):
+        return "x64"
+    raise ArgumentTypeError(
+        f"unknown architecture '{value}' (expected: arm64, aarch64, a64, x64, amd64, x86_64, x86)")
 
-    Args:
-      target_os_override: override specified by the user for cross-compilation,
-        or None to target the host platform.
 
-    Returns:
-      Target --os to pass to premake. If a return value of this function valid
-      for the current configuration is passed to it again, the same value will
-      be returned.
+def get_build_dir(target_arch=None):
+    """Returns the Ninja build directory for the given target architecture.
+
+    Uses a separate directory when cross-compiling to avoid cache conflicts.
     """
     if sys.platform == "darwin":
         target_os = "macosx"
@@ -1032,13 +1074,10 @@ def run_premake(target_os, action, cc=None, enable_tests=False,
       action: action to perform.
     """
     args = [
-        sys.executable,
-        os.path.join("tools", "build", "premake.py"),
-        "--file=premake5.lua",
-        f"--os={target_os}",
-        "--test-suite-mode=combined",
-        "--verbose",
-        action,
+        "cmake",
+        "-S", ".",
+        "-B", build_dir,
+        "-G", generator,
     ]
     if not cc:
         cc = get_cc(cc=cc)
@@ -1229,22 +1268,14 @@ def discover_commands(subparsers):
     commands = {
         "setup": SetupCommand(subparsers),
         "fetchdata": FetchDataCommand(subparsers),
-        "pull": PullCommand(subparsers),
-        "premake": PremakeCommand(subparsers),
         "build": BuildCommand(subparsers),
-        "buildshaders": BuildShadersCommand(subparsers),
         "devenv": DevenvCommand(subparsers),
         "gentests": GenTestsCommand(subparsers),
         "test": TestCommand(subparsers),
-        "gputest": GpuTestCommand(subparsers),
         "clean": CleanCommand(subparsers),
-        "nuke": NukeCommand(subparsers),
-        "cleangenerated": CleanGeneratedCommand(subparsers),
         "lint": LintCommand(subparsers),
         "format": FormatCommand(subparsers),
-        "style": StyleCommand(subparsers),
         "tidy": TidyCommand(subparsers),
-        "stub": StubCommand(subparsers),
         }
     return commands
 
@@ -1297,13 +1328,14 @@ class SetupCommand(Command):
             help_short="Setup the build environment.",
             *args, **kwargs)
         self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
+            "--target-arch", type=normalize_target_arch, default=None,
+            help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
+                 "On Windows and macOS, non-native values enable cross-compilation "
+                 "into a separate build-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
         print("Setting up the build environment...\n")
 
-        # Setup submodules.
         print("- git submodule init / update...")
         if git_is_repository():
             git_submodule_update()
@@ -1436,7 +1468,8 @@ class BaseBuildCommand(Command):
             subparsers,
             *args, **kwargs)
         self.parser.add_argument(
-            "--cc", choices=["clang", "gcc", "msc"], default=None, help="Compiler toolchain passed to premake")
+            "--cc", choices=["clang", "gcc", "msc"], default=None,
+            help="Compiler toolchain.")
         self.parser.add_argument(
             "--config", choices=["checked", "debug", "release", "valgrind"], default="debug",
             type=str.lower, help="Chooses the build configuration.")
@@ -1484,6 +1517,7 @@ class BaseBuildCommand(Command):
             # Keep build/version.h current for Xcode and no-premake incremental builds.
             generate_version_h()
 
+        build_dir = get_build_dir(target_arch)
         print("- building (%s):%s..." % (
             "all" if not len(args["target"]) else ", ".join(args["target"]),
             args["config"]))
@@ -2537,16 +2571,13 @@ class CleanCommand(Command):
             name="clean",
             help_short="Removes intermediate files and build outputs.",
             *args, **kwargs)
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
 
     def execute(self, args, pass_args, cwd):
-        print("Cleaning build artifacts...\n"
-              "- premake clean...")
-        run_premake(get_premake_target_os(args["target_os"]), "clean")
-
-        # Also clean generated files
+        print("Cleaning build artifacts...")
+        for _build_dir in ("build", "build-arm64", "build-x64", "build-vs"):
+            if os.path.isdir(_build_dir):
+                print(f"- cmake clean {_build_dir}...")
+                subprocess.call(["cmake", "--build", _build_dir, "--target", "clean"])
         clean_generated_files()
 
         print("\nSuccess!")
@@ -2889,15 +2920,17 @@ class TidyCommand(Command):
         self.parser.add_argument(
             "--fix", action="store_true",
             help="Applies suggested fixes, where possible.")
-        self.parser.add_argument(
-            "--target_os", default=None,
-            help="Target OS passed to premake, for cross-compilation")
 
     def execute(self, args, pass_args, cwd):
-        # Run premake to generate our compile_commands.json file for clang to use.
-        # TODO(benvanik): only do linux? whatever clang-tidy is ok with.
-        run_premake(get_premake_target_os(args["target_os"]),
-                    "export-compile-commands")
+        # clang-tidy needs a compile_commands.json; CMake emits one when
+        # CMAKE_EXPORT_COMPILE_COMMANDS is on.
+        ret = subprocess.call([
+            "cmake", "-S", ".", "-B", "build",
+            "-G", "Ninja Multi-Config",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        ])
+        if ret != 0:
+            return ret
 
         if sys.platform == "darwin":
             platform_name = "darwin"
@@ -3003,10 +3036,14 @@ class DevenvCommand(Command):
             name="devenv",
             help_short="Launches the development environment.",
             *args, **kwargs)
+        self.parser.add_argument(
+            "--target-arch", type=normalize_target_arch, default=None,
+            help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
+                 "On Windows, non-native values enable cross-compilation into a "
+                 "separate build-vs-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
-        devenv = None
-        show_reload_prompt = False
+        target_arch = args.get("target_arch")
         if sys.platform == "win32":
             if not vs_version:
                 print("ERROR: Visual Studio is not installed.");
@@ -3018,44 +3055,48 @@ class DevenvCommand(Command):
         elif has_bin("clion") or has_bin("clion.sh"):
             print("Launching CLion...")
             show_reload_prompt = create_clion_workspace()
-            devenv = "cmake"
-        else:
-            print("Launching CodeLite...")
-            devenv = "codelite"
+            if run_cmake_configure(target_arch=target_arch) != 0:
+                return 1
+            if show_reload_prompt:
+                print_box("Please run \"File ⇒ ↺ Reload CMake Project\" from inside the IDE!")
+            bin_name = "clion" if has_bin("clion") else "clion.sh"
+            shell_call([bin_name, "."])
+            return 0
+        print("No supported IDE found. Open the project root in your IDE.")
+        print("CMakeLists.txt and CMakePresets.json are in the project root.")
+        return 0
 
-        print("\n- running premake...")
-        run_platform_premake(devenv=devenv)
-
-        print("\n- launching devenv...")
-        if show_reload_prompt:
-            print_box("Please run \"File ⇒ ↺ Reload CMake Project\" from inside the IDE!")
-        if sys.platform == "win32":
-            shell_call([
-                "devenv",
-                "build\\xenia.sln",
-            ])
-        elif sys.platform == "darwin":
-            shell_call([
-                "xed",
-                "build/xenia.xcworkspace",
-            ])
-        elif has_bin("clion"):
-            shell_call([
-                "clion",
-                ".",
-            ])
-        elif has_bin("clion.sh"):
-            shell_call([
-                "clion.sh",
-                ".",
-            ])
-        else:
-            shell_call([
-                "codelite",
-                "build/xenia.workspace",
-            ])
-        print("")
-
+    def _launch_visual_studio(self, target_arch=None):
+        """Configures a VS build tree under build-vs[-arch]/ and launches devenv."""
+        if not vs_version:
+            print_error("Visual Studio is not installed.")
+            return 1
+        # Kept separate from build/ (Ninja Multi-Config) because CMake
+        # refuses to change generators on an existing tree — mixing the
+        # two workflows in one dir would force a full wipe each time.
+        is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
+        effective_arch = target_arch or ("arm64" if is_native_arm64 else "x64")
+        vs_arch = "ARM64" if effective_arch == "arm64" else "x64"
+        vs_build_dir = "build-vs" if effective_arch == ("arm64" if is_native_arm64 else "x64") else f"build-vs-{effective_arch}"
+        print(f"Configuring Visual Studio build tree ({vs_arch}) in {vs_build_dir}...")
+        # -A <arch> without -G lets CMake pick whichever VS generator matches
+        # the installed toolchain (VS 2022, 2026, ...).
+        ret = subprocess.call([
+            "cmake", "-S", ".", "-B", vs_build_dir, "-A", vs_arch,
+        ])
+        if ret != 0:
+            print_error("cmake configure failed for the VS build tree")
+            return ret
+        generate_version_h(vs_build_dir)
+        # VS 2026+ emits xenia.slnx; older VS emits xenia.sln.
+        sln_path = os.path.join(vs_build_dir, "xenia.slnx")
+        if not os.path.exists(sln_path):
+            sln_path = os.path.join(vs_build_dir, "xenia.sln")
+        if not os.path.exists(sln_path):
+            print_error("cmake configured successfully but no .sln/.slnx was produced")
+            return 1
+        print(f"\n- launching devenv on {sln_path}...")
+        shell_call(["devenv", sln_path])
         return 0
 
 

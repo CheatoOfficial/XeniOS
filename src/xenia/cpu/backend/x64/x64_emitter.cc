@@ -215,36 +215,8 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // IMPORTANT: any changes to the prolog must be kept in sync with
   //     X64CodeCache, which dynamically generates exception information.
   //     Adding or changing anything here must be matched!
-
-  /*
-    pick a page to use as the local base as close to the commonly accessed page
-    that contains most backend fields the sizes that are checked are chosen
-    based on PTE coalescing sizes. zen does 16k or 32k
-  */
-  size_t stack_size = StackLayout::GUEST_STACK_SIZE;
-  if (stack_offset < (4096 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 4096;
-  } else if (stack_offset <
-             (16384 - sizeof(X64BackendContext))) {  // 16k PTE coalescing
-    locals_page_delta_ = 16384;
-  } else if (stack_offset < (32768 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 32768;
-  } else if (stack_offset < (65536 - sizeof(X64BackendContext))) {
-    locals_page_delta_ = 65536;
-  } else {
-    // extremely unlikely, fall back to stack
-    stack_size =
-        xe::align<size_t>(StackLayout::GUEST_STACK_SIZE + stack_offset, 16);
-    locals_page_delta_ = 0;
-  }
-
-  // Ensure that after we SUB the stack_size, RSP is 16-byte aligned.
-  // On function entry, RSP is misaligned by 8 (due to CALL pushing return
-  // address). So we need stack_size to be 8 mod 16, not 0 mod 16.
-  if ((stack_size % 16) == 0) {
-    stack_size += 8;  // Make it 8 mod 16
-  }
-  assert_true((stack_size % 16) == 8);  // Should be 8 mod 16 for alignment
+  const size_t stack_size = StackLayout::GUEST_STACK_SIZE + stack_offset;
+  assert_true((stack_size + 8) % 16 == 0);
   func_info.stack_size = stack_size;
   stack_size_ = stack_size;
 
@@ -795,12 +767,37 @@ void X64Emitter::CallIndirect(const hir::Instr* instr,
     je(epilog_label(), CodeGenerator::T_NEAR);
   }
 
-  // Load the pointer to the indirection table maintained in X64CodeCache.
-  // The target dword will either contain the address of the generated code
-  // or a thunk to ResolveAddress.
   if (code_cache_->has_indirection_table()) {
-    if (reg.cvt32() != ebx) {
-      mov(ebx, reg.cvt32());
+    // Must leave the guest address in edx for the resolve thunk to read.
+    if (reg.cvt32() != edx) {
+      mov(edx, reg.cvt32());
+    }
+    if (!code_cache_->encoded_indirection()) {
+      // Fast path: table mapped at host VA == guest addr; slot holds raw
+      // 32-bit host target.
+      mov(eax, dword[rdx]);
+    } else {
+      // Encoded path: see X64CodeCache for the entry format.
+      Xbyak::Label external_target;
+      Xbyak::Label indirection_ready;
+
+      mov(r8, code_cache_->indirection_table_base_bias());
+      mov(eax, dword[r8 + rdx]);
+      test(eax, eax);
+      js(external_target);
+
+      // Internal: rel32 from code cache base.
+      mov(r8, code_cache_->execute_base_address());
+      add(rax, r8);
+      jmp(indirection_ready);
+
+      // External: tagged index into the side table.
+      L(external_target);
+      and_(eax, X64CodeCache::kIndirectionExternalIndexMask);
+      mov(r8, code_cache_->external_indirection_table_base_address());
+      mov(rax, qword[r8 + rax * 8]);
+
+      L(indirection_ready);
     }
 #if XE_PLATFORM_MAC
     const uintptr_t indirection_bias =
@@ -1299,14 +1296,24 @@ static constexpr uintptr_t kConstDataIncrement = 0x00001000;
 // doing so requires RIP-relative addressing, which is difficult to support
 // given the current setup.
 uintptr_t X64Emitter::PlaceConstData() {
+  // Constants are accessed via [disp32] in GetXmmConstPtr, so the mapping
+  // must land in the bottom 31 bits. Bound the hint walk so we bail
+  // cleanly instead of looping past 2GB and tripping the assert below.
+  static constexpr uintptr_t kSub2GBLimit = 0x80000000ULL;
   uint8_t* ptr = reinterpret_cast<uint8_t*>(kConstDataLocation);
   void* mem = nullptr;
-  while (!mem) {
+  while (!mem && reinterpret_cast<uintptr_t>(ptr) < kSub2GBLimit) {
     mem = memory::AllocFixed(
         ptr, xe::round_up(kConstDataSize, memory::page_size()),
         memory::AllocationType::kReserveCommit, memory::PageAccess::kReadWrite);
 
     ptr += kConstDataIncrement;
+  }
+  if (!mem) {
+    XELOGE(
+        "PlaceConstData: no sub-2GB hole found for the constant table; "
+        "JIT cannot use [disp32] for constants and will not work.");
+    return 0;
   }
 
   // The pointer must not be greater than 31 bits.
@@ -1372,6 +1379,12 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
       }
 
       if (all_equal_bytes) {
+        if (IsFeatureEnabled(kX64EmitGFNI)) {
+          vpxor(dest, dest);
+          vgf2p8affineqb(dest, dest, dest, firstbyte);
+          return;
+        }
+
         void* bval = FindByteConstantOffset(firstbyte);
 
         if (bval) {
@@ -1661,9 +1674,6 @@ SimdDomain X64Emitter::DeduceSimdDomain(const hir::Value* for_value) {
 
   return SimdDomain::DONTCARE;
 }
-Xbyak::RegExp X64Emitter::GetLocalsBase() const {
-  return !locals_page_delta_ ? rsp : GetContextReg() - locals_page_delta_;
-}
 Xbyak::Address X64Emitter::GetBackendCtxPtr(int offset_in_x64backendctx) const {
   /*
     index context ptr negatively to get to backend ctx field
@@ -1795,19 +1805,23 @@ void X64Emitter::PushStackpoint() {
   // push the current host and guest stack pointers
   // this is done before a stack frame is set up or any guest instructions are
   // executed this code is probably the most intrusive part of the stackpoint
-  mov(rbx, GetBackendCtxPtr(offsetof(X64BackendContext, stackpoints)));
+  //
+  // Scratch regs here must NOT be in gpr_reg_map_ — the callee's prolog
+  // runs them before the caller's live HIR values would be spilled, so
+  // clobbering an allocatable reg corrupts state across the call.
+  mov(rdx, GetBackendCtxPtr(offsetof(X64BackendContext, stackpoints)));
   mov(eax,
       GetBackendCtxPtr(offsetof(X64BackendContext, current_stackpoint_depth)));
 
   mov(r8, qword[GetContextReg() + offsetof(ppc::PPCContext, r[1])]);
 
   imul(r9d, eax, sizeof(X64BackendStackpoint));
-  add(rbx, r9);
+  add(rdx, r9);
 
-  mov(qword[rbx + offsetof(X64BackendStackpoint, host_stack_)], rsp);
-  mov(dword[rbx + offsetof(X64BackendStackpoint, guest_stack_)], r8d);
+  mov(qword[rdx + offsetof(X64BackendStackpoint, host_stack_)], rsp);
+  mov(dword[rdx + offsetof(X64BackendStackpoint, guest_stack_)], r8d);
   mov(r8d, dword[GetContextReg() + offsetof(ppc::PPCContext, lr)]);
-  mov(dword[rbx + offsetof(X64BackendStackpoint, guest_return_address_)], r8d);
+  mov(dword[rdx + offsetof(X64BackendStackpoint, guest_return_address_)], r8d);
 
   if (IsFeatureEnabled(kX64FlagsIndependentVars)) {
     inc(eax);

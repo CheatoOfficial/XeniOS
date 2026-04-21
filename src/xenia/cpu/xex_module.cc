@@ -58,6 +58,8 @@ DEFINE_bool(xex_log_import_library_names, false,
 
 DECLARE_bool(allow_plugins);
 
+DECLARE_bool(disable_context_promotion);
+
 static constexpr uint8_t xe_xex1_retail_key[16] = {
     0xA2, 0x6C, 0x10, 0xF7, 0x1F, 0xD9, 0x35, 0xE9,
     0x8B, 0x99, 0x92, 0x2C, 0xE9, 0x32, 0x15, 0x72};
@@ -1453,7 +1455,10 @@ std::unique_ptr<Function> XexModule::CreateFunction(uint32_t address) {
       processor_->backend()->CreateGuestFunction(this, address));
 }
 void XexInfoCache::Init(XexModule* xexmod) {
-  if (cvars::disable_instruction_infocache) {
+  // If context promotion is disabled then disable instruction info cache as
+  // well, otherwise XMA will write to unknown registers.
+  if (cvars::disable_instruction_infocache ||
+      cvars::disable_context_promotion) {
     return;
   }
 
@@ -1479,9 +1484,12 @@ void XexInfoCache::Init(XexModule* xexmod) {
   auto try_open = [this, &infocache_path, num_codebytes,
                    expected_cache_size]() {
     bool did_exist = true;
+    const size_t file_size = sizeof(InfoCacheFlagsHeader) +
+                             (sizeof(InfoCacheFlags) * (num_codebytes / 4));
 
     if (!std::filesystem::exists(infocache_path)) {
       xe::filesystem::CreateEmptyFile(infocache_path);
+      std::filesystem::resize_file(infocache_path, file_size);
       did_exist = false;
     }
 
@@ -1494,8 +1502,7 @@ void XexInfoCache::Init(XexModule* xexmod) {
            infocache_path.string(), did_exist, file_size, expected_cache_size);
 
     // todo: prepopulate with stuff from pdata, dll exports
-
-    this->executable_addr_flags_ = std::move(xe::MappedMemory::Open(
+    this->executable_addr_flags_ = MappedMemory::Open(
         infocache_path, xe::MappedMemory::Mode::kReadWrite, 0,
         expected_cache_size));  // one infocacheflags entry per PPC instr addr
     return did_exist;

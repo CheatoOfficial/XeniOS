@@ -33,7 +33,6 @@
 #include "xenia/gpu/vulkan/vulkan_shader.h"
 #include "xenia/gpu/vulkan/vulkan_shared_memory.h"
 #include "xenia/gpu/xenos.h"
-#include "xenia/ui/vulkan/spirv_tools_context.h"
 #include "xenia/ui/vulkan/vulkan_util.h"
 
 // Shader bytecode.
@@ -60,13 +59,6 @@ DEFINE_int32(
     "automatically (75% of logical CPU cores), a positive number to specify "
     "the number of threads explicitly (up to the number of logical CPU cores), "
     "0 to disable multithreaded pipeline creation.",
-    "Vulkan");
-
-DEFINE_bool(
-    vulkan_spirv_optimization, false,
-    "Enable SPIR-V shader optimization. When enabled, shaders are optimized "
-    "on pipeline creation threads before the shader module is created. This "
-    "only affects async pipeline creation and does not block the main thread.",
     "Vulkan");
 
 DECLARE_bool(vulkan_dynamic_rendering);
@@ -98,24 +90,13 @@ bool VulkanPipelineCache::Initialize() {
       render_target_cache_.GetPath() ==
       RenderTargetCache::Path::kPixelShaderInterlock;
 
-  // Initialize SPIRV-Tools (used for validation and optional optimization)
-  spirv_tools_context_ = std::make_unique<ui::vulkan::SpirvToolsContext>();
-  if (!spirv_tools_context_->Initialize(spirv_version_)) {
-    XELOGE("Failed to initialize SPIRV-Tools");
-    // Continue without SPIRV-Tools
-    spirv_tools_context_.reset();
-  } else {
-    XELOGI("SPIRV-Tools initialized successfully");
-  }
-
   shader_translator_ = std::make_unique<SpirvShaderTranslator>(
       SpirvShaderTranslator::Features(vulkan_device),
       render_target_cache_.msaa_2x_attachments_supported(),
       render_target_cache_.msaa_2x_no_attachments_supported(),
       edram_fragment_shader_interlock,
       render_target_cache_.draw_resolution_scale_x(),
-      render_target_cache_.draw_resolution_scale_y(), nullptr,
-      false);  // Never optimize during initial translation
+      render_target_cache_.draw_resolution_scale_y());
 
   if (edram_fragment_shader_interlock) {
     std::vector<uint8_t> depth_only_fragment_shader_code =
@@ -803,6 +784,28 @@ bool VulkanPipelineCache::IsCreatingPipelines() {
   return !creation_queue_.empty() || creation_threads_busy_ != 0;
 }
 
+void VulkanPipelineCache::AwaitPipelineCompletion() {
+  if (creation_threads_.empty()) {
+    return;
+  }
+
+  bool await_creation_completion_event;
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    await_creation_completion_event =
+        !creation_queue_.empty() || creation_threads_busy_ != 0;
+    if (await_creation_completion_event) {
+      creation_completion_event_->Reset();
+      creation_completion_set_event_.store(true, std::memory_order_release);
+    }
+  }
+
+  if (await_creation_completion_event) {
+    creation_request_cond_.notify_one();
+    xe::threading::Wait(creation_completion_event_.get(), false);
+  }
+}
+
 void VulkanPipelineCache::CreationThread() {
   for (;;) {
     PipelineCreationArguments creation_arguments;
@@ -823,13 +826,6 @@ void VulkanPipelineCache::CreationThread() {
                                  creation_arguments.pixel_shader)) {
       XELOGE("Failed to translate shaders for pipeline creation");
     } else {
-      // Optimize shaders on the creation thread before creating the pipeline.
-      // This keeps the main thread fast while still benefiting from
-      // optimization.
-      OptimizeTranslationIfNeeded(*creation_arguments.vertex_shader);
-      if (creation_arguments.pixel_shader) {
-        OptimizeTranslationIfNeeded(*creation_arguments.pixel_shader);
-      }
       if (!EnsurePipelineCreated(creation_arguments)) {
         XELOGE("Failed to create Vulkan pipeline");
       }
@@ -882,32 +878,6 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
            shader.ucode_data_hash());
     return false;
   }
-
-#ifndef NDEBUG
-  // Validate SPIR-V before creating shader module to get detailed error
-  // messages. This is a warning only - we still try to create the shader
-  // module to see if the driver accepts it.
-  if (spirv_tools_context_) {
-    std::string validation_error;
-    spv_result_t validation_result = spirv_tools_context_->Validate(
-        reinterpret_cast<const uint32_t*>(
-            translation.translated_binary().data()),
-        translation.translated_binary().size() / sizeof(uint32_t),
-        &validation_error);
-    if (validation_result != SPV_SUCCESS) {
-      XELOGW(
-          "VulkanPipelineCache: SPIR-V validation warning for shader {:016X} "
-          "modification {:016X}: {}",
-          shader.ucode_data_hash(), translation.modification(),
-          validation_error);
-      // Dump the shader for debugging if dump path is set
-      if (!cvars::dump_shaders.empty()) {
-        translation.Dump(cvars::dump_shaders, "vulkan_warning");
-      }
-      // Continue anyway - the driver might accept it
-    }
-  }
-#endif  // NDEBUG
 
   if (translation.GetOrCreateShaderModule() == VK_NULL_HANDLE) {
     return false;
@@ -1022,8 +992,7 @@ void VulkanPipelineCache::TranslateShadersForStorage(
     // Each thread needs its own translator.
     SpirvShaderTranslator translator(
         SpirvShaderTranslator::Features(vulkan_device), msaa_2x_attachments,
-        msaa_2x_no_attachments, edram_fsi_used, draw_res_x, draw_res_y, nullptr,
-        false);  // Don't optimize during parallel translation
+        msaa_2x_no_attachments, edram_fsi_used, draw_res_x, draw_res_y);
 
     while (true) {
       size_t index = translation_index.fetch_add(1);
@@ -3148,58 +3117,6 @@ void VulkanPipelineCache::ProcessDeferredDestructions() {
     if (pipeline != VK_NULL_HANDLE) {
       dfn.vkDestroyPipeline(device, pipeline, nullptr);
     }
-  }
-}
-
-void VulkanPipelineCache::OptimizeTranslationIfNeeded(
-    VulkanShader::VulkanTranslation& translation) {
-  // Only optimize if enabled and spirv-tools is available.
-  if (!cvars::vulkan_spirv_optimization || !spirv_tools_context_) {
-    return;
-  }
-
-  // Only optimize if the shader module hasn't been created yet.
-  // Once created, we can't replace it without the complexity of the old
-  // background optimization system.
-  if (translation.shader_module() != VK_NULL_HANDLE) {
-    return;
-  }
-
-  if (!translation.is_valid()) {
-    return;
-  }
-
-  const std::vector<uint8_t>& unoptimized_binary =
-      translation.translated_binary();
-  if (unoptimized_binary.empty()) {
-    return;
-  }
-
-  // Reinterpret the byte vector as uint32_t for SPIRV-Tools
-  const uint32_t* spirv_words =
-      reinterpret_cast<const uint32_t*>(unoptimized_binary.data());
-  size_t word_count = unoptimized_binary.size() / sizeof(uint32_t);
-
-  std::vector<uint32_t> optimized_spirv;
-  spv_result_t result = spirv_tools_context_->Optimize(spirv_words, word_count,
-                                                       optimized_spirv, true);
-
-  if (result == SPV_SUCCESS && !optimized_spirv.empty()) {
-    // Convert back to byte vector and replace the translated binary
-    std::vector<uint8_t> optimized_binary;
-    optimized_binary.resize(optimized_spirv.size() * sizeof(uint32_t));
-    std::memcpy(optimized_binary.data(), optimized_spirv.data(),
-                optimized_binary.size());
-    translation.SetOptimizedBinary(std::move(optimized_binary));
-
-    size_t original_size = word_count;
-    size_t optimized_size = optimized_spirv.size();
-    XELOGI("SPIRV optimization: {} -> {} words ({:.1f}% reduction)",
-           original_size, optimized_size,
-           100.0f * (1.0f - float(optimized_size) / float(original_size)));
-  } else {
-    XELOGW("SPIRV optimization failed with error code: {}",
-           static_cast<int>(result));
   }
 }
 

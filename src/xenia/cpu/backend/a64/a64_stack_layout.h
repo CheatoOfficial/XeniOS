@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -11,8 +11,6 @@
 #define XENIA_CPU_BACKEND_A64_A64_STACK_LAYOUT_H_
 
 #include "xenia/base/vec128.h"
-#include "xenia/cpu/backend/a64/a64_backend.h"
-#include "xenia/cpu/backend/a64/a64_emitter.h"
 
 namespace xe {
 namespace cpu {
@@ -22,9 +20,8 @@ namespace a64 {
 class StackLayout {
  public:
   /**
-   * Stack Layout
-   * ----------------------------
-   * NOTE: stack must always be 16b aligned.
+   * ARM64 Thunk Stack Layout (HostToGuest)
+   * NOTE: stack must always be 16-byte aligned.
    *
    * Thunk stack:
    *      Non-Volatile         Volatile
@@ -92,33 +89,30 @@ class StackLayout {
   static const size_t THUNK_STACK_SIZE = sizeof(Thunk);
 
   /**
-   *
-   *
-   * Guest stack:
+   * ARM64 Guest Stack Layout
    *  +------------------+
-   *  | arg temp, 3 * 8  | sp + 0
-   *  |                  |
-   *  |                  |
-   *  +------------------+
-   *  | scratch, 48b     | sp + 32(kStashOffset)
-   *  |                  |
-   *  +------------------+
-   *  | X0  / context    | sp + 80
-   *  +------------------+
-   *  | guest ret addr   | sp + 88
-   *  +------------------+
-   *  | call ret addr    | sp + 96
-   *  +------------------+
-   *    ... locals ...
-   *  +------------------+
-   *  | (return address) |
+   *  | scratch, 48b     | sp + 0x000  (3 x Q for VMX FP scratch)
+   *  | guest ret addr   | sp + 0x030  (guest PPC return address)
+   *  | call ret addr    | sp + 0x038  (next call's guest PPC return addr)
+   *  | host ret addr    | sp + 0x040  (host x30/LR, for ret instruction)
+   *  | guest saved r1   | sp + 0x048  (guest r1 at function entry, for
+   *  |                  |              longjmp detection)
+   *  |  ... locals ...  |
    *  +------------------+
    *
+   * Minimum size: 80 bytes (aligned to 16).
+   *
+   * Convention: at guest function entry, x0 holds the guest PPC return
+   * address. The prolog stores it to GUEST_RET_ADDR and saves x30 (host
+   * LR) to HOST_RET_ADDR.
    */
-  static const size_t GUEST_STACK_SIZE = 96 + 16;
-  static const size_t GUEST_CTX_HOME = 80;
-  static const size_t GUEST_RET_ADDR = 88;
-  static const size_t GUEST_CALL_RET_ADDR = 96;
+  static constexpr size_t GUEST_STACK_SIZE = 80;  // 16-byte aligned
+  static constexpr size_t GUEST_SCRATCH = 0;      // 48 bytes (3 x Q)
+  static constexpr size_t GUEST_RET_ADDR = 48;
+  static constexpr size_t GUEST_CALL_RET_ADDR = 56;
+  static constexpr size_t HOST_RET_ADDR = 64;
+  // Stackpoint depth after PushStackpoint in prolog, for longjmp detection.
+  static constexpr size_t GUEST_SAVED_STACKPOINT_DEPTH = 72;
 };
 
 }  // namespace a64

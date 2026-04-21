@@ -80,16 +80,28 @@ DEFINE_bool(
     "when MSAA is used with fullscreen passes.",
     "GPU");
 
-DEFINE_int32(query_occlusion_sample_lower_threshold, 80,
-             "If set to -1 no sample counts are written, games may hang. Else, "
-             "the sample count of every tile will be incremented on every "
-             "EVENT_WRITE_ZPD by this number. Setting this to 0 means "
-             "everything is reported as occluded.",
+DEFINE_int32(occlusion_query_fake_lower_threshold, 80,
+             "Lower end of the fake sample count value written on "
+             "EVENT_WRITE_ZPD when real occlusion queries are disabled.\n"
+             "-1 writes nothing, resulting in some games that sit and hang.\n"
+             "0 means the fake result stays fully occluded.",
              "GPU");
-DEFINE_int32(
-    query_occlusion_sample_upper_threshold, 100,
-    "Set to higher number than query_occlusion_sample_lower_threshold. This "
-    "value is ignored if query_occlusion_sample_lower_threshold is set to -1.",
+DEFINE_int32(occlusion_query_fake_upper_threshold, 100,
+             "Upper end of the fake sample count value written on "
+             "EVENT_WRITE_ZPD when real occlusion queries are disabled.\n"
+             "Keep this higher than occlusion_query_fake_lower_threshold.\n"
+             "Ignored if occlusion_query_fake_lower_threshold is -1.",
+             "GPU");
+DEFINE_bool(occlusion_query_log, false,
+            "Log occlusion query lifetime and summary stats.", "GPU");
+DEFINE_double(
+    occlusion_query_sample_count_saturation, 1.0,
+    "Compress higher occlusion query sample counts before guest writeback.\n"
+    "This can be useful if effects such as lens flares appear too bright\n"
+    "or too strong.\n"
+    "1.0 = default behavior\n"
+    "0.0 = collapse all nonzero sample counts to 1\n"
+    "Values around 0.90 are a good starting point for subtle tuning.",
     "GPU");
 
 DEFINE_bool(metal_shader_disk_cache, true,

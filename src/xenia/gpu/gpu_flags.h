@@ -29,9 +29,9 @@ DECLARE_bool(non_seamless_cube_map);
 
 DECLARE_bool(half_pixel_offset);
 
-DECLARE_int32(query_occlusion_sample_lower_threshold);
+DECLARE_string(occlusion_query);
 
-DECLARE_int32(query_occlusion_sample_upper_threshold);
+DECLARE_int32(occlusion_query_fake_lower_threshold);
 
 DECLARE_bool(metal_shader_disk_cache);
 DECLARE_bool(metal_pipeline_binary_archive);
@@ -45,7 +45,9 @@ DECLARE_bool(metal_use_spirvcross);
 
 DECLARE_bool(occlusion_query_enable);
 
-void SetOcclusionQueryEnable(bool value);
+DECLARE_bool(occlusion_query_log);
+
+DECLARE_double(occlusion_query_sample_count_saturation);
 
 // Returns the guest vblank rate in Hz (50 for PAL, 60 for NTSC).
 // Based on use_50Hz_mode cvar.

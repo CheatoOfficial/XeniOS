@@ -25,7 +25,7 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
 #endif
 #include <winsock2.h>  // NOLINT(build/include_order)
-#elif XE_PLATFORM_LINUX
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>

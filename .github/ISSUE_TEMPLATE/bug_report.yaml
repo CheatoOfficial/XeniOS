@@ -26,7 +26,7 @@ body:
         required: true
       - label: This issue isn't for tech support (help with Xenia).
         required: true
-      - label: If this issue occurs in a specific game, I've done analysis to locate the faulty subsystem of the emulator and a potential reason in it.
+      - label: If this issue occurs in a specific game, I've identified an earlier build or Xenia fork where the issue does not occur.
         required: true
       - label: I've checked if this issue hasn't already been reported.
         required: true

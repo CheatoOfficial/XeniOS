@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -185,7 +185,6 @@ bool A64Function::CallImpl(ThreadState* thread_state, uint32_t return_address) {
   auto* code = machine_code_.load(std::memory_order_acquire);
   thunk(code, thread_state->context(),
         reinterpret_cast<void*>(uintptr_t(return_address)));
-
   return true;
 }
 

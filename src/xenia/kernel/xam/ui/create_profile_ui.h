@@ -36,6 +36,7 @@ class CreateProfileUI final : public XamDialog {
   bool focus_set_ = false;
   bool migration_ = false;
   char gamertag_[16] = "";
+  bool valid_gamertag_ = false;
   Emulator* emulator_;
 };
 

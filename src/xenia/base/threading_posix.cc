@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <array>
@@ -26,7 +27,15 @@
 #include <ctime>
 #include <limits>
 
-#include "logging.h"
+#include "xenia/base/logging.h"
+
+#if XE_PLATFORM_MAC
+#include <mach/mach.h>
+#endif
+
+#if XE_PLATFORM_LINUX
+#include <semaphore.h>
+#endif
 
 #if XE_PLATFORM_APPLE
 #include <mach/mach.h>
@@ -708,6 +717,9 @@ class PosixCondition<Thread> final : public PosixConditionBase {
   /// Thread::GetCurrentThread() on the main thread
   explicit PosixCondition(pthread_t thread)
       : thread_(thread),
+#if XE_PLATFORM_LINUX
+        tid_(static_cast<pid_t>(syscall(SYS_gettid))),
+#endif
         signaled_(false),
         exit_code_(0),
         state_(State::kRunning),
@@ -863,32 +875,79 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
   int priority() const {
     WaitStarted();
+#if XE_PLATFORM_LINUX
+    if (fifo_failed_) {
+      // Report nice values mapped back into the SCHED_FIFO 1..32 range so
+      // callers see a consistent priority space.
+      int nice_val = getpriority(PRIO_PROCESS, tid_);
+      return 16 - nice_val;
+    }
+#endif
     int policy;
     sched_param param{};
     int ret = pthread_getschedparam(thread_, &policy, &param);
     if (ret != 0) {
       return -1;
     }
-
+#if XE_PLATFORM_MAC
+    // Reverse the mapping applied in set_priority so callers see xenia-space
+    // values 1..32 regardless of Darwin's SCHED_FIFO range (typically 15..47).
+    static const int fifo_min = sched_get_priority_min(SCHED_FIFO);
+    static const int fifo_max = sched_get_priority_max(SCHED_FIFO);
+    const int fifo_range = fifo_max - fifo_min;
+    if (fifo_range <= 0) {
+      return param.sched_priority;
+    }
+    return 1 + (param.sched_priority - fifo_min) * 31 / fifo_range;
+#else
     return param.sched_priority;
+#endif
   }
 
   void set_priority(int new_priority) const {
     WaitStarted();
-    sched_param param{};
+#if XE_PLATFORM_LINUX
+    if (!fifo_failed_) {
+#endif
+      sched_param param{};
+#if XE_PLATFORM_MAC
+      // Xenia's POSIX ThreadPriority tiers are 1/8/16/24/32. Darwin's
+      // SCHED_FIFO range is typically 15..47, so linearly remap xenia 1..32
+      // into that range to keep all five tiers distinct and monotonically
+      // ordered. The guest kernel emulates Xenon quantum decay on its own
+      // and re-applies priorities via this path as they change.
+      static const int fifo_min = sched_get_priority_min(SCHED_FIFO);
+      static const int fifo_max = sched_get_priority_max(SCHED_FIFO);
+      param.sched_priority =
+          fifo_min + (new_priority - 1) * (fifo_max - fifo_min) / 31;
+#else
     param.sched_priority = new_priority;
-    int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
-    if (res != 0) {
-      switch (res) {
-        case EPERM:
-          XELOGW("Permission denied while setting priority");
-          break;
-        case EINVAL:
-          assert_always();
-        default:
-          XELOGW("Unknown error while setting priority");
+#endif
+      int res = pthread_setschedparam(thread_, SCHED_FIFO, &param);
+      if (res == 0) {
+        return;
+      }
+#if XE_PLATFORM_LINUX
+      // SCHED_FIFO requires CAP_SYS_NICE or root on Linux; fall back to
+      // nice values under SCHED_OTHER for unprivileged runs.
+      if (res == EPERM) {
+        fifo_failed_ = true;
+      } else {
+        XELOGW("Unexpected error {} while setting SCHED_FIFO priority", res);
+        fifo_failed_ = true;
       }
     }
+    // Map SCHED_FIFO range (1..32) to nice range (19..-19), fifo 16 → nice 0.
+    int nice_val = 16 - new_priority;
+    if (nice_val < -20) nice_val = -20;
+    if (nice_val > 19) nice_val = 19;
+    if (tid_ > 0) {
+      setpriority(PRIO_PROCESS, tid_, nice_val);
+    }
+#else
+    XELOGW("pthread_setschedparam failed: err={} '{}'", res,
+           std::strerror(res));
+#endif
   }
 
   void QueueUserCallback(std::function<void()> callback) {
@@ -942,6 +1001,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       if (out_previous_suspend_count) {
         *out_previous_suspend_count = suspend_count_;
       }
+      already_suspended = (state_ == State::kSuspended);
       state_ = State::kSuspended;
       ++suspend_count_;
     }
@@ -999,11 +1059,23 @@ class PosixCondition<Thread> final : public PosixConditionBase {
                        [this] { return state_ != State::kUninitialized; });
   }
 
-  /// Set state to suspended and wait until it reset by another thread
+  /// Set state to suspended and wait until it is reset by another thread.
+  /// On Linux/Android this uses sem_wait, which is async-signal-safe, so it
+  /// can be called from the suspend signal handler without deadlocking on
+  /// non-reentrant mutex/condvar operations. macOS has no unnamed
+  /// semaphores (sem_init returns ENOSYS), so we fall back to the condvar
+  /// path there.
   void WaitSuspended() {
+#if XE_PLATFORM_LINUX
+    int ret;
+    do {
+      ret = sem_wait(&suspend_sem_);
+    } while (ret == -1 && errno == EINTR);
+#else
     std::unique_lock lock(state_mutex_);
     state_signal_.wait(lock, [this] { return suspend_count_ == 0; });
     state_ = State::kRunning;
+#endif
   }
 
   void* native_handle() const override {
@@ -1018,8 +1090,15 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       joined_ = true;
       pthread_join(thread_, nullptr);
     }
+#if XE_PLATFORM_LINUX
+    sem_destroy(&suspend_sem_);
+#endif
   }
   pthread_t thread_;
+#if XE_PLATFORM_LINUX
+  pid_t tid_ = 0;                     // Kernel TID for setpriority() fallback.
+  mutable bool fifo_failed_ = false;  // True after SCHED_FIFO was rejected.
+#endif
   bool signaled_;
   int exit_code_;
   State state_;             // Protected by state_mutex_
@@ -1338,6 +1417,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   delete start_data;
 
   current_thread_ = thread;
+#if XE_PLATFORM_LINUX
+  thread->handle_.tid_ = static_cast<pid_t>(syscall(SYS_gettid));
+#endif
   {
     std::unique_lock lock(thread->handle_.state_mutex_);
     thread->handle_.state_ =

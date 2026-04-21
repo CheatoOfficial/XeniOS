@@ -23,6 +23,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if XE_PLATFORM_MAC
+#include <limits.h>
+#include <mach-o/dyld.h>
+#endif
 
 #if XE_PLATFORM_APPLE
 #include <limits.h>
@@ -159,12 +163,6 @@ bool TruncateStdioFile(FILE* file, uint64_t length) {
     }
   }
   return true;
-}
-
-static int removeCallback(const char* fpath, const struct stat* sb,
-                          int typeflag, struct FTW* ftwbuf) {
-  int rv = remove(fpath);
-  return rv;
 }
 
 static uint64_t convertUnixtimeToWinFiletime(time_t unixtime) {

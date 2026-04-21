@@ -184,6 +184,7 @@ class EmulatorWindow {
     void OnMouseDown(ui::MouseEvent& e) override;
     void OnMouseUp(ui::MouseEvent& e) override;
     void OnMouseDoubleClick(ui::MouseEvent& e) override;
+    void OnUsbDeviceChanged(bool is_arrival) override;
 
    private:
     EmulatorWindow& emulator_window_;

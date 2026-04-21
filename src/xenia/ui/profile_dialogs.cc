@@ -45,7 +45,7 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
                         ImGuiWindowFlags_AlwaysAutoResize |
                         ImGuiWindowFlags_HorizontalScrollbar)) {
     ImGui::End();
-    delete this;
+    Close();
     return;
   }
 
@@ -61,6 +61,9 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
   const auto content_files = xe::filesystem::ListDirectories(
       emulator_window_->emulator()->content_root());
 
+  if (ImGui::IsWindowAppearing()) {
+    ImGui::SetKeyboardFocusHere();
+  }
   if (content_files.empty()) {
     if (ImGui::Button("Create Profile")) {
       new kernel::xam::ui::CreateProfileUI(emulator_window_->imgui_drawer(),
@@ -82,7 +85,7 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::Button("Close") || !dialog_open) {
     emulator_window_->SetHotkeysState(true);
     ImGui::End();
-    delete this;
+    Close();
     return;
   }
   ImGui::End();
@@ -219,7 +222,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
              ImGui::GetWindowPos().y);
 
   for (auto& [xuid, account] : *profiles) {
-    ImGui::PushID(static_cast<int>(xuid));
+    ImGui::PushID(fmt::format("{:016X}", xuid).c_str());
 
     const uint8_t user_index =
         profile_manager->GetUserIndexAssignedToProfile(xuid);
@@ -262,7 +265,21 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
           if (ImGui::BeginMenu("Login to slot:")) {
             for (uint8_t i = 1; i <= XUserMaxUserCount; i++) {
               if (ImGui::MenuItem(fmt::format("slot {}", i).c_str())) {
+                uint64_t current_slot_xuid = 0;
+
+                if (const auto current_profile = profile_manager->GetProfile(
+                        static_cast<uint8_t>(i - 1));
+                    current_profile) {
+                  current_slot_xuid = current_profile->xuid();
+                }
+
                 profile_manager->Login(xuid, i - 1);
+                LoadProfileIcon(xuid);
+
+                // Release resources
+                if (current_slot_xuid) {
+                  LoadProfileIcon(current_slot_xuid);
+                }
               }
             }
             ImGui::EndMenu();

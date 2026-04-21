@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -80,7 +80,9 @@ namespace cpu {
 namespace backend {
 namespace a64 {
 
-using namespace oaknut::util;
+// Resolve a guest function at runtime. Called by the resolve thunk when
+// a guest address has not yet been compiled.
+uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
 
 namespace {
 
@@ -203,8 +205,8 @@ uint64_t ReservedStore64Helper(void* raw_context, uint64_t guest_address,
 
 class A64ThunkEmitter : public A64Emitter {
  public:
-  A64ThunkEmitter(A64Backend* backend);
-  ~A64ThunkEmitter() override;
+  A64HelperEmitter(A64Backend* backend, XbyakA64Allocator* allocator);
+
   HostToGuestThunk EmitHostToGuestThunk();
   GuestToHostThunk EmitGuestToHostThunk();
   ResolveFunctionThunk EmitResolveFunctionThunk();
@@ -289,11 +291,6 @@ A64Backend::A64Backend() : Backend(), code_cache_(nullptr) {
 }
 
 A64Backend::~A64Backend() {
-  if (capstone_handle_) {
-    cs_close(&capstone_handle_);
-  }
-
-  A64Emitter::FreeConstData(emitter_data_);
   ExceptionHandler::Uninstall(&ExceptionCallbackThunk, this);
   if (guest_trampoline_memory_) {
     memory::DeallocFixed(
@@ -314,27 +311,36 @@ bool A64Backend::Initialize(Processor* processor) {
     return false;
   }
 
-  auto& gprs = machine_info_.register_sets[0];
-  gprs.id = 0;
-  std::strcpy(gprs.name, "x");
-  gprs.types = MachineInfo::RegisterSet::INT_TYPES;
-  gprs.count = A64Emitter::GPR_COUNT;
-
-  auto& fprs = machine_info_.register_sets[1];
-  fprs.id = 1;
-  std::strcpy(fprs.name, "v");
-  fprs.types = MachineInfo::RegisterSet::FLOAT_TYPES |
-               MachineInfo::RegisterSet::VEC_TYPES;
-  fprs.count = A64Emitter::FPR_COUNT;
-
-  code_cache_ = A64CodeCache::Create();
-  Backend::code_cache_ = code_cache_.get();
+  // Fast indirection is only viable if trampolines made it under 4GB.
+  code_cache_->set_allow_fast_indirection(guest_trampolines_sub4gb_);
   if (!code_cache_->Initialize()) {
+    XELOGE("A64Backend: Failed to initialize code cache");
     return false;
   }
 
-  // Generate thunks used to transition between jitted code and host code.
-  A64ThunkEmitter thunk_emitter(this);
+  // Expose the code cache to the base Backend class.
+  Backend::code_cache_ = code_cache_.get();
+
+  // Set up machine info for the register allocator.
+  machine_info_.supports_extended_load_store = true;
+  // GPR set: x22-x28 (7 registers; x19=backend ctx, x20=context, x21=membase)
+  auto& gpr_set = machine_info_.register_sets[0];
+  gpr_set.id = 0;
+  std::strcpy(gpr_set.name, "gpr");
+  gpr_set.types = MachineInfo::RegisterSet::INT_TYPES;
+  gpr_set.count = A64Emitter::GPR_COUNT;
+  // VEC set: v4-v15, v16-v31 (28 registers, v0-v3 scratch)
+  auto& vec_set = machine_info_.register_sets[1];
+  vec_set.id = 1;
+  std::strcpy(vec_set.name, "vec");
+  vec_set.types = MachineInfo::RegisterSet::FLOAT_TYPES |
+                  MachineInfo::RegisterSet::VEC_TYPES;
+  vec_set.count = A64Emitter::VEC_COUNT;
+
+  // Generate thunks using ARM64 assembler.
+  XbyakA64Allocator allocator;
+  A64HelperEmitter thunk_emitter(this, &allocator);
+
   host_to_guest_thunk_ = thunk_emitter.EmitHostToGuestThunk();
   guest_to_host_thunk_ = thunk_emitter.EmitGuestToHostThunk();
   resolve_function_thunk_ = thunk_emitter.EmitResolveFunctionThunk();
@@ -356,7 +362,25 @@ bool A64Backend::Initialize(Processor* processor) {
       uint32_t(uint64_t(resolve_function_thunk_)));
 #endif
 
-  // Allocate some special indirections.
+  if (cvars::a64_enable_host_guest_stack_synchronization) {
+    synchronize_guest_and_host_stack_helper_ =
+        thunk_emitter.EmitGuestAndHostSynchronizeStackHelper();
+  }
+
+  // Set the indirection table default to point at the resolve thunk.
+  // Use 64-bit encoding: the resolve thunk address is encoded as a rel32
+  // offset if it lands inside the code cache, or as a tagged external-table
+  // index otherwise.
+  static_cast<A64CodeCache*>(code_cache_.get())
+      ->set_indirection_default_64(
+          reinterpret_cast<uint64_t>(resolve_function_thunk_));
+
+  // Commit the indirection table range used by guest trampolines so that
+  // CreateGuestTrampoline can call AddIndirection without faulting.
+  code_cache_->CommitExecutableRange(GUEST_TRAMPOLINE_BASE,
+                                     GUEST_TRAMPOLINE_END);
+
+  // Commit special indirection ranges (force return address, etc.).
   code_cache_->CommitExecutableRange(0x9FFF0000, 0x9FFFFFFF);
   code_cache_->CommitExecutableRange(kGuestTrampolineBase, kGuestTrampolineEnd);
 
@@ -385,184 +409,6 @@ std::unique_ptr<Assembler> A64Backend::CreateAssembler() {
 std::unique_ptr<GuestFunction> A64Backend::CreateGuestFunction(
     Module* module, uint32_t address) {
   return std::make_unique<A64Function>(module, address);
-}
-
-uint64_t ReadCapstoneReg(HostThreadContext* context, aarch64_reg reg) {
-  switch (reg) {
-    case ARM64_REG_X0:
-      return context->x[0];
-    case ARM64_REG_X1:
-      return context->x[1];
-    case ARM64_REG_X2:
-      return context->x[2];
-    case ARM64_REG_X3:
-      return context->x[3];
-    case ARM64_REG_X4:
-      return context->x[4];
-    case ARM64_REG_X5:
-      return context->x[5];
-    case ARM64_REG_X6:
-      return context->x[6];
-    case ARM64_REG_X7:
-      return context->x[7];
-    case ARM64_REG_X8:
-      return context->x[8];
-    case ARM64_REG_X9:
-      return context->x[9];
-    case ARM64_REG_X10:
-      return context->x[10];
-    case ARM64_REG_X11:
-      return context->x[11];
-    case ARM64_REG_X12:
-      return context->x[12];
-    case ARM64_REG_X13:
-      return context->x[13];
-    case ARM64_REG_X14:
-      return context->x[14];
-    case ARM64_REG_X15:
-      return context->x[15];
-    case ARM64_REG_X16:
-      return context->x[16];
-    case ARM64_REG_X17:
-      return context->x[17];
-    case ARM64_REG_X18:
-      return context->x[18];
-    case ARM64_REG_X19:
-      return context->x[19];
-    case ARM64_REG_X20:
-      return context->x[20];
-    case ARM64_REG_X21:
-      return context->x[21];
-    case ARM64_REG_X22:
-      return context->x[22];
-    case ARM64_REG_X23:
-      return context->x[23];
-    case ARM64_REG_X24:
-      return context->x[24];
-    case ARM64_REG_X25:
-      return context->x[25];
-    case ARM64_REG_X26:
-      return context->x[26];
-    case ARM64_REG_X27:
-      return context->x[27];
-    case ARM64_REG_X28:
-      return context->x[28];
-    case ARM64_REG_X29:
-      return context->x[29];
-    case ARM64_REG_X30:
-      return context->x[30];
-    case ARM64_REG_W0:
-      return uint32_t(context->x[0]);
-    case ARM64_REG_W1:
-      return uint32_t(context->x[1]);
-    case ARM64_REG_W2:
-      return uint32_t(context->x[2]);
-    case ARM64_REG_W3:
-      return uint32_t(context->x[3]);
-    case ARM64_REG_W4:
-      return uint32_t(context->x[4]);
-    case ARM64_REG_W5:
-      return uint32_t(context->x[5]);
-    case ARM64_REG_W6:
-      return uint32_t(context->x[6]);
-    case ARM64_REG_W7:
-      return uint32_t(context->x[7]);
-    case ARM64_REG_W8:
-      return uint32_t(context->x[8]);
-    case ARM64_REG_W9:
-      return uint32_t(context->x[9]);
-    case ARM64_REG_W10:
-      return uint32_t(context->x[10]);
-    case ARM64_REG_W11:
-      return uint32_t(context->x[11]);
-    case ARM64_REG_W12:
-      return uint32_t(context->x[12]);
-    case ARM64_REG_W13:
-      return uint32_t(context->x[13]);
-    case ARM64_REG_W14:
-      return uint32_t(context->x[14]);
-    case ARM64_REG_W15:
-      return uint32_t(context->x[15]);
-    case ARM64_REG_W16:
-      return uint32_t(context->x[16]);
-    case ARM64_REG_W17:
-      return uint32_t(context->x[17]);
-    case ARM64_REG_W18:
-      return uint32_t(context->x[18]);
-    case ARM64_REG_W19:
-      return uint32_t(context->x[19]);
-    case ARM64_REG_W20:
-      return uint32_t(context->x[20]);
-    case ARM64_REG_W21:
-      return uint32_t(context->x[21]);
-    case ARM64_REG_W22:
-      return uint32_t(context->x[22]);
-    case ARM64_REG_W23:
-      return uint32_t(context->x[23]);
-    case ARM64_REG_W24:
-      return uint32_t(context->x[24]);
-    case ARM64_REG_W25:
-      return uint32_t(context->x[25]);
-    case ARM64_REG_W26:
-      return uint32_t(context->x[26]);
-    case ARM64_REG_W27:
-      return uint32_t(context->x[27]);
-    case ARM64_REG_W28:
-      return uint32_t(context->x[28]);
-    case ARM64_REG_W29:
-      return uint32_t(context->x[29]);
-    case ARM64_REG_W30:
-      return uint32_t(context->x[30]);
-    default:
-      assert_unhandled_case(reg);
-      return 0;
-  }
-}
-
-bool TestCapstonePstate(arm64_cc cond, uint32_t pstate) {
-  // https://devblogs.microsoft.com/oldnewthing/20220815-00/?p=106975
-  // Upper 4 bits of pstate are NZCV
-  const bool N = !!(pstate & 0x80000000);
-  const bool Z = !!(pstate & 0x40000000);
-  const bool C = !!(pstate & 0x20000000);
-  const bool V = !!(pstate & 0x10000000);
-  switch (cond) {
-    case ARM64CC_EQ:
-      return (Z == true);
-    case ARM64CC_NE:
-      return (Z == false);
-    case ARM64CC_HS:
-      return (C == true);
-    case ARM64CC_LO:
-      return (C == false);
-    case ARM64CC_MI:
-      return (N == true);
-    case ARM64CC_PL:
-      return (N == false);
-    case ARM64CC_VS:
-      return (V == true);
-    case ARM64CC_VC:
-      return (V == false);
-    case ARM64CC_HI:
-      return ((C == true) && (Z == false));
-    case ARM64CC_LS:
-      return ((C == false) || (Z == true));
-    case ARM64CC_GE:
-      return (N == V);
-    case ARM64CC_LT:
-      return (N != V);
-    case ARM64CC_GT:
-      return ((Z == false) && (N == V));
-    case ARM64CC_LE:
-      return ((Z == true) || (N != V));
-    case ARM64CC_AL:
-      return true;
-    case ARM64CC_NV:
-      return false;
-    default:
-      assert_unhandled_case(cond);
-      return false;
-  }
 }
 
 uint64_t A64Backend::CalculateNextHostInstruction(ThreadDebugInfo* thread_info,
@@ -633,12 +479,15 @@ uint64_t A64Backend::CalculateNextHostInstruction(ThreadDebugInfo* thread_info,
   }
 }
 
+// ARM64 BRK #0 encoding (4 bytes, fixed-width instruction).
+static constexpr uint32_t kArm64Brk0 = 0xD4200000;
+
 void A64Backend::InstallBreakpoint(Breakpoint* breakpoint) {
   breakpoint->ForEachHostAddress([breakpoint](uint64_t host_address) {
     auto ptr = reinterpret_cast<void*>(host_address);
-    auto original_bytes = xe::load_and_swap<uint32_t>(ptr);
-    assert_true(original_bytes != 0x0000'dead);
-    xe::store_and_swap<uint32_t>(ptr, 0x0000'dead);
+    auto original_bytes = xe::load<uint32_t>(ptr);
+    assert_true(original_bytes != kArm64Brk0);
+    xe::store<uint32_t>(ptr, kArm64Brk0);
     breakpoint->backend_data().emplace_back(host_address, original_bytes);
   });
 }
@@ -654,20 +503,19 @@ void A64Backend::InstallBreakpoint(Breakpoint* breakpoint, Function* fn) {
     return;
   }
 
-  // Assume we haven't already installed a breakpoint in this spot.
   auto ptr = reinterpret_cast<void*>(host_address);
-  auto original_bytes = xe::load_and_swap<uint32_t>(ptr);
-  assert_true(original_bytes != 0x0000'dead);
-  xe::store_and_swap<uint32_t>(ptr, 0x0000'dead);
+  auto original_bytes = xe::load<uint32_t>(ptr);
+  assert_true(original_bytes != kArm64Brk0);
+  xe::store<uint32_t>(ptr, kArm64Brk0);
   breakpoint->backend_data().emplace_back(host_address, original_bytes);
 }
 
 void A64Backend::UninstallBreakpoint(Breakpoint* breakpoint) {
   for (auto& pair : breakpoint->backend_data()) {
     auto ptr = reinterpret_cast<uint8_t*>(pair.first);
-    auto instruction_bytes = xe::load_and_swap<uint32_t>(ptr);
-    assert_true(instruction_bytes == 0x0000'dead);
-    xe::store_and_swap<uint32_t>(ptr, static_cast<uint32_t>(pair.second));
+    auto instruction_bytes = xe::load<uint32_t>(ptr);
+    assert_true(instruction_bytes == kArm64Brk0);
+    xe::store<uint32_t>(ptr, static_cast<uint32_t>(pair.second));
   }
   breakpoint->backend_data().clear();
 }
@@ -874,7 +722,7 @@ void A64Backend::RecordMMIOExceptionForGuestInstruction(void* host_address) {
 }
 
 bool A64Backend::ExceptionCallbackThunk(Exception* ex, void* data) {
-  auto backend = reinterpret_cast<A64Backend*>(data);
+  auto* backend = reinterpret_cast<A64Backend*>(data);
   return backend->ExceptionCallback(ex);
 }
 
@@ -1075,21 +923,16 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
     return false;
   }
   if (ex->code() != Exception::Code::kIllegalInstruction) {
-    // We only care about illegal instructions. Other things will be handled by
-    // other handlers (probably). If nothing else picks it up we'll be called
-    // with OnUnhandledException to do real crash handling.
     return false;
   }
 
-  // Verify an expected illegal instruction.
+  // Verify it's our BRK #0 instruction.
   auto instruction_bytes =
-      xe::load_and_swap<uint32_t>(reinterpret_cast<void*>(ex->pc()));
-  if (instruction_bytes != 0x0000'dead) {
-    // Not our `udf #0xdead` - not us.
+      xe::load<uint32_t>(reinterpret_cast<void*>(ex->pc()));
+  if (instruction_bytes != kArm64Brk0) {
     return false;
   }
 
-  // Let the processor handle things.
   return processor()->OnThreadBreakpointHit(ex);
 }
 

@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2025 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -55,6 +55,14 @@ namespace MTL {
 class Heap;
 class SharedEvent;
 }  // namespace MTL
+
+namespace xe {
+namespace ui {
+namespace metal {
+class MetalGPUCompletionTimeline;
+}  // namespace metal
+}  // namespace ui
+}  // namespace xe
 
 namespace xe {
 namespace gpu {
@@ -125,6 +133,14 @@ class MetalCommandProcessor : public CommandProcessor {
   MTL::CommandBuffer* GetCurrentCommandBuffer() const {
     return current_command_buffer_;
   }
+
+  // Debug marker methods - public so subsystems can annotate their operations.
+  void UpdateDebugMarkersEnabled();
+  void PushDebugMarker(const char* format, ...);
+  void PopDebugMarker();
+  void InsertDebugMarker(const char* format, ...);
+  bool debug_markers_enabled() const { return debug_markers_enabled_; }
+  void RequestCapture();
   uint32_t current_draw_index() const { return current_draw_index_; }
 
   // Submission coordination helpers — callers use these to query or obtain
@@ -228,6 +244,7 @@ class MetalCommandProcessor : public CommandProcessor {
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                  uint32_t frontbuffer_height) override;
+  void OnPrimaryBufferEnd() override;
 
   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
                      const uint32_t* host_address,
@@ -561,7 +578,6 @@ class MetalCommandProcessor : public CommandProcessor {
   // Shared memory for Xbox 360 memory access
   std::unique_ptr<MetalSharedMemory> shared_memory_;
   std::unique_ptr<MetalPrimitiveProcessor> primitive_processor_;
-  bool frame_open_ = false;
 
   bool saw_swap_ = false;
   uint32_t last_swap_ptr_ = 0;

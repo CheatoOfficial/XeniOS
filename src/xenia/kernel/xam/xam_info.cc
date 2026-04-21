@@ -9,6 +9,7 @@
 
 #include <thread>
 
+#include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
@@ -887,6 +888,25 @@ DECLARE_XAM_EXPORT1(XamDoesOmniNeedConfiguration, kNone, kStub);
 
 dword_result_t XamFirstRunExperienceShouldRun_entry() { return 0; }
 DECLARE_XAM_EXPORT1(XamFirstRunExperienceShouldRun, kNone, kStub);
+
+dword_result_t QueryPerformanceFrequency_entry(lpqword_t query) {
+  uint64_t result = Clock::guest_tick_frequency();
+  *query = static_cast<uint32_t>(result);
+  return 1;
+}
+DECLARE_XAM_EXPORT1(QueryPerformanceFrequency, kNone, kImplemented);
+
+void GetSystemTimeAsFileTime_entry(lpqword_t time_ptr,
+                                   const ppc_context_t& ctx) {
+  if (time_ptr) {
+    uint32_t ts_bundle = ctx->kernel_state->GetKeTimestampBundle();
+    uint64_t time = Clock::QueryGuestSystemTime();
+    ctx->TranslateVirtual<X_TIME_STAMP_BUNDLE*>(ts_bundle)->system_time =
+        xe::byte_swap(time);
+    *time_ptr = time;
+  }
+}
+DECLARE_XAM_EXPORT1(GetSystemTimeAsFileTime, kNone, kImplemented);
 
 }  // namespace xam
 }  // namespace kernel

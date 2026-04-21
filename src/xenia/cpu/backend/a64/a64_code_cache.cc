@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Ben Vanik. All rights reserved.                             *
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -25,17 +25,6 @@
 #if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
 #include <pthread.h>
 #endif
-
-#include "third_party/fmt/include/fmt/format.h"
-#include "xenia/base/assert.h"
-#include "xenia/base/clock.h"
-#include "xenia/base/cvar.h"
-#include "xenia/base/literals.h"
-#include "xenia/base/logging.h"
-#include "xenia/base/math.h"
-#include "xenia/base/memory.h"
-#include "xenia/cpu/function.h"
-#include "xenia/cpu/module.h"
 
 namespace xe {
 namespace cpu {
@@ -74,13 +63,6 @@ bool ShouldLogIndirectionTable() {
   if (!cvars::a64_indirection_table_log) {
     return false;
   }
-  const int32_t limit = cvars::a64_indirection_table_log_limit;
-  if (limit <= 0) {
-    return false;
-  }
-  static std::atomic<int32_t> log_count{0};
-  const int32_t count = log_count.fetch_add(1, std::memory_order_relaxed);
-  return count < limit;
 }
 
 #if XE_PLATFORM_IOS && XE_ARCH_ARM64
@@ -502,7 +484,9 @@ const size_t A64CodeCache::kIndirectionTableSize;
 // On ARM64 platforms, this will be set dynamically during initialization
 uintptr_t A64CodeCache::kIndirectionTableBase = 0x80000000;
 #else
-const uintptr_t A64CodeCache::kIndirectionTableBase;
+  __builtin___clear_cache(
+      reinterpret_cast<char*>(address),
+      reinterpret_cast<char*>(static_cast<uint8_t*>(address) + size));
 #endif
 
 A64CodeCache::A64CodeCache() = default;

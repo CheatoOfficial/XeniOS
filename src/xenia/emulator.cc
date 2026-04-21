@@ -12,6 +12,9 @@
 #include "xenia/emulator.h"
 
 #include <algorithm>
+#if XE_PLATFORM_LINUX
+#include <fstream>
+#endif
 #include "config.h"
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/tabulate/single_include/tabulate/tabulate.hpp"
@@ -39,9 +42,6 @@
 #endif
 #include "xenia/cpu/backend/code_cache.h"
 #include "xenia/cpu/backend/null_backend.h"
-#if XE_ARCH_ARM64
-#include "xenia/cpu/backend/a64/a64_backend.h"
-#endif  // XE_ARCH_ARM64
 #include "xenia/cpu/cpu_flags.h"
 #include "xenia/cpu/thread_state.h"
 #include "xenia/gpu/command_processor.h"
@@ -77,6 +77,8 @@
 
 #if XE_ARCH_AMD64
 #include "xenia/cpu/backend/x64/x64_backend.h"
+#elif XE_ARCH_ARM64
+#include "xenia/cpu/backend/a64/a64_backend.h"
 #endif  // XE_ARCH
 
 #if XE_PLATFORM_IOS
@@ -145,6 +147,7 @@ DECLARE_bool(allow_plugins);
 
 DECLARE_bool(mount_scratch);
 DECLARE_bool(mount_cache);
+DECLARE_bool(mount_memory_unit);
 DECLARE_bool(force_mount_devkit);
 
 DEFINE_int32(priority_class, 0,
@@ -302,6 +305,31 @@ X_STATUS Emulator::Setup(
   // Before we can set thread affinity we must enable the process to use all
   // logical processors.
   xe::threading::EnableAffinityConfiguration();
+
+#if XE_PLATFORM_LINUX
+  // Check if /dev/shm is mounted with noexec. The code cache uses shm_open
+  // with PROT_EXEC, which will fail with EPERM on noexec tmpfs mounts.
+  {
+    std::ifstream mounts("/proc/mounts");
+    std::string line;
+    while (std::getline(mounts, line)) {
+      if (line.find("/dev/shm") != std::string::npos &&
+          line.find("noexec") != std::string::npos) {
+        XELOGE(
+            "/dev/shm is mounted with noexec, which prevents the code cache "
+            "from allocating executable memory. Please remount it with: "
+            "sudo mount -o remount,exec /dev/shm");
+        xe::ShowSimpleMessageBox(
+            xe::SimpleMessageBoxType::Error,
+            "/dev/shm is mounted with noexec, which prevents Xenia from "
+            "allocating executable memory for the code cache.\n\n"
+            "Please remount it with:\n"
+            "  sudo mount -o remount,exec /dev/shm");
+        return X_STATUS_UNSUCCESSFUL;
+      }
+    }
+  }
+#endif
 
   XELOGI("{}: Initializing Memory...", __func__);
   // Create memory system first, as it is required for other systems.
@@ -715,7 +743,8 @@ X_STATUS Emulator::LaunchXexFile(const std::filesystem::path& path) {
   auto file_name = path.filename();
 
   // Launch the game.
-  auto fs_path = "game:\\" + xe::path_to_utf8(file_name);
+  auto fs_path = fmt::format("{}\\", kDefaultGameSymbolicLink) +
+                 xe::path_to_utf8(file_name);
   X_STATUS result = CompleteLaunch(path, fs_path);
 
   if (XFAILED(result)) {
@@ -731,9 +760,9 @@ X_STATUS Emulator::LaunchXexFile(const std::filesystem::path& path) {
   const std::string mount_path =
       utf8::find_base_guest_path(kernel_state_->GetExecutableModule()->path());
 
-  // System related symlinks
-  file_system_->RegisterSymbolicLink("media:", mount_path);
-  file_system_->RegisterSymbolicLink("font:", mount_path);
+  // System related symlinks. This should point to dashboard location in the
+  // future.
+  file_system_->RegisterSymbolicLink("\\SystemRoot", mount_path);
 
   auto module = kernel_state_->LoadUserModule("xam.xex");
 
@@ -1756,6 +1785,20 @@ void Emulator::MountStandardDrives() {
     }
   }
 
+  if (cvars::mount_memory_unit) {
+    auto mu_device = std::make_unique<xe::vfs::HostPathDevice>(
+        "\\MU", storage_root_ / "mu", false);
+    if (!mu_device->Initialize()) {
+      XELOGE("Unable to scan MU path");
+    } else {
+      if (!fs->RegisterDevice(std::move(mu_device))) {
+        XELOGE("Unable to register MU path");
+      } else {
+        fs->RegisterSymbolicLink("MU:", "\\MU");
+      }
+    }
+  }
+
   if (cvars::force_mount_devkit) {
     auto devkit_device =
         std::make_unique<xe::vfs::HostPathDevice>("\\DEVKIT", "devkit", false);
@@ -1982,6 +2025,19 @@ bool Emulator::ExceptionCallback(Exception* ex) {
   crash_msg.append(
       fmt::format("PC: 0x{:08X}\n",
                   guest_function->MapMachineCodeToGuestAddress(ex->pc())));
+  if (ex->code() == Exception::Code::kAccessViolation) {
+    const char* op_str = "unknown";
+    if (ex->access_violation_operation() ==
+        Exception::AccessViolationOperation::kRead)
+      op_str = "read";
+    else if (ex->access_violation_operation() ==
+             Exception::AccessViolationOperation::kWrite)
+      op_str = "write";
+    crash_msg.append(fmt::format("Access Violation: {} at 0x{:016X}\n", op_str,
+                                 ex->fault_address()));
+  } else if (ex->code() == Exception::Code::kIllegalInstruction) {
+    crash_msg.append("Illegal Instruction\n");
+  }
   crash_msg.append("Registers:\n");
   for (int i = 0; i < 32; i++) {
     crash_msg.append(fmt::format(" r{:<3} = {:016X}\n", i, context->r[i]));
@@ -2080,7 +2136,7 @@ std::string Emulator::RemountAndResolveLaunchPath(
 }
 
 std::string Emulator::FindLaunchModule() {
-  std::string path("game:\\");
+  std::string path(fmt::format("{}\\", kDefaultGameSymbolicLink));
 
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
 

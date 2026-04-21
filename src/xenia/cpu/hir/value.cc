@@ -877,10 +877,10 @@ void Value::Permute(Value* src1, Value* src2, TypeName type) {
       return _mm_storeu_si128((__m128i*)&v, x);
     };
 
-    __m128i xmm1 = lod(src1->constant.v128);
-    __m128i xmm2 = lod(src2->constant.v128);
-    xmm1 = _mm_shuffle_epi8(xmm1, lod(perm));
-    xmm2 = _mm_shuffle_epi8(xmm2, lod(perm));
+    vec128_t shuf1, shuf2;
+    shuffle_bytes(src1->constant.v128, perm, shuf1);
+    shuffle_bytes(src2->constant.v128, perm, shuf2);
+
     uint8_t mask = 0;
     for (int i = 0; i < 8; i++) {
       if (perm_ctrl.i16[i] == 0) {
@@ -888,10 +888,12 @@ void Value::Permute(Value* src1, Value* src2, TypeName type) {
       }
     }
 
-    vec128_t unp_mask = vec128b(0);
+    // Blend: select from shuf1 where mask bit is set, shuf2 otherwise
     for (int i = 0; i < 8; i++) {
       if (mask & (1 << i)) {
-        unp_mask.u16[i] = 0xFFFF;
+        constant.v128.u16[i] = shuf1.u16[i];
+      } else {
+        constant.v128.u16[i] = shuf2.u16[i];
       }
     }
 

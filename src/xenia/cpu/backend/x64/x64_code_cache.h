@@ -10,42 +10,22 @@
 #ifndef XENIA_CPU_BACKEND_X64_X64_CODE_CACHE_H_
 #define XENIA_CPU_BACKEND_X64_X64_CODE_CACHE_H_
 
-#include <atomic>
-#include <cstddef>
-#include <cstdint>
 #include <memory>
-#include <string>
-#include <utility>
-#include <vector>
 
-#include "xenia/base/memory.h"
-#include "xenia/base/mutex.h"
-#include "xenia/cpu/backend/code_cache.h"
+#include "xenia/cpu/backend/code_cache_base.h"
 
 namespace xe {
 namespace cpu {
 namespace backend {
 namespace x64 {
 
-struct EmitFunctionInfo {
-  struct _code_size {
-    size_t prolog;
-    size_t body;
-    size_t epilog;
-    size_t tail;
-    size_t total;
-  } code_size;
-  size_t prolog_stack_alloc_offset;  // offset of instruction after stack alloc
-  size_t stack_size;
-};
-
-class X64CodeCache : public CodeCache {
+class X64CodeCache : public CodeCacheBase<X64CodeCache> {
  public:
-  ~X64CodeCache() override;
+  ~X64CodeCache() override = default;
 
   static std::unique_ptr<X64CodeCache> Create();
 
-  virtual bool Initialize();
+  void* LookupUnwindInfo(uint64_t host_pc) override { return nullptr; }
 
   const std::filesystem::path& file_name() const override { return file_name_; }
   uintptr_t execute_base_address() const override {
@@ -112,6 +92,7 @@ class X64CodeCache : public CodeCache {
 
   X64CodeCache();
 
+  // Virtual for platform-specific overrides (_win.cc / _posix.cc).
   virtual UnwindReservation RequestUnwindReservation(uint8_t* entry_address) {
     return UnwindReservation();
   }

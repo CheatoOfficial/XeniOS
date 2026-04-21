@@ -84,6 +84,13 @@ DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 DEFINE_string(apu, "alsa", "Audio system. Use: " APU_OPTIONS, "APU");
 DEFINE_string(gpu, "vulkan", "Graphics system. Use: " GPU_OPTIONS, "GPU");
 DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
+#elif XE_PLATFORM_MAC
+#define APU_OPTIONS "[sdl, nop]"
+#define GPU_OPTIONS "[null]"
+#define HID_OPTIONS "[sdl, nop]"
+DEFINE_string(apu, "sdl", "Audio system. Use: " APU_OPTIONS, "APU");
+DEFINE_string(gpu, "null", "Graphics system. Use: " GPU_OPTIONS, "GPU");
+DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 #else
 #define APU_OPTIONS "[sdl, nop]"
 #define HID_OPTIONS "[sdl, nop]"
@@ -526,12 +533,9 @@ bool EmulatorApp::OnInitialize() {
     if (!cvars::portable &&
         !std::filesystem::exists(storage_root / "portable.txt")) {
       storage_root = xe::filesystem::GetUserFolder();
-#if defined(XE_PLATFORM_WIN32) || defined(XE_PLATFORM_LINUX)
-      storage_root = storage_root / "Xenia";
+#if XE_PLATFORM_ANDROID
+      // TODO(Triang3l): Point to the app's external storage "files" directory.
 #else
-      // TODO(Triang3l): Point to the app's external storage "files" directory
-      // on Android.
-#warning Unhandled platform for the data root.
       storage_root = storage_root / "Xenia";
 #endif
     }
@@ -548,6 +552,8 @@ bool EmulatorApp::OnInitialize() {
 
 #if XE_ARCH_AMD64 == 1
   amd64::InitFeatureFlags();
+#elif XE_ARCH_ARM64 == 1
+  arm64::InitFeatureFlags();
 #endif
 
   std::filesystem::path content_root = cvars::content_root;

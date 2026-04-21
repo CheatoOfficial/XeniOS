@@ -133,10 +133,6 @@ inline bool atomic_cas(int64_t old_value, int64_t new_value,
       reinterpret_cast<volatile int64_t*>(value), old_value, new_value);
 }
 
-#else
-
-#error No atomic primitives defined for this platform/cpu combination.
-
 #endif  // XE_PLATFORM
 
 inline uint32_t atomic_inc(volatile uint32_t* value) {

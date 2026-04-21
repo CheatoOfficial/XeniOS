@@ -26,13 +26,22 @@
 #include <mach/vm_region.h>
 #endif
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <sstream>
 #include "xenia/base/logging.h"
 
+#if XE_PLATFORM_MAC
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_region.h>
+#endif  // XE_PLATFORM_MAC
+
+#include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/platform.h"
 #include "xenia/base/string.h"
@@ -232,7 +241,13 @@ void* AllocFixed(void* base_address, size_t length,
     }
     return result;
   }
-  return nullptr;
+
+  if (base_address != nullptr && result != base_address) {
+    munmap(result, length);
+    return nullptr;
+  }
+
+  return result;
 }
 
 bool DeallocFixed(void* base_address, size_t length,
@@ -556,6 +571,7 @@ void CloseFileMappingHandle(FileMappingHandle handle,
       g_shm_file_names.erase(it);
     }
   }
+#endif  // XE_PLATFORM_MAC
 #endif
 }
 
@@ -572,15 +588,22 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
 
   void* result = mmap(base_address, length, prot, flags, handle, file_offset);
 
-  if (result != MAP_FAILED) {
-    std::lock_guard guard(g_mapped_file_ranges_mutex);
-    mapped_file_ranges.push_back(
-        {reinterpret_cast<uintptr_t>(result),
-         reinterpret_cast<uintptr_t>(result) + length});
-    return result;
+  if (result == MAP_FAILED) {
+    return nullptr;
   }
 
-  return nullptr;
+  // Without MAP_FIXED_NOREPLACE (e.g. macOS), a non-null base_address is just
+  // a hint. Enforce the caller's contract by failing on address mismatch so
+  // callers can retry at a different base, matching AllocFixed's behavior.
+  if (base_address != nullptr && result != base_address) {
+    munmap(result, length);
+    return nullptr;
+  }
+
+  std::lock_guard guard(g_mapped_file_ranges_mutex);
+  mapped_file_ranges.push_back({reinterpret_cast<uintptr_t>(result),
+                                reinterpret_cast<uintptr_t>(result) + length});
+  return result;
 }
 
 bool UnmapFileView(FileMappingHandle handle, void* base_address,
@@ -612,6 +635,32 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
   return true;
 #else
   std::lock_guard guard(g_mapped_file_ranges_mutex);
+
+#if XE_PLATFORM_MAC
+  uintptr_t unmap_begin = reinterpret_cast<uintptr_t>(base_address);
+  uintptr_t unmap_end = unmap_begin + length;
+
+  for (auto mapped_range = mapped_file_ranges.begin();
+       mapped_range != mapped_file_ranges.end(); ++mapped_range) {
+    if (unmap_begin >= mapped_range->region_begin &&
+        unmap_end <= mapped_range->region_end) {
+      uintptr_t orig_begin = mapped_range->region_begin;
+      uintptr_t orig_end = mapped_range->region_end;
+      mapped_file_ranges.erase(mapped_range);
+
+      if (orig_begin < unmap_begin) {
+        mapped_file_ranges.push_back({orig_begin, unmap_begin});
+      }
+      if (unmap_end < orig_end) {
+        mapped_file_ranges.push_back({unmap_end, orig_end});
+      }
+
+      return munmap(base_address, length) == 0;
+    }
+  }
+
+  return munmap(base_address, length) == 0;
+#else
   for (auto mapped_range = mapped_file_ranges.begin();
        mapped_range != mapped_file_ranges.end();) {
     if (mapped_range->region_begin ==

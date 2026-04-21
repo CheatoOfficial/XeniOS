@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <iostream>
 
+#include <iostream>
+
 namespace xe {
 namespace debugging {
 
@@ -26,11 +28,11 @@ bool IsDebuggerAttached() {
   return (info.kp_proc.p_flag & P_TRACED) != 0;
 }
 
-// TODO(benvanik): find a more reliable way.
-void Break() {
-  // __asm__("int $3");
-  __builtin_debugtrap();
-}
+void Break() { __builtin_debugtrap(); }
+
+namespace internal {
+void DebugPrint(const char* s) { std::clog << s << std::endl; }
+}  // namespace internal
 
 namespace internal {
 void DebugPrint(const char* s) { std::clog << s << std::endl; }

@@ -63,6 +63,26 @@ std::string JsonValueToString(const rapidjson::Value& value) {
   return result;
 }
 
+std::string TomlValueToString(const toml::node& node) {
+  if (auto* str = node.as_string()) return str->get();
+  if (auto* integer = node.as_integer()) return std::to_string(integer->get());
+  if (auto* fp = node.as_floating_point()) return fmt::format("{}", fp->get());
+  if (auto* boolean = node.as_boolean())
+    return boolean->get() ? "true" : "false";
+  return "";
+}
+
+// Find the settings file for a title, checking .toml first then .json
+std::filesystem::path FindOptimizedSettingsPath(uint32_t title_id) {
+  auto base = config::GetBundledDataPath("optimized_settings");
+  auto name = fmt::format("{:08X}", title_id);
+  auto toml_path = base / (name + ".toml");
+  if (std::filesystem::exists(toml_path)) return toml_path;
+  auto json_path = base / (name + ".json");
+  if (std::filesystem::exists(json_path)) return json_path;
+  return {};
+}
+
 bool CanaryCvarCompat(const std::string& var_name, const std::string& value,
                       std::string& out_var_name, std::string& out_value) {
   for (const auto& alias : xe::ui::GetCvarAliases()) {
@@ -92,9 +112,8 @@ GameConfigDialogQt::GameConfigDialogQt(QWidget* parent,
   LoadConfigOverrides();
 
   // Check if recommended settings exist and enable/disable button accordingly
-  auto settings_path = config::GetBundledDataPath("optimized_settings") /
-                       (fmt::format("{:08X}", title_id_) + ".json");
-  recommended_button_->setEnabled(std::filesystem::exists(settings_path));
+  auto settings_path = FindOptimizedSettingsPath(title_id_);
+  recommended_button_->setEnabled(!settings_path.empty());
 }
 
 GameConfigDialogQt::~GameConfigDialogQt() = default;
@@ -702,70 +721,105 @@ void GameConfigDialogQt::OnUseRecommendedClicked() {
 }
 
 void GameConfigDialogQt::LoadRecommendedSettings() {
-  auto settings_path = config::GetBundledDataPath("optimized_settings") /
-                       (fmt::format("{:08X}", title_id_) + ".json");
+  auto settings_path = FindOptimizedSettingsPath(title_id_);
 
-  if (!std::filesystem::exists(settings_path)) {
+  if (settings_path.empty()) {
     QMessageBox::information(this, "No Recommended Settings",
                              "No optimized settings are available for this "
                              "game in the community database.");
     return;
   }
 
-  // Read the JSON file
-  std::ifstream file(settings_path);
-  if (!file.is_open()) {
-    QMessageBox::warning(this, "Error Loading Settings",
-                         "Failed to open recommended settings file.");
-    return;
-  }
-
-  std::string json_content((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
-  file.close();
-
-  // Parse JSON
-  rapidjson::Document doc;
-  rapidjson::ParseResult parse_result = doc.Parse(json_content.c_str());
-
-  if (!parse_result) {
-    QMessageBox::warning(
-        this, "Error Parsing Settings",
-        SafeQString(
-            fmt::format("Failed to parse recommended settings: {} at offset {}",
-                        rapidjson::GetParseError_En(parse_result.Code()),
-                        parse_result.Offset())));
-    return;
-  }
-
-  if (!doc.IsObject()) {
-    QMessageBox::warning(this, "Error Parsing Settings",
-                         "Recommended settings file has invalid format.");
-    return;
-  }
+  bool is_toml = settings_path.extension() == ".toml";
 
   // Track how many settings were applied
   int settings_applied = 0;
 
-  // Iterate through categories (APU, GPU, HACKS, etc.)
-  for (auto cat_it = doc.MemberBegin(); cat_it != doc.MemberEnd(); ++cat_it) {
-    if (!cat_it->value.IsObject()) {
-      continue;
+  if (is_toml) {
+    // Parse TOML file
+    toml::parse_result result;
+    try {
+      result = toml::parse_file(settings_path.string());
+    } catch (const toml::parse_error& err) {
+      QMessageBox::warning(
+          this, "Error Parsing Settings",
+          SafeQString(fmt::format("Failed to parse recommended settings: {}",
+                                  err.what())));
+      return;
     }
 
-    // Iterate through settings within each category
-    for (auto setting_it = cat_it->value.MemberBegin();
-         setting_it != cat_it->value.MemberEnd(); ++setting_it) {
-      std::string var_name = setting_it->name.GetString();
-      std::string value = JsonValueToString(setting_it->value);
+    // Iterate through categories (APU, GPU, HACKS, etc.)
+    for (auto&& [category_key, category_node] : result) {
+      auto* category_table = category_node.as_table();
+      if (!category_table) continue;
 
-      // Apply CanaryCvarCompat translation
-      std::string translated_var_name;
-      std::string translated_value;
-      CanaryCvarCompat(var_name, value, translated_var_name, translated_value);
+      for (auto&& [setting_key, setting_node] : *category_table) {
+        std::string var_name(setting_key.str());
+        std::string value = TomlValueToString(setting_node);
 
-      if (ApplyRecommendedSetting(translated_var_name, translated_value)) {
-        settings_applied++;
+        std::string translated_var_name;
+        std::string translated_value;
+        CanaryCvarCompat(var_name, value, translated_var_name,
+                         translated_value);
+
+        if (ApplyRecommendedSetting(translated_var_name, translated_value)) {
+          settings_applied++;
+        }
+      }
+    }
+  } else {
+    // Read the JSON file
+    std::ifstream file(settings_path);
+    if (!file.is_open()) {
+      QMessageBox::warning(this, "Error Loading Settings",
+                           "Failed to open recommended settings file.");
+      return;
+    }
+
+    std::string json_content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    file.close();
+
+    // Parse JSON
+    rapidjson::Document doc;
+    rapidjson::ParseResult parse_result = doc.Parse(json_content.c_str());
+
+    if (!parse_result) {
+      QMessageBox::warning(
+          this, "Error Parsing Settings",
+          SafeQString(fmt::format(
+              "Failed to parse recommended settings: {} at offset {}",
+              rapidjson::GetParseError_En(parse_result.Code()),
+              parse_result.Offset())));
+      return;
+    }
+
+    if (!doc.IsObject()) {
+      QMessageBox::warning(this, "Error Parsing Settings",
+                           "Recommended settings file has invalid format.");
+      return;
+    }
+
+    // Iterate through categories (APU, GPU, HACKS, etc.)
+    for (auto cat_it = doc.MemberBegin(); cat_it != doc.MemberEnd(); ++cat_it) {
+      if (!cat_it->value.IsObject()) {
+        continue;
+      }
+
+      // Iterate through settings within each category
+      for (auto setting_it = cat_it->value.MemberBegin();
+           setting_it != cat_it->value.MemberEnd(); ++setting_it) {
+        std::string var_name = setting_it->name.GetString();
+        std::string value = JsonValueToString(setting_it->value);
+
+        std::string translated_var_name;
+        std::string translated_value;
+        CanaryCvarCompat(var_name, value, translated_var_name,
+                         translated_value);
+
+        if (ApplyRecommendedSetting(translated_var_name, translated_value)) {
+          settings_applied++;
+        }
       }
     }
   }

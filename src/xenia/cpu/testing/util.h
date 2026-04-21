@@ -33,6 +33,16 @@ namespace testing {
 
 using xe::cpu::ppc::PPCContext;
 
+inline std::unique_ptr<xe::cpu::backend::Backend> CreateBackend() {
+#if XE_ARCH_AMD64
+  return std::make_unique<xe::cpu::backend::x64::X64Backend>();
+#elif XE_ARCH_ARM64
+  return std::make_unique<xe::cpu::backend::a64::A64Backend>();
+#else
+  return nullptr;
+#endif
+}
+
 class TestFunction {
  public:
   TestFunction(std::function<void(hir::HIRBuilder& b)> generator) {
@@ -99,6 +109,10 @@ class TestFunction {
 #endif  // XE_PLATFORM_APPLE
       auto ctx = thread_state->context();
       ctx->lr = 0xBCBCBCBC;
+
+      // Reset hardware FPU rounding mode to nearest before each run,
+      // in case a prior test left it dirty.
+      processor->backend()->SetGuestRoundingMode(ctx, 0);
 
       pre_call(ctx);
 

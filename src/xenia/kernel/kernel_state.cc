@@ -522,6 +522,9 @@ void KernelState::SetExecutableModule(object_ref<UserModule> module) {
         xboxkrnl::XboxkrnlModule::kExLoadedCommandLineSize);
   }
 
+  // Initialize file I/O hooks for XMP volume title-specific patches.
+  InitXmpVolumePatch();
+
   // Spin up deferred dispatch worker.
   // TODO(benvanik): move someplace more appropriate (out of ctor, but around
   // here).
@@ -742,7 +745,7 @@ const object_ref<UserModule> KernelState::LoadTitleUpdate(
       "UPDATE", 0, *title_update, content_license, disc_number);
 
   std::string mount_path = "";
-  if (!file_system()->FindSymbolicLink("game:", mount_path)) {
+  if (!file_system()->FindSymbolicLink(kDefaultGameSymbolicLink, mount_path)) {
     return nullptr;
   }
 
@@ -751,7 +754,8 @@ const object_ref<UserModule> KernelState::LoadTitleUpdate(
   }
 
   std::string resolved_path = "";
-  if (!file_system()->FindSymbolicLink("UPDATE:", resolved_path)) {
+  if (!file_system()->FindSymbolicLink(kDefaultUpdateSymbolicLink,
+                                       resolved_path)) {
     return nullptr;
   }
 
@@ -856,6 +860,10 @@ void KernelState::UnloadUserModule(const object_ref<UserModule>& module,
                            }) == user_modules_.end());
 
   object_table()->ReleaseHandleInLock(module->handle());
+}
+
+void KernelState::InitXmpVolumePatch() {
+  xmp_volume_patch_ = XmpVolumePatch::CreateForTitle(title_id(), this);
 }
 
 void KernelState::TerminateTitle() {
@@ -1402,15 +1410,16 @@ void KernelState::EmulateCPInterruptDPC(uint32_t interrupt_callback,
 }
 
 void KernelState::InitializeProcess(X_KPROCESS* process, uint32_t type,
-                                    char unk_18, char unk_19, char unk_1A) {
+                                    char priority_class, char default_priority,
+                                    char max_dynamic_priority) {
   uint32_t guest_kprocess = memory()->HostToGuestVirtual(process);
 
   uint32_t thread_list_guest_ptr =
       guest_kprocess + offsetof(X_KPROCESS, thread_list);
 
-  process->unk_18 = unk_18;
-  process->unk_19 = unk_19;
-  process->unk_1A = unk_1A;
+  process->process_priority_class = priority_class;
+  process->default_thread_priority = default_priority;
+  process->max_dynamic_priority = max_dynamic_priority;
   util::XeInitializeListHead(&process->thread_list, thread_list_guest_ptr);
   process->quantum = 60;
   // doubt any guest code uses this ptr, which i think probably has something to
@@ -1418,7 +1427,7 @@ void KernelState::InitializeProcess(X_KPROCESS* process, uint32_t type,
   process->clrdataa_masked_ptr = 0;
   // clrdataa_ & ~(1U << 31);
   process->thread_count = 0;
-  process->unk_1B = 0x06;
+  process->disable_quantum_decay = 0x06;
   process->kernel_stack_size = 16 * 1024;
   process->tls_slot_size = 0x80;
 

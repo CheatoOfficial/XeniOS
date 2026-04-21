@@ -117,8 +117,12 @@ X64Backend::X64Backend() : Backend(), code_cache_(nullptr) {
   cs_option(capstone_handle_, CS_OPT_SYNTAX, CS_OPT_SYNTAX_INTEL);
   cs_option(capstone_handle_, CS_OPT_DETAIL, CS_OPT_ON);
   cs_option(capstone_handle_, CS_OPT_SKIPDATA, CS_OPT_OFF);
-  uint32_t base_address = 0x10000;
+  // Probe for trampoline memory sub-4GB.  Succeeds on most Windows/Linux
+  // configs; required by the fast indirection path (32-bit absolute slot
+  // values).  If it fails, fall back to any VA and the code cache will
+  // pick the encoded path.
   void* buf_trampoline_code = nullptr;
+  uint32_t base_address = 0x10000;
   while (base_address < 0x80000000) {
     buf_trampoline_code = memory::AllocFixed(
         (void*)(uintptr_t)base_address,
@@ -161,6 +165,8 @@ X64Backend::X64Backend() : Backend(), code_cache_(nullptr) {
   }
   xenia_assert(buf_trampoline_code);
   guest_trampoline_memory_ = (uint8_t*)buf_trampoline_code;
+  guest_trampolines_sub4gb_ =
+      reinterpret_cast<uintptr_t>(buf_trampoline_code) < 0x100000000ull;
   guest_trampoline_address_bitmap_.Resize(MAX_GUEST_TRAMPOLINES);
 }
 
@@ -289,6 +295,8 @@ bool X64Backend::Initialize(Processor* processor) {
 
   code_cache_ = X64CodeCache::Create();
   Backend::code_cache_ = code_cache_.get();
+  // Fast indirection is only viable if trampolines made it under 4GB.
+  code_cache_->set_allow_fast_indirection(guest_trampolines_sub4gb_);
   if (!code_cache_->Initialize()) {
     return false;
   }
@@ -297,6 +305,9 @@ bool X64Backend::Initialize(Processor* processor) {
                                       GUEST_TRAMPOLINE_END);
   // Allocate emitter constant data.
   emitter_data_ = X64Emitter::PlaceConstData();
+  if (!emitter_data_) {
+    return false;
+  }
 
   // Generate thunks used to transition between jitted code and host code.
   XbyakAllocator allocator;
@@ -327,11 +338,9 @@ bool X64Backend::Initialize(Processor* processor) {
   vrsqrtefp_vector_helper =
       thunk_emitter.EmitVectorVRsqrteHelper(vrsqrtefp_scalar_helper);
   frsqrtefp_helper = thunk_emitter.EmitFrsqrteHelper();
-  // Set the code cache to use the ResolveFunction thunk for default
-  // indirections.
-  assert_zero(uint64_t(resolve_function_thunk_) & 0xFFFFFFFF00000000ull);
-  code_cache_->set_indirection_default(
-      uint32_t(uint64_t(resolve_function_thunk_)));
+  // Default indirection slots point at the resolve thunk.
+  code_cache_->set_indirection_default_64(
+      reinterpret_cast<uint64_t>(resolve_function_thunk_));
 
   // Allocate some special indirections.
   code_cache_->CommitExecutableRange(0x9FFF0000, 0x9FFFFFFF);
@@ -750,8 +759,6 @@ HostToGuestThunk X64HelperEmitter::EmitHostToGuestThunk() {
 
   add(rsp, stack_size);
   ret();
-#else
-  assert_always("Unknown platform ABI in host to guest thunk!");
 #endif
 
   code_offsets.tail = getSize();
@@ -799,6 +806,9 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   call(rax);
 
   EmitLoadVolatileRegs();
+  // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
+  // so later guest FP ops observe the correct PPC rounding state.
+  vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
 
   code_offsets.epilog = getSize();
 
@@ -847,13 +857,14 @@ GuestToHostThunk X64HelperEmitter::EmitGuestToHostThunk() {
   call(rax);
 
   EmitLoadVolatileRegs();
+  // Host callbacks may change MXCSR. Restore the guest scalar rounding mode
+  // so later guest FP ops observe the correct PPC rounding state.
+  vldmxcsr(GetBackendCtxPtr(offsetof(X64BackendContext, mxcsr_fpu)));
 
   code_offsets.epilog = getSize();
 
   add(rsp, stack_size);
   ret();
-#else
-  assert_always("Unknown platform ABI in guest to host thunk!")
 #endif
 
   code_offsets.tail = getSize();
@@ -878,8 +889,8 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
 
 ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
 #if XE_PLATFORM_WIN32
-  // ebx = target PPC address
-  // rcx = context
+  // edx = target PPC address
+  // rsi = context
 
   _code_offsets code_offsets = {};
 
@@ -896,8 +907,7 @@ ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
   // Save volatile registers
   EmitSaveVolatileRegs();
 
-  mov(rcx, rsi);  // context
-  mov(rdx, rbx);
+  mov(rcx, rsi);  // arg0 = context (rdx is already the target PPC address)
   mov(rax, reinterpret_cast<uint64_t>(&ResolveFunction));
   call(rax);
 
@@ -909,7 +919,7 @@ ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
   jmp(rax);
 #elif XE_PLATFORM_LINUX || XE_PLATFORM_APPLE
   // Function is called with the following params:
-  // ebx = target PPC address
+  // edx = target PPC address
   // rsi = context
 
   // System-V ABI args:
@@ -935,8 +945,8 @@ ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
 
   // Save volatile registers
   EmitSaveVolatileRegs();
-  mov(rdi, rsi);  // context
-  mov(rsi, rbx);  // target PPC address
+  mov(rdi, rsi);  // arg0 = context
+  mov(rsi, rdx);  // arg1 = target PPC address
   mov(rax, reinterpret_cast<uint64_t>(&ResolveFunction));
   call(rax);
 
@@ -946,8 +956,6 @@ ResolveFunctionThunk X64HelperEmitter::EmitResolveFunctionThunk() {
 
   add(rsp, stack_size);
   jmp(rax);
-#else
-  assert_always("Unknown platform ABI in resolve function!");
 #endif
 
   code_offsets.tail = getSize();
@@ -1880,9 +1888,8 @@ uint32_t X64Backend::CreateGuestTrampoline(GuestTrampolineProc proc,
       GUEST_TRAMPOLINE_BASE +
       (static_cast<uint32_t>(new_index) * GUEST_TRAMPOLINE_MIN_LEN);
 
-  code_cache()->AddIndirection(
-      indirection_guest_addr,
-      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(write_pos)));
+  code_cache()->AddIndirection64(indirection_guest_addr,
+                                 reinterpret_cast<uint64_t>(write_pos));
 
   return indirection_guest_addr;
 }
