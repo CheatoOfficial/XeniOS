@@ -175,11 +175,21 @@ jobs:
           # iOS project files.
           mkdir -p tools/build/bin
           if [ '${{ steps.cache-premake5.outputs.cache-hit }}' != 'true' ]; then
+            repo_root="$PWD"
+            premake_core_dir="third_party/premake-core"
+            if [ ! -f "${premake_core_dir}/Bootstrap.mak" ] && git -C "${premake_core_dir}" rev-parse --git-dir >/dev/null 2>&1; then
+              git -C "${premake_core_dir}" reset --hard HEAD
+            fi
+            if [ ! -f "${premake_core_dir}/Bootstrap.mak" ]; then
+              echo "::warning::premake-core worktree is incomplete; cloning fallback source"
+              premake_core_dir="$(mktemp -d "${TMPDIR:-/tmp}/premake-core.XXXXXX")"
+              retry git clone --depth=1 --branch v5.0.0-beta7 https://github.com/premake/premake-core.git "${premake_core_dir}"
+            fi
             # Build premake5 from source (host macOS binary).
-            cd third_party/premake-core
+            cd "${premake_core_dir}"
             make -f Bootstrap.mak PLATFORM=ARM64 osx
-            cd ../..
-            cp third_party/premake-core/bin/release/premake5 tools/build/bin/
+            cd "${repo_root}"
+            cp "${premake_core_dir}/bin/release/premake5" tools/build/bin/
             chmod +x tools/build/bin/premake5
             echo "premake5 built and copied to tools/build/bin/"
           else
