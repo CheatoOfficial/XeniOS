@@ -15,10 +15,10 @@
 #include <cstring>
 
 #include "xenia/cpu/backend/a64/a64_backend.h"
+#include "xenia/cpu/backend/a64/a64_oaknut_compat.h"
 #include "xenia/cpu/backend/a64/a64_op.h"
 #include "xenia/cpu/backend/a64/a64_seq_util.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
-#include "xenia/cpu/backend/a64/a64_oaknut_compat.h"
 #include "xenia/cpu/hir/instr.h"
 
 namespace xe {
