@@ -277,6 +277,9 @@ bool X64Backend::Initialize(Processor* processor) {
                                       GUEST_TRAMPOLINE_END);
   // Allocate emitter constant data.
   emitter_data_ = X64Emitter::PlaceConstData();
+  if (!emitter_data_) {
+    return false;
+  }
 
   // Generate thunks used to transition between jitted code and host code.
   XbyakAllocator allocator;

@@ -1295,14 +1295,24 @@ static constexpr uintptr_t kConstDataIncrement = 0x00001000;
 // doing so requires RIP-relative addressing, which is difficult to support
 // given the current setup.
 uintptr_t X64Emitter::PlaceConstData() {
+  // Constants are accessed via [disp32] in GetXmmConstPtr, so the mapping
+  // must land in the bottom 31 bits. Bound the hint walk so we bail
+  // cleanly instead of looping past 2GB and tripping the assert below.
+  static constexpr uintptr_t kSub2GBLimit = 0x80000000ULL;
   uint8_t* ptr = reinterpret_cast<uint8_t*>(kConstDataLocation);
   void* mem = nullptr;
-  while (!mem) {
+  while (!mem && reinterpret_cast<uintptr_t>(ptr) < kSub2GBLimit) {
     mem = memory::AllocFixed(
         ptr, xe::round_up(kConstDataSize, memory::page_size()),
         memory::AllocationType::kReserveCommit, memory::PageAccess::kReadWrite);
 
     ptr += kConstDataIncrement;
+  }
+  if (!mem) {
+    XELOGE(
+        "PlaceConstData: no sub-2GB hole found for the constant table; "
+        "JIT cannot use [disp32] for constants and will not work.");
+    return 0;
   }
 
   // The pointer must not be greater than 31 bits.
