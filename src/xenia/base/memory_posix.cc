@@ -571,7 +571,6 @@ void CloseFileMappingHandle(FileMappingHandle handle,
       g_shm_file_names.erase(it);
     }
   }
-#endif  // XE_PLATFORM_MAC
 #endif
 }
 
@@ -675,6 +674,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
   // TODO: Implement partial file unmapping.
   assert_always("Error: Partial unmapping of files not yet supported.");
   return munmap(base_address, length) == 0;
+#endif
 #endif
 }
 
