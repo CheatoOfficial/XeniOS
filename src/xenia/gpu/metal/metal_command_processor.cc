@@ -4983,12 +4983,16 @@ bool MetalCommandProcessor::EndSubmission(bool is_swap) {
       if (completion_timeline_) {
         completion_timeline_->SignalAndAdvance(current_command_buffer_);
       }
+#if METAL_SHADER_CONVERTER_AVAILABLE
       ScheduleDrawRingRelease(current_command_buffer_);
+#endif
       current_command_buffer_->commit();
       current_command_buffer_->release();
       current_command_buffer_ = nullptr;
     }
+#if METAL_SHADER_CONVERTER_AVAILABLE
     SetActiveDrawRing(nullptr);
+#endif
     current_draw_index_ = 0;
 
     submission_open_ = false;
