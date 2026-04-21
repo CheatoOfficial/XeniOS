@@ -24,7 +24,7 @@
 #include "xenia/cpu/xex_module.h"
 #include "xenia/memory.h"
 
-#include "xbyak_aarch64.h"
+#include "third_party/xbyak_aarch64/xbyak_aarch64/xbyak_aarch64.h"
 
 namespace xe {
 namespace cpu {
