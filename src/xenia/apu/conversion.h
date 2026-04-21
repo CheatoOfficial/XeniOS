@@ -35,8 +35,8 @@ static void _generic_sequential_6_BE_to_interleaved_6_LE(
     }
   }
 }
-#if XE_COMPILER_CLANG_CL != 1 && !XE_PLATFORM_LINUX
-// load_be_u32 unavailable on clang-cl
+#if XE_COMPILER_CLANG_CL != 1 && !XE_PLATFORM_LINUX && !XE_PLATFORM_MAC
+// load_be_u32 unavailable on clang-cl, clang on Linux, or clang on macOS
 XE_NOINLINE
 static void _movbe_sequential_6_BE_to_interleaved_6_LE(
     float* XE_RESTRICT output, const float* XE_RESTRICT input,
