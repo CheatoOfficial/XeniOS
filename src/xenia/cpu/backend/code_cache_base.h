@@ -168,7 +168,14 @@ class CodeCacheBase : public CodeCache {
     const bool wx_preferred = xe::memory::IsWritableExecutableMemoryPreferred();
 
     // Fast path: fixed-VA table + code cache, slots hold raw 32-bit targets.
-    if (allow_fast_indirection_) {
+    // Disabled on macOS x86_64 (Rosetta): shm+PROT_EXEC mapping appears to
+    // succeed but the page isn't actually executable. The encoded path
+    // uses an anonymous MAP_JIT mapping which works.
+    bool try_fast_indirection = allow_fast_indirection_;
+#if XE_PLATFORM_MAC && XE_ARCH_AMD64
+    try_fast_indirection = false;
+#endif
+    if (try_fast_indirection) {
       indirection_table_base_ =
           reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
               reinterpret_cast<void*>(kIndirectionTableBase),
@@ -233,10 +240,9 @@ class CodeCacheBase : public CodeCache {
 
     // Try the preferred fixed address first; fall back to OS-chosen on fail.
     if (wx_preferred) {
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
-      // macOS allows RWX only on anonymous MAP_JIT regions, so the cache is
-      // a single anonymous mapping; writes are gated by
-      // pthread_jit_write_protect_np in PlaceGuestCode/PlaceData.
+#if XE_PLATFORM_MAC
+      // macOS allows RWX only on anonymous MAP_JIT regions; the W^X gate
+      // happens via pthread_jit_write_protect_np in PlaceGuestCode/PlaceData.
       generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
           xe::memory::AllocFixed(nullptr, kGeneratedCodeSize,
                                  xe::memory::AllocationType::kReserveCommit,
