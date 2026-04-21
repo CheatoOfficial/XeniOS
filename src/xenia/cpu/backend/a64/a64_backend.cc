@@ -1134,41 +1134,43 @@ HostToGuestThunk A64ThunkEmitter::EmitHostToGuestThunk() {
 
   const size_t stack_size = StackLayout::THUNK_STACK_SIZE;
 
-  code_offsets.prolog = offset();
+  code_offsets.prolog = getSize();
 
-  EmitBtiJc();
-  SUB(SP, SP, stack_size);
+  sub(sp, sp, static_cast<uint32_t>(stack_size));
 
-  code_offsets.prolog_stack_alloc = offset();
-  code_offsets.body = offset();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
 
   EmitSaveNonvolatileRegs();
 
-  MOV(X16, X0);
-  MOV(GetContextReg(), X1);  // context
+  mov(x16, x0);
+  mov(GetContextReg(), x1);  // context
+  mov(GetBackendCtxReg(), GetContextReg());
+  sub(GetBackendCtxReg(), GetBackendCtxReg(), sizeof(A64BackendContext));
   // Ensure membase is set for guest memory accesses.
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
-  MOV(X0, X2);  // return address
-  BLR(X16);
+  ldr(GetMembaseReg(),
+      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                         virtual_membase))));
+  mov(x0, x2);  // return address
+  blr(x16);
 
   EmitLoadNonvolatileRegs();
 
-  code_offsets.epilog = offset();
+  code_offsets.epilog = getSize();
 
-  ADD(SP, SP, stack_size);
+  add(sp, sp, static_cast<uint32_t>(stack_size));
 
-  RET();
+  ret();
 
-  code_offsets.tail = offset();
+  code_offsets.tail = getSize();
 
   assert_zero(code_offsets.prolog);
   EmitFunctionInfo func_info = {};
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = stack_size;
@@ -1193,39 +1195,39 @@ GuestToHostThunk A64ThunkEmitter::EmitGuestToHostThunk() {
 
   const size_t stack_size = StackLayout::THUNK_STACK_SIZE;
 
-  code_offsets.prolog = offset();
+  code_offsets.prolog = getSize();
 
-  EmitBtiJc();
-  SUB(SP, SP, stack_size);
+  sub(sp, sp, static_cast<uint32_t>(stack_size));
 
-  code_offsets.prolog_stack_alloc = offset();
-  code_offsets.body = offset();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
 
   EmitSaveVolatileRegs();
 
-  MOV(X16, X0);              // function
-  MOV(X0, GetContextReg());  // context
-  BLR(X16);
+  mov(x16, x0);              // function
+  mov(x0, GetContextReg());  // context
+  blr(x16);
 
   EmitLoadVolatileRegs();
   // Reload membase in case the host clobbered it.
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
+  ldr(GetMembaseReg(),
+      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                         virtual_membase))));
 
-  code_offsets.epilog = offset();
+  code_offsets.epilog = getSize();
 
-  ADD(SP, SP, stack_size);
-  RET();
+  add(sp, sp, static_cast<uint32_t>(stack_size));
+  ret();
 
-  code_offsets.tail = offset();
+  code_offsets.tail = getSize();
 
   assert_zero(code_offsets.prolog);
   EmitFunctionInfo func_info = {};
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = stack_size;
@@ -1252,16 +1254,16 @@ ResolveFunctionThunk A64ThunkEmitter::EmitResolveFunctionThunk() {
 
   const size_t stack_size = StackLayout::THUNK_STACK_SIZE;
 
-  code_offsets.prolog = offset();
+  code_offsets.prolog = getSize();
 
-  EmitBtiJc();
-  // Preserve context register
-  STP(ZR, X0, SP, PRE_INDEXED, -16);
+  // Preserve the context argument since x0 carries the resolved target back.
+  sub(sp, sp, 16);
+  stp(xzr, x0, ptr(sp));
 
-  SUB(SP, SP, stack_size);
+  sub(sp, sp, static_cast<uint32_t>(stack_size));
 
-  code_offsets.prolog_stack_alloc = offset();
-  code_offsets.body = offset();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
 
   EmitSaveVolatileRegs();
 
@@ -1269,40 +1271,42 @@ ResolveFunctionThunk A64ThunkEmitter::EmitResolveFunctionThunk() {
   // mov(rdx, rbx);
   // mov(rax, reinterpret_cast<uint64_t>(&ResolveFunction));
   // call(rax)
-  MOV(X0, GetContextReg());  // context
-  MOV(W1, W17);
-  MOV(X16, reinterpret_cast<uint64_t>(&ResolveFunction));
-  BLR(X16);
-  MOV(X16, X0);
+  mov(x0, GetContextReg());  // context
+  mov(w1, w17);
+  mov(x16, reinterpret_cast<uint64_t>(&ResolveFunction));
+  blr(x16);
+  mov(x16, x0);
 
   EmitLoadVolatileRegs();
   // Reload membase in case ResolveFunction clobbered it.
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
+  ldr(GetMembaseReg(),
+      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                         virtual_membase))));
 
-  code_offsets.epilog = offset();
+  code_offsets.epilog = getSize();
 
   // add(rsp, stack_size);
   // jmp(rax);
-  ADD(SP, SP, stack_size);
+  add(sp, sp, static_cast<uint32_t>(stack_size));
 
   // Reload context register
-  LDP(ZR, X0, SP, POST_INDEXED, 16);
-  oaknut::Label resolve_failed;
-  CBZ(X16, resolve_failed);
-  BR(X16);
-  l(resolve_failed);
-  RET();
+  ldr(x0, ptr(sp, 8));
+  add(sp, sp, 16);
+  Xbyak_aarch64::Label resolve_failed;
+  cbz(x16, resolve_failed);
+  br(x16);
+  L(resolve_failed);
+  ret();
 
-  code_offsets.tail = offset();
+  code_offsets.tail = getSize();
 
   assert_zero(code_offsets.prolog);
   EmitFunctionInfo func_info = {};
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = stack_size;
@@ -1323,46 +1327,53 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncThunk() {
 
   const size_t stack_size = 0;
 
-  code_offsets.prolog = offset();
-  code_offsets.prolog_stack_alloc = offset();
-  code_offsets.body = offset();
+  code_offsets.prolog = getSize();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
 
   // backend_ctx = context - sizeof(A64BackendContext)
-  SUB(X1, X0, sizeof(A64BackendContext));
-  LDR(W2, X1, offsetof(A64BackendContext, pending_stack_sync));
-  oaknut::Label no_sync;
-  CBZ(W2, no_sync);
+  sub(x1, x0, sizeof(A64BackendContext));
+  ldr(w2, ptr(x1, static_cast<int32_t>(
+                      offsetof(A64BackendContext, pending_stack_sync))));
+  Xbyak_aarch64::Label no_sync;
+  cbz(w2, no_sync);
 
-  LDR(X3, X1, offsetof(A64BackendContext, pending_stack_sync_target));
-  LDR(X4, X1, offsetof(A64BackendContext, pending_stack_sync_sp));
-  LDR(X5, X1, offsetof(A64BackendContext, pending_stack_sync_fp));
+  ldr(x3, ptr(x1, static_cast<int32_t>(
+                      offsetof(A64BackendContext, pending_stack_sync_target))));
+  ldr(x4, ptr(x1, static_cast<int32_t>(
+                      offsetof(A64BackendContext, pending_stack_sync_sp))));
+  ldr(x5, ptr(x1, static_cast<int32_t>(
+                      offsetof(A64BackendContext, pending_stack_sync_fp))));
 
-  MOV(W2, 0);
-  STR(W2, X1, offsetof(A64BackendContext, pending_stack_sync));
+  mov(w2, 0);
+  str(w2, ptr(x1, static_cast<int32_t>(
+                      offsetof(A64BackendContext, pending_stack_sync))));
 
   // Restore context/membase for the resumed guest code.
-  MOV(GetContextReg(), X0);
-  LDR(GetMembaseReg(), GetContextReg(),
-      offsetof(ppc::PPCContext, virtual_membase));
+  mov(GetBackendCtxReg(), x1);
+  mov(GetContextReg(), x0);
+  ldr(GetMembaseReg(),
+      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                         virtual_membase))));
 
   // Restore host frame and stack.
-  MOV(X29, X5);
-  MOV(SP, X4);
-  BR(X3);
+  mov(x29, x5);
+  mov(sp, x4);
+  br(x3);
 
-  l(no_sync);
-  RET();
+  L(no_sync);
+  ret();
 
-  code_offsets.epilog = offset();
-  code_offsets.tail = offset();
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
 
   assert_zero(code_offsets.prolog);
   EmitFunctionInfo func_info = {};
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = stack_size;
@@ -1372,7 +1383,7 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncThunk() {
 }
 
 StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
-  // X0 = context, X1 = caller stack size
+  // x8 = resume target, x9 = caller stack size, x19/x20 are backend/context.
   struct _code_offsets {
     size_t prolog;
     size_t prolog_stack_alloc;
@@ -1383,92 +1394,104 @@ StackSyncThunk A64ThunkEmitter::EmitStackSyncHelper() {
 
   const size_t stack_size = 0;
 
-  code_offsets.prolog = offset();
-  code_offsets.prolog_stack_alloc = offset();
-  code_offsets.body = offset();
+  code_offsets.prolog = getSize();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
 
-  oaknut::Label done;
-  oaknut::Label loop;
-  oaknut::Label check_lr;
-  oaknut::Label scan_loop;
-  oaknut::Label scan_done;
-  oaknut::Label scan_found;
+  Xbyak_aarch64::Label done;
+  Xbyak_aarch64::Label loop;
+  Xbyak_aarch64::Label check_lr;
+  Xbyak_aarch64::Label scan_loop;
+  Xbyak_aarch64::Label scan_done;
+  Xbyak_aarch64::Label scan_found;
 
-  // backend_ctx = context - sizeof(A64BackendContext)
-  SUB(X2, X0, sizeof(A64BackendContext));
-  LDR(X3, X2, offsetof(A64BackendContext, stackpoints));
-  CBZ(X3, done);
-  LDR(W4, X2, offsetof(A64BackendContext, current_stackpoint_depth));
-  CBZ(W4, done);
-  SUB(W4, W4, 1);  // current index = depth - 1
+  mov(x2, GetBackendCtxReg());
+  ldr(x3, ptr(x2, static_cast<int32_t>(offsetof(A64BackendContext,
+                                                stackpoints))));
+  cbz(x3, done);
+  ldr(w4, ptr(x2, static_cast<int32_t>(offsetof(
+                     A64BackendContext, current_stackpoint_depth))));
+  cbz(w4, done);
+  sub(w4, w4, 1);  // current index = depth - 1
 
   // guest_sp
-  LDR(W5, X0, offsetof(ppc::PPCContext, r[1]));
-  MOV(W6, 0);  // num_frames_bigger
+  ldr(w5, ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                             r[1]))));
+  mov(w6, 0);  // num_frames_bigger
 
-  l(loop);
+  L(loop);
   // entry = stackpoints + (index * sizeof(A64BackendStackpoint))
-  LSL(X7, X4, 5);  // sizeof(A64BackendStackpoint) == 32
-  ADD(X7, X3, X7);
-  LDR(W8, X7, offsetof(A64BackendStackpoint, guest_sp));
-  CMP(W8, W5);
-  B(oaknut::Cond::GE, check_lr);
-  ADD(W6, W6, 1);
-  CBZ(W4, done);
-  SUB(W4, W4, 1);
-  B(loop);
+  lsl(x7, x4, 5);  // sizeof(A64BackendStackpoint) == 32
+  add(x7, x3, x7);
+  ldr(w10, ptr(x7, static_cast<int32_t>(
+                       offsetof(A64BackendStackpoint, guest_sp))));
+  cmp(w10, w5);
+  b(GE, check_lr);
+  add(w6, w6, 1);
+  cbz(w4, done);
+  sub(w4, w4, 1);
+  b(loop);
 
-  l(check_lr);
-  CMP(W6, 1);
-  B(oaknut::Cond::LE, done);
+  L(check_lr);
+  cmp(w6, 1);
+  b(LE, done);
 
   // Disambiguate same-guest-sp frames via guest LR.
-  LDR(W9, X0, offsetof(ppc::PPCContext, lr));
-  MOV(W10, W4);  // scan index
+  ldr(w11, ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                              lr))));
+  mov(w12, w4);  // scan index
 
-  l(scan_loop);
-  LSL(X7, X10, 5);
-  ADD(X7, X3, X7);
-  LDR(W11, X7, offsetof(A64BackendStackpoint, guest_sp));
-  CMP(W11, W5);
-  B(oaknut::Cond::NE, scan_done);
-  LDR(W12, X7, offsetof(A64BackendStackpoint, guest_return_address));
-  CMP(W12, W9);
-  B(oaknut::Cond::EQ, scan_found);
-  CBZ(W10, scan_done);
-  SUB(W10, W10, 1);
-  B(scan_loop);
+  L(scan_loop);
+  lsl(x7, x12, 5);
+  add(x7, x3, x7);
+  ldr(w13, ptr(x7, static_cast<int32_t>(
+                       offsetof(A64BackendStackpoint, guest_sp))));
+  cmp(w13, w5);
+  b(NE, scan_done);
+  ldr(w14, ptr(x7, static_cast<int32_t>(offsetof(
+                       A64BackendStackpoint, guest_return_address))));
+  cmp(w14, w11);
+  b(EQ, scan_found);
+  cbz(w12, scan_done);
+  sub(w12, w12, 1);
+  b(scan_loop);
 
-  l(scan_found);
-  MOV(W4, W10);
+  L(scan_found);
+  mov(w4, w12);
 
-  l(scan_done);
+  L(scan_done);
   // Restore host frame and stack.
-  LSL(X7, X4, 5);
-  ADD(X7, X3, X7);
-  LDR(X13, X7, offsetof(A64BackendStackpoint, host_sp));
-  LDR(X14, X7, offsetof(A64BackendStackpoint, host_fp));
-  MOV(SP, X13);
-  MOV(X29, X14);
+  lsl(x7, x4, 5);
+  add(x7, x3, x7);
+  ldr(x15, ptr(x7, static_cast<int32_t>(
+                       offsetof(A64BackendStackpoint, host_sp))));
+  ldr(x16, ptr(x7, static_cast<int32_t>(
+                       offsetof(A64BackendStackpoint, host_fp))));
+  mov(sp, x15);
+  mov(x29, x16);
   // Adjust for caller stack size.
-  SUB(SP, SP, X1);
+  sub(sp, sp, x9, UXTX);
 
-  ADD(W4, W4, 1);
-  STR(W4, X2, offsetof(A64BackendContext, current_stackpoint_depth));
+  add(w4, w4, 1);
+  str(w4, ptr(x2, static_cast<int32_t>(offsetof(
+                     A64BackendContext, current_stackpoint_depth))));
+  ldr(GetMembaseReg(),
+      ptr(GetContextReg(), static_cast<int32_t>(offsetof(ppc::PPCContext,
+                                                         virtual_membase))));
 
-  l(done);
-  RET();
+  L(done);
+  br(x8);
 
-  code_offsets.epilog = offset();
-  code_offsets.tail = offset();
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
 
   assert_zero(code_offsets.prolog);
   EmitFunctionInfo func_info = {};
-  func_info.code_size.total = offset();
+  func_info.code_size.total = getSize();
   func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
   func_info.code_size.body = code_offsets.epilog - code_offsets.body;
   func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
-  func_info.code_size.tail = offset() - code_offsets.tail;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
   func_info.prolog_stack_alloc_offset =
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = stack_size;
@@ -1481,103 +1504,175 @@ void A64ThunkEmitter::EmitSaveVolatileRegs() {
   // Save off volatile registers.
   // Preserve arguments passed to and returned from a subroutine
   // STR(X0, SP, offsetof(StackLayout::Thunk, r[0]));
-  STP(X1, X2, SP, offsetof(StackLayout::Thunk, r[0]));
-  STP(X3, X4, SP, offsetof(StackLayout::Thunk, r[2]));
-  STP(X5, X6, SP, offsetof(StackLayout::Thunk, r[4]));
-  STP(X7, X8, SP, offsetof(StackLayout::Thunk, r[6]));
-  STP(X9, X10, SP, offsetof(StackLayout::Thunk, r[8]));
-  STP(X11, X12, SP, offsetof(StackLayout::Thunk, r[10]));
-  STP(X13, X14, SP, offsetof(StackLayout::Thunk, r[12]));
-  STP(X15, X30, SP, offsetof(StackLayout::Thunk, r[14]));
+  stp(x1, x2,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[0]))));
+  stp(x3, x4,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[2]))));
+  stp(x5, x6,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[4]))));
+  stp(x7, x8,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[6]))));
+  stp(x9, x10,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[8]))));
+  stp(x11, x12,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[10]))));
+  stp(x13, x14,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[12]))));
+  stp(x15, x30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[14]))));
   // Preserve context/membase registers explicitly in case host code clobbers
   // them.
-  STR(X27, SP, offsetof(StackLayout::Thunk, r[16]));
-  STR(X28, SP, offsetof(StackLayout::Thunk, r[17]));
+  str(GetContextReg(),
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[16]))));
+  str(GetMembaseReg(),
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[17]))));
 
   // Preserve arguments passed to and returned from a subroutine
   // STR(Q0, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  STP(Q1, Q2, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  STP(Q3, Q4, SP, offsetof(StackLayout::Thunk, xmm[2]));
-  STP(Q5, Q6, SP, offsetof(StackLayout::Thunk, xmm[4]));
-  STP(Q7, Q8, SP, offsetof(StackLayout::Thunk, xmm[6]));
-  STP(Q9, Q10, SP, offsetof(StackLayout::Thunk, xmm[8]));
-  STP(Q11, Q12, SP, offsetof(StackLayout::Thunk, xmm[10]));
-  STP(Q13, Q14, SP, offsetof(StackLayout::Thunk, xmm[12]));
-  STP(Q15, Q16, SP, offsetof(StackLayout::Thunk, xmm[14]));
-  STP(Q17, Q18, SP, offsetof(StackLayout::Thunk, xmm[16]));
-  STP(Q19, Q20, SP, offsetof(StackLayout::Thunk, xmm[18]));
-  STP(Q21, Q22, SP, offsetof(StackLayout::Thunk, xmm[20]));
-  STP(Q23, Q24, SP, offsetof(StackLayout::Thunk, xmm[22]));
-  STP(Q25, Q26, SP, offsetof(StackLayout::Thunk, xmm[24]));
-  STP(Q27, Q28, SP, offsetof(StackLayout::Thunk, xmm[26]));
-  STP(Q29, Q30, SP, offsetof(StackLayout::Thunk, xmm[28]));
-  STR(Q31, SP, offsetof(StackLayout::Thunk, xmm[30]));
+  stp(q1, q2,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[0]))));
+  stp(q3, q4,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[2]))));
+  stp(q5, q6,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[4]))));
+  stp(q7, q8,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[6]))));
+  stp(q9, q10,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[8]))));
+  stp(q11, q12,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[10]))));
+  stp(q13, q14,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[12]))));
+  stp(q15, q16,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[14]))));
+  stp(q17, q18,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[16]))));
+  stp(q19, q20,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[18]))));
+  stp(q21, q22,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[20]))));
+  stp(q23, q24,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[22]))));
+  stp(q25, q26,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[24]))));
+  stp(q27, q28,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[26]))));
+  stp(q29, q30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[28]))));
+  str(q31,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[30]))));
 }
 
 void A64ThunkEmitter::EmitLoadVolatileRegs() {
   // Preserve arguments passed to and returned from a subroutine
   // LDR(X0, SP, offsetof(StackLayout::Thunk, r[0]));
-  LDP(X1, X2, SP, offsetof(StackLayout::Thunk, r[0]));
-  LDP(X3, X4, SP, offsetof(StackLayout::Thunk, r[2]));
-  LDP(X5, X6, SP, offsetof(StackLayout::Thunk, r[4]));
-  LDP(X7, X8, SP, offsetof(StackLayout::Thunk, r[6]));
-  LDP(X9, X10, SP, offsetof(StackLayout::Thunk, r[8]));
-  LDP(X11, X12, SP, offsetof(StackLayout::Thunk, r[10]));
-  LDP(X13, X14, SP, offsetof(StackLayout::Thunk, r[12]));
-  LDP(X15, X30, SP, offsetof(StackLayout::Thunk, r[14]));
-  LDR(X27, SP, offsetof(StackLayout::Thunk, r[16]));
-  LDR(X28, SP, offsetof(StackLayout::Thunk, r[17]));
+  ldp(x1, x2,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[0]))));
+  ldp(x3, x4,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[2]))));
+  ldp(x5, x6,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[4]))));
+  ldp(x7, x8,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[6]))));
+  ldp(x9, x10,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[8]))));
+  ldp(x11, x12,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[10]))));
+  ldp(x13, x14,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[12]))));
+  ldp(x15, x30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[14]))));
+  ldr(GetContextReg(),
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[16]))));
+  ldr(GetMembaseReg(),
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[17]))));
 
   // Preserve arguments passed to and returned from a subroutine
   // LDR(Q0, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  LDP(Q1, Q2, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  LDP(Q3, Q4, SP, offsetof(StackLayout::Thunk, xmm[2]));
-  LDP(Q5, Q6, SP, offsetof(StackLayout::Thunk, xmm[4]));
-  LDP(Q7, Q8, SP, offsetof(StackLayout::Thunk, xmm[6]));
-  LDP(Q9, Q10, SP, offsetof(StackLayout::Thunk, xmm[8]));
-  LDP(Q11, Q12, SP, offsetof(StackLayout::Thunk, xmm[10]));
-  LDP(Q13, Q14, SP, offsetof(StackLayout::Thunk, xmm[12]));
-  LDP(Q15, Q16, SP, offsetof(StackLayout::Thunk, xmm[14]));
-  LDP(Q17, Q18, SP, offsetof(StackLayout::Thunk, xmm[16]));
-  LDP(Q19, Q20, SP, offsetof(StackLayout::Thunk, xmm[18]));
-  LDP(Q21, Q22, SP, offsetof(StackLayout::Thunk, xmm[20]));
-  LDP(Q23, Q24, SP, offsetof(StackLayout::Thunk, xmm[22]));
-  LDP(Q25, Q26, SP, offsetof(StackLayout::Thunk, xmm[24]));
-  LDP(Q27, Q28, SP, offsetof(StackLayout::Thunk, xmm[26]));
-  LDP(Q29, Q30, SP, offsetof(StackLayout::Thunk, xmm[28]));
-  LDR(Q31, SP, offsetof(StackLayout::Thunk, xmm[30]));
+  ldp(q1, q2,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[0]))));
+  ldp(q3, q4,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[2]))));
+  ldp(q5, q6,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[4]))));
+  ldp(q7, q8,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[6]))));
+  ldp(q9, q10,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[8]))));
+  ldp(q11, q12,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[10]))));
+  ldp(q13, q14,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[12]))));
+  ldp(q15, q16,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[14]))));
+  ldp(q17, q18,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[16]))));
+  ldp(q19, q20,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[18]))));
+  ldp(q21, q22,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[20]))));
+  ldp(q23, q24,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[22]))));
+  ldp(q25, q26,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[24]))));
+  ldp(q27, q28,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[26]))));
+  ldp(q29, q30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[28]))));
+  ldr(q31,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[30]))));
 }
 
 void A64ThunkEmitter::EmitSaveNonvolatileRegs() {
-  STP(X19, X20, SP, offsetof(StackLayout::Thunk, r[0]));
-  STP(X21, X22, SP, offsetof(StackLayout::Thunk, r[2]));
-  STP(X23, X24, SP, offsetof(StackLayout::Thunk, r[4]));
-  STP(X25, X26, SP, offsetof(StackLayout::Thunk, r[6]));
-  STP(X27, X28, SP, offsetof(StackLayout::Thunk, r[8]));
-  STP(X29, X30, SP, offsetof(StackLayout::Thunk, r[10]));
+  stp(x19, x20,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[0]))));
+  stp(x21, x22,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[2]))));
+  stp(x23, x24,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[4]))));
+  stp(x25, x26,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[6]))));
+  stp(x27, x28,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[8]))));
+  stp(x29, x30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[10]))));
 
-  STR(X17, SP, offsetof(StackLayout::Thunk, r[12]));
+  str(x17, ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[12]))));
 
-  STP(D8, D9, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  STP(D10, D11, SP, offsetof(StackLayout::Thunk, xmm[1]));
-  STP(D12, D13, SP, offsetof(StackLayout::Thunk, xmm[2]));
-  STP(D14, D15, SP, offsetof(StackLayout::Thunk, xmm[3]));
+  stp(d8, d9,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[0]))));
+  stp(d10, d11,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[1]))));
+  stp(d12, d13,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[2]))));
+  stp(d14, d15,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[3]))));
 }
 
 void A64ThunkEmitter::EmitLoadNonvolatileRegs() {
-  LDP(X19, X20, SP, offsetof(StackLayout::Thunk, r[0]));
-  LDP(X21, X22, SP, offsetof(StackLayout::Thunk, r[2]));
-  LDP(X23, X24, SP, offsetof(StackLayout::Thunk, r[4]));
-  LDP(X25, X26, SP, offsetof(StackLayout::Thunk, r[6]));
-  LDP(X27, X28, SP, offsetof(StackLayout::Thunk, r[8]));
-  LDP(X29, X30, SP, offsetof(StackLayout::Thunk, r[10]));
+  ldp(x19, x20,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[0]))));
+  ldp(x21, x22,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[2]))));
+  ldp(x23, x24,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[4]))));
+  ldp(x25, x26,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[6]))));
+  ldp(x27, x28,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[8]))));
+  ldp(x29, x30,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[10]))));
 
-  LDR(X17, SP, offsetof(StackLayout::Thunk, r[12]));
+  ldr(x17, ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, r[12]))));
 
-  LDP(D8, D9, SP, offsetof(StackLayout::Thunk, xmm[0]));
-  LDP(D10, D11, SP, offsetof(StackLayout::Thunk, xmm[1]));
-  LDP(D12, D13, SP, offsetof(StackLayout::Thunk, xmm[2]));
-  LDP(D14, D15, SP, offsetof(StackLayout::Thunk, xmm[3]));
+  ldp(d8, d9,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[0]))));
+  ldp(d10, d11,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[1]))));
+  ldp(d12, d13,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[2]))));
+  ldp(d14, d15,
+      ptr(sp, static_cast<int32_t>(offsetof(StackLayout::Thunk, xmm[3]))));
 }
 
 }  // namespace a64
