@@ -52,5 +52,10 @@ project("xenia-cpu-backend-a64")
     })
   filter({})
 
+  files({
+    project_root.."/third_party/xbyak_aarch64/src/util_impl.cpp",
+    project_root.."/third_party/xbyak_aarch64/src/xbyak_aarch64_impl.cpp",
+  })
+
   -- Include only ARM64-specific files
   local_platform_files()
