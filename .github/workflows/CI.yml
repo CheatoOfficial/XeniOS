@@ -149,7 +149,7 @@ jobs:
           retry git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' | grep -v 'premake-androidndk\|premake-export-compile-commands\|DirectXShaderCompiler')
           # Restore non-submodule files in third_party/ that the submodule
           # cache may have overwritten with stale versions.
-          git checkout -- third_party/*.lua
+          git ls-files -z 'third_party/*.lua' | xargs -0 git checkout --
 
           # Remove any stale premake5 binary left in the submodule tree by
           # a previous cache run.  premake.py checks this path first and
