@@ -987,6 +987,14 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       *out_previous_suspend_count = suspend_count_;
     }
     --suspend_count_;
+    if (suspend_count_ == 0) {
+      state_ = State::kRunning;
+#if XE_PLATFORM_LINUX
+      // sem_post is async-signal-safe and wakes the thread from sem_wait
+      // inside the suspend signal handler without taking any locks.
+      sem_post(&suspend_sem_);
+#endif
+    }
     state_signal_.notify_all();
     return true;
   }
@@ -996,6 +1004,11 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       *out_previous_suspend_count = 0;
     }
     WaitStarted();
+
+    // Check if we're trying to suspend ourselves.
+    bool is_current_thread = pthread_self() == thread_;
+    bool already_suspended = false;
+
     {
       std::unique_lock lock(state_mutex_);
       if (out_previous_suspend_count) {
@@ -1005,6 +1018,20 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       state_ = State::kSuspended;
       ++suspend_count_;
     }
+
+    // If already suspended, just increment the count. Sending another signal
+    // would re-enter the suspend handler, but Resume only wakes once when the
+    // count reaches 0.
+    if (already_suspended) {
+      return true;
+    }
+
+    if (is_current_thread) {
+      // Avoid signalling ourselves and nesting the suspend handler.
+      WaitSuspended();
+      return true;
+    }
+
     int result =
         pthread_kill(thread_, GetSystemSignal(SignalType::kThreadSuspend));
     return result == 0;
