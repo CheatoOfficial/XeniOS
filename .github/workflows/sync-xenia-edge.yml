@@ -1,21 +1,31 @@
-name: Sync xenia-edge
+name: Sync upstreams
 
 on:
   workflow_dispatch:
     inputs:
-      upstream_branch:
+      xenia_edge_branch:
         description: xenia-edge branch to merge into main
         required: false
-        default: metal/msc-pre-strict-clean-localized
+        default: edge
+        type: string
+      xenios_branch:
+        description: xenios-jp/XeniOS branch to merge into main
+        required: false
+        default: xenios
+        type: string
+      killswitch_branch:
+        description: KilIswitch/XeniOS branch to merge into main
+        required: false
+        default: xenios
         type: string
   schedule:
-    - cron: "17 6 * * *"
+    - cron: "0 * * * *"
 
 permissions:
   contents: write
 
 concurrency:
-  group: sync-xenia-edge
+  group: sync-upstreams
   cancel-in-progress: false
 
 jobs:
@@ -36,59 +46,104 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Merge upstream branch
+      - name: Merge upstream branches
         id: merge
         shell: bash
         run: |
           set -euo pipefail
 
-          upstream_branch="${{ github.event.inputs.upstream_branch }}"
-          if [ -z "${upstream_branch}" ]; then
-            upstream_branch="metal/msc-pre-strict-clean-localized"
+          xenia_edge_branch="${{ github.event.inputs.xenia_edge_branch }}"
+          xenios_branch="${{ github.event.inputs.xenios_branch }}"
+          killswitch_branch="${{ github.event.inputs.killswitch_branch }}"
+
+          if [ -z "${xenia_edge_branch}" ]; then
+            xenia_edge_branch="edge"
+          fi
+          if [ -z "${xenios_branch}" ]; then
+            xenios_branch="xenios"
+          fi
+          if [ -z "${killswitch_branch}" ]; then
+            killswitch_branch="xenios"
           fi
 
           git remote remove xeniaedge 2>/dev/null || true
+          git remote remove xeniosjp 2>/dev/null || true
+          git remote remove killswitch 2>/dev/null || true
           git remote add xeniaedge https://github.com/has207/xenia-edge.git
+          git remote add xeniosjp https://github.com/xenios-jp/XeniOS.git
+          git remote add killswitch https://github.com/KilIswitch/XeniOS.git
 
           git fetch origin main
-          git fetch xeniaedge "${upstream_branch}"
+          git fetch xeniaedge "${xenia_edge_branch}"
+          git fetch xeniosjp "${xenios_branch}"
+          git fetch killswitch "${killswitch_branch}"
 
           git checkout -B main origin/main
 
-          if ! git merge --no-ff -X ours --no-commit "xeniaedge/${upstream_branch}"; then
-            echo "::error::Automatic merge from xeniaedge/${upstream_branch} failed"
-            git status --short
-            git merge --abort || true
-            exit 1
+          # Surface overlapping file edits between the upstream iOS branches so
+          # the workflow tells us when xenios-jp and KilIswitch touched the
+          # same files, even if our merge policy keeps the current fork stable.
+          base_commit="$(git merge-base "xeniosjp/${xenios_branch}" "killswitch/${killswitch_branch}")"
+          xenios_only="$(mktemp)"
+          killswitch_only="$(mktemp)"
+          git diff --name-only "${base_commit}..xeniosjp/${xenios_branch}" | sort -u > "${xenios_only}"
+          git diff --name-only "${base_commit}..killswitch/${killswitch_branch}" | sort -u > "${killswitch_only}"
+          overlap="$(comm -12 "${xenios_only}" "${killswitch_only}" || true)"
+          rm -f "${xenios_only}" "${killswitch_only}"
+
+          if [ -n "${overlap}" ]; then
+            echo "::warning::xenios-jp and KilIswitch both changed these paths:"
+            while IFS= read -r path; do
+              [ -n "${path}" ] || continue
+              echo "::warning::  ${path}"
+            done <<< "${overlap}"
           fi
 
-          if [ ! -f .git/MERGE_HEAD ]; then
-            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
-            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
+          merge_upstream() {
+            local remote_name="$1"
+            local branch_name="$2"
+            local label="$3"
 
-          # Keep the fork's workflow definitions authoritative on main. This
-          # avoids GitHub App push restrictions around workflow-file changes.
-          git checkout origin/main -- .github/workflows
+            if ! git merge --no-ff -X ours --no-commit "${remote_name}/${branch_name}"; then
+              echo "::error::Automatic merge from ${label} failed"
+              git status --short
+              git diff --name-only --diff-filter=U | sed 's/^/::error::conflict file: /'
+              git merge --abort || true
+              exit 1
+            fi
 
-          if git diff --cached --quiet && git diff --quiet; then
-            git merge --abort || true
-            echo "has_changes=false" >> "${GITHUB_OUTPUT}"
-            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
+            if [ ! -f .git/MERGE_HEAD ]; then
+              echo "No changes from ${label}"
+              return 0
+            fi
 
-          git commit --no-edit
+            # Keep this fork's workflow definitions authoritative on main so
+            # scheduled syncs cannot overwrite CI/publish behavior.
+            git checkout origin/main -- .github/workflows
+
+            if git diff --cached --quiet && git diff --quiet; then
+              git merge --abort || true
+              echo "Merge from ${label} was empty after preserving local workflows"
+              return 0
+            fi
+
+            git commit --no-edit
+            echo "Merged ${label}"
+          }
+
+          # Merge order matters. Apply the lower-level emulator base first,
+          # then upstream XeniOS, then the KilIswitch fork so iOS/touch
+          # customizations stay on top.
+          merge_upstream xeniaedge "${xenia_edge_branch}" "xenia-edge/${xenia_edge_branch}"
+          merge_upstream xeniosjp "${xenios_branch}" "xenios-jp/XeniOS:${xenios_branch}"
+          merge_upstream killswitch "${killswitch_branch}" "KilIswitch/XeniOS:${killswitch_branch}"
 
           if git diff --quiet origin/main...HEAD; then
             echo "has_changes=false" >> "${GITHUB_OUTPUT}"
-            echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           echo "has_changes=true" >> "${GITHUB_OUTPUT}"
-          echo "upstream_branch=${upstream_branch}" >> "${GITHUB_OUTPUT}"
 
       - name: Push synced main
         if: steps.merge.outputs.has_changes == 'true'
