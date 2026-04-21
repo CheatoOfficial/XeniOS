@@ -1765,147 +1765,6 @@ struct DID_SATURATE
 EMITTER_OPCODE_TABLE(OPCODE_DID_SATURATE, DID_SATURATE);
 
 // ============================================================================
-// OPCODE_ADD
-// ============================================================================
-// TODO(benvanik): put dest/src1|2 together.
-template <typename SEQ, typename REG, typename ARGS>
-void EmitAddXX(A64Emitter& e, const ARGS& i) {
-  SEQ::EmitCommutativeBinaryOp(
-      e, i,
-      [](A64Emitter& e, REG dest_src, REG src) {
-        e.ADD(dest_src, dest_src, src);
-      },
-      [](A64Emitter& e, REG dest_src, int32_t constant) {
-        e.MOV(REG(1), constant);
-        e.ADD(dest_src, dest_src, REG(1));
-      });
-}
-struct ADD_I8 : Sequence<ADD_I8, I<OPCODE_ADD, I8Op, I8Op, I8Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddXX<ADD_I8, WReg>(e, i);
-  }
-};
-struct ADD_I16 : Sequence<ADD_I16, I<OPCODE_ADD, I16Op, I16Op, I16Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddXX<ADD_I16, WReg>(e, i);
-  }
-};
-struct ADD_I32 : Sequence<ADD_I32, I<OPCODE_ADD, I32Op, I32Op, I32Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddXX<ADD_I32, WReg>(e, i);
-  }
-};
-struct ADD_I64 : Sequence<ADD_I64, I<OPCODE_ADD, I64Op, I64Op, I64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddXX<ADD_I64, XReg>(e, i);
-  }
-};
-struct ADD_F32 : Sequence<ADD_F32, I<OPCODE_ADD, F32Op, F32Op, F32Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitCommutativeBinaryVOp<SReg>(
-        e, i, [](A64Emitter& e, SReg dest, SReg src1, SReg src2) {
-          e.FADD(dest, src1, src2);
-        });
-  }
-};
-struct ADD_F64 : Sequence<ADD_F64, I<OPCODE_ADD, F64Op, F64Op, F64Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    DReg src1 = i.src1.is_constant ? D1 : i.src1.reg();
-    DReg src2 = i.src2.is_constant ? D2 : i.src2.reg();
-    if (i.src1.is_constant) {
-      e.LoadConstantV(src1.toQ(), i.src1.constant());
-    }
-    if (i.src2.is_constant) {
-      e.LoadConstantV(src2.toQ(), i.src2.constant());
-    }
-
-    oaknut::Label do_op;
-    oaknut::Label done;
-    EmitPropagateInputNanF64Binary(e, i.dest.reg(), src1, src2, do_op, done);
-    e.l(do_op);
-    e.FADD(i.dest.reg(), src1, src2);
-    e.l(done);
-  }
-};
-struct ADD_V128 : Sequence<ADD_V128, I<OPCODE_ADD, V128Op, V128Op, V128Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitWithVmxFpcr(e, [&] {
-      EmitCommutativeBinaryVOp(
-          e, i, [](A64Emitter& e, QReg dest, QReg src1, QReg src2) {
-            e.FADD(dest.S4(), src1.S4(), src2.S4());
-          });
-    });
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_ADD, ADD_I8, ADD_I16, ADD_I32, ADD_I64, ADD_F32,
-                     ADD_F64, ADD_V128);
-
-// ============================================================================
-// OPCODE_ADD_CARRY
-// ============================================================================
-// TODO(benvanik): put dest/src1|2 together.
-template <typename SEQ, typename REG, typename ARGS>
-void EmitAddCarryXX(A64Emitter& e, const ARGS& i) {
-  // TODO(benvanik): faster setting? we could probably do some fun math tricks
-  // here to get the carry flag set.
-  if (i.src3.is_constant) {
-    e.MOV(W0, WZR);
-    if (i.src3.constant()) {
-      // Set carry
-      // This is implicitly "SUBS 0 - 0"
-      e.CMP(W0, 0);
-    } else {
-      // Clear carry
-      e.CMN(W0, 0);
-    }
-  } else {
-    // If src3 is non-zero, set the carry flag
-    e.CMP(i.src3.reg(), 0);
-    e.CSET(X0, Cond::NE);
-
-    e.mrs(X1, 3, 3, 4, 2, 0);
-    // Assign carry bit
-    e.BFI(X1, X0, 29, 1);
-    e.msr(3, 3, 4, 2, 0, X1);
-  }
-  SEQ::EmitCommutativeBinaryOp(
-      e, i,
-      [](A64Emitter& e, const REG& dest_src, const REG& src) {
-        e.ADC(dest_src, dest_src, src);
-      },
-      [](A64Emitter& e, const REG& dest_src, int32_t constant) {
-        e.MOV(REG(1), constant);
-        e.ADC(dest_src, dest_src, REG(1));
-      });
-}
-struct ADD_CARRY_I8
-    : Sequence<ADD_CARRY_I8, I<OPCODE_ADD_CARRY, I8Op, I8Op, I8Op, I8Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddCarryXX<ADD_CARRY_I8, WReg>(e, i);
-  }
-};
-struct ADD_CARRY_I16
-    : Sequence<ADD_CARRY_I16, I<OPCODE_ADD_CARRY, I16Op, I16Op, I16Op, I8Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddCarryXX<ADD_CARRY_I16, WReg>(e, i);
-  }
-};
-struct ADD_CARRY_I32
-    : Sequence<ADD_CARRY_I32, I<OPCODE_ADD_CARRY, I32Op, I32Op, I32Op, I8Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddCarryXX<ADD_CARRY_I32, WReg>(e, i);
-  }
-};
-struct ADD_CARRY_I64
-    : Sequence<ADD_CARRY_I64, I<OPCODE_ADD_CARRY, I64Op, I64Op, I64Op, I8Op>> {
-  static void Emit(A64Emitter& e, const EmitArgType& i) {
-    EmitAddCarryXX<ADD_CARRY_I64, XReg>(e, i);
-  }
-};
-EMITTER_OPCODE_TABLE(OPCODE_ADD_CARRY, ADD_CARRY_I8, ADD_CARRY_I16,
-                     ADD_CARRY_I32, ADD_CARRY_I64);
-
-// ============================================================================
 // OPCODE_SUB
 // ============================================================================
 template <typename T, typename REG>
@@ -2017,9 +1876,9 @@ struct SUB_F64 : Sequence<SUB_F64, I<OPCODE_SUB, F64Op, F64Op, F64Op>> {
     oaknut::Label do_op;
     oaknut::Label done;
     EmitPropagateInputNanF64Binary(e, i.dest.reg(), src1, src2, do_op, done);
-    e.l(do_op);
+    e.L(do_op);
     e.FSUB(i.dest.reg(), src1, src2);
-    e.l(done);
+    e.L(done);
   }
 };
 struct SUB_V128 : Sequence<SUB_V128, I<OPCODE_SUB, V128Op, V128Op, V128Op>> {
@@ -2224,9 +2083,9 @@ struct MUL_F64 : Sequence<MUL_F64, I<OPCODE_MUL, F64Op, F64Op, F64Op>> {
     oaknut::Label do_op;
     oaknut::Label done;
     EmitPropagateInputNanF64Binary(e, i.dest.reg(), src1, src2, do_op, done);
-    e.l(do_op);
+    e.L(do_op);
     e.FMUL(i.dest.reg(), src1, src2);
-    e.l(done);
+    e.L(done);
   }
 };
 struct MUL_V128 : Sequence<MUL_V128, I<OPCODE_MUL, V128Op, V128Op, V128Op>> {
@@ -2300,9 +2159,9 @@ struct DIV_I32 : Sequence<DIV_I32, I<OPCODE_DIV, I32Op, I32Op, I32Op>> {
           e.UDIV(i.dest, i.src1, i.src2);
         }
         e.B(done);
-        e.l(div_zero);
+        e.L(div_zero);
         e.MOV(i.dest, 0);
-        e.l(done);
+        e.L(done);
       }
     } else {
       if (i.src2.is_constant) {
@@ -2319,10 +2178,10 @@ struct DIV_I32 : Sequence<DIV_I32, I<OPCODE_DIV, I32Op, I32Op, I32Op>> {
           e.B(Cond::NE, do_div);
           e.MOV(i.dest, 0);
           e.B(done);
-          e.l(do_div);
+          e.L(do_div);
           e.MOV(W0, divisor);
           e.SDIV(i.dest, i.src1, W0);
-          e.l(done);
+          e.L(done);
           return;
         }
         e.MOV(W0, divisor);
@@ -2343,7 +2202,7 @@ struct DIV_I32 : Sequence<DIV_I32, I<OPCODE_DIV, I32Op, I32Op, I32Op>> {
         e.B(Cond::NE, do_div);
         e.MOV(i.dest, 0);
         e.B(done);
-        e.l(do_div);
+        e.L(do_div);
         if (i.src1.is_constant) {
           e.MOV(W0, i.src1.constant());
           e.SDIV(i.dest, W0, i.src2);
@@ -2351,9 +2210,9 @@ struct DIV_I32 : Sequence<DIV_I32, I<OPCODE_DIV, I32Op, I32Op, I32Op>> {
           e.SDIV(i.dest, i.src1, i.src2);
         }
         e.B(done);
-        e.l(div_zero);
+        e.L(div_zero);
         e.MOV(i.dest, 0);
-        e.l(done);
+        e.L(done);
       }
     }
   }
@@ -2387,9 +2246,9 @@ struct DIV_I64 : Sequence<DIV_I64, I<OPCODE_DIV, I64Op, I64Op, I64Op>> {
           e.UDIV(i.dest, i.src1, i.src2);
         }
         e.B(done);
-        e.l(div_zero);
+        e.L(div_zero);
         e.MOV(i.dest, 0);
-        e.l(done);
+        e.L(done);
       }
     } else {
       if (i.src2.is_constant) {
@@ -2406,10 +2265,10 @@ struct DIV_I64 : Sequence<DIV_I64, I<OPCODE_DIV, I64Op, I64Op, I64Op>> {
           e.B(Cond::NE, do_div);
           e.MOV(i.dest, 0);
           e.B(done);
-          e.l(do_div);
+          e.L(do_div);
           e.MOV(X0, divisor);
           e.SDIV(i.dest, i.src1, X0);
-          e.l(done);
+          e.L(done);
           return;
         }
         e.MOV(X0, divisor);
@@ -2430,7 +2289,7 @@ struct DIV_I64 : Sequence<DIV_I64, I<OPCODE_DIV, I64Op, I64Op, I64Op>> {
         e.B(Cond::NE, do_div);
         e.MOV(i.dest, 0);
         e.B(done);
-        e.l(do_div);
+        e.L(do_div);
         if (i.src1.is_constant) {
           e.MOV(X0, i.src1.constant());
           e.SDIV(i.dest, X0, i.src2);
@@ -2438,9 +2297,9 @@ struct DIV_I64 : Sequence<DIV_I64, I<OPCODE_DIV, I64Op, I64Op, I64Op>> {
           e.SDIV(i.dest, i.src1, i.src2);
         }
         e.B(done);
-        e.l(div_zero);
+        e.L(div_zero);
         e.MOV(i.dest, 0);
-        e.l(done);
+        e.L(done);
       }
     }
   }
@@ -2485,9 +2344,9 @@ struct DIV_F64 : Sequence<DIV_F64, I<OPCODE_DIV, F64Op, F64Op, F64Op>> {
     oaknut::Label do_op;
     oaknut::Label done;
     EmitPropagateInputNanF64Binary(e, i.dest.reg(), src1, src2, do_op, done);
-    e.l(do_op);
+    e.L(do_op);
     e.FDIV(i.dest.reg(), src1, src2);
-    e.l(done);
+    e.L(done);
   }
 };
 struct DIV_V128 : Sequence<DIV_V128, I<OPCODE_DIV, V128Op, V128Op, V128Op>> {
@@ -2557,9 +2416,9 @@ struct MUL_ADD_F64
     oaknut::Label done;
     EmitPropagateInputNanF64Ternary(e, i.dest.reg(), src1, src2, src3, do_op,
                                     done);
-    e.l(do_op);
+    e.L(do_op);
     e.FMADD(i.dest.reg(), src1, src2, src3);
-    e.l(done);
+    e.L(done);
   }
 };
 struct MUL_ADD_V128
@@ -2662,10 +2521,10 @@ struct MUL_SUB_F64
     oaknut::Label done;
     EmitPropagateInputNanF64Ternary(e, i.dest.reg(), src1, src2, src3, do_op,
                                     done);
-    e.l(do_op);
+    e.L(do_op);
     e.FMUL(i.dest.reg(), src1, src2);
     e.FSUB(i.dest.reg(), i.dest.reg(), src3);
-    e.l(done);
+    e.L(done);
   }
 };
 struct MUL_SUB_V128
@@ -2777,7 +2636,7 @@ struct NEG_F64 : Sequence<NEG_F64, I<OPCODE_NEG, F64Op, F64Op>> {
       e.FCMP(src_for_nan, src_for_nan);
       e.B(Cond::VC, done);
       e.FMOV(i.dest.reg(), src_for_nan);
-      e.l(done);
+      e.L(done);
       return;
     }
 
