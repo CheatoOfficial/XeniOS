@@ -43,8 +43,6 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
 
   std::lock_guard<std::mutex> lock(timer_lock_);
 
-  std::lock_guard<std::mutex> lock(timer_lock_);
-
   period_ms = Clock::ScaleGuestDurationMillis(period_ms);
   WinSystemClock::time_point due_tp;
   if (due_time < 0) {
