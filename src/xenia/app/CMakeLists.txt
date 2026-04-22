@@ -110,6 +110,11 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     X11-xcb
     SDL2
   )
+elseif(APPLE)
+  target_link_libraries(xenia-app PRIVATE
+    xenia-gpu-metal
+    xenia-ui-metal
+  )
 endif()
 
 xe_target_defaults(xenia-app)
