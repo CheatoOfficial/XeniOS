@@ -89,7 +89,6 @@ def import_subprocess_environment(args):
         "WindowsSdkDir",
         "PROGRAMFILES",
         "ProgramFiles(x86)",
-        "VULKAN_SDK"
         "CC",
         "CXX",
         )
@@ -552,9 +551,6 @@ def generate_moc_files():
 def main():
     # Add self to the root search path.
     sys.path.insert(0, self_path)
-
-    # Setup Vulkan SDK and check if available
-    vulkan_sdk_available = setup_vulkan_sdk()
 
     # Augment path to include our fancy things.
     os.environ["PATH"] += os.pathsep + os.pathsep.join([
