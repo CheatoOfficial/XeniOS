@@ -18,5 +18,6 @@ DECLARE_path(cache_root);
 DECLARE_bool(portable);
 DECLARE_bool(mount_scratch);
 DECLARE_bool(mount_cache);
+DECLARE_bool(mount_memory_unit);
 
 #endif  // XENIA_STORAGE_FLAGS_H_
