@@ -258,12 +258,37 @@ if(NOT WIN32)
 endif()
 
 # ==============================================================================
-# xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h)
+# SPIRV-Cross (Apple only — used by xenia-shader-cc to emit MSL when requested)
+# ==============================================================================
+if(APPLE)
+  add_library(spirv-cross STATIC
+    SPIRV-Cross/spirv_cross.cpp
+    SPIRV-Cross/spirv_cross_parsed_ir.cpp
+    SPIRV-Cross/spirv_parser.cpp
+    SPIRV-Cross/spirv_cfg.cpp
+    SPIRV-Cross/spirv_cross_util.cpp
+    SPIRV-Cross/spirv_glsl.cpp
+    SPIRV-Cross/spirv_msl.cpp
+  )
+  target_include_directories(spirv-cross PUBLIC SPIRV-Cross)
+  target_compile_features(spirv-cross PUBLIC cxx_std_17)
+  if(MSVC)
+    target_compile_options(spirv-cross PRIVATE /EHsc)
+  endif()
+endif()
+
+# ==============================================================================
+# xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h, and on
+# Apple, optionally -> MSL via SPIRV-Cross)
 # ==============================================================================
 add_executable(xenia-shader-cc ${PROJECT_SOURCE_DIR}/tools/build/shader_cc.cc)
 target_link_libraries(xenia-shader-cc PRIVATE glslang SPIRV-Tools-static)
 target_include_directories(xenia-shader-cc PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/glslang/StandAlone)
+if(APPLE)
+  target_link_libraries(xenia-shader-cc PRIVATE spirv-cross)
+  target_compile_definitions(xenia-shader-cc PRIVATE XE_SHADER_CC_METAL=1)
+endif()
 if(MSVC)
   target_compile_options(xenia-shader-cc PRIVATE /EHsc)
 endif()

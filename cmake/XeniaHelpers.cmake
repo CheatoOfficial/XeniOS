@@ -205,6 +205,55 @@ function(xe_shader_rules_dxbc target shader_dir)
   target_sources(${target} PRIVATE ${_sources})
 endfunction()
 
+# xe_shader_rules_metal(target shader_dir)
+#
+# Metal counterpart to xe_shader_rules_spirv / xe_shader_rules_dxbc. Runs
+# xenia-shader-cc --msl on each stage-suffixed *.xesl / *.glsl file under
+# shader_dir, emitting <shader_dir>/bytecode/metal/<id>.h with the metallib
+# bytes embedded as `const uint8_t <id>_metallib[]`.
+function(xe_shader_rules_metal target shader_dir)
+  if(NOT APPLE)
+    return()
+  endif()
+  get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
+  file(GLOB _sources
+    "${shader_dir}/*.xesl" "${shader_dir}/*.glsl"
+    "${shader_dir}/*.xesli" "${shader_dir}/*.glsli")
+  set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_metal.stamp")
+  set(_valid_stages vs hs ds gs ps cs)
+  set(_bytecode_dir "${shader_dir}/bytecode/metal")
+  set(_commands)
+  list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  foreach(src ${_sources})
+    get_filename_component(_name ${src} NAME)
+    string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
+    string(REPLACE "." "_" _id "${_basename}")
+    string(LENGTH "${_id}" _len)
+    if(_len LESS 3)
+      continue()
+    endif()
+    math(EXPR _s "${_len} - 2")
+    string(SUBSTRING "${_id}" ${_s} 2 _stage)
+    if(NOT _stage IN_LIST _valid_stages)
+      continue()
+    endif()
+    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
+      --msl "${src}" "${_bytecode_dir}/${_id}.h")
+  endforeach()
+  add_custom_command(
+    OUTPUT "${_stamp}"
+    ${_commands}
+    COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
+    DEPENDS ${_sources} xenia-shader-cc
+    COMMENT "Compiling Metal shaders for ${target}..."
+    VERBATIM
+  )
+  add_custom_target(${target}-metal-shaders DEPENDS "${_stamp}")
+  add_dependencies(${target} ${target}-metal-shaders)
+  set_source_files_properties(${_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
+  target_sources(${target} PRIVATE ${_sources})
+endfunction()
+
 # xe_force_c(files...) — compile the given sources as C.
 function(xe_force_c)
   set_source_files_properties(${ARGN} PROPERTIES LANGUAGE C)
