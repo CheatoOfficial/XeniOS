@@ -18,7 +18,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup
         env:
           LLVM_VERSION: 21
@@ -36,21 +36,21 @@ jobs:
     needs: lint
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
 
       - name: Cache premake5
         id: cache-premake5
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: tools/build/bin/premake5
           key: ${{ runner.os }}-${{ runner.arch }}-macos26-premake5-ios-${{ hashFiles('.gitmodules', 'xenia-build.py', 'tools/build/premake.py') }}
 
       - name: Cache build output
         id: cache-build-ios
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: build/DerivedData
           key: ${{ runner.os }}-${{ runner.arch }}-macos26-ios-deriveddata-${{ hashFiles('src/**', 'premake5.lua', 'third_party/**/*.lua', 'assets/apple/**') }}
@@ -221,7 +221,7 @@ jobs:
 
       - name: Upload iOS ARM64 artifacts
         if: steps.prepare_artifacts.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xenios_ipa
           path: artifacts/release/xenios.ipa
@@ -238,7 +238,7 @@ jobs:
       contents: write
     steps:
       - name: Download iOS artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: xenios_ipa
           path: artifacts/release
