@@ -137,6 +137,7 @@ jobs:
               third_party/glslang-spirv.lua
               third_party/imgui.lua
               third_party/metal-shader-converter.lua
+              third_party/metal-shader-converter
               third_party/miniaudio
               third_party/miniaudio.lua
               third_party/oaknut
@@ -157,6 +158,16 @@ jobs:
             # upstream CMake-focused syncs can't delete the files CI still
             # needs to generate and build iOS projects.
             git restore --source=origin/main --staged --worktree -- "${preserve_paths[@]}"
+          }
+
+          ensure_ios_submodule_metadata() {
+            git config -f .gitmodules \
+              submodule.third_party/metal-shader-converter.path \
+              third_party/metal-shader-converter
+            git config -f .gitmodules \
+              submodule.third_party/metal-shader-converter.url \
+              https://github.com/wmarti/metal-shader-converter.git
+            git add .gitmodules
           }
 
           merge_upstream() {
@@ -199,6 +210,7 @@ jobs:
             fi
 
             restore_local_ios_build_surface
+            ensure_ios_submodule_metadata
 
             if git diff --cached --quiet && git diff --quiet; then
               git merge --abort || true
