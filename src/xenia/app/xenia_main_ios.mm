@@ -51,6 +51,7 @@
 // CVar normally defined in windowed_app_main_qt.cc (excluded on iOS).
 DEFINE_transient_path(target, "", "Specifies the target file to run.",
                       "General");
+DECLARE_bool(protect_zero);
 DECLARE_string(launch_module);
 DECLARE_uint32(launch_flags);
 DECLARE_string(launch_data);
@@ -148,6 +149,12 @@ bool EmulatorAppIOS::OnInitialize() {
   XELOGI("iOS: Storage root: {}", storage_root);
 
   config::SetupConfig(storage_root);
+
+  if (cvars::protect_zero) {
+    XELOGW("iOS: Disabling protect_zero to avoid launch-time zero-page JIT "
+           "faults on guest address 0x00000000 accesses");
+    cvars::protect_zero = false;
+  }
 
   std::filesystem::path content_root = cvars::content_root;
   if (content_root.empty()) {
