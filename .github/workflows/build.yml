@@ -197,6 +197,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-qt6-
 
+      - name: Disable Defender scanning for build paths
+        run: |
+          Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE"
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
+        shell: pwsh
+
       - name: Setup
         run: |
           # Verify FXC is available (from Windows SDK)
