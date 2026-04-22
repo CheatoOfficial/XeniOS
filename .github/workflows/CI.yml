@@ -13,6 +13,12 @@ on:
       - 'LICENSE'
   workflow_dispatch:
 
+# sccache writes cache entries via the GitHub Actions cache API; that requires
+# `actions: write` on top of the default `contents: read`.
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   lint:
     name: Lint
@@ -58,13 +64,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-linuxdeploy-
 
-      - name: Cache submodules
-        id: cache-submodules
-        uses: actions/cache@v3
-        with:
-          path: third_party
-          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
-
       - name: Setup
         run: |
           UBUNTU_BASE=$(lsb_release -cs)
@@ -100,18 +99,24 @@ jobs:
           fi
           echo "$HOME/linuxdeploy" >> $GITHUB_PATH
 
-          # Update submodules if not cached
-          if [ '${{ steps.cache-submodules.outputs.cache-hit }}' != 'true' ]; then
-            git submodule update --init --depth=1 -j$(getconf _NPROCESSORS_ONLN) $(grep -oP '(?<=path = )(?!third_party\/DirectXShaderCompiler).+' .gitmodules)
-          fi
+          # Update submodules
+          git submodule update --init --depth=1 -j$(getconf _NPROCESSORS_ONLN) $(grep -oP '(?<=path = )(?!third_party\/DirectXShaderCompiler).+' .gitmodules)
 
           # Fetch data repos (game-patches, optimized-settings)
           ./xenia-build.py fetchdata
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@main
       - name: Build
         env:
           CC: clang-21
           CXX: clang++-21
+          SCCACHE_GHA_ENABLED: "true"
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
         run: ./xenia-build.py build --config=Release
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
@@ -204,13 +209,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-qt6-
 
-      - name: Cache submodules
-        id: cache-submodules
-        uses: actions/cache@v3
-        with:
-          path: third_party
-          key: ${{ runner.os }}-submodules-${{ hashFiles('.gitmodules') }}-${{ hashFiles('.git/modules/third_party/*/HEAD') }}
-
       - name: Setup
         run: |
           # Verify FXC is available (from Windows SDK)
@@ -229,16 +227,22 @@ jobs:
             aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -O C:\Qt
           }
 
-          $cacheHit = '${{ steps.cache-submodules.outputs.cache-hit }}'
-          if ($cacheHit -ne 'true') {
-            git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = ).+' .gitmodules).Matches.Value
-          }
+          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS (Select-String -CaseSensitive '(?<=path = ).+' .gitmodules).Matches.Value
 
           # Fetch data repos (game-patches, optimized-settings)
           python xenia-build.py fetchdata
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@main
       - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
         run: python xenia-build.py build --config=Release --target=xenia-app
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
       - name: Prepare artifacts
         id: prepare_artifacts
         run: |
