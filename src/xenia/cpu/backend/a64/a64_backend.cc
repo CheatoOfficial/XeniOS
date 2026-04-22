@@ -1151,6 +1151,11 @@ HostToGuestThunk A64ThunkEmitter::EmitHostToGuestThunk() {
   ldr(GetMembaseReg(),
       ptr(GetContextReg(),
           static_cast<int32_t>(offsetof(ppc::PPCContext, virtual_membase))));
+  // Restore the guest scalar FPCR so host-side work cannot leak stale
+  // rounding / non-IEEE state into translated guest FP code.
+  ldr(w11, ptr(GetBackendCtxReg(),
+               static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+  msr(3, 3, 4, 4, 0, x11);
   mov(x0, x2);  // return address
   blr(x16);
 
@@ -1207,6 +1212,11 @@ GuestToHostThunk A64ThunkEmitter::EmitGuestToHostThunk() {
   mov(x16, x0);              // function
   mov(x0, GetContextReg());  // context
   blr(x16);
+  // Host callbacks may change FPCR. Restore the cached guest scalar FP state
+  // before resuming translated code.
+  ldr(w11, ptr(GetBackendCtxReg(),
+               static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+  msr(3, 3, 4, 4, 0, x11);
 
   EmitLoadVolatileRegs();
   // Reload membase in case the host clobbered it.

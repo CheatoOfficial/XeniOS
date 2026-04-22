@@ -26,6 +26,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
+#include "xenia/cpu/backend/a64/a64_backend.h"
 #include "xenia/emulator.h"
 #include "xenia/storage_flags.h"
 #include "xenia/ui/window.h"
@@ -837,6 +838,16 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
       }
       emulator_->Shutdown();
     }
+
+#if XE_ARCH_ARM64
+    if (require_cpu_backend &&
+        cvars::a64_enable_host_guest_stack_synchronization) {
+      XELOGW(
+          "iOS: Forcing A64 stack synchronization off for launch to avoid "
+          "known ARM64 runtime instability");
+      cvars::a64_enable_host_guest_stack_synchronization = false;
+    }
+#endif
 
     X_STATUS setup_result =
         emulator_->Setup(window_.get(),
