@@ -112,7 +112,6 @@ static NSString* const kXeniaCompatDataDidUpdateNotification =
     @"XeniaCompatDataDidUpdateNotification";
 
 static NSString* xe_compat_cache_path(void);
-static std::filesystem::path GetLogFilePath();
 
 static BOOL xe_is_cs_debugged(void) {
   int flags = 0;
