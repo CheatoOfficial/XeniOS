@@ -1321,6 +1321,8 @@ static const char* xe_signal_name(int signal_number) {
       return "SIGILL";
     case SIGFPE:
       return "SIGFPE";
+    case SIGTRAP:
+      return "SIGTRAP";
     default:
       return "UNKNOWN";
   }
@@ -1405,7 +1407,7 @@ static void xe_install_ios_crash_handlers() {
   g_xenia_ios_previous_terminate_handler =
       std::set_terminate(xe_ios_terminate_handler);
 
-  const int signals[] = {SIGABRT, SIGBUS, SIGSEGV, SIGILL, SIGFPE};
+  const int signals[] = {SIGABRT, SIGBUS, SIGSEGV, SIGILL, SIGFPE, SIGTRAP};
   struct sigaction action;
   std::memset(&action, 0, sizeof(action));
   sigemptyset(&action.sa_mask);
@@ -10740,6 +10742,7 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
       display_name = ToNSString(path_to_launch.filename().string());
     }
     XELOGI("iOS: Launching queued external request: {}", path_to_launch.string());
+    xe::FlushLog();
     [self launchGameAtPath:path_to_launch displayName:display_name];
   }
 }
@@ -12312,6 +12315,7 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   XELOGI("iOS: UI launch request game='{}' path='{}' exists={} jit={} running={} stopping={}",
          game_label ? game_label.UTF8String : "", game_path.string(), path_exists,
          self.jitAcquired, self.gameRunning, self.gameStopInProgress);
+  xe::FlushLog();
   if (path_ec) {
     XELOGW("iOS: Failed checking game path '{}': {}", game_path.string(),
            path_ec.message());
@@ -12377,6 +12381,7 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   if (self.appContext) {
     XELOGI("iOS: Dispatching launch request to emulator thread for '{}'",
            game_path.string());
+    xe::FlushLog();
     self.appContext->LaunchGame(std::string([path_ns UTF8String]));
   } else {
     XELOGE("iOS: Launch aborted because app context is unavailable for '{}'",

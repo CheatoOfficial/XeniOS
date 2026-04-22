@@ -310,6 +310,7 @@ bool EmulatorAppIOS::OnInitialize() {
         } else {
           XELOGI("iOS: Game launch requested: {}", path);
         }
+        xe::FlushLog();
         auto game_path = std::filesystem::path(path);
         if (!game_path.empty()) {
           // User-driven launches should not reuse prior relaunch metadata.
