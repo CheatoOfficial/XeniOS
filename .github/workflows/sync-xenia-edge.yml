@@ -156,7 +156,7 @@ jobs:
             # Keep this fork's iOS/premake build surface authoritative so
             # upstream CMake-focused syncs can't delete the files CI still
             # needs to generate and build iOS projects.
-            git checkout origin/main -- "${preserve_paths[@]}"
+            git restore --source=origin/main --staged --worktree -- "${preserve_paths[@]}"
           }
 
           merge_upstream() {
