@@ -15,6 +15,10 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <TargetConditionals.h>
+#include <atomic>
+#include <exception>
+#include <fcntl.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
@@ -108,6 +112,7 @@ static NSString* const kXeniaCompatDataDidUpdateNotification =
     @"XeniaCompatDataDidUpdateNotification";
 
 static NSString* xe_compat_cache_path(void);
+static std::filesystem::path GetLogFilePath();
 
 static BOOL xe_is_cs_debugged(void) {
   int flags = 0;
@@ -1220,11 +1225,217 @@ std::string ChoiceTitleForItem(const IOSConfigItem& item) {
   return item.choices.empty() ? std::string() : item.choices.front().title;
 }
 
-std::filesystem::path GetLogFilePath() {
+static std::filesystem::path GetLogFilePath() {
   if (!cvars::log_file.empty()) {
     return cvars::log_file;
   }
   return xe_get_ios_documents_path() / "xenia.log";
+}
+
+namespace {
+
+std::atomic<int> g_xenia_ios_crash_log_fd{-1};
+std::atomic<bool> g_xenia_ios_crash_handlers_installed{false};
+std::terminate_handler g_xenia_ios_previous_terminate_handler = nullptr;
+
+}  // namespace
+
+static int xe_get_ios_crash_log_fd() {
+  int fd = g_xenia_ios_crash_log_fd.load(std::memory_order_acquire);
+  if (fd >= 0) {
+    return fd;
+  }
+
+  std::filesystem::path log_path = GetLogFilePath();
+  std::error_code create_ec;
+  std::filesystem::create_directories(log_path.parent_path(), create_ec);
+  (void)create_ec;
+
+  std::string log_path_string = log_path.string();
+  int opened_fd = open(log_path_string.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (opened_fd < 0) {
+    return -1;
+  }
+
+  int expected = -1;
+  if (!g_xenia_ios_crash_log_fd.compare_exchange_strong(expected, opened_fd,
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire)) {
+    close(opened_fd);
+    return expected;
+  }
+
+  return opened_fd;
+}
+
+static void xe_write_ios_crash_bytes(const char* bytes, size_t length) {
+  if (!bytes || !length) {
+    return;
+  }
+
+  int fd = xe_get_ios_crash_log_fd();
+  if (fd < 0) {
+    return;
+  }
+
+  while (length) {
+    ssize_t written = write(fd, bytes, length);
+    if (written <= 0) {
+      break;
+    }
+    bytes += written;
+    length -= static_cast<size_t>(written);
+  }
+}
+
+static void xe_append_ios_crash_line(const std::string& line) {
+  xe_write_ios_crash_bytes(line.data(), line.size());
+  xe_write_ios_crash_bytes("\n", 1);
+}
+
+static void xe_append_ios_crash_stack_symbols(NSArray<NSString*>* symbols) {
+  if (!symbols || symbols.count == 0) {
+    return;
+  }
+  xe_append_ios_crash_line("stack:");
+  for (NSString* symbol in symbols) {
+    if (!symbol) {
+      continue;
+    }
+    const char* utf8 = symbol.UTF8String;
+    if (!utf8) {
+      continue;
+    }
+    xe_append_ios_crash_line(std::string("  ") + utf8);
+  }
+}
+
+static const char* xe_signal_name(int signal_number) {
+  switch (signal_number) {
+    case SIGABRT:
+      return "SIGABRT";
+    case SIGBUS:
+      return "SIGBUS";
+    case SIGSEGV:
+      return "SIGSEGV";
+    case SIGILL:
+      return "SIGILL";
+    case SIGFPE:
+      return "SIGFPE";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static void xe_ios_uncaught_exception_handler(NSException* exception) {
+  xe_append_ios_crash_line("");
+  xe_append_ios_crash_line("=== xenia iOS uncaught exception ===");
+  xe_append_ios_crash_line(std::string("name=") +
+                           (exception.name ? exception.name.UTF8String : ""));
+  xe_append_ios_crash_line(std::string("reason=") +
+                           (exception.reason ? exception.reason.UTF8String : ""));
+  xe_append_ios_crash_stack_symbols(exception.callStackSymbols);
+  int fd = g_xenia_ios_crash_log_fd.load(std::memory_order_acquire);
+  if (fd >= 0) {
+    fsync(fd);
+  }
+}
+
+static void xe_ios_terminate_handler() {
+  std::string message = "std::terminate called";
+  if (std::exception_ptr current = std::current_exception()) {
+    try {
+      std::rethrow_exception(current);
+    } catch (const std::exception& e) {
+      message += ": ";
+      message += e.what();
+    } catch (...) {
+      message += ": non-std exception";
+    }
+  }
+
+  xe_append_ios_crash_line("");
+  xe_append_ios_crash_line("=== xenia iOS terminate ===");
+  xe_append_ios_crash_line(message);
+  xe_append_ios_crash_stack_symbols([NSThread callStackSymbols]);
+
+  int fd = g_xenia_ios_crash_log_fd.load(std::memory_order_acquire);
+  if (fd >= 0) {
+    fsync(fd);
+  }
+
+  if (g_xenia_ios_previous_terminate_handler &&
+      g_xenia_ios_previous_terminate_handler != xe_ios_terminate_handler) {
+    g_xenia_ios_previous_terminate_handler();
+  }
+  abort();
+}
+
+static void xe_ios_signal_handler(int signal_number, siginfo_t* info,
+                                  void* context) {
+  (void)context;
+  char buffer[256];
+  int length = snprintf(buffer, sizeof(buffer),
+                        "\n=== xenia iOS signal ===\nsignal=%d (%s) code=%d addr=%p\n",
+                        signal_number, xe_signal_name(signal_number),
+                        info ? info->si_code : 0, info ? info->si_addr : nullptr);
+  if (length > 0) {
+    size_t write_length = static_cast<size_t>(
+        length < static_cast<int>(sizeof(buffer)) ? length : sizeof(buffer) - 1);
+    xe_write_ios_crash_bytes(buffer, write_length);
+  }
+
+  int fd = g_xenia_ios_crash_log_fd.load(std::memory_order_acquire);
+  if (fd >= 0) {
+    fsync(fd);
+  }
+
+  signal(signal_number, SIG_DFL);
+  raise(signal_number);
+  _Exit(128 + signal_number);
+}
+
+static void xe_install_ios_crash_handlers() {
+  if (g_xenia_ios_crash_handlers_installed.exchange(true,
+                                                    std::memory_order_acq_rel)) {
+    return;
+  }
+
+  (void)xe_get_ios_crash_log_fd();
+  NSSetUncaughtExceptionHandler(&xe_ios_uncaught_exception_handler);
+  g_xenia_ios_previous_terminate_handler =
+      std::set_terminate(xe_ios_terminate_handler);
+
+  const int signals[] = {SIGABRT, SIGBUS, SIGSEGV, SIGILL, SIGFPE};
+  struct sigaction action;
+  std::memset(&action, 0, sizeof(action));
+  sigemptyset(&action.sa_mask);
+  action.sa_flags = SA_SIGINFO | SA_RESETHAND;
+  action.sa_sigaction = &xe_ios_signal_handler;
+  for (int signal_number : signals) {
+    sigaction(signal_number, &action, nullptr);
+  }
+}
+
+static void xe_log_ios_boot_environment(const char* source_tag, NSURL* launch_url) {
+  UIDevice* device = [UIDevice currentDevice];
+  NSProcessInfo* process_info = [NSProcessInfo processInfo];
+  NSOperatingSystemVersion os = process_info.operatingSystemVersion;
+  NSString* bundle_identifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
+  NSString* launch_url_string = launch_url.absoluteString ?: @"";
+
+  XELOGI("iOS: Logging to {}", GetLogFilePath().string());
+  XELOGI("iOS: Bootstrap source={} launch_url_present={} launch_url={}",
+         source_tag ? source_tag : "unknown", launch_url ? 1 : 0,
+         launch_url ? launch_url_string.UTF8String : "");
+  XELOGI(
+      "iOS: Build {} ({}) bundle={} device={} system={} {}.{}.{} cs_flags=0x{:08X} "
+      "debugged={} jit_ready={} jit_exec_probe={}",
+      XE_BUILD_VERSION, XE_BUILD_NUMBER, bundle_identifier.UTF8String,
+      (device.localizedModel ?: @"").UTF8String, (device.systemName ?: @"").UTF8String,
+      static_cast<uint32_t>(os.majorVersion), static_cast<uint32_t>(os.minorVersion),
+      static_cast<uint32_t>(os.patchVersion), xe_ios_code_sign_flags(),
+      xe_is_cs_debugged(), xe_check_jit_available(), xe_can_mmap_exec_page());
 }
 
 std::string ReadFileTail(const std::filesystem::path& path, size_t max_bytes) {
@@ -12097,11 +12308,22 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   NSString* path_ns = ToNSString(game_path.string());
   NSString* fallback_name = ToNSString(game_path.filename().string());
   NSString* game_label = display_name.length ? display_name : fallback_name;
+  std::error_code path_ec;
+  const bool path_exists = std::filesystem::exists(game_path, path_ec);
+  XELOGI("iOS: UI launch request game='{}' path='{}' exists={} jit={} running={} stopping={}",
+         game_label ? game_label.UTF8String : "", game_path.string(), path_exists,
+         self.jitAcquired, self.gameRunning, self.gameStopInProgress);
+  if (path_ec) {
+    XELOGW("iOS: Failed checking game path '{}': {}", game_path.string(),
+           path_ec.message());
+  }
 
   if (IsLikelyGodContainerFile(game_path)) {
     auto header = xe::vfs::XContentContainerDevice::ReadContainerHeader(game_path);
     if (header && header->content_metadata.data_file_count > 0 &&
         !HasContentSidecarDataDirectory(game_path)) {
+      XELOGW("iOS: Launch blocked because GOD sidecar data is missing for '{}'",
+             game_path.string());
       self.statusLabel.text = @"Selected game is missing its .data folder.";
       xe_present_ok_alert(
           self, @"Missing Game Data",
@@ -12111,11 +12333,15 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   }
 
   if (!self.jitAcquired) {
+    XELOGW("iOS: Launch blocked because JIT is not active for '{}'",
+           game_path.string());
     [self presentJITRequiredAlert];
     return;
   }
 
   if (self.gameStopInProgress || self.gameRunning) {
+    XELOGI("iOS: Launch for '{}' will be queued while the current game stops",
+           game_path.string());
     if (self.appContext) {
       self.statusLabel.text = [NSString stringWithFormat:@"Stopping current game; queued %@.",
                                                          game_label];
@@ -12150,8 +12376,12 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
       }];
 
   if (self.appContext) {
+    XELOGI("iOS: Dispatching launch request to emulator thread for '{}'",
+           game_path.string());
     self.appContext->LaunchGame(std::string([path_ns UTF8String]));
   } else {
+    XELOGE("iOS: Launch aborted because app context is unavailable for '{}'",
+           game_path.string());
     self.statusLabel.text = @"Unable to launch game (app context unavailable).";
     self.launcherOverlay.hidden = NO;
     self.launcherOverlay.alpha = 1.0;
@@ -13251,6 +13481,13 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
   char** argv_ptr = argv;
   cvar::ParseLaunchArguments(argc, argv_ptr, "", {});
 
+  if (cvars::log_file.empty()) {
+    cvars::log_file = xe_get_ios_documents_path() / "xenia.log";
+  }
+  xe_install_ios_crash_handlers();
+  xe::InitializeLogging("xenia", true);
+  xe_log_ios_boot_environment(source_tag, launch_url);
+
   // Create the app context.
   app_context_ = std::make_unique<xe::ui::IOSWindowedAppContext>();
 
@@ -13356,10 +13593,7 @@ static NSString* XeniaTouchControlEditorTitle(NSInteger control_identifier) {
 
   // Create and initialize the Xenia app.
   app_ = xe::ui::GetWindowedAppCreator()(*app_context_);
-  if (cvars::log_file.empty()) {
-    cvars::log_file = xe_get_ios_documents_path() / "xenia.log";
-  }
-  xe::InitializeLogging(app_->GetName(), true);
+  XELOGI("iOS: Created windowed app '{}'", app_->GetName());
 
   if (!app_->OnInitialize()) {
     XELOGE("iOS: App initialization failed");

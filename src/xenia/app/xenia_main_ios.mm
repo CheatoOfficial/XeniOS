@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -743,13 +744,24 @@ bool EmulatorAppIOS::RequestGameStop(const char* reason) {
 void EmulatorAppIOS::StartEmulatorThread(std::filesystem::path game_path,
                                          bool require_cpu_backend) {
   if (emulator_thread_.joinable()) {
+    XELOGI("iOS: Joining previous emulator thread before starting a new launch");
     emulator_thread_.join();
   }
 
+  XELOGI(
+      "iOS: StartEmulatorThread path='{}' require_cpu_backend={} initialized={} "
+      "cpu_initialized={}",
+      game_path.empty() ? std::string("<profile-services>") : game_path.string(),
+      require_cpu_backend, emulator_initialized_.load(std::memory_order_acquire),
+      emulator_cpu_initialized_.load(std::memory_order_acquire));
   game_stop_requested_.store(false, std::memory_order_release);
   emulator_thread_ = std::thread([this, game_path = std::move(game_path), require_cpu_backend]() {
     emulator_thread_running_.store(true, std::memory_order_release);
+    XELOGI("iOS: Emulator thread starting for '{}'",
+           game_path.empty() ? std::string("<profile-services>") : game_path.string());
     EmulatorThread(game_path, require_cpu_backend);
+    XELOGI("iOS: Emulator thread completed for '{}'",
+           game_path.empty() ? std::string("<profile-services>") : game_path.string());
     emulator_thread_running_.store(false, std::memory_order_release);
     game_stop_requested_.store(false, std::memory_order_release);
     app_context().CallInUIThread([this]() { StartQueuedLaunchIfIdle(); });
@@ -826,9 +838,22 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
     });
   }};
 
+  XELOGI(
+      "iOS: EmulatorThread begin path='{}' launched_with_game={} "
+      "require_cpu_backend={} protect_zero={} stack_sync={} launch_module='{}' "
+      "launch_flags={} launch_data_len={}",
+      launched_with_game ? game_path.string() : std::string("<profile-services>"),
+      launched_with_game, require_cpu_backend, cvars::protect_zero,
+      cvars::a64_enable_host_guest_stack_synchronization, cvars::launch_module,
+      cvars::launch_flags, cvars::launch_data.size());
+
+  try {
+
   const bool need_profile_mode_transition =
       !emulator_initialized_.load(std::memory_order_acquire) ||
       (require_cpu_backend && !emulator_cpu_initialized_.load(std::memory_order_acquire));
+  XELOGI("iOS: need_profile_mode_transition={} require_cpu_backend={}",
+         need_profile_mode_transition, require_cpu_backend);
 
   if (need_profile_mode_transition) {
     if (emulator_initialized_.load(std::memory_order_acquire) &&
@@ -856,6 +881,8 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
     }
 #endif
 
+    XELOGI("iOS: Calling Emulator::Setup require_cpu_backend={}",
+           require_cpu_backend);
     X_STATUS setup_result =
         emulator_->Setup(window_.get(),
                          nullptr,  // No ImGui drawer on iOS for now.
@@ -920,7 +947,30 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
 
   if (!game_path.empty()) {
     auto abs_path = std::filesystem::absolute(game_path);
-    XELOGI("iOS: Launching game: {}", abs_path);
+    std::error_code exists_ec;
+    std::error_code type_ec;
+    std::error_code size_ec;
+    const bool path_exists = std::filesystem::exists(abs_path, exists_ec);
+    const bool is_regular_file =
+        path_exists && std::filesystem::is_regular_file(abs_path, type_ec);
+    const uintmax_t path_size =
+        is_regular_file ? std::filesystem::file_size(abs_path, size_ec) : 0;
+    XELOGI("iOS: Launching game path='{}' exists={} regular_file={} size={} bytes",
+           abs_path.string(), path_exists, is_regular_file, path_size);
+    if (exists_ec) {
+      XELOGW("iOS: Failed checking launch path '{}': {}", abs_path.string(),
+             exists_ec.message());
+    }
+    if (type_ec) {
+      XELOGW("iOS: Failed checking launch path type '{}': {}", abs_path.string(),
+             type_ec.message());
+    }
+    if (size_ec) {
+      XELOGW("iOS: Failed checking launch path size '{}': {}", abs_path.string(),
+             size_ec.message());
+    }
+    XELOGI("iOS: Launch metadata module='{}' flags={} data_len={}",
+           cvars::launch_module, cvars::launch_flags, cvars::launch_data.size());
 
     auto xam = emulator_->kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
     if (xam) {
@@ -942,6 +992,8 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
       }
     }
 
+    XELOGI("iOS: Entering Emulator::LaunchPath for '{}'", abs_path.string());
+    xe::FlushLog();
     X_STATUS launch_result = emulator_->LaunchPath(abs_path);
     cvars::launch_module = "";
     cvars::launch_flags = 0;
@@ -954,6 +1006,18 @@ void EmulatorAppIOS::EmulatorThread(const std::filesystem::path& game_path,
     XELOGI("iOS: Game launched successfully");
     emulator_->WaitUntilExit();
     XELOGI("iOS: Game execution finished (exit wait completed)");
+  }
+  } catch (const std::exception& e) {
+    XELOGE("iOS: EmulatorThread caught std::exception for '{}': {}",
+           launched_with_game ? game_path.string()
+                              : std::string("<profile-services>"),
+           e.what());
+    xe::FlushLog();
+  } catch (...) {
+    XELOGE("iOS: EmulatorThread caught unknown exception for '{}'",
+           launched_with_game ? game_path.string()
+                              : std::string("<profile-services>"));
+    xe::FlushLog();
   }
 }
 
