@@ -113,19 +113,17 @@ endfunction()
 
 # xe_shader_rules_spirv(target shader_dir)
 #
-# Wires up SPIR-V shader compilation (glslang + spirv-opt + spirv-dis,
-# via tools/build/compile_shader_spirv.py) as a prerequisite of target.
-# Sources are *.xesl / *.glsl with a stage suffix (vs/hs/ds/gs/ps/cs);
-# outputs land in <shader_dir>/bytecode/vulkan_spirv/<id>.h. A stamp
-# file drives incremental rebuilds when any source or the compile
-# script changes.
+# Wires up SPIR-V shader compilation via the in-tree xenia-shader-cc host
+# tool (glslang-based) as a prerequisite of target. Sources are *.xesl /
+# *.glsl with a stage suffix (vs/hs/ds/gs/ps/cs); outputs land in
+# <shader_dir>/bytecode/vulkan_spirv/<id>.h. A stamp file drives
+# incremental rebuilds when any source or the tool changes.
 function(xe_shader_rules_spirv target shader_dir)
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
   file(GLOB _sources
     "${shader_dir}/*.xesl" "${shader_dir}/*.glsl"
     "${shader_dir}/*.xesli" "${shader_dir}/*.glsli")
   set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_spirv.stamp")
-  set(_script "${PROJECT_SOURCE_DIR}/tools/build/compile_shader_spirv.py")
   set(_valid_stages vs hs ds gs ps cs)
   set(_commands)
   set(_bytecode_dir "${shader_dir}/bytecode/vulkan_spirv")
@@ -143,13 +141,14 @@ function(xe_shader_rules_spirv target shader_dir)
     if(NOT _stage IN_LIST _valid_stages)
       continue()
     endif()
-    list(APPEND _commands COMMAND ${Python3_EXECUTABLE} "${_script}" "${src}" "${_bytecode_dir}/${_id}.h")
+    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
+      "${src}" "${_bytecode_dir}/${_id}.h")
   endforeach()
   add_custom_command(
     OUTPUT "${_stamp}"
     ${_commands}
     COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
-    DEPENDS ${_sources} "${_script}"
+    DEPENDS ${_sources} xenia-shader-cc
     COMMENT "Compiling SPIR-V shaders for ${target}..."
     VERBATIM
   )

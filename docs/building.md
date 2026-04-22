@@ -14,8 +14,6 @@ drivers.
 * Windows 11 SDK version 10.0.22000.0 (for Visual Studio 2022, this or any newer version)
 * [Python 3.6+ 64-bit](https://www.python.org/downloads/)
   * Ensure Python is in PATH.
-* [Vulkan SDK](https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe)
-  * The build script will automatically detect it if installed at `C:\VulkanSDK`
 * Qt 6.10.1 (for the UI)
   * Install using aqtinstall:
     ```
@@ -70,15 +68,6 @@ xb gentests
 
 # Run tests:
 xb test
-
-# Run GPU tests:
-xb gputest
-
-
-## Other:
-
-# Generate SPIR-V binaries and header files:
-xb genspirv
 -->
 
 #### Cross-compiling (Windows ARM64 ↔ x64)
