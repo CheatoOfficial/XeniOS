@@ -64,6 +64,8 @@ DECLARE_bool(readback_resolve_half_pixel_offset);
 
 DECLARE_bool(gpu_3d_to_2d_texture);
 
+DECLARE_bool(metal_shared_memory_zero_copy);
+
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1
 
 #endif  // XENIA_GPU_GPU_FLAGS_H_

@@ -1,1 +1,0 @@
-namespace xe::gpu::metal {}

@@ -1,10 +1,21 @@
-# Placeholder library for the Metal GPU backend. Exists so the build-time
-# Metal shader compilation has a target to hang off; replace placeholder.cc
-# with real backend sources when the Metal backend is implemented.
-add_library(xenia-gpu-metal STATIC placeholder.cc)
+add_library(xenia-gpu-metal STATIC
+  metal_command_processor.cc
+  metal_command_processor.h
+  metal_graphics_system.cc
+  metal_graphics_system.h
+  metal_heap_pool.cc
+  metal_heap_pool.h
+  metal_primitive_processor.cc
+  metal_primitive_processor.h
+  metal_shared_memory.cc
+  metal_shared_memory.h
+  metal_upload_buffer_pool.cc
+  metal_upload_buffer_pool.h
+)
 target_link_libraries(xenia-gpu-metal PUBLIC
   xenia-base
   xenia-gpu
+  xenia-ui-metal
   "-framework Foundation"
   "-framework Metal"
   "-framework MetalKit"

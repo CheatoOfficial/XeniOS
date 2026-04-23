@@ -203,3 +203,8 @@ DEFINE_int32(anisotropic_override, -1,
              "  4 = Force 8x anisotropic filtering\n"
              "  5 = Force 16x anisotropic filtering",
              "GPU");
+
+DEFINE_bool(metal_shared_memory_zero_copy, true,
+            "Use MTLBuffer bytes-no-copy for guest memory on unified memory "
+            "devices when possible.",
+            "GPU");
