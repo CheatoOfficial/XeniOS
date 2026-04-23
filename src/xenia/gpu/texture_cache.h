@@ -617,6 +617,7 @@ class TextureCache {
   // there was an error.
   void ResetTextureBindings(bool from_destructor = false);
   bool IsBindingOutdatedForUse(const TextureBinding& binding) const;
+  void InvalidateUsedOutdatedBindings(uint32_t used_texture_mask);
 
   const TextureBinding* GetValidTextureBinding(
       uint32_t fetch_constant_index) const {

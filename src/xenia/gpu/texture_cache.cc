@@ -319,12 +319,10 @@ uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle,
 void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   const auto& regs = register_file();
 
-  if (texture_became_outdated_.exchange(false, std::memory_order_acquire)) {
-    // A texture has become outdated - make sure whether textures are outdated
-    // is rechecked in this draw and in subsequent ones to reload the new data
-    // if needed.
-    ResetTextureBindings();
-  }
+  // Clear the aggregate flag, but invalidate only actually used outdated
+  // bindings below to avoid resyncing all slots on unrelated texture updates.
+  texture_became_outdated_.exchange(false, std::memory_order_acquire);
+  InvalidateUsedOutdatedBindings(used_texture_mask);
 
   // Update the texture keys and the textures.
   uint32_t bindings_changed = 0;
@@ -341,6 +339,8 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(index);
     TextureKey old_key = binding.key;
     uint8_t old_swizzled_signs = binding.swizzled_signs;
+    const bool binding_was_outdated =
+        old_key.is_valid && IsBindingOutdatedForUse(binding);
     BindingInfoFromFetchConstant(fetch, binding.key, &binding.swizzled_signs);
     texture_bindings_in_sync_ |= index_bit;
     if (!binding.key.is_valid) {
@@ -383,6 +383,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
         if (key_changed || !any_sign_was_not_signed) {
           binding.texture = FindOrCreateTexture(binding.key);
           load_unsigned_data = true;
+        } else if (binding_was_outdated && binding.texture != nullptr) {
+          // Fetch constants unchanged but watched guest memory changed - force
+          // a data upload against the same Texture*.
+          load_unsigned_data = true;
         }
       } else {
         binding.texture = nullptr;
@@ -393,6 +397,8 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
           signed_key.signed_separate = 1;
           binding.texture_signed = FindOrCreateTexture(signed_key);
           load_signed_data = true;
+        } else if (binding_was_outdated && binding.texture_signed != nullptr) {
+          load_signed_data = true;
         }
       } else {
         binding.texture_signed = nullptr;
@@ -402,6 +408,8 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       // be different.
       if (key_changed) {
         binding.texture = FindOrCreateTexture(binding.key);
+        load_unsigned_data = true;
+      } else if (binding_was_outdated && binding.texture != nullptr) {
         load_unsigned_data = true;
       }
       binding.texture_signed = nullptr;
@@ -451,6 +459,23 @@ bool TextureCache::IsBindingOutdatedForUse(
   };
   return is_texture_outdated(binding.texture) ||
          is_texture_outdated(binding.texture_signed);
+}
+
+// Clears the in-sync bit for used slots whose backing texture data is stale so
+// the main RequestTextures loop reprocesses them (re-binding the same Texture*
+// with fresh data uploaded via LoadTexturesData). Only used-and-outdated slots
+// are touched; non-used and clean slots keep their cached state.
+void TextureCache::InvalidateUsedOutdatedBindings(uint32_t used_texture_mask) {
+  uint32_t used_in_sync = used_texture_mask & texture_bindings_in_sync_;
+  uint32_t index = 0;
+  while (xe::bit_scan_forward(used_in_sync, &index)) {
+    uint32_t index_bit = UINT32_C(1) << index;
+    used_in_sync = xe::clear_lowest_bit(used_in_sync);
+    const TextureBinding& binding = texture_bindings_[index];
+    if (IsBindingOutdatedForUse(binding)) {
+      texture_bindings_in_sync_ &= ~index_bit;
+    }
+  }
 }
 
 const char* TextureCache::TextureKey::GetLogDimensionName(
