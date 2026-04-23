@@ -119,10 +119,12 @@ add_compile_definitions(
   VULKAN_HPP_NO_TO_STRING
   IMGUI_DISABLE_OBSOLETE_FUNCTIONS
   IMGUI_DISABLE_DEFAULT_FONT
-  IMGUI_USE_STB_SPRINTF
   USE_CPP17  # Tabulate
   _LIB
 )
+
+# Prevent ASan error from ImGUI
+add_compile_definitions($<$<NOT:$<CONFIG:Checked>>:IMGUI_USE_STB_SPRINTF>)
 
 # ==============================================================================
 # Qt6 (optional, gated on the QT_DIR env var)
@@ -218,8 +220,6 @@ if(MSVC)
   add_compile_definitions(
     $<$<CONFIG:Checked>:DEBUG>
     $<$<CONFIG:Checked>:NDEBUG>
-    # STB_SPRINTF is incompatible with ASan runtime hooks.
-    $<$<CONFIG:Checked>:IMGUI_USE_STB_SPRINTF_DISABLED>
   )
 
   # Debug: /RTC1 requires the debug CRT, so strip it — we're on /MD. Pin
