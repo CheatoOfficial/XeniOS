@@ -157,22 +157,21 @@ target_include_directories(fmt PUBLIC fmt/include)
 
 # ==============================================================================
 # glslang-spirv (runtime: SPIR-V emission primitives for Xenia's own
-# SpirvShaderTranslator; not needed on macOS — no Vulkan/SPIR-V backend)
+# SpirvShaderTranslator; used by the Vulkan backend and by the Metal backend's
+# SPIRV-Cross path)
 # ==============================================================================
-if(NOT APPLE)
-  file(GLOB _glslang_spirv_cpp "glslang/SPIRV/*.cpp")
-  file(GLOB _glslang_spirv_h "glslang/SPIRV/*.h")
-  file(GLOB _glslang_spirv_hpp "glslang/SPIRV/*.hpp11")
-  # Excluding GlslangToSpv keeps MachineIndependent out of the runtime link.
-  list(FILTER _glslang_spirv_cpp EXCLUDE REGEX "GlslangToSpv\\.cpp$")
-  add_library(glslang-spirv STATIC
-    ${_glslang_spirv_cpp}
-    ${_glslang_spirv_h}
-    ${_glslang_spirv_hpp}
-    glslang/glslang/Include/visibility.h
-  )
-  target_include_directories(glslang-spirv PUBLIC glslang)
-endif()
+file(GLOB _glslang_spirv_cpp "glslang/SPIRV/*.cpp")
+file(GLOB _glslang_spirv_h "glslang/SPIRV/*.h")
+file(GLOB _glslang_spirv_hpp "glslang/SPIRV/*.hpp11")
+# Excluding GlslangToSpv keeps MachineIndependent out of the runtime link.
+list(FILTER _glslang_spirv_cpp EXCLUDE REGEX "GlslangToSpv\\.cpp$")
+add_library(glslang-spirv STATIC
+  ${_glslang_spirv_cpp}
+  ${_glslang_spirv_h}
+  ${_glslang_spirv_hpp}
+  glslang/glslang/Include/visibility.h
+)
+target_include_directories(glslang-spirv PUBLIC glslang)
 
 # ==============================================================================
 # SPIRV-Headers + SPIRV-Tools (host: SPIR-V optimization + disassembly
@@ -258,7 +257,8 @@ if(NOT WIN32)
 endif()
 
 # ==============================================================================
-# SPIRV-Cross (Apple only — used by xenia-shader-cc to emit MSL when requested)
+# SPIRV-Cross (Apple only — used at runtime by xenia-gpu-metal to translate
+# guest SPIR-V to MSL via MslShader)
 # ==============================================================================
 if(APPLE)
   add_library(spirv-cross STATIC
@@ -279,7 +279,7 @@ endif()
 
 # ==============================================================================
 # xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h, and on
-# Apple, optionally -> MSL via SPIRV-Cross)
+# Apple, XeSL -> MSL metallib -> .h via xcrun metal)
 # ==============================================================================
 add_executable(xenia-shader-cc ${PROJECT_SOURCE_DIR}/tools/build/shader_cc.cc)
 target_link_libraries(xenia-shader-cc PRIVATE glslang SPIRV-Tools-static)
@@ -288,7 +288,6 @@ target_include_directories(xenia-shader-cc PRIVATE
 set_target_properties(xenia-shader-cc PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host_tools")
 if(APPLE)
-  target_link_libraries(xenia-shader-cc PRIVATE spirv-cross)
   target_compile_definitions(xenia-shader-cc PRIVATE XE_SHADER_CC_METAL=1)
 endif()
 if(MSVC)

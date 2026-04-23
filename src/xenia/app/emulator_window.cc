@@ -242,6 +242,13 @@ DEFINE_bool(use_gamemode, false,
             "GameMode must be installed on your system for this to work.",
             "Linux");
 #endif
+#if XE_PLATFORM_MAC
+DEFINE_bool(
+    use_metal_hud, false,
+    "Enable the Metal performance HUD (MTL_HUD_ENABLED=1) when launching "
+    "games in separate processes.",
+    "MacOS");
+#endif
 DEFINE_bool(disable_game_window_mouse, false,
             "Disables mouse interactions in the game window, including "
             "double-click to fullscreen and right-click context menu.",
@@ -496,6 +503,11 @@ void EmulatorWindow::OnEmulatorInitialized() {
       if (cvars::use_gamemode) {
         gamemode_cmd = "gamemoderun";
         argv.push_back(gamemode_cmd.c_str());
+      }
+#endif
+#if XE_PLATFORM_MAC
+      if (cvars::use_metal_hud) {
+        setenv("MTL_HUD_ENABLED", "1", 1);
       }
 #endif
 
@@ -835,9 +847,19 @@ bool EmulatorWindow::Initialize() {
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&Logging",
                            [this]() { OpenConfigDialog("Logging"); }));
+#if XE_PLATFORM_MAC
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "Mac&OS",
+                           [this]() { OpenConfigDialog("MacOS"); }));
+#endif
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&Memory",
                            [this]() { OpenConfigDialog("Memory"); }));
+#if XE_PLATFORM_MAC
+      config_menu->AddChild(
+          MenuItem::Create(MenuItem::Type::kString, "Me&tal",
+                           [this]() { OpenConfigDialog("Metal"); }));
+#endif
       config_menu->AddChild(
           MenuItem::Create(MenuItem::Type::kString, "&Profiles",
                            [this]() { OpenConfigDialog("Profiles"); }));
@@ -2430,6 +2452,11 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     if (cvars::use_gamemode) {
       gamemode_cmd = "gamemoderun";
       argv.push_back(gamemode_cmd.c_str());
+    }
+#endif
+#if XE_PLATFORM_MAC
+    if (cvars::use_metal_hud) {
+      setenv("MTL_HUD_ENABLED", "1", 1);
     }
 #endif
 

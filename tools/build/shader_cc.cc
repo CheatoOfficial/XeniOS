@@ -1,12 +1,15 @@
-// Build-time shader compiler. Consumes a GLSL/XeSL source file and emits a C
-// header with the compiled SPIR-V as `const uint32_t <id>[]`.
+// Build-time shader compiler for Xenia's built-in shaders.
 //
-// Usage: xenia-shader-cc <input> <output.h>
+// Usage: xenia-shader-cc [--msl] <input> <output.h>
 //
-// Stage (vs/hs/ds/gs/ps/cs) is parsed from the filename stem, e.g. foo.cs.glsl
-// -> compute. XeSL sources are compiled with the XeSL wrapper (#version 460 +
-// Google include directive + #include of the file itself) and with includes
-// resolved relative to the input file's directory.
+// Default: GLSL/XeSL -> SPIR-V, linked in-process via glslang and
+// SPIRV-Tools, emitted as `const uint32_t <id>[]`. Stage parsed from
+// filename stem (foo.cs.glsl -> compute); XeSL sources compiled with
+// SHADING_LANGUAGE_GLSL_XE=1 and includes resolved relative to the
+// input's directory.
+//
+// --msl (Apple only): .xesl -> .metallib via `xcrun metal -x metal -D
+// SHADING_LANGUAGE_MSL_XE=1`, emitted as `const uint8_t <id>_metallib[]`.
 
 #include <algorithm>
 #include <cstdint>
@@ -31,8 +34,6 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#include "spirv_msl.hpp"
 
 extern char** environ;
 #endif
@@ -230,6 +231,74 @@ int main(int argc, char** argv) {
   std::filesystem::path input_path = argv[arg_idx];
   std::filesystem::path output_path = argv[arg_idx + 1];
   std::string input_filename = input_path.filename().string();
+  std::string identifier = IdentifierFromFilename(input_filename);
+
+  if (msl_mode) {
+#ifdef XE_SHADER_CC_METAL
+    auto tmp_dir = std::filesystem::temp_directory_path();
+    auto tag = identifier + "_" + std::to_string(::getpid());
+    auto air_path = tmp_dir / (tag + ".air");
+    auto lib_path = tmp_dir / (tag + ".metallib");
+
+    auto cleanup = [&] {
+      std::error_code ec;
+      std::filesystem::remove(air_path, ec);
+      std::filesystem::remove(lib_path, ec);
+    };
+
+    std::vector<std::string> metal_cmd = {
+        "xcrun",
+        "-sdk",
+        "macosx",
+        "metal",
+        "-x",
+        "metal",
+        "-std=macos-metal2.3",
+        "-D",
+        "SHADING_LANGUAGE_MSL_XE=1",
+        "-w",
+    };
+    std::string input_dir = input_path.parent_path().string();
+    if (!input_dir.empty()) {
+      metal_cmd.push_back("-I");
+      metal_cmd.push_back(input_dir);
+    }
+    metal_cmd.push_back("-c");
+    metal_cmd.push_back(input_path.string());
+    metal_cmd.push_back("-o");
+    metal_cmd.push_back(air_path.string());
+    if (RunCommand(metal_cmd) != 0) {
+      std::fprintf(stderr, "metal failed for %s\n",
+                   input_path.string().c_str());
+      cleanup();
+      return 1;
+    }
+    if (RunCommand({"xcrun", "-sdk", "macosx", "metallib", air_path.string(),
+                    "-o", lib_path.string()}) != 0) {
+      std::fprintf(stderr, "metallib failed for %s\n",
+                   input_path.string().c_str());
+      cleanup();
+      return 1;
+    }
+
+    std::vector<uint8_t> bytes;
+    if (!ReadBinaryFile(lib_path, &bytes)) {
+      std::fprintf(stderr, "failed to read %s\n", lib_path.string().c_str());
+      cleanup();
+      return 1;
+    }
+    cleanup();
+
+    if (!WriteMetallibHeader(output_path, identifier, bytes)) {
+      return 1;
+    }
+    return 0;
+#else
+    std::fprintf(stderr,
+                 "--msl not available (built without XE_SHADER_CC_METAL)\n");
+    return 1;
+#endif
+  }
 
   EShLanguage stage;
   std::string stage_key;
@@ -350,76 +419,6 @@ int main(int argc, char** argv) {
       return 1;
     }
     spirv = std::move(optimized);
-  }
-
-  std::string identifier = IdentifierFromFilename(input_filename);
-
-  if (msl_mode) {
-#ifdef XE_SHADER_CC_METAL
-    std::string msl;
-    try {
-      spirv_cross::CompilerMSL compiler(std::move(spirv));
-      auto opts = compiler.get_msl_options();
-      opts.platform = spirv_cross::CompilerMSL::Options::macOS;
-      opts.msl_version =
-          spirv_cross::CompilerMSL::Options::make_msl_version(2, 3);
-      compiler.set_msl_options(opts);
-      msl = compiler.compile();
-    } catch (const std::exception& e) {
-      std::fprintf(stderr, "SPIRV-Cross failed for %s: %s\n",
-                   input_path.string().c_str(), e.what());
-      return 1;
-    }
-
-    auto tmp_dir = std::filesystem::temp_directory_path();
-    auto tag = identifier + "_" + std::to_string(::getpid());
-    auto msl_path = tmp_dir / (tag + ".metal");
-    auto air_path = tmp_dir / (tag + ".air");
-    auto lib_path = tmp_dir / (tag + ".metallib");
-
-    if (!WriteFile(msl_path, msl)) {
-      std::fprintf(stderr, "failed to write %s\n", msl_path.string().c_str());
-      return 1;
-    }
-
-    auto cleanup = [&] {
-      std::error_code ec;
-      std::filesystem::remove(msl_path, ec);
-      std::filesystem::remove(air_path, ec);
-      std::filesystem::remove(lib_path, ec);
-    };
-
-    if (RunCommand({"xcrun", "-sdk", "macosx", "metal", "-x", "metal",
-                    "-std=macos-metal2.3", "-w", "-c", msl_path.string(), "-o",
-                    air_path.string()}) != 0) {
-      std::fprintf(stderr, "metal failed for %s\n",
-                   input_path.string().c_str());
-      cleanup();
-      return 1;
-    }
-    if (RunCommand({"xcrun", "-sdk", "macosx", "metallib", air_path.string(),
-                    "-o", lib_path.string()}) != 0) {
-      std::fprintf(stderr, "metallib failed for %s\n",
-                   input_path.string().c_str());
-      cleanup();
-      return 1;
-    }
-
-    std::vector<uint8_t> bytes;
-    if (!ReadBinaryFile(lib_path, &bytes)) {
-      std::fprintf(stderr, "failed to read %s\n", lib_path.string().c_str());
-      cleanup();
-      return 1;
-    }
-    cleanup();
-
-    if (!WriteMetallibHeader(output_path, identifier, bytes)) {
-      return 1;
-    }
-    return 0;
-#else
-    return 1;
-#endif
   }
 
   if (!WriteSpirvHeader(output_path, identifier, spirv)) {

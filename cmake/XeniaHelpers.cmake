@@ -208,24 +208,26 @@ endfunction()
 # xe_shader_rules_metal(target shader_dir)
 #
 # Metal counterpart to xe_shader_rules_spirv / xe_shader_rules_dxbc. Runs
-# xenia-shader-cc --msl on each stage-suffixed *.xesl / *.glsl file under
-# shader_dir, emitting <shader_dir>/bytecode/metal/<id>.h with the metallib
-# bytes embedded as `const uint8_t <id>_metallib[]`.
+# xenia-shader-cc --msl on each cs/ps/vs-stage *.xesl file under shader_dir,
+# emitting <shader_dir>/bytecode/metal/<id>.h with the metallib bytes
+# embedded as `const uint8_t <id>_metallib[]`. .glsl / .hlsl / fxaa / ffx_
+# sources are skipped (they don't expose an MSL branch).
 function(xe_shader_rules_metal target shader_dir)
   if(NOT APPLE)
     return()
   endif()
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
-  file(GLOB _sources
-    "${shader_dir}/*.xesl" "${shader_dir}/*.glsl"
-    "${shader_dir}/*.xesli" "${shader_dir}/*.glsli")
+  file(GLOB _sources "${shader_dir}/*.xesl" "${shader_dir}/*.xesli")
   set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_metal.stamp")
-  set(_valid_stages vs hs ds gs ps cs)
+  set(_valid_stages vs ps cs)
   set(_bytecode_dir "${shader_dir}/bytecode/metal")
   set(_commands)
   list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
+    if(_name MATCHES "^fxaa" OR _name MATCHES "ffx_")
+      continue()
+    endif()
     string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
     string(REPLACE "." "_" _id "${_basename}")
     string(LENGTH "${_id}" _len)

@@ -39,22 +39,22 @@
 #endif
 
 DEFINE_bool(metal_presenter_force_10bpc, true,
-            "Force RGB10A2 guest output for presenter (reduces gamma conversion cost).", "GPU");
+            "Force RGB10A2 guest output for presenter (reduces gamma conversion cost).", "Metal");
 DEFINE_bool(metal_presenter_use_metalfx, false,
-            "Use MetalFX spatial scaling when upscaling guest output.", "GPU");
+            "Use MetalFX spatial scaling when upscaling guest output.", "Metal");
 DEFINE_int32(metal_presenter_metalfx_color_processing, 0,
-             "MetalFX color processing mode: 0=perceptual, 1=linear.", "GPU");
+             "MetalFX color processing mode: 0=perceptual, 1=linear.", "Metal");
 DEFINE_int32(metal_presenter_metalfx_scale_x, 0,
-             "MetalFX scale factor X (1=1x, 2=2x, etc). 0 = Fit Window.", "GPU");
+             "MetalFX scale factor X (1=1x, 2=2x, etc). 0 = Fit Window.", "Metal");
 DEFINE_int32(metal_presenter_metalfx_scale_y, 0,
-             "MetalFX scale factor Y (1=1x, 2=2x, etc). 0 = Fit Window.", "GPU");
+             "MetalFX scale factor Y (1=1x, 2=2x, etc). 0 = Fit Window.", "Metal");
 DEFINE_bool(metal_presenter_use_backing_scale, false,
             "Use macOS backing scale (Retina) for CAMetalLayer drawable size. "
             "If false, drawable size equals logical window size (lower GPU cost, "
             "less sharp).",
-            "GPU");
+            "Metal");
 DEFINE_bool(metal_presenter_debug_markers, false,
-            "Add Metal debug markers for presenter passes and conversions.", "GPU");
+            "Add Metal debug markers for presenter passes and conversions.", "Metal");
 
 namespace xe {
 namespace ui {
@@ -715,14 +715,9 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
 }
 
 void MetalPresenter::DisconnectPaintingFromSurfaceFromUIThreadImpl() {
-  // Clean up Metal presentation resources
   if (metal_layer_) {
     metal_layer_ = nullptr;
   }
-
-  // Command queue is owned by the provider, not released here
-  command_queue_ = nullptr;
-
   XELOGI("Metal surface disconnected successfully");
 }
 

@@ -421,6 +421,38 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   }
 }
 
+bool TextureCache::AnyUsedTextureRequestWorkPending(
+    uint32_t used_texture_mask) const {
+  if (!used_texture_mask) {
+    return false;
+  }
+  // Any used slot that is out of sync needs work.
+  if (used_texture_mask & ~texture_bindings_in_sync_) {
+    return true;
+  }
+  // Any in-sync slot whose backing texture data is outdated also needs work.
+  uint32_t used_in_sync = used_texture_mask & texture_bindings_in_sync_;
+  uint32_t index = 0;
+  while (xe::bit_scan_forward(used_in_sync, &index)) {
+    used_in_sync = xe::clear_lowest_bit(used_in_sync);
+    const TextureBinding& binding = texture_bindings_[index];
+    if (binding.key.is_valid && IsBindingOutdatedForUse(binding)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TextureCache::IsBindingOutdatedForUse(
+    const TextureBinding& binding) const {
+  auto is_texture_outdated = [](const Texture* texture) {
+    return texture && (texture->base_outdated_lockless() ||
+                       texture->mips_outdated_lockless());
+  };
+  return is_texture_outdated(binding.texture) ||
+         is_texture_outdated(binding.texture_signed);
+}
+
 const char* TextureCache::TextureKey::GetLogDimensionName(
     xenos::DataDimension dimension) {
   switch (dimension) {

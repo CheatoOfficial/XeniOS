@@ -124,6 +124,10 @@ class TextureCache {
   }
 
   virtual void RequestTextures(uint32_t used_texture_mask);
+  // Returns whether RequestTextures(used_texture_mask) may need to process
+  // bindings or reload texture data from guest memory. Used as a cheap
+  // pre-check to skip the full RequestTextures call when nothing changed.
+  bool AnyUsedTextureRequestWorkPending(uint32_t used_texture_mask) const;
 
   // "ActiveTexture" means as of the latest RequestTextures call.
 
@@ -612,6 +616,7 @@ class TextureCache {
   // this will cause another attempt to create a texture or to untile it if
   // there was an error.
   void ResetTextureBindings(bool from_destructor = false);
+  bool IsBindingOutdatedForUse(const TextureBinding& binding) const;
 
   const TextureBinding* GetValidTextureBinding(
       uint32_t fetch_constant_index) const {
