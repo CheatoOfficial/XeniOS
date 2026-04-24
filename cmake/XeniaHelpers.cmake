@@ -129,7 +129,7 @@ function(xe_shader_rules_spirv target shader_dir)
   set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/vulkan_spirv")
   set(_valid_stages vs hs ds gs ps cs)
   set(_outputs)
-  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  file(MAKE_DIRECTORY "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
@@ -144,17 +144,18 @@ function(xe_shader_rules_spirv target shader_dir)
       continue()
     endif()
     set(_out "${_bytecode_dir}/${_id}.h")
+    set(_dep "${_out}.d")
     list(APPEND _outputs "${_out}")
-    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
-      "${src}" "${_out}")
+    add_custom_command(
+      OUTPUT "${_out}"
+      COMMAND $<TARGET_FILE:xenia-shader-cc> --depfile "${_dep}"
+              "${src}" "${_out}"
+      DEPENDS "${src}" xenia-shader-cc
+      DEPFILE "${_dep}"
+      COMMENT "SPIR-V: ${_name}"
+      VERBATIM
+    )
   endforeach()
-  add_custom_command(
-    OUTPUT ${_outputs}
-    ${_commands}
-    DEPENDS ${_sources} xenia-shader-cc
-    COMMENT "Compiling SPIR-V shaders for ${target}..."
-    VERBATIM
-  )
   add_custom_target(${target}-spirv-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-spirv-shaders)
   target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
@@ -180,7 +181,7 @@ function(xe_shader_rules_dxbc target shader_dir)
   set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/d3d12_5_1")
   set(_valid_stages vs hs ds gs ps cs)
   set(_outputs)
-  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  file(MAKE_DIRECTORY "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
@@ -195,17 +196,18 @@ function(xe_shader_rules_dxbc target shader_dir)
       continue()
     endif()
     set(_out "${_bytecode_dir}/${_id}.h")
+    set(_dep "${_out}.d")
     list(APPEND _outputs "${_out}")
-    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
-      --dxbc "${src}" "${_out}")
+    add_custom_command(
+      OUTPUT "${_out}"
+      COMMAND $<TARGET_FILE:xenia-shader-cc> --dxbc --depfile "${_dep}"
+              "${src}" "${_out}"
+      DEPENDS "${src}" xenia-shader-cc
+      DEPFILE "${_dep}"
+      COMMENT "DXBC: ${_name}"
+      VERBATIM
+    )
   endforeach()
-  add_custom_command(
-    OUTPUT ${_outputs}
-    ${_commands}
-    DEPENDS ${_sources} xenia-shader-cc
-    COMMENT "Compiling DXBC shaders for ${target}..."
-    VERBATIM
-  )
   add_custom_target(${target}-dxbc-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-dxbc-shaders)
   target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
@@ -232,7 +234,7 @@ function(xe_shader_rules_metal target shader_dir)
   set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/metal")
   set(_valid_stages vs ps cs)
   set(_outputs)
-  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  file(MAKE_DIRECTORY "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     if(_name MATCHES "^fxaa" OR _name MATCHES "ffx_")
@@ -250,17 +252,18 @@ function(xe_shader_rules_metal target shader_dir)
       continue()
     endif()
     set(_out "${_bytecode_dir}/${_id}.h")
+    set(_dep "${_out}.d")
     list(APPEND _outputs "${_out}")
-    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
-      --msl "${src}" "${_out}")
+    add_custom_command(
+      OUTPUT "${_out}"
+      COMMAND $<TARGET_FILE:xenia-shader-cc> --msl --depfile "${_dep}"
+              "${src}" "${_out}"
+      DEPENDS "${src}" xenia-shader-cc
+      DEPFILE "${_dep}"
+      COMMENT "Metal: ${_name}"
+      VERBATIM
+    )
   endforeach()
-  add_custom_command(
-    OUTPUT ${_outputs}
-    ${_commands}
-    DEPENDS ${_sources} xenia-shader-cc
-    COMMENT "Compiling Metal shaders for ${target}..."
-    VERBATIM
-  )
   add_custom_target(${target}-metal-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-metal-shaders)
   target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
