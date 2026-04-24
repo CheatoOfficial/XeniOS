@@ -115,19 +115,21 @@ endfunction()
 #
 # Wires up SPIR-V shader compilation via the in-tree xenia-shader-cc host
 # tool (glslang-based) as a prerequisite of target. Sources are *.xesl /
-# *.glsl with a stage suffix (vs/hs/ds/gs/ps/cs); outputs land in
-# <shader_dir>/bytecode/vulkan_spirv/<id>.h. A stamp file drives
-# incremental rebuilds when any source or the tool changes.
+# *.glsl with a stage suffix (vs/hs/ds/gs/ps/cs); outputs land in the build
+# tree at ${PROJECT_BINARY_DIR}/generated/<src-relative>/bytecode/vulkan_spirv/
+# and the generated root is added to the target's include path so existing
+# `#include "xenia/.../bytecode/vulkan_spirv/<id>.h"` continues to resolve.
 function(xe_shader_rules_spirv target shader_dir)
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
   file(GLOB _sources
     "${shader_dir}/*.xesl" "${shader_dir}/*.glsl"
     "${shader_dir}/*.xesli" "${shader_dir}/*.glsli")
-  set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_spirv.stamp")
+  file(RELATIVE_PATH _rel_dir "${PROJECT_SOURCE_DIR}/src" "${shader_dir}")
+  set(_generated_root "${PROJECT_BINARY_DIR}/generated")
+  set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/vulkan_spirv")
   set(_valid_stages vs hs ds gs ps cs)
-  set(_commands)
-  set(_bytecode_dir "${shader_dir}/bytecode/vulkan_spirv")
-  list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  set(_outputs)
+  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
@@ -141,19 +143,21 @@ function(xe_shader_rules_spirv target shader_dir)
     if(NOT _stage IN_LIST _valid_stages)
       continue()
     endif()
+    set(_out "${_bytecode_dir}/${_id}.h")
+    list(APPEND _outputs "${_out}")
     list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
-      "${src}" "${_bytecode_dir}/${_id}.h")
+      "${src}" "${_out}")
   endforeach()
   add_custom_command(
-    OUTPUT "${_stamp}"
+    OUTPUT ${_outputs}
     ${_commands}
-    COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
     DEPENDS ${_sources} xenia-shader-cc
     COMMENT "Compiling SPIR-V shaders for ${target}..."
     VERBATIM
   )
-  add_custom_target(${target}-spirv-shaders DEPENDS "${_stamp}")
+  add_custom_target(${target}-spirv-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-spirv-shaders)
+  target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
   # Attach sources to the target for IDE visibility without letting VS
   # try to compile them as C++.
   set_source_files_properties(${_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
@@ -164,18 +168,20 @@ endfunction()
 #
 # DXBC counterpart to xe_shader_rules_spirv: invokes FXC via
 # tools/build/compile_shader_dxbc.py on each stage-suffixed *.xesl /
-# *.hlsl under shader_dir, emitting <shader_dir>/bytecode/d3d12_5_1/<id>.h.
+# *.hlsl under shader_dir, emitting to the build tree under
+# ${PROJECT_BINARY_DIR}/generated/<src-relative>/bytecode/d3d12_5_1/.
 function(xe_shader_rules_dxbc target shader_dir)
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
   file(GLOB _sources
     "${shader_dir}/*.xesl" "${shader_dir}/*.hlsl"
     "${shader_dir}/*.xesli" "${shader_dir}/*.hlsli")
-  set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_dxbc.stamp")
+  file(RELATIVE_PATH _rel_dir "${PROJECT_SOURCE_DIR}/src" "${shader_dir}")
+  set(_generated_root "${PROJECT_BINARY_DIR}/generated")
+  set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/d3d12_5_1")
   set(_script "${PROJECT_SOURCE_DIR}/tools/build/compile_shader_dxbc.py")
   set(_valid_stages vs hs ds gs ps cs)
-  set(_commands)
-  set(_bytecode_dir "${shader_dir}/bytecode/d3d12_5_1")
-  list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  set(_outputs)
+  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     string(REGEX REPLACE "\\.[^.]+$" "" _basename "${_name}")
@@ -189,18 +195,20 @@ function(xe_shader_rules_dxbc target shader_dir)
     if(NOT _stage IN_LIST _valid_stages)
       continue()
     endif()
-    list(APPEND _commands COMMAND ${Python3_EXECUTABLE} "${_script}" "${src}" "${_bytecode_dir}/${_id}.h")
+    set(_out "${_bytecode_dir}/${_id}.h")
+    list(APPEND _outputs "${_out}")
+    list(APPEND _commands COMMAND ${Python3_EXECUTABLE} "${_script}" "${src}" "${_out}")
   endforeach()
   add_custom_command(
-    OUTPUT "${_stamp}"
+    OUTPUT ${_outputs}
     ${_commands}
-    COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
     DEPENDS ${_sources} "${_script}"
     COMMENT "Compiling DXBC shaders for ${target}..."
     VERBATIM
   )
-  add_custom_target(${target}-dxbc-shaders DEPENDS "${_stamp}")
+  add_custom_target(${target}-dxbc-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-dxbc-shaders)
+  target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
   set_source_files_properties(${_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
   target_sources(${target} PRIVATE ${_sources})
 endfunction()
@@ -209,20 +217,22 @@ endfunction()
 #
 # Metal counterpart to xe_shader_rules_spirv / xe_shader_rules_dxbc. Runs
 # xenia-shader-cc --msl on each cs/ps/vs-stage *.xesl file under shader_dir,
-# emitting <shader_dir>/bytecode/metal/<id>.h with the metallib bytes
-# embedded as `const uint8_t <id>_metallib[]`. .glsl / .hlsl / fxaa / ffx_
-# sources are skipped (they don't expose an MSL branch).
+# emitting to the build tree under ${PROJECT_BINARY_DIR}/generated/<src-
+# relative>/bytecode/metal/ with the metallib bytes embedded as
+# `const uint8_t <id>_metallib[]`. .glsl / .hlsl / fxaa / ffx_ sources are
+# skipped (no MSL branch in those polyglots).
 function(xe_shader_rules_metal target shader_dir)
   if(NOT APPLE)
     return()
   endif()
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
   file(GLOB _sources "${shader_dir}/*.xesl" "${shader_dir}/*.xesli")
-  set(_stamp "${CMAKE_CURRENT_BINARY_DIR}/${target}_metal.stamp")
+  file(RELATIVE_PATH _rel_dir "${PROJECT_SOURCE_DIR}/src" "${shader_dir}")
+  set(_generated_root "${PROJECT_BINARY_DIR}/generated")
+  set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/metal")
   set(_valid_stages vs ps cs)
-  set(_bytecode_dir "${shader_dir}/bytecode/metal")
-  set(_commands)
-  list(APPEND _commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
+  set(_outputs)
+  set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
   foreach(src ${_sources})
     get_filename_component(_name ${src} NAME)
     if(_name MATCHES "^fxaa" OR _name MATCHES "ffx_")
@@ -239,19 +249,21 @@ function(xe_shader_rules_metal target shader_dir)
     if(NOT _stage IN_LIST _valid_stages)
       continue()
     endif()
+    set(_out "${_bytecode_dir}/${_id}.h")
+    list(APPEND _outputs "${_out}")
     list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
-      --msl "${src}" "${_bytecode_dir}/${_id}.h")
+      --msl "${src}" "${_out}")
   endforeach()
   add_custom_command(
-    OUTPUT "${_stamp}"
+    OUTPUT ${_outputs}
     ${_commands}
-    COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
     DEPENDS ${_sources} xenia-shader-cc
     COMMENT "Compiling Metal shaders for ${target}..."
     VERBATIM
   )
-  add_custom_target(${target}-metal-shaders DEPENDS "${_stamp}")
+  add_custom_target(${target}-metal-shaders DEPENDS ${_outputs})
   add_dependencies(${target} ${target}-metal-shaders)
+  target_include_directories(${target} BEFORE PRIVATE "${_generated_root}")
   set_source_files_properties(${_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
   target_sources(${target} PRIVATE ${_sources})
 endfunction()
