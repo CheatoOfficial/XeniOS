@@ -14,17 +14,18 @@ if(_ui_exclude AND _ui_srcs)
   list(REMOVE_ITEM _ui_srcs ${_ui_exclude})
   set_target_properties(xenia-ui PROPERTIES SOURCES "${_ui_srcs}")
 endif()
-# The Qt resource compiler output is checked in under src/xenia/ui/ on
-# Linux only (Windows embeds resources via main_resources.rc instead).
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
-   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ui_resources_qrc.cpp")
-  target_sources(xenia-ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui_resources_qrc.cpp)
-endif()
 target_link_libraries(xenia-ui PUBLIC xenia-base)
 if(XE_HAS_QT)
   target_link_libraries(xenia-ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets)
   target_link_libraries(xenia-ui PRIVATE Qt6::GuiPrivate)
-  set_target_properties(xenia-ui PROPERTIES AUTOMOC ON)
+  set_target_properties(xenia-ui PROPERTIES AUTOMOC ON AUTORCC ON)
+  # Qt resources: AUTORCC picks up .qrc files listed in target_sources,
+  # generates qrc_<stem>.cpp into xenia-ui_autogen/, and compiles it in.
+  # window_qt.cc calls Q_INIT_RESOURCE(ui_resources) unconditionally, so
+  # every Qt-enabled target needs the rcc output -- main_resources.rc only
+  # carries the Win32 app icon, not the Qt resource bundle.
+  target_sources(xenia-ui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui_resources.qrc)
   # AUTOMOC-generated moc files sit in xenia-ui_autogen/ and include the
   # original header via `#include "foo.h"`, so their directory needs to
   # be on the quoted-include path. Scoped to this target — the global

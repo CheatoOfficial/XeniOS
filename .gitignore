@@ -62,9 +62,6 @@ obj/
 *.o
 *.aps
 
-# Qt MOC generated files
-src/xenia/ui/moc_*.cc
-
 # ==============================================================================
 # Logs and dumps
 # ==============================================================================
@@ -82,8 +79,6 @@ imgui.ini
 # npm/node
 .lock-wscript
 node_modules/
-node_modules/**/build/
-node_modules/.bin/
 
 # coverage/etc
 /scratch/
