@@ -26,6 +26,8 @@ else()
 endif()
 target_link_libraries(xenia-xex-metadata PRIVATE fmt xenia-base xenia-vfs)
 xe_target_defaults(xenia-xex-metadata)
+set_target_properties(xenia-xex-metadata PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host_tools")
 
 if(XENIA_BUILD_MISC)
   # VFS dump tool
