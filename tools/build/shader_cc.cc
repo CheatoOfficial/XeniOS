@@ -1,6 +1,6 @@
 // Build-time shader compiler for Xenia's built-in shaders.
 //
-// Usage: xenia-shader-cc [--msl] <input> <output.h>
+// Usage: xenia-shader-cc [--msl | --dxbc] <input> <output.h>
 //
 // Default: GLSL/XeSL -> SPIR-V, linked in-process via glslang and
 // SPIRV-Tools, emitted as `const uint32_t <id>[]`. Stage parsed from
@@ -10,6 +10,10 @@
 //
 // --msl (Apple only): .xesl -> .metallib via `xcrun metal -x metal -D
 // SHADING_LANGUAGE_MSL_XE=1`, emitted as `const uint8_t <id>_metallib[]`.
+//
+// --dxbc: HLSL/XeSL -> DXBC via fxc.exe with /Fh writing the header
+// directly (SHADING_LANGUAGE_HLSL_XE=1). FXC_PATH env overrides the
+// auto-detected Windows Kits path; wine is used on non-Windows hosts.
 
 #include <algorithm>
 #include <cstdint>
@@ -30,7 +34,9 @@
 #include "spirv-tools/libspirv.hpp"
 #include "spirv-tools/optimizer.hpp"
 
-#ifdef XE_SHADER_CC_METAL
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -136,9 +142,58 @@ bool WriteSpirvHeader(const std::filesystem::path& path,
   return bool(out);
 }
 
-#ifdef XE_SHADER_CC_METAL
+#if defined(_WIN32)
+// Quote an argument for the MSVCRT command-line parser, which is what fxc.exe
+// (and most MSVC-built tools) use to re-split GetCommandLineW() back into
+// argv. _spawnvp joins argv with literal spaces and no quoting, so any arg
+// containing whitespace -- e.g. "C:\Program Files (x86)\..." -- must be
+// wrapped here or it gets re-split into multiple tokens on the receiving end.
+std::string QuoteForSpawn(const std::string& arg) {
+  if (!arg.empty() && arg.find_first_of(" \t\n\v\"") == std::string::npos) {
+    return arg;
+  }
+  std::string out;
+  out.push_back('"');
+  for (size_t i = 0; i < arg.size(); ++i) {
+    size_t backslashes = 0;
+    while (i < arg.size() && arg[i] == '\\') {
+      ++backslashes;
+      ++i;
+    }
+    if (i == arg.size()) {
+      out.append(backslashes * 2, '\\');
+      break;
+    } else if (arg[i] == '"') {
+      out.append(backslashes * 2 + 1, '\\');
+      out.push_back('"');
+    } else {
+      out.append(backslashes, '\\');
+      out.push_back(arg[i]);
+    }
+  }
+  out.push_back('"');
+  return out;
+}
+#endif
 
 int RunCommand(const std::vector<std::string>& args) {
+  if (args.empty()) return -1;
+#if defined(_WIN32)
+  std::vector<std::string> quoted;
+  quoted.reserve(args.size());
+  for (const auto& a : args) quoted.push_back(QuoteForSpawn(a));
+  std::vector<char*> argv;
+  argv.reserve(quoted.size() + 1);
+  for (auto& a : quoted) argv.push_back(a.data());
+  argv.push_back(nullptr);
+  intptr_t rc = _spawnvp(_P_WAIT, args[0].c_str(), argv.data());
+  if (rc < 0) {
+    std::fprintf(stderr, "_spawnvp(%s) failed: %s\n", args[0].c_str(),
+                 std::strerror(errno));
+    return -1;
+  }
+  return static_cast<int>(rc);
+#else
   std::vector<char*> argv;
   argv.reserve(args.size() + 1);
   for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
@@ -157,15 +212,10 @@ int RunCommand(const std::vector<std::string>& args) {
   }
   if (!WIFEXITED(status)) return -1;
   return WEXITSTATUS(status);
+#endif
 }
 
-bool WriteFile(const std::filesystem::path& path,
-               const std::string_view& contents) {
-  std::ofstream out(path, std::ios::binary);
-  if (!out) return false;
-  out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-  return bool(out);
-}
+#ifdef XE_SHADER_CC_METAL
 
 bool ReadBinaryFile(const std::filesystem::path& path,
                     std::vector<uint8_t>* out) {
@@ -204,10 +254,37 @@ bool WriteMetallibHeader(const std::filesystem::path& path,
 
 #endif  // XE_SHADER_CC_METAL
 
+// Locates fxc.exe (or dxc.exe) for --dxbc mode: FXC_PATH env var takes
+// priority; otherwise on Windows we walk Windows Kits\10\bin\*\x64\fxc.exe
+// and pick the highest-versioned one. Returns empty on miss.
+std::string FindFxc() {
+  const char* env = std::getenv("FXC_PATH");
+  if (env && *env) return env;
+#ifdef _WIN32
+  const char* pf86 = std::getenv("ProgramFiles(x86)");
+  if (!pf86) return {};
+  std::filesystem::path kits =
+      std::filesystem::path(pf86) / "Windows Kits" / "10" / "bin";
+  std::error_code ec;
+  std::string best;
+  for (auto& entry : std::filesystem::directory_iterator(kits, ec)) {
+    if (!entry.is_directory(ec)) continue;
+    std::filesystem::path candidate = entry.path() / "x64" / "fxc.exe";
+    if (std::filesystem::exists(candidate, ec) && candidate.string() > best) {
+      best = candidate.string();
+    }
+  }
+  return best;
+#else
+  return {};
+#endif
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   bool msl_mode = false;
+  bool dxbc_mode = false;
   int arg_idx = 1;
   while (arg_idx < argc && argv[arg_idx][0] == '-') {
     if (std::strcmp(argv[arg_idx], "--msl") == 0) {
@@ -218,13 +295,21 @@ int main(int argc, char** argv) {
 #endif
       msl_mode = true;
       ++arg_idx;
+    } else if (std::strcmp(argv[arg_idx], "--dxbc") == 0) {
+      dxbc_mode = true;
+      ++arg_idx;
     } else {
       std::fprintf(stderr, "unknown flag: %s\n", argv[arg_idx]);
       return 1;
     }
   }
   if (argc - arg_idx != 2) {
-    std::fprintf(stderr, "Usage: %s [--msl] <input> <output>\n", argv[0]);
+    std::fprintf(stderr, "Usage: %s [--msl | --dxbc] <input> <output>\n",
+                 argv[0]);
+    return 1;
+  }
+  if (msl_mode && dxbc_mode) {
+    std::fprintf(stderr, "--msl and --dxbc are mutually exclusive\n");
     return 1;
   }
 
@@ -307,6 +392,67 @@ int main(int argc, char** argv) {
                  "cannot determine shader stage from filename: %s\n",
                  input_filename.c_str());
     return 1;
+  }
+
+  if (dxbc_mode) {
+    std::string fxc = FindFxc();
+    if (fxc.empty()) {
+      std::fprintf(stderr,
+                   "ERROR: could not find fxc! Set FXC_PATH or install "
+                   "Windows SDK.\n");
+      return 1;
+    }
+    std::string fxc_name =
+        std::filesystem::path(fxc).filename().string();
+    std::transform(fxc_name.begin(), fxc_name.end(), fxc_name.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    const bool is_dxc = fxc_name.find("dxc") != std::string::npos;
+
+    std::error_code ec;
+    std::filesystem::create_directories(output_path.parent_path(), ec);
+
+    std::vector<std::string> cmd;
+#ifndef _WIN32
+    cmd.push_back("wine");
+#endif
+    cmd.push_back(fxc);
+
+    std::string src_dir = input_path.parent_path().string();
+    std::string target = stage_key + (is_dxc ? "_6_0" : "_5_1");
+    if (is_dxc) {
+      // DXC supports SM 6.0+ only.
+      cmd.insert(cmd.end(), {
+                                "-T", target,
+                                "-HV", "2017",
+                                "-D", "SHADING_LANGUAGE_HLSL_XE=1",
+                                "-I", src_dir,
+                                "-Fh", output_path.string(),
+                                "-Vn", identifier,
+                                "-nologo",
+                                input_path.string(),
+                            });
+    } else {
+      cmd.insert(cmd.end(), {
+                                "/D", "SHADING_LANGUAGE_HLSL_XE=1",
+                                "/I", src_dir,
+                                "/Fh", output_path.string(),
+                                "/T", target,
+                                "/Vn", identifier,
+                                "/O3",
+                                "/Qstrip_reflect",
+                                "/Qstrip_debug",
+                                "/Qstrip_priv",
+                                "/Gfp",
+                                "/nologo",
+                                input_path.string(),
+                            });
+    }
+    if (RunCommand(cmd) != 0) {
+      std::fprintf(stderr, "fxc failed for %s\n",
+                   input_path.string().c_str());
+      return 1;
+    }
+    return 0;
   }
 
   std::string source;

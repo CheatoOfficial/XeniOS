@@ -166,9 +166,9 @@ endfunction()
 
 # xe_shader_rules_dxbc(target shader_dir)
 #
-# DXBC counterpart to xe_shader_rules_spirv: invokes FXC via
-# tools/build/compile_shader_dxbc.py on each stage-suffixed *.xesl /
-# *.hlsl under shader_dir, emitting to the build tree under
+# DXBC counterpart to xe_shader_rules_spirv: invokes xenia-shader-cc --dxbc
+# (which shells out to fxc.exe) on each stage-suffixed *.xesl / *.hlsl
+# under shader_dir, emitting to the build tree under
 # ${PROJECT_BINARY_DIR}/generated/<src-relative>/bytecode/d3d12_5_1/.
 function(xe_shader_rules_dxbc target shader_dir)
   get_filename_component(shader_dir "${shader_dir}" ABSOLUTE)
@@ -178,7 +178,6 @@ function(xe_shader_rules_dxbc target shader_dir)
   file(RELATIVE_PATH _rel_dir "${PROJECT_SOURCE_DIR}/src" "${shader_dir}")
   set(_generated_root "${PROJECT_BINARY_DIR}/generated")
   set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/d3d12_5_1")
-  set(_script "${PROJECT_SOURCE_DIR}/tools/build/compile_shader_dxbc.py")
   set(_valid_stages vs hs ds gs ps cs)
   set(_outputs)
   set(_commands COMMAND ${CMAKE_COMMAND} -E make_directory "${_bytecode_dir}")
@@ -197,12 +196,13 @@ function(xe_shader_rules_dxbc target shader_dir)
     endif()
     set(_out "${_bytecode_dir}/${_id}.h")
     list(APPEND _outputs "${_out}")
-    list(APPEND _commands COMMAND ${Python3_EXECUTABLE} "${_script}" "${src}" "${_out}")
+    list(APPEND _commands COMMAND $<TARGET_FILE:xenia-shader-cc>
+      --dxbc "${src}" "${_out}")
   endforeach()
   add_custom_command(
     OUTPUT ${_outputs}
     ${_commands}
-    DEPENDS ${_sources} "${_script}"
+    DEPENDS ${_sources} xenia-shader-cc
     COMMENT "Compiling DXBC shaders for ${target}..."
     VERBATIM
   )
