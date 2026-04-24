@@ -347,17 +347,11 @@ else()
     $<$<CONFIG:Checked>:DEBUG>
     $<$<CONFIG:Checked>:NDEBUG>
   )
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_compile_definitions($<$<CONFIG:Checked>:_GLIBCXX_DEBUG>)
-  endif()
 
   add_compile_definitions(
     $<$<CONFIG:Debug>:DEBUG>
     $<$<CONFIG:Debug>:_NO_DEBUG_HEAP=1>
   )
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_DEBUG>)
-  endif()
 
   # Release keeps -g so crashes in the field have resolvable frames.
   add_compile_definitions(
