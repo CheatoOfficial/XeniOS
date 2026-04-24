@@ -876,7 +876,6 @@ def discover_commands(subparsers):
         "devenv": DevenvCommand(subparsers),
         "gentests": GenTestsCommand(subparsers),
         "test": TestCommand(subparsers),
-        "clean": CleanCommand(subparsers),
         "lint": LintCommand(subparsers),
         "format": FormatCommand(subparsers),
         "tidy": TidyCommand(subparsers),
@@ -1333,64 +1332,6 @@ class GenTestsCommand(Command):
         return 0
 
 
-class CleanCommand(Command):
-    """'clean' command.
-    """
-
-    def __init__(self, subparsers, *args, **kwargs):
-        super(CleanCommand, self).__init__(
-            subparsers,
-            name="clean",
-            help_short="Removes intermediate files and build outputs.",
-            *args, **kwargs)
-
-    def execute(self, args, pass_args, cwd):
-        print("Cleaning build artifacts...")
-        for _build_dir in ("build", "build-arm64", "build-x64", "build-vs"):
-            if os.path.isdir(_build_dir):
-                print(f"- cmake clean {_build_dir}...")
-                subprocess.call(["cmake", "--build", _build_dir, "--target", "clean"])
-        clean_generated_files()
-        print_status(ResultStatus.SUCCESS)
-        return 0
-
-
-def clean_shader_bytecode():
-    """Removes generated shader bytecode files."""
-    bytecode_dirs = [
-        "src/xenia/gpu/shaders/bytecode/d3d12_5_1",
-        "src/xenia/gpu/shaders/bytecode/vulkan_spirv",
-        "src/xenia/ui/shaders/bytecode/d3d12_5_1",
-        "src/xenia/ui/shaders/bytecode/vulkan_spirv",
-    ]
-    for bytecode_dir in bytecode_dirs:
-        if os.path.isdir(bytecode_dir):
-            print(f"- removing {bytecode_dir}/...")
-            rmtree(bytecode_dir)
-
-
-def clean_moc_files():
-    """Removes generated MOC files."""
-    ui_dir = "src/xenia/ui"
-    if os.path.isdir(ui_dir):
-        for filename in os.listdir(ui_dir):
-            if filename.startswith("moc_") and filename.endswith(".cc"):
-                moc_path = os.path.join(ui_dir, filename)
-                print(f"- removing {moc_path}...")
-                os.remove(moc_path)
-
-
-def clean_generated_files():
-    """Removes generated shader bytecode and MOC files."""
-    clean_shader_bytecode()
-    clean_moc_files()
-
-
-# Generated files that should be excluded from linting/formatting
-GENERATED_FILES = [
-    "src/xenia/ui/ui_resources_qrc.cpp",  # Qt resource file
-]
-
 def find_xenia_source_files():
     """Gets all xenia source files in the project.
 
@@ -1400,8 +1341,7 @@ def find_xenia_source_files():
     return [os.path.join(root, name)
             for root, dirs, files in os.walk("src")
             for name in files
-            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))
-            and os.path.join(root, name) not in GENERATED_FILES]
+            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))]
 
 
 class LintCommand(Command):
@@ -1481,9 +1421,6 @@ class LintCommand(Command):
                 "--style=file",
                 "--diff",
             ]
-            # Exclude generated files
-            for generated_file in GENERATED_FILES:
-                cmd.append(f":(exclude){generated_file}")
             ret = shell_call(cmd, throw_on_error=False, stdout_path=difftemp)
             with open(difftemp) as f:
                 contents = f.read()
@@ -1502,9 +1439,6 @@ class LintCommand(Command):
                     "--style=file",
                     "--diff",
                 ]
-                # Exclude generated files
-                for generated_file in GENERATED_FILES:
-                    cmd.append(f":(exclude){generated_file}")
                 shell_call(cmd, throw_on_error=False)
                 print_error("1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
@@ -1562,10 +1496,6 @@ class FormatCommand(Command):
                 f"--binary={clang_format_binary}",
                 f"--commit={'origin/canary_experimental' if args['origin'] else 'HEAD'}",
             ]
-            # Exclude generated files
-            for generated_file in GENERATED_FILES:
-                cmd.append(f":(exclude){generated_file}")
-
             ret = shell_call(cmd, throw_on_error=False)
             if ret != 0:
                 print("\nFiles were formatted. Please stage the changes:")
