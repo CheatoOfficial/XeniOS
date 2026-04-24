@@ -1,6 +1,7 @@
 // Build-time shader compiler for Xenia's built-in shaders.
 //
-// Usage: xenia-shader-cc [--msl | --dxbc] <input> <output.h>
+// Usage: xenia-shader-cc [--msl | --dxbc] [--depfile <path>]
+//                       <input> <output.h>
 //
 // Default: GLSL/XeSL -> SPIR-V, linked in-process via glslang and
 // SPIRV-Tools, emitted as `const uint32_t <id>[]`. Stage parsed from
@@ -14,14 +15,20 @@
 // --dxbc: HLSL/XeSL -> DXBC via fxc.exe with /Fh writing the header
 // directly (SHADING_LANGUAGE_HLSL_XE=1). FXC_PATH env overrides the
 // auto-detected Windows Kits path; wine is used on non-Windows hosts.
+//
+// --depfile writes a Make-style dependency file listing every source the
+// compile transitively read, so CMake/Ninja can trigger rebuilds when a
+// cross-directory include (e.g. ui/shaders/xesl.xesli) changes.
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -99,6 +106,38 @@ bool ReadFile(const std::filesystem::path& path, std::string* out) {
   buf << in.rdbuf();
   *out = buf.str();
   return true;
+}
+
+// Escape spaces in Make-style depfile paths (Ninja's parser requires this).
+std::string EscapeDepPath(const std::string& p) {
+  std::string out;
+  out.reserve(p.size());
+  for (char c : p) {
+    if (c == ' ' || c == '\t') out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
+// Writes a Make-style depfile: "<target>: <dep1> <dep2> ..." with each dep on
+// its own line (backslash-continued) so Ninja's DEPFILE parser accepts it.
+bool WriteDepfile(const std::filesystem::path& depfile_path,
+                  const std::filesystem::path& target,
+                  const std::vector<std::string>& deps) {
+  std::error_code ec;
+  std::filesystem::create_directories(depfile_path.parent_path(), ec);
+  std::ofstream out(depfile_path, std::ios::binary);
+  if (!out) {
+    std::fprintf(stderr, "failed to open depfile %s\n",
+                 depfile_path.string().c_str());
+    return false;
+  }
+  out << EscapeDepPath(target.string()) << ":";
+  for (const auto& dep : deps) {
+    out << " \\\n  " << EscapeDepPath(dep);
+  }
+  out << "\n";
+  return bool(out);
 }
 
 std::string DisassembleSpirv(const std::vector<uint32_t>& spirv) {
@@ -244,6 +283,7 @@ std::string FindFxc() {
 int main(int argc, char** argv) {
   bool msl_mode = false;
   bool dxbc_mode = false;
+  std::string depfile_path;
   int arg_idx = 1;
   while (arg_idx < argc && argv[arg_idx][0] == '-') {
     if (std::strcmp(argv[arg_idx], "--msl") == 0) {
@@ -257,14 +297,23 @@ int main(int argc, char** argv) {
     } else if (std::strcmp(argv[arg_idx], "--dxbc") == 0) {
       dxbc_mode = true;
       ++arg_idx;
+    } else if (std::strcmp(argv[arg_idx], "--depfile") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr, "--depfile requires a path\n");
+        return 1;
+      }
+      depfile_path = argv[arg_idx + 1];
+      arg_idx += 2;
     } else {
       std::fprintf(stderr, "unknown flag: %s\n", argv[arg_idx]);
       return 1;
     }
   }
   if (argc - arg_idx != 2) {
-    std::fprintf(stderr, "Usage: %s [--msl | --dxbc] <input> <output>\n",
-                 argv[0]);
+    std::fprintf(
+        stderr,
+        "Usage: %s [--msl | --dxbc] [--depfile <path>] <input> <output>\n",
+        argv[0]);
     return 1;
   }
   if (msl_mode && dxbc_mode) {
@@ -306,6 +355,16 @@ int main(int argc, char** argv) {
     if (!input_dir.empty()) {
       metal_cmd.push_back("-I");
       metal_cmd.push_back(input_dir);
+    }
+    if (!depfile_path.empty()) {
+      // xcrun metal is clang-based and supports standard depfile flags.
+      // -MT retargets the depfile at our final .h (not the intermediate .air)
+      // so CMake/Ninja link the dependency graph to the right output.
+      metal_cmd.push_back("-MD");
+      metal_cmd.push_back("-MT");
+      metal_cmd.push_back(output_path.string());
+      metal_cmd.push_back("-MF");
+      metal_cmd.push_back(depfile_path);
     }
     metal_cmd.push_back("-c");
     metal_cmd.push_back(input_path.string());
@@ -411,6 +470,89 @@ int main(int argc, char** argv) {
                    input_path.string().c_str());
       return 1;
     }
+
+    // Depfile: FXC has no native depfile emission, so re-invoke with /P
+    // (preprocess-only) to a temp file, then scrape `#line N "path"` markers.
+    // DXC supports /P the same way.
+    if (!depfile_path.empty()) {
+      auto tmp_dir = std::filesystem::temp_directory_path();
+      auto tag = identifier + "_" +
+                 std::to_string(
+#ifdef _WIN32
+                     static_cast<int>(_getpid())
+#else
+                     static_cast<int>(::getpid())
+#endif
+                 );
+      auto pp_path = tmp_dir / (tag + ".hlsl");
+
+      std::vector<std::string> pp_cmd;
+#ifndef _WIN32
+      pp_cmd.push_back("wine");
+#endif
+      pp_cmd.push_back(fxc);
+      if (is_dxc) {
+        pp_cmd.insert(pp_cmd.end(), {
+                                        "-P",
+                                        pp_path.string(),
+                                        "-D",
+                                        "SHADING_LANGUAGE_HLSL_XE=1",
+                                        "-I",
+                                        src_dir,
+                                        "-nologo",
+                                        input_path.string(),
+                                    });
+      } else {
+        pp_cmd.insert(pp_cmd.end(), {
+                                        "/P",
+                                        pp_path.string(),
+                                        "/D",
+                                        "SHADING_LANGUAGE_HLSL_XE=1",
+                                        "/I",
+                                        src_dir,
+                                        "/nologo",
+                                        input_path.string(),
+                                    });
+      }
+      if (RunCommand(pp_cmd) != 0) {
+        std::fprintf(stderr,
+                     "fxc /P failed for %s (depfile won't be written)\n",
+                     input_path.string().c_str());
+        std::filesystem::remove(pp_path, ec);
+        return 1;
+      }
+      std::string pp;
+      if (!ReadFile(pp_path, &pp)) {
+        std::filesystem::remove(pp_path, ec);
+        return 1;
+      }
+      std::filesystem::remove(pp_path, ec);
+      // Extract unique paths from `#line N "path"` markers.
+      std::vector<std::string> deps;
+      std::set<std::string> seen;
+      size_t pos = 0;
+      while ((pos = pp.find("#line ", pos)) != std::string::npos) {
+        size_t quote = pp.find('"', pos);
+        if (quote == std::string::npos) break;
+        size_t end = pp.find('"', quote + 1);
+        if (end == std::string::npos) break;
+        std::string path = pp.substr(quote + 1, end - quote - 1);
+        // FXC emits paths with escaped backslashes on Windows — unescape.
+        std::string unescaped;
+        unescaped.reserve(path.size());
+        for (size_t i = 0; i < path.size(); ++i) {
+          if (path[i] == '\\' && i + 1 < path.size() && path[i + 1] == '\\') {
+            unescaped.push_back('\\');
+            ++i;
+          } else {
+            unescaped.push_back(path[i]);
+          }
+        }
+        if (seen.insert(unescaped).second) deps.push_back(unescaped);
+        pos = end + 1;
+      }
+      if (!WriteDepfile(depfile_path, output_path, deps)) return 1;
+    }
     return 0;
   }
 
@@ -500,6 +642,21 @@ int main(int argc, char** argv) {
 
   std::vector<uint32_t> spirv;
   glslang::GlslangToSpv(*program.getIntermediate(stage), spirv, &spv_options);
+
+  // Emit the depfile from the includer's set of resolved paths. Add the
+  // primary source too (it's a dep of the output .h but not something the
+  // includer tracked since we synthesize the XeSL wrapper).
+  if (!depfile_path.empty()) {
+    std::vector<std::string> deps;
+    deps.push_back(input_path.string());
+    for (const auto& p : includer.getIncludedFiles()) {
+      deps.push_back(p);
+    }
+    if (!WriteDepfile(depfile_path, output_path, deps)) {
+      glslang::FinalizeProcess();
+      return 1;
+    }
+  }
 
   glslang::FinalizeProcess();
 
