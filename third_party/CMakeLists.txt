@@ -285,6 +285,8 @@ add_executable(xenia-shader-cc ${PROJECT_SOURCE_DIR}/tools/build/shader_cc.cc)
 target_link_libraries(xenia-shader-cc PRIVATE glslang SPIRV-Tools-static)
 target_include_directories(xenia-shader-cc PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/glslang/StandAlone)
+set_target_properties(xenia-shader-cc PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host_tools")
 if(APPLE)
   target_link_libraries(xenia-shader-cc PRIVATE spirv-cross)
   target_compile_definitions(xenia-shader-cc PRIVATE XE_SHADER_CC_METAL=1)
