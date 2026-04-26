@@ -104,6 +104,8 @@
 #endif
 #endif
 
+#include "xenia/apu/audio_system.h"
+#include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
@@ -1960,15 +1962,43 @@ void EmulatorWindow::UpdateTitle() {
     }
   }
 
-  // Graphics system name, if available
+  std::string graphics_name;
+  std::string graphics_suffix;
   auto graphics_system = emulator()->graphics_system();
   if (graphics_system) {
-    auto graphics_name = graphics_system->name();
-    if (!graphics_name.empty()) {
-      sb.Append(" <");
-      sb.Append(graphics_name);
-      sb.Append(">");
+    graphics_name = graphics_system->name();
+    auto command_processor = graphics_system->command_processor();
+    if (command_processor) {
+      graphics_suffix = command_processor->GetTitleStateSuffix();
     }
+  }
+  std::string audio_name;
+  auto audio_system = emulator()->audio_system();
+  if (audio_system) {
+    audio_name = audio_system->name();
+  }
+  std::string cpu_name;
+  auto processor = emulator()->processor();
+  if (processor && processor->backend()) {
+    cpu_name = processor->backend()->name();
+  }
+  if (!graphics_name.empty() || !cpu_name.empty()) {
+    sb.Append(" <");
+    if (!graphics_name.empty()) {
+      sb.Append(graphics_name);
+      sb.Append(graphics_suffix);
+      if (!audio_name.empty()) {
+        sb.Append(" - ");
+        sb.Append(audio_name);
+      }
+    }
+    if (!cpu_name.empty()) {
+      if (!graphics_name.empty()) {
+        sb.Append(" - ");
+      }
+      sb.Append(cpu_name);
+    }
+    sb.Append(">");
   }
 
   if (Clock::guest_time_scalar() != 1.0) {

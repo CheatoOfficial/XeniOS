@@ -128,6 +128,8 @@ class X64Backend : public Backend {
   X64CodeCache* code_cache() const { return code_cache_.get(); }
   uintptr_t emitter_data() const { return emitter_data_; }
 
+  std::string name() const override { return "x64"; }
+
   // Call a generated function, saving all stack parameters.
   HostToGuestThunk host_to_guest_thunk() const { return host_to_guest_thunk_; }
   // Function that guest code can call to transition into host code.

@@ -12,14 +12,12 @@
 #include <cstdarg>
 #include <cstring>
 
-#include "xenia/apu/audio_system.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
-#include "xenia/emulator.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
 #include "xenia/gpu/d3d12/d3d12_shader.h"
 #include "xenia/gpu/d3d12/d3d12_zpd_query_pool.h"
@@ -798,40 +796,36 @@ void D3D12CommandProcessor::SetPrimitiveTopology(
   }
 }
 
-std::string D3D12CommandProcessor::GetWindowTitleText() const {
-  std::ostringstream title;
-  title << "Direct3D 12";
-  if (render_target_cache_) {
-    // Rasterizer-ordered views are a feature very rarely used as of 2020 and
-    // that faces adoption complications (outside of Direct3D - on Vulkan - at
-    // least), but crucial to Xenia - raise awareness of its usage.
-    // https://github.com/KhronosGroup/Vulkan-Ecosystem/issues/27#issuecomment-455712319
-    // "In Xenia's title bar "D3D12 ROV" can be seen, which was a surprise, as I
-    //  wasn't aware that Xenia D3D12 backend was using Raster Order Views
-    //  feature" - oscarbg in that issue.
-    switch (render_target_cache_->GetPath()) {
-      case RenderTargetCache::Path::kHostRenderTargets:
-        title << " - RTV/DSV";
-        break;
-      case RenderTargetCache::Path::kPixelShaderInterlock:
-        title << " - ROV";
-        break;
-      default:
-        break;
-    }
-    uint32_t draw_resolution_scale_x =
-        texture_cache_ ? texture_cache_->draw_resolution_scale_x() : 1;
-    uint32_t draw_resolution_scale_y =
-        texture_cache_ ? texture_cache_->draw_resolution_scale_y() : 1;
-    if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
-      title << ' ' << draw_resolution_scale_x << 'x' << draw_resolution_scale_y;
-    }
+std::string D3D12CommandProcessor::GetTitleStateSuffix() const {
+  if (!render_target_cache_) {
+    return {};
   }
-  auto* audio_system = kernel_state_->emulator()->audio_system();
-  if (audio_system) {
-    title << " - " << audio_system->name();
+  std::ostringstream suffix;
+  // Rasterizer-ordered views are a feature very rarely used as of 2020 and
+  // that faces adoption complications (outside of Direct3D - on Vulkan - at
+  // least), but crucial to Xenia - raise awareness of its usage.
+  // https://github.com/KhronosGroup/Vulkan-Ecosystem/issues/27#issuecomment-455712319
+  // "In Xenia's title bar "D3D12 ROV" can be seen, which was a surprise, as I
+  //  wasn't aware that Xenia D3D12 backend was using Raster Order Views
+  //  feature" - oscarbg in that issue.
+  switch (render_target_cache_->GetPath()) {
+    case RenderTargetCache::Path::kHostRenderTargets:
+      suffix << " - RTV/DSV";
+      break;
+    case RenderTargetCache::Path::kPixelShaderInterlock:
+      suffix << " - ROV";
+      break;
+    default:
+      break;
   }
-  return title.str();
+  uint32_t draw_resolution_scale_x =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_x() : 1;
+  uint32_t draw_resolution_scale_y =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_y() : 1;
+  if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
+    suffix << ' ' << draw_resolution_scale_x << 'x' << draw_resolution_scale_y;
+  }
+  return suffix.str();
 }
 
 bool D3D12CommandProcessor::SetupContext() {
