@@ -153,6 +153,31 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
                                   uint32_t alignment = 0);
   Xbyak_aarch64::Label& NewCachedLabel();
 
+  // ARM64 conditional branches (cbz/cbnz: ±1 MiB, tbz/tbnz: ±32 KiB,
+  // b.cond: ±1 MiB) can fall short of their target in large guest functions.
+  // These shadows emit the safe pattern `<inverse> skip; b target; skip:`,
+  // routing the long branch through unconditional b (±128 MiB). The
+  // int64_t-immediate overloads remain available via the using-declarations
+  // for hand-tuned thunks that pass literal byte offsets.
+  using Xbyak_aarch64::CodeGenerator::b;
+  using Xbyak_aarch64::CodeGenerator::cbz;
+  using Xbyak_aarch64::CodeGenerator::cbnz;
+  using Xbyak_aarch64::CodeGenerator::tbz;
+  using Xbyak_aarch64::CodeGenerator::tbnz;
+  void b(const Xbyak_aarch64::Cond cond, const Xbyak_aarch64::Label& label);
+  void cbz(const Xbyak_aarch64::WReg& rt, const Xbyak_aarch64::Label& label);
+  void cbz(const Xbyak_aarch64::XReg& rt, const Xbyak_aarch64::Label& label);
+  void cbnz(const Xbyak_aarch64::WReg& rt, const Xbyak_aarch64::Label& label);
+  void cbnz(const Xbyak_aarch64::XReg& rt, const Xbyak_aarch64::Label& label);
+  void tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
+           const Xbyak_aarch64::Label& label);
+  void tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
+           const Xbyak_aarch64::Label& label);
+  void tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
+            const Xbyak_aarch64::Label& label);
+  void tbnz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
+            const Xbyak_aarch64::Label& label);
+
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
 
