@@ -14,17 +14,18 @@ if(_ui_exclude AND _ui_srcs)
   list(REMOVE_ITEM _ui_srcs ${_ui_exclude})
   set_target_properties(xenia-ui PROPERTIES SOURCES "${_ui_srcs}")
 endif()
-# The Qt resource compiler output is checked in under src/xenia/ui/ on
-# Linux only (Windows embeds resources via main_resources.rc instead).
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
-   AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ui_resources_qrc.cpp")
-  target_sources(xenia-ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ui_resources_qrc.cpp)
-endif()
 target_link_libraries(xenia-ui PUBLIC xenia-base)
 if(XE_HAS_QT)
   target_link_libraries(xenia-ui PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets)
   target_link_libraries(xenia-ui PRIVATE Qt6::GuiPrivate)
-  set_target_properties(xenia-ui PROPERTIES AUTOMOC ON)
+  set_target_properties(xenia-ui PROPERTIES AUTOMOC ON AUTORCC ON)
+  # Qt resources: AUTORCC picks up .qrc files listed in target_sources,
+  # generates qrc_<stem>.cpp into xenia-ui_autogen/, and compiles it in.
+  # Windows embeds the same assets via main_resources.rc instead.
+  if(NOT WIN32)
+    target_sources(xenia-ui PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/ui_resources.qrc)
+  endif()
   # AUTOMOC-generated moc files sit in xenia-ui_autogen/ and include the
   # original header via `#include "foo.h"`, so their directory needs to
   # be on the quoted-include path. Scoped to this target — the global
@@ -36,5 +37,12 @@ if(WIN32)
   target_link_libraries(xenia-ui PRIVATE dwmapi dxgi winmm)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(xenia-ui PRIVATE xcb X11 X11-xcb fontconfig ${GTK3_LIBRARIES})
+elseif(APPLE)
+  # xe_platform_sources globs *.cc only; surface_mac.mm is Objective-C++.
+  target_sources(xenia-ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/surface_mac.mm)
+  target_link_libraries(xenia-ui PRIVATE
+    "-framework Cocoa"
+    "-framework QuartzCore"
+  )
 endif()
 xe_target_defaults(xenia-ui)

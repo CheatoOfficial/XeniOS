@@ -95,8 +95,6 @@ imgui.ini
 # npm/node
 .lock-wscript
 node_modules/
-node_modules/**/build/
-node_modules/.bin/
 
 # coverage/etc
 /scratch/

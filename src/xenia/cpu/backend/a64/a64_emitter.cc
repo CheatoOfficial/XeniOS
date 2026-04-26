@@ -72,7 +72,7 @@ const uint32_t A64Emitter::vec_reg_map_[VEC_COUNT] = {
 };
 
 A64Emitter::A64Emitter(A64Backend* backend, XbyakA64Allocator* allocator)
-    : CodeGenerator(kMaxCodeSize, Xbyak_aarch64::DontSetProtectRWE, allocator),
+    : CodeGenerator(kMaxCodeSize, Xbyak_aarch64::AutoGrow, allocator),
       processor_(backend->processor()),
       backend_(backend),
       code_cache_(backend->code_cache()),
@@ -354,6 +354,78 @@ void A64Emitter::MarkSourceOffset(const hir::Instr* i) {
 void A64Emitter::DebugBreak() { brk(0xF000); }
 
 void A64Emitter::Trap(uint16_t trap_type) { brk(trap_type); }
+
+void A64Emitter::b(const Xbyak_aarch64::Cond cond,
+                   const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::b(static_cast<Xbyak_aarch64::Cond>(cond ^ 1), skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::cbz(const Xbyak_aarch64::WReg& rt,
+                     const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::cbnz(rt, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::cbz(const Xbyak_aarch64::XReg& rt,
+                     const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::cbnz(rt, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::cbnz(const Xbyak_aarch64::WReg& rt,
+                      const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::cbz(rt, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::cbnz(const Xbyak_aarch64::XReg& rt,
+                      const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::cbz(rt, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
+                     const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::tbnz(rt, imm, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
+                     const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::tbnz(rt, imm, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
+                      const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::tbz(rt, imm, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
+
+void A64Emitter::tbnz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
+                      const Xbyak_aarch64::Label& label) {
+  Xbyak_aarch64::Label skip;
+  CodeGenerator::tbz(rt, imm, skip);
+  CodeGenerator::b(label);
+  L(skip);
+}
 
 void A64Emitter::UnimplementedInstr(const hir::Instr* i) {
   XELOGE("A64: Unimplemented HIR instruction: {}",
@@ -718,11 +790,11 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
     // Set up arguments for the sync helper:
     //   x8 = return address (where to resume after fixup)
     //   x9 = this function's stack size
-    e.adr(e.x8, return_from_sync);
     e.mov(e.x9, static_cast<uint64_t>(e.stack_size()));
     e.mov(e.x10, reinterpret_cast<uint64_t>(e.backend()->stack_sync_helper()));
     e.br(e.x10);
   });
+  adr(x8, return_from_sync);
   b(NE, sync_label);
 
   L(return_from_sync);

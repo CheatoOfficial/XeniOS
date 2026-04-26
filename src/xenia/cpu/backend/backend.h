@@ -11,6 +11,7 @@
 #define XENIA_CPU_BACKEND_BACKEND_H_
 
 #include <memory>
+#include <string>
 
 #include "xenia/cpu/backend/machine_info.h"
 #include "xenia/cpu/thread_debug_info.h"
@@ -49,6 +50,8 @@ class Backend {
   Processor* processor() const { return processor_; }
   const MachineInfo* machine_info() const { return &machine_info_; }
   CodeCache* code_cache() const { return code_cache_; }
+
+  virtual std::string name() const { return "unknown"; }
 
   virtual bool Initialize(Processor* processor);
 

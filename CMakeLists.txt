@@ -366,15 +366,17 @@ else()
     $<$<CONFIG:Release>:-fomit-frame-pointer>
     $<$<CONFIG:Release>:-g>
   )
-  # ThinLTO + lld. Gated behind XENIA_ENABLE_LTO so -DXENIA_ENABLE_LTO=OFF
-  # produces a Release binary with the standard system linker and no LTO,
-  # which links an order of magnitude faster during iterative work.
+  # ThinLTO. On Linux/Windows use lld (faster and what LLVM tests ThinLTO
+  # against upstream). On macOS use Apple's ld64, which handles ThinLTO
+  # natively and avoids an lld install requirement. Gated behind
+  # XENIA_ENABLE_LTO so -DXENIA_ENABLE_LTO=OFF produces a Release binary
+  # with no LTO, which links an order of magnitude faster during iteration.
   if(XENIA_ENABLE_LTO)
     add_compile_options($<$<CONFIG:Release>:-flto=thin>)
-    add_link_options(
-      $<$<CONFIG:Release>:-flto=thin>
-      $<$<CONFIG:Release>:-fuse-ld=lld>
-    )
+    add_link_options($<$<CONFIG:Release>:-flto=thin>)
+    if(NOT APPLE)
+      add_link_options($<$<CONFIG:Release>:-fuse-ld=lld>)
+    endif()
     # Use llvm-ar / llvm-ranlib when available to avoid LTO plugin
     # version mismatch between system ar/ranlib and clang's bitcode.
     find_program(LLVM_AR NAMES llvm-ar)

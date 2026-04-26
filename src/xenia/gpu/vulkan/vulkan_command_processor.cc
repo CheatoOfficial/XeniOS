@@ -13,13 +13,11 @@
 #include <cstdint>
 #include <cstring>
 
-#include "xenia/apu/audio_system.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
-#include "xenia/emulator.h"
 #include "xenia/gpu/draw_util.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/packet_disassembler.h"
@@ -190,33 +188,29 @@ void VulkanCommandProcessor::ReturnFromWait() {
   CommandProcessor::ReturnFromWait();
 }
 
-std::string VulkanCommandProcessor::GetWindowTitleText() const {
-  std::ostringstream title;
-  title << "Vulkan";
-  if (render_target_cache_) {
-    switch (render_target_cache_->GetPath()) {
-      case RenderTargetCache::Path::kHostRenderTargets:
-        title << " - FBO";
-        break;
-      case RenderTargetCache::Path::kPixelShaderInterlock:
-        title << " - FSI";
-        break;
-      default:
-        break;
-    }
-    uint32_t draw_resolution_scale_x =
-        texture_cache_ ? texture_cache_->draw_resolution_scale_x() : 1;
-    uint32_t draw_resolution_scale_y =
-        texture_cache_ ? texture_cache_->draw_resolution_scale_y() : 1;
-    if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
-      title << ' ' << draw_resolution_scale_x << 'x' << draw_resolution_scale_y;
-    }
+std::string VulkanCommandProcessor::GetTitleStateSuffix() const {
+  if (!render_target_cache_) {
+    return {};
   }
-  auto* audio_system = kernel_state_->emulator()->audio_system();
-  if (audio_system) {
-    title << " - " << audio_system->name();
+  std::ostringstream suffix;
+  switch (render_target_cache_->GetPath()) {
+    case RenderTargetCache::Path::kHostRenderTargets:
+      suffix << " - FBO";
+      break;
+    case RenderTargetCache::Path::kPixelShaderInterlock:
+      suffix << " - FSI";
+      break;
+    default:
+      break;
   }
-  return title.str();
+  uint32_t draw_resolution_scale_x =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_x() : 1;
+  uint32_t draw_resolution_scale_y =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_y() : 1;
+  if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
+    suffix << ' ' << draw_resolution_scale_x << 'x' << draw_resolution_scale_y;
+  }
+  return suffix.str();
 }
 
 bool VulkanCommandProcessor::SetupContext() {

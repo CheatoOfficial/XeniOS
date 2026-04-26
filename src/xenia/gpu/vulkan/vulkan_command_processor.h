@@ -271,8 +271,7 @@ class VulkanCommandProcessor final : public CommandProcessor {
   void SetViewport(const VkViewport& viewport);
   void SetScissor(const VkRect2D& scissor);
 
-  // Returns the text to display in the GPU backend name in the window title.
-  std::string GetWindowTitleText() const;
+  std::string GetTitleStateSuffix() const override;
 
   // Debug marker methods - public so subsystems can annotate their operations.
   void PushDebugMarker(const char* format, ...);

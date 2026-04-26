@@ -1296,7 +1296,6 @@ def discover_commands(subparsers):
         "devenv": DevenvCommand(subparsers),
         "gentests": GenTestsCommand(subparsers),
         "test": TestCommand(subparsers),
-        "clean": CleanCommand(subparsers),
         "lint": LintCommand(subparsers),
         "format": FormatCommand(subparsers),
         "tidy": TidyCommand(subparsers),
@@ -2720,8 +2719,7 @@ def find_xenia_source_files():
     return [os.path.join(root, name)
             for root, dirs, files in os.walk("src")
             for name in files
-            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))
-            and os.path.join(root, name) not in GENERATED_FILES]
+            if name.endswith((".cc", ".c", ".h", ".inl", ".inc"))]
 
 
 class LintCommand(Command):
@@ -2801,9 +2799,6 @@ class LintCommand(Command):
                 "--style=file",
                 "--diff",
             ]
-            # Exclude generated files
-            for generated_file in GENERATED_FILES:
-                cmd.append(f":(exclude){generated_file}")
             ret = shell_call(cmd, throw_on_error=False, stdout_path=difftemp)
             with open(difftemp) as f:
                 contents = f.read()
@@ -2822,9 +2817,6 @@ class LintCommand(Command):
                     "--style=file",
                     "--diff",
                 ]
-                # Exclude generated files
-                for generated_file in GENERATED_FILES:
-                    cmd.append(f":(exclude){generated_file}")
                 shell_call(cmd, throw_on_error=False)
                 print("ERROR: 1+ diffs. Stage changes and run 'xb format' to fix.")
                 return 1
@@ -2882,10 +2874,6 @@ class FormatCommand(Command):
                 f"--binary={clang_format_binary}",
                 f"--commit={'origin/' + default_branch if args['origin'] else 'HEAD'}",
             ]
-            # Exclude generated files
-            for generated_file in GENERATED_FILES:
-                cmd.append(f":(exclude){generated_file}")
-
             ret = shell_call(cmd, throw_on_error=False)
             if ret != 0:
                 print("\nFiles were formatted. Please stage the changes:")

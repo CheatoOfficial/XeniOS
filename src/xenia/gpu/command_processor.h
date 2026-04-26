@@ -144,6 +144,8 @@ class CommandProcessor {
   virtual bool Initialize();
   virtual void Shutdown();
 
+  virtual std::string GetTitleStateSuffix() const { return {}; }
+
   void CallInThread(std::function<void()> fn);
 
   virtual void ClearCaches();
