@@ -840,6 +840,26 @@ VirtualKey QtWindow::TranslateVirtualKey(int qt_key) {
       return VirtualKey::kAdd;
     case Qt::Key_Minus:
       return VirtualKey::kSubtract;
+    case Qt::Key_Semicolon:
+      return VirtualKey::kOem1;  // ;: (US)
+    case Qt::Key_Equal:
+      return VirtualKey::kOemPlus;
+    case Qt::Key_Comma:
+      return VirtualKey::kOemComma;
+    case Qt::Key_Period:
+      return VirtualKey::kOemPeriod;
+    case Qt::Key_Slash:
+      return VirtualKey::kOem2;  // /? (US)
+    case Qt::Key_QuoteLeft:
+      return VirtualKey::kOem3;  // `~ (US)
+    case Qt::Key_BracketLeft:
+      return VirtualKey::kOem4;  // [{ (US)
+    case Qt::Key_Backslash:
+      return VirtualKey::kOem5;  // \| (US)
+    case Qt::Key_BracketRight:
+      return VirtualKey::kOem6;  // ]} (US)
+    case Qt::Key_Apostrophe:
+      return VirtualKey::kOem7;  // '" (US)
     default:
       return VirtualKey::kNone;
   }

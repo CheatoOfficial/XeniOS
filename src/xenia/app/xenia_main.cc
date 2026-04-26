@@ -65,6 +65,9 @@
 #if !XE_PLATFORM_ANDROID
 #include "xenia/hid/sdl/sdl_hid.h"
 #endif  // !XE_PLATFORM_ANDROID
+#if !XE_PLATFORM_WIN32
+#include "xenia/hid/keyboard/keyboard_hid.h"
+#endif
 #if XE_PLATFORM_WIN32
 #include "xenia/hid/winkey/winkey_hid.h"
 #include "xenia/hid/xinput/xinput_hid.h"
@@ -275,7 +278,19 @@ class EmulatorApp final : public xe::ui::WindowedApp {
                                               Args... args) {
       std::vector<std::unique_ptr<T>> instances;
 
-      if (name != "winkey") {
+      // Drivers that are always loaded as a keyboard fallback alongside
+      // whatever the user selected via `name`. winkey on Windows; keyboard
+      // on Linux/macOS. Only one is registered on any given build.
+      static constexpr std::string_view kAlwaysOn[] = {"winkey", "keyboard"};
+
+      auto is_always_on = [&](std::string_view n) {
+        for (auto a : kAlwaysOn) {
+          if (n == a) return true;
+        }
+        return false;
+      };
+
+      if (!is_always_on(name)) {
         auto it = std::find_if(
             creators_.cbegin(), creators_.cend(),
             [&name](const auto& f) { return name.compare(f.name) == 0; });
@@ -288,13 +303,15 @@ class EmulatorApp final : public xe::ui::WindowedApp {
         }
       }
 
-      auto it = std::find_if(
-          creators_.cbegin(), creators_.cend(),
-          [&name](const auto& f) { return f.name.compare("winkey") == 0; });
-      if (it != creators_.cend() && (*it).is_available()) {
-        auto instance = (*it).instantiate(std::forward<Args>(args)...);
-        if (instance) {
-          instances.emplace_back(std::move(instance));
+      for (auto always : kAlwaysOn) {
+        auto it = std::find_if(
+            creators_.cbegin(), creators_.cend(),
+            [&always](const auto& f) { return f.name.compare(always) == 0; });
+        if (it != creators_.cend() && (*it).is_available()) {
+          auto instance = (*it).instantiate(std::forward<Args>(args)...);
+          if (instance) {
+            instances.emplace_back(std::move(instance));
+          }
         }
       }
       return instances;
@@ -503,6 +520,9 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
 #if !XE_PLATFORM_ANDROID
     factory.Add("sdl", xe::hid::sdl::Create);
 #endif  // !XE_PLATFORM_ANDROID
+#if !XE_PLATFORM_WIN32
+    factory.Add("keyboard", xe::hid::keyboard::Create);
+#endif
 #if XE_PLATFORM_WIN32
     // WinKey input driver should always be the last input driver added!
     factory.Add("winkey", xe::hid::winkey::Create);
