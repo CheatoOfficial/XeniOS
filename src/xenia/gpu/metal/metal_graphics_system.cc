@@ -26,7 +26,7 @@ bool MetalGraphicsSystem::IsAvailable() {
   return xe::ui::metal::MetalProvider::IsMetalAPIAvailable();
 }
 
-std::string MetalGraphicsSystem::name() const { return "MetalGraphicsSystem"; }
+std::string MetalGraphicsSystem::name() const { return "Metal"; }
 
 X_STATUS MetalGraphicsSystem::Setup(cpu::Processor* processor,
                                     kernel::KernelState* kernel_state,
