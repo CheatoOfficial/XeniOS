@@ -471,6 +471,22 @@ MetalCommandProcessor::MetalCommandProcessor(
     MetalGraphicsSystem* graphics_system, kernel::KernelState* kernel_state)
     : CommandProcessor(graphics_system, kernel_state) {}
 
+std::string MetalCommandProcessor::GetTitleStateSuffix() const {
+  if (!render_target_cache_) {
+    return {};
+  }
+  std::ostringstream suffix;
+  suffix << " - SPIRV-Cross";
+  uint32_t draw_resolution_scale_x =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_x() : 1;
+  uint32_t draw_resolution_scale_y =
+      texture_cache_ ? texture_cache_->draw_resolution_scale_y() : 1;
+  if (draw_resolution_scale_x > 1 || draw_resolution_scale_y > 1) {
+    suffix << ' ' << draw_resolution_scale_x << 'x' << draw_resolution_scale_y;
+  }
+  return suffix.str();
+}
+
 MetalCommandProcessor::~MetalCommandProcessor() {
   // End any active render encoder before releasing
   // Note: Only call endEncoding if the encoder is still active

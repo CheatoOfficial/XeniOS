@@ -67,6 +67,8 @@ class MetalCommandProcessor : public CommandProcessor {
   void InvalidateGpuMemory() override;
   void ClearReadbackBuffers() override;
 
+  std::string GetTitleStateSuffix() const override;
+
   // Track memory regions written by IssueCopy (resolve) so trace playback
   // can skip overwriting them with stale data from the trace file.
   void MarkResolvedMemory(uint32_t base_ptr, uint32_t length);

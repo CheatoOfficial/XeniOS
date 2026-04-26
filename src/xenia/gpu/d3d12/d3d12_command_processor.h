@@ -229,8 +229,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
   void SetStencilReference(uint32_t stencil_ref);
   void SetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY primitive_topology);
 
-  // Returns the text to display in the GPU backend name in the window title.
-  std::string GetWindowTitleText() const;
+  std::string GetTitleStateSuffix() const override;
 
  protected:
   bool SetupContext() override;

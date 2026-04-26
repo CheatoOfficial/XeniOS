@@ -101,6 +101,8 @@ class A64Backend : public Backend {
   A64CodeCache* code_cache() const { return code_cache_.get(); }
   uintptr_t emitter_data() const { return emitter_data_; }
 
+  std::string name() const override { return "a64"; }
+
   HostToGuestThunk host_to_guest_thunk() const { return host_to_guest_thunk_; }
   GuestToHostThunk guest_to_host_thunk() const { return guest_to_host_thunk_; }
   ResolveFunctionThunk resolve_function_thunk() const {
