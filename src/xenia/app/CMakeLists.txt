@@ -105,6 +105,7 @@ if(WIN32)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(xenia-app PRIVATE
     xenia-apu-alsa
+    xenia-hid-keyboard
     X11
     xcb
     X11-xcb
@@ -113,6 +114,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 elseif(APPLE)
   target_link_libraries(xenia-app PRIVATE
     xenia-gpu-metal
+    xenia-hid-keyboard
     xenia-ui-metal
   )
 endif()
