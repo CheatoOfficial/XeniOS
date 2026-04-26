@@ -273,6 +273,7 @@ else()
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-register>
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-volatile>
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-enum-enum-conversion>
+      $<$<COMPILE_LANGUAGE:CXX>:-Wno-absolute-value>
     )
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20)
       add_compile_options(
