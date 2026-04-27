@@ -60,7 +60,7 @@ option(XENIA_ENABLE_LTO "Enable link-time optimization in Release (slow link)" O
 
 get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(_is_multi_config)
-  set(CMAKE_CONFIGURATION_TYPES "Checked;Debug;Release;Valgrind" CACHE STRING "" FORCE)
+  set(CMAKE_CONFIGURATION_TYPES "Checked;Debug;Release;Valgrind" CACHE STRING "")
 endif()
 
 # Checked and Valgrind inherit Debug's flags as a starting point; the

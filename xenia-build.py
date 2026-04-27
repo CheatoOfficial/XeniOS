@@ -974,51 +974,63 @@ def get_cc(cc=None):
         return "msc"
 
 def get_clang_format_binary():
-    """Finds a clang-format binary. Aborts if none is found.
-
-    Returns:
-      A path to the clang-format executable.
-    """
+    """Finds the highest-version clang-format on PATH (plus a few known
+    Windows absolute paths). Returns an absolute path; aborts if nothing
+    >= the minimum version is found."""
     clang_format_version_min = 19
 
-    # Build list of all potential clang-format binaries
-    all_binaries = []
+    # Walk every PATH entry and collect every clang-format[.exe] and
+    # clang-format-N[.exe] we find, not just the first one — Visual
+    # Studio's bundled LLVM (often older) frequently shadows a newer
+    # standalone install when vcvars is sourced.
+    candidates = []
+    seen = set()
+    def add(path):
+        path = os.path.normcase(os.path.abspath(path))
+        if path in seen:
+            return
+        seen.add(path)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            candidates.append(path)
 
-    # Check versioned binaries from 21 down to 19
-    # This prefers newer versions but accepts older ones
-    for version in range(21, clang_format_version_min - 1, -1):
-        binary = f"clang-format-{version}"
-        if has_bin(binary):
-            all_binaries.append(binary)
+    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+        path_dir = path_dir.strip('"')
+        if not path_dir or not os.path.isdir(path_dir):
+            continue
+        try:
+            entries = os.listdir(path_dir)
+        except OSError:
+            continue
+        for name in entries:
+            base, _, ext = name.rpartition(".") if "." in name else (name, "", "")
+            stem = (base if ext.lower() == "exe" else name).lower()
+            if stem == "clang-format" or (
+                stem.startswith("clang-format-")
+                and stem[len("clang-format-"):].isdigit()):
+                add(os.path.join(path_dir, name))
 
-    # Also check generic clang-format
-    all_binaries.append("clang-format")
-
-    # Add Windows-specific paths
     if sys.platform == "win32":
         if "VCINSTALLDIR" in os.environ:
-            if is_amd64():
-                all_binaries.append(os.path.join(os.environ["VCINSTALLDIR"], "Tools", "Llvm", "x64", "bin", "clang-format.exe"))
-            elif is_arm():
-                all_binaries.append(os.path.join(os.environ["VCINSTALLDIR"], "Tools", "Llvm", "arm64", "bin", "clang-format.exe"))
+            sub = "x64" if is_amd64() else "arm64" if is_arm() else None
+            if sub:
+                add(os.path.join(os.environ["VCINSTALLDIR"], "Tools",
+                                 "Llvm", sub, "bin", "clang-format.exe"))
+        add(os.path.join(os.environ.get("ProgramFiles", ""), "LLVM",
+                         "bin", "clang-format.exe"))
 
-        all_binaries.append(os.path.join(os.environ["ProgramFiles"], "LLVM", "bin", "clang-format.exe"))
-
-    # Find the highest version available
     best_binary = None
     best_version = 0
-
-    for binary in all_binaries:
-        if has_bin(binary):
-            try:
-                clang_format_out = subprocess.check_output([binary, "--version"], text=True)
-                version = int(clang_format_out.split("version ")[1].split(".")[0])
-                if version >= clang_format_version_min and version > best_version:
-                    best_version = version
-                    best_binary = binary
-                    best_output = clang_format_out
-            except:
-                continue
+    best_output = None
+    for binary in candidates:
+        try:
+            out = subprocess.check_output([binary, "--version"], text=True)
+            version = int(out.split("version ")[1].split(".")[0])
+        except (subprocess.CalledProcessError, OSError, ValueError, IndexError):
+            continue
+        if version >= clang_format_version_min and version > best_version:
+            best_version = version
+            best_binary = binary
+            best_output = out
 
     if best_binary:
         print(best_output)
@@ -3052,6 +3064,12 @@ class DevenvCommand(Command):
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
                  "On Windows, non-native values enable cross-compilation into a "
                  "separate build-vs-<arch>/ tree.")
+        self.parser.add_argument(
+            "--config", choices=["checked", "debug", "release", "valgrind"],
+            default="debug", type=str.lower,
+            help="Build configuration the IDE solution is pinned to. The VS "
+                 "dropdown is restricted to this single config; re-run xb "
+                 "devenv with a different --config to switch.")
 
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
@@ -3077,8 +3095,9 @@ class DevenvCommand(Command):
         print("CMakeLists.txt and CMakePresets.json are in the project root.")
         return 0
 
-    def _launch_visual_studio(self, target_arch=None):
-        """Configures a VS build tree under build-vs[-arch]/ and launches devenv."""
+    def _launch_visual_studio(self, target_arch=None, config="debug"):
+        """Configures a VS build tree under build-vs[-arch]/ pinned to a single
+        config, then launches devenv on the generated solution."""
         if not vs_version:
             print_error("Visual Studio is not installed.")
             return 1
@@ -3089,11 +3108,14 @@ class DevenvCommand(Command):
         effective_arch = target_arch or ("arm64" if is_native_arm64 else "x64")
         vs_arch = "ARM64" if effective_arch == "arm64" else "x64"
         vs_build_dir = "build-vs" if effective_arch == ("arm64" if is_native_arm64 else "x64") else f"build-vs-{effective_arch}"
-        print(f"Configuring Visual Studio build tree ({vs_arch}) in {vs_build_dir}...")
+        config_title = config.title()
+        print(f"Configuring Visual Studio build tree ({vs_arch}, {config_title}) in {vs_build_dir}...")
         # -A <arch> without -G lets CMake pick whichever VS generator matches
         # the installed toolchain (VS 2022, 2026, ...).
         ret = subprocess.call([
             "cmake", "-S", ".", "-B", vs_build_dir, "-A", vs_arch,
+            f"-DCMAKE_BUILD_TYPE={config_title}",
+            f"-DCMAKE_CONFIGURATION_TYPES={config_title}",
         ])
         if ret != 0:
             print_error("cmake configure failed for the VS build tree")
