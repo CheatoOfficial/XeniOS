@@ -42,6 +42,8 @@
 #include "spirv-tools/optimizer.hpp"
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #include <process.h>
 #else
 #include <spawn.h>
@@ -215,7 +217,8 @@ std::string QuoteForSpawn(const std::string& arg) {
 }
 #endif
 
-int RunCommand(const std::vector<std::string>& args) {
+int RunCommand(const std::vector<std::string>& args,
+               bool silent_stdout = false) {
   if (args.empty()) return -1;
 #if defined(_WIN32)
   std::vector<std::string> quoted;
@@ -225,7 +228,22 @@ int RunCommand(const std::vector<std::string>& args) {
   argv.reserve(quoted.size() + 1);
   for (auto& a : quoted) argv.push_back(a.data());
   argv.push_back(nullptr);
+  int saved_stdout = -1;
+  if (silent_stdout) {
+    std::fflush(stdout);
+    saved_stdout = _dup(_fileno(stdout));
+    int devnull = _open("nul", _O_WRONLY);
+    if (devnull >= 0) {
+      _dup2(devnull, _fileno(stdout));
+      _close(devnull);
+    }
+  }
   intptr_t rc = _spawnvp(_P_WAIT, args[0].c_str(), argv.data());
+  if (saved_stdout >= 0) {
+    std::fflush(stdout);
+    _dup2(saved_stdout, _fileno(stdout));
+    _close(saved_stdout);
+  }
   if (rc < 0) {
     std::fprintf(stderr, "_spawnvp(%s) failed: %s\n", args[0].c_str(),
                  std::strerror(errno));
@@ -506,7 +524,7 @@ int main(int argc, char** argv) {
                                 input_path.string(),
                             });
     }
-    if (RunCommand(cmd) != 0) {
+    if (RunCommand(cmd, /*silent_stdout=*/true) != 0) {
       std::fprintf(stderr, "fxc failed for %s\n",
                    input_path.string().c_str());
       return 1;
@@ -555,7 +573,7 @@ int main(int argc, char** argv) {
                                         input_path.string(),
                                     });
       }
-      if (RunCommand(pp_cmd) != 0) {
+      if (RunCommand(pp_cmd, /*silent_stdout=*/true) != 0) {
         std::fprintf(stderr,
                      "fxc /P failed for %s (depfile won't be written)\n",
                      input_path.string().c_str());
