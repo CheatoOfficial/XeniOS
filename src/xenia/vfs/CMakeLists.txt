@@ -13,23 +13,23 @@ endif()
 target_link_libraries(xenia-vfs PUBLIC xenia-base zstd zarchive)
 xe_target_defaults(xenia-vfs)
 
-# xenia-xex-metadata: standalone console tool that dumps XEX metadata
-add_executable(xenia-xex-metadata
-  ${CMAKE_CURRENT_SOURCE_DIR}/xex_metadata_main.cc
-)
-if(WIN32)
-  target_sources(xenia-xex-metadata PRIVATE
-    ${PROJECT_SOURCE_DIR}/src/xenia/base/console_app_main_win.cc)
-else()
-  target_sources(xenia-xex-metadata PRIVATE
-    ${PROJECT_SOURCE_DIR}/src/xenia/base/console_app_main_posix.cc)
-endif()
-target_link_libraries(xenia-xex-metadata PRIVATE fmt xenia-base xenia-vfs)
-xe_target_defaults(xenia-xex-metadata)
-set_target_properties(xenia-xex-metadata PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host_tools")
-
 if(XENIA_BUILD_MISC)
+  # xenia-xex-metadata: standalone console tool that dumps XEX metadata
+  add_executable(xenia-xex-metadata
+    ${CMAKE_CURRENT_SOURCE_DIR}/xex_metadata_main.cc
+  )
+  if(WIN32)
+    target_sources(xenia-xex-metadata PRIVATE
+      ${PROJECT_SOURCE_DIR}/src/xenia/base/console_app_main_win.cc)
+  else()
+    target_sources(xenia-xex-metadata PRIVATE
+      ${PROJECT_SOURCE_DIR}/src/xenia/base/console_app_main_posix.cc)
+  endif()
+  target_link_libraries(xenia-xex-metadata PRIVATE fmt xenia-base xenia-vfs)
+  xe_target_defaults(xenia-xex-metadata)
+  set_target_properties(xenia-xex-metadata PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/host_tools")
+
   # VFS dump tool
   add_executable(xenia-vfs-dump
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs_dump.cc

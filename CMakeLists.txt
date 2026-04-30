@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
 if(APPLE)
   project(xenia LANGUAGES C CXX OBJCXX)
   set(CMAKE_OBJCXX_STANDARD 20)
