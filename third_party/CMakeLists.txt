@@ -173,6 +173,19 @@ add_library(glslang-spirv STATIC
 )
 target_include_directories(glslang-spirv PUBLIC glslang)
 
+# Cross-compiling x64-host → ARM64-target on Windows: the cross
+# toolchain produces an ARM64 PE for xenia-shader-cc that won't run on
+# the x64 host, so reuse the binary from a previous native build instead
+# (Windows-on-ARM runs x64 fine via Prism, and macOS handles its own
+# x86_64↔arm64 via Rosetta — both directions are unaffected).
+set(_xe_use_host_shader_cc FALSE)
+if(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
+    AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+  set(_xe_use_host_shader_cc TRUE)
+endif()
+
+if(NOT _xe_use_host_shader_cc)
+
 # ==============================================================================
 # SPIRV-Headers + SPIRV-Tools (host: SPIR-V optimization + disassembly
 # support for glslang's ENABLE_OPT path; used by the xenia-shader-cc tool)
@@ -256,6 +269,8 @@ if(NOT WIN32)
   endif()
 endif()
 
+endif()  # NOT _xe_use_host_shader_cc (SPIRV-Tools + glslang block)
+
 # ==============================================================================
 # SPIRV-Cross (Apple only — used at runtime by xenia-gpu-metal to translate
 # guest SPIR-V to MSL via MslShader)
@@ -281,6 +296,8 @@ endif()
 # xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h, and on
 # Apple, XeSL -> MSL metallib -> .h via xcrun metal)
 # ==============================================================================
+if(NOT _xe_use_host_shader_cc)
+
 add_executable(xenia-shader-cc ${PROJECT_SOURCE_DIR}/tools/build/shader_cc.cc)
 target_link_libraries(xenia-shader-cc PRIVATE glslang SPIRV-Tools-static)
 target_include_directories(xenia-shader-cc PRIVATE
@@ -292,6 +309,35 @@ if(APPLE)
 endif()
 if(MSVC)
   target_compile_options(xenia-shader-cc PRIVATE /EHsc)
+endif()
+
+else()  # _xe_use_host_shader_cc: x64→ARM64 cross-compile, use native build's binary
+
+# Native x64 build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
+set(_xe_host_shader_cc_dir "${CMAKE_SOURCE_DIR}/build/host_tools")
+set(_xe_host_shader_cc_any "")
+foreach(_cfg Release Checked Debug Valgrind)
+  if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
+    set(_xe_host_shader_cc_any "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
+    break()
+  endif()
+endforeach()
+if(NOT _xe_host_shader_cc_any)
+  message(FATAL_ERROR
+    "Cross-compile to ARM64 needs a host xenia-shader-cc.exe but none was found "
+    "under ${_xe_host_shader_cc_dir}/<Config>/.\n"
+    "  Run a native build first to produce it, e.g.:\n"
+    "    xb build --target xenia-shader-cc --config=release\n"
+    "  Then re-run the cross-compile.")
+endif()
+add_executable(xenia-shader-cc IMPORTED GLOBAL)
+set_target_properties(xenia-shader-cc PROPERTIES
+  IMPORTED_LOCATION "${_xe_host_shader_cc_any}"
+  IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_dir}/Release/xenia-shader-cc.exe"
+  IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_dir}/Checked/xenia-shader-cc.exe"
+  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_dir}/Debug/xenia-shader-cc.exe"
+  IMPORTED_LOCATION_VALGRIND "${_xe_host_shader_cc_dir}/Valgrind/xenia-shader-cc.exe")
+
 endif()
 
 # ==============================================================================
