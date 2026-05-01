@@ -34,15 +34,30 @@ CAMetalLayer* MacNSViewSurface::GetOrCreateMetalLayer() const {
   if (!view_) {
     return nullptr;
   }
-  CALayer* layer = [view_ layer];
-  if ([layer isKindOfClass:[CAMetalLayer class]]) {
-    return static_cast<CAMetalLayer*>(layer);
+  CALayer* mainLayer = [view_ layer];
+  if ([mainLayer isKindOfClass:[CAMetalLayer class]]) {
+    return static_cast<CAMetalLayer*>(mainLayer);
+  }
+  if (mainLayer) {
+    for (CALayer* sub in mainLayer.sublayers) {
+      if ([sub isKindOfClass:[CAMetalLayer class]]) {
+        return static_cast<CAMetalLayer*>(sub);
+      }
+    }
+  }
+  // Attach as a sublayer rather than replacing the view's main layer: wx has
+  // already set wantsLayer:YES during construction, which precludes the
+  // setLayer-before-wantsLayer order required for a layer-hosting view.
+  if (!mainLayer) {
+    [view_ setWantsLayer:YES];
+    mainLayer = [view_ layer];
   }
   CAMetalLayer* metalLayer = [CAMetalLayer layer];
-  [view_ setWantsLayer:YES];
-  [view_ setLayer:metalLayer];
   metalLayer.framebufferOnly = YES;
   metalLayer.opaque = YES;
+  metalLayer.frame = mainLayer.bounds;
+  metalLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+  [mainLayer addSublayer:metalLayer];
   return metalLayer;
 }
 

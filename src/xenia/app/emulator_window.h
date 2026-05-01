@@ -13,10 +13,6 @@
 #include <memory>
 #include <string>
 
-#include <QPointer>
-
-class QTimer;
-
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/ui/imgui_confirm_dialog.h"
@@ -38,6 +34,9 @@ class QTimer;
 namespace xe {
 namespace app {
 
+class GameListPanel;
+struct WxToolbarState;
+
 class EmulatorWindow {
  public:
   using steady_clock = std::chrono::steady_clock;  // stdlib steady clock
@@ -57,7 +56,7 @@ class EmulatorWindow {
 
   static std::unique_ptr<EmulatorWindow> Create(
       Emulator* emulator, ui::WindowedAppContext& app_context, uint32_t width,
-      uint32_t height, bool is_game_process = false);
+      uint32_t height);
 
   std::unique_ptr<xe::threading::Thread> Gamepad_HotKeys_Listener;
 
@@ -75,7 +74,6 @@ class EmulatorWindow {
   ui::WindowedAppContext& app_context() const { return app_context_; }
   ui::Window* window() const { return window_.get(); }
   ui::ImGuiDrawer* imgui_drawer() const { return imgui_drawer_.get(); }
-  bool is_game_process() const { return is_game_process_; }
 
   ui::Presenter* GetGraphicsSystemPresenter() const;
   void SetupGraphicsSystemPresenterPainting();
@@ -104,7 +102,7 @@ class EmulatorWindow {
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
   void FileOpen();
 
-  // Helper methods for updating cvars from Qt dialogs (public for Qt dialogs)
+  // Helper methods for updating cvars from config dialogs.
   void UpdateAntiAliasingCvar(gpu::CommandProcessor::SwapPostEffect effect);
   void UpdateScalingAndSharpeningCvar(
       ui::Presenter::GuestOutputPaintConfig::Effect effect);
@@ -189,7 +187,7 @@ class EmulatorWindow {
 
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
-                          uint32_t height, bool is_game_process = false);
+                          uint32_t height);
 
   bool Initialize();
 
@@ -200,8 +198,6 @@ class EmulatorWindow {
   void OnMouseUp(const ui::MouseEvent& e);
   void FileClose();
   void InstallContent();
-  void ExtractZarchive();
-  void CreateZarchive();
   void ShowContentDirectory();
   void CpuTimeScalarReset();
   void CpuTimeScalarSetHalf();
@@ -233,18 +229,9 @@ class EmulatorWindow {
 
   void ClearDialogs();
 
-  // Timer callback for saving window size after resize is complete
-  void SaveWindowSizeConfig();
-
   Emulator* emulator_;
   ui::WindowedAppContext& app_context_;
-  bool is_game_process_;
   EmulatorWindowListener window_listener_;
-
-  // Timer for debouncing resize events (save config after resize is done)
-  std::unique_ptr<QTimer> resize_save_timer_;
-  uint32_t pending_resize_width_ = 0;
-  uint32_t pending_resize_height_ = 0;
 
   std::unique_ptr<ui::Window> window_;
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
@@ -261,16 +248,35 @@ class EmulatorWindow {
 
   ui::ImGuiPostProcessingDialog* postprocessing_dialog_ = nullptr;
   ui::ImGuiPerformanceDialog* performance_dialog_ = nullptr;
-  QPointer<class GameListDialogQt> game_list_dialog_qt_;
   ProfileConfigDialog* profile_dialog_ = nullptr;
-  QPointer<class SimpleConfigDialogQt> simple_config_dialog_qt_;
-  QPointer<class ConfigDialogQt> config_dialog_qt_;
   ui::ImGuiContextMenu* context_menu_ = nullptr;
   ui::ImGuiXmpDialog* xmp_dialog_ = nullptr;
 
-  // Menu items that need to be enabled/disabled based on child process state
-  ui::MenuItem* file_menu_ = nullptr;
-  ui::MenuItem* file_open_item_ = nullptr;
+  GameListPanel* game_list_panel_ = nullptr;
+  std::unique_ptr<WxToolbarState> wx_toolbar_state_;
+  // True when the app was started with --target and the title hasn't been
+  // explicitly stopped yet — keeps the render pane visible during the gap
+  // between the window appearing and on_launch firing.
+  bool target_pending_launch_ = false;
+  // Render dimensions captured at app start, restored after Stop.
+  uint32_t default_logical_width_ = 0;
+  uint32_t default_logical_height_ = 0;
+  ui::MenuItem* file_open_menu_item_ = nullptr;
+  ui::MenuItem* file_stop_menu_item_ = nullptr;
+  ui::MenuItem* profile_menu_ = nullptr;
+  ui::MenuItem* config_menu_ = nullptr;
+  ui::MenuItem* tools_menu_ = nullptr;
+  void RefreshProfileMenu();
+  void PopulateProfileMenu(ui::MenuItem* parent);
+  void RefreshProfileIcon();
+  void ShowProfilePopupMenu();
+  // Reapply the "render visible iff title open or fullscreen, game list
+  // otherwise" invariant. Called on every relevant state change.
+  void ApplyContentVisibility();
+  // Tear down the running title on a non-guest thread and refresh the UI to
+  // show the game list. Skips the user prompt — caller is responsible for
+  // confirmation.
+  void StopTitleAndReturnToList();
 };
 
 }  // namespace app

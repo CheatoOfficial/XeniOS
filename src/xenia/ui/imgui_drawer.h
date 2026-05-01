@@ -170,6 +170,8 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   // anything.
   bool reset_mouse_position_after_next_frame_ = false;
 
+  uint32_t mouse_buttons_held_ = 0;
+
   double frame_time_tick_frequency_;
   uint64_t last_frame_time_ticks_;
 

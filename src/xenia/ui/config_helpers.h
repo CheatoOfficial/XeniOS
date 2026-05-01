@@ -212,6 +212,41 @@ GetKnownEnumOptions() {
   return options;
 }
 
+enum class CvarPathKind {
+  kDirectory,
+  kFileOpen,
+  kFileSave,
+};
+
+struct CvarPathInfo {
+  CvarPathKind kind = CvarPathKind::kDirectory;
+  // Pipe-delimited wxFileDialog wildcard
+  // ("Audio (*.wav)|*.wav|All (*.*)|*.*"). Empty for kDirectory.
+  std::string wildcard;
+};
+
+inline const CvarPathInfo* GetCvarPathInfo(const std::string& name) {
+  static const std::map<std::string, CvarPathInfo> kInfo = {
+      {"achievement_sound_path",
+       {CvarPathKind::kFileOpen,
+        "Audio Files (*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.opus)"
+        "|*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.opus"
+        "|All Files (*.*)|*.*"}},
+      {"custom_font_path",
+       {CvarPathKind::kFileOpen,
+        "Font Files (*.ttf;*.otf;*.ttc)|*.ttf;*.otf;*.ttc"
+        "|All Files (*.*)|*.*"}},
+      {"mappings_file",
+       {CvarPathKind::kFileOpen,
+        "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"}},
+      {"log_file",
+       {CvarPathKind::kFileSave,
+        "Log Files (*.log;*.txt)|*.log;*.txt|All Files (*.*)|*.*"}},
+  };
+  auto it = kInfo.find(name);
+  return it == kInfo.end() ? nullptr : &it->second;
+}
+
 }  // namespace ui
 }  // namespace xe
 

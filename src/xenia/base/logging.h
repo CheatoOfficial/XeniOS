@@ -73,8 +73,7 @@ class DebugPrintLogSink final : public LogSink {
 
 // Initializes the logging system and any outputs requested.
 // Must be called on startup.
-void InitializeLogging(const std::string_view app_name,
-                       bool is_game_process = false);
+void InitializeLogging(const std::string_view app_name);
 void ShutdownLogging();
 
 // Flushes all log sinks immediately.

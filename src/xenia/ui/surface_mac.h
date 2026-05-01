@@ -18,8 +18,10 @@
 @class NSView;
 @class CAMetalLayer;
 #else
-typedef struct objc_object NSView;
-typedef struct objc_object CAMetalLayer;
+// Match wx/defs.h's DECLARE_WXCOCOA_OBJC_CLASS pattern so non-Obj-C TUs that
+// include both headers don't hit a typedef/struct redefinition.
+struct NSView;
+struct CAMetalLayer;
 #endif
 
 namespace xe {

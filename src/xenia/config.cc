@@ -262,11 +262,17 @@ uint32_t LoadGameConfigForFile(const std::filesystem::path& game_path) {
   auto title_id_str = fmt::format("{:08X}", title_id);
   const auto game_config_path = GetGameConfigPath(title_id_str);
 
-  if (!std::filesystem::exists(game_config_path)) {
+  if (!cvar::ConfigVars) {
     return title_id;
   }
 
-  if (!cvar::ConfigVars) {
+  // Drop the previous title's overrides so cvars revert to base config + the
+  // new title's overrides only.
+  for (auto& it : *cvar::ConfigVars) {
+    static_cast<cvar::IConfigVar*>(it.second)->ClearGameConfigValue();
+  }
+
+  if (!std::filesystem::exists(game_config_path)) {
     return title_id;
   }
 

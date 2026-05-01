@@ -40,6 +40,8 @@ class InputSystem {
   X_STATUS Setup();
 
   void AddDriver(std::unique_ptr<InputDriver> driver);
+  void ClearDrivers() { drivers_.clear(); }
+  size_t driver_count() const { return drivers_.size(); }
 
   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags,
                            X_INPUT_CAPABILITIES* out_caps);

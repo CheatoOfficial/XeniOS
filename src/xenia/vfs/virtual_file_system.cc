@@ -361,7 +361,7 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry,
 
 X_STATUS VirtualFileSystem::ExtractContentFile(Entry* entry,
                                                std::filesystem::path base_path,
-                                               uint64_t& progress,
+                                               std::atomic<uint64_t>& progress,
                                                bool extract_to_root) {
   // Allocate a buffer when needed.
   size_t buffer_size = 0;
@@ -438,8 +438,8 @@ X_STATUS VirtualFileSystem::ExtractContentFile(Entry* entry,
 }
 
 X_STATUS VirtualFileSystem::ExtractContentFiles(
-    Device* device, std::filesystem::path base_path, uint64_t& progress,
-    std::function<bool()> should_cancel) {
+    Device* device, std::filesystem::path base_path,
+    std::atomic<uint64_t>& progress, std::function<bool()> should_cancel) {
   // Run through all the files, breadth-first style.
   std::queue<vfs::Entry*> queue;
   auto root = device->ResolvePath("/");

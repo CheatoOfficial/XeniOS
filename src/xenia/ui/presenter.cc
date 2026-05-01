@@ -1079,6 +1079,12 @@ Presenter::PaintMode Presenter::GetDesiredPaintModeFromUIThread(
   if (!cvars::host_present_from_non_ui_thread) {
     return PaintMode::kUIThreadOnRequest;
   }
+  if (surface_ && surface_->GetType() == Surface::kTypeIndex_WaylandWindow) {
+    // Wayland connections aren't thread-safe — GTK dispatches wl_display from
+    // the UI thread, so the GPU thread must not call vkQueuePresentKHR (which
+    // dispatches the same display) concurrently.
+    return PaintMode::kUIThreadOnRequest;
+  }
   if (surface_paint_connection_has_implicit_vsync_) {
     // Don't be causing host vertical sync CPU waits in the thread generating
     // the guest output.
@@ -1208,8 +1214,6 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
 #if XE_PLATFORM_WIN32
   HMONITOR surface_new_win32_monitor = nullptr;
   if (surface_) {
-    // Get HWND from the surface instead of assuming Win32Window
-    // This supports both Win32Window and QtWindow
     HWND hwnd = nullptr;
     if (surface_->GetType() == Surface::kTypeIndex_Win32Hwnd) {
       hwnd = static_cast<const Win32HwndSurface*>(surface_)->hwnd();
@@ -1388,15 +1392,14 @@ void Presenter::WaitForUITickFromUIThread() {
     dxgi_ui_tick_signal_condition_.wait(dxgi_ui_tick_lock);
   }
 #elif XE_PLATFORM_LINUX
+  // Without this, ImGui draws run uncapped (~3000 fps) when a dialog is open.
   if (!AreUITicksNeededFromUIThread()) {
     return;
   }
-  // On Linux, implement timer-based rate limiting at 60 FPS to match game frame
-  // rate.
   auto now = std::chrono::steady_clock::now();
   auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
       now - linux_ui_tick_last_paint_time_);
-  constexpr auto frame_time = std::chrono::microseconds(16667);  // ~60 FPS
+  constexpr auto frame_time = std::chrono::microseconds(16667);
   if (elapsed < frame_time) {
     std::this_thread::sleep_for(frame_time - elapsed);
   }

@@ -25,6 +25,7 @@
 #include "xenia/gpu/xenos_zpd_report.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/user_module.h"
+
 #if !defined(NDEBUG)
 
 #define XE_ENABLE_GPU_REG_WRITE_LOGGING 1
@@ -424,6 +425,7 @@ void CommandProcessor::ThrottlePresentation() {
   // Host frame rate limiting based on framerate_limit cvar.
   // This is separate from guest vblank timing (controlled by vsync cvar).
   const uint64_t framerate_limit = cvars::framerate_limit;
+
   if (framerate_limit == 0) {
     // No host frame limiting
     return;

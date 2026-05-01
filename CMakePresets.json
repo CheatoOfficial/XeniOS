@@ -91,11 +91,6 @@
       "configuration": "Checked"
     },
     {
-      "name": "valgrind",
-      "configurePreset": "default",
-      "configuration": "Valgrind"
-    },
-    {
       "name": "vs-debug",
       "configurePreset": "vs",
       "configuration": "Debug"

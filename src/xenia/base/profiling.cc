@@ -15,9 +15,12 @@
 
 // NOTE: microprofile must be setup first, before profiling.h is included.
 #define MICROPROFILE_ENABLED 1
-#define MICROPROFILEUI_ENABLED 1
 #define MICROPROFILE_IMPL 1
+// UI impl needs MicroProfileDraw{Box,Text,Line2D} from microprofile_drawer.cc.
+#if defined(XE_OPTION_PROFILING_UI) && XE_OPTION_PROFILING_UI
+#define MICROPROFILEUI_ENABLED 1
 #define MICROPROFILEUI_IMPL 1
+#endif
 #define MICROPROFILE_PER_THREAD_BUFFER_SIZE (1024 * 1024 * 10)
 #define MICROPROFILE_USE_THREAD_NAME_CALLBACK 1
 #define MICROPROFILE_WEBSERVER_MAXFRAMES 3
@@ -66,7 +69,13 @@ bool Profiler::dpi_scaling_ = false;
 
 bool Profiler::is_enabled() { return true; }
 
-bool Profiler::is_visible() { return is_enabled() && MicroProfileIsDrawing(); }
+bool Profiler::is_visible() {
+#if XE_OPTION_PROFILING_UI
+  return is_enabled() && MicroProfileIsDrawing();
+#else
+  return false;
+#endif
+}
 
 void Profiler::Initialize() {
   // Custom groups.
@@ -206,6 +215,7 @@ void Profiler::TogglePause() {}
 #endif  // XE_OPTION_PROFILING_UI
 
 void Profiler::ToggleDisplay() {
+#if XE_OPTION_PROFILING_UI
   bool was_visible = is_visible();
   MicroProfileToggleDisplayMode();
   if (is_visible() != was_visible) {
@@ -216,7 +226,6 @@ void Profiler::ToggleDisplay() {
         window_->AddInputListener(&input_listener_, z_order_);
       }
     }
-#if XE_OPTION_PROFILING_UI
     if (presenter_) {
       if (was_visible) {
         presenter_->RemoveUIDrawerFromUIThread(&ui_drawer_);
@@ -224,8 +233,8 @@ void Profiler::ToggleDisplay() {
         presenter_->AddUIDrawerFromUIThread(&ui_drawer_, z_order_);
       }
     }
-#endif  // XE_OPTION_PROFILING_UI
   }
+#endif  // XE_OPTION_PROFILING_UI
 }
 
 void Profiler::SetUserIO(size_t z_order, ui::Window* window,

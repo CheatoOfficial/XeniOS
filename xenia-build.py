@@ -156,128 +156,6 @@ vs_version = import_vs_environment()
 
 default_branch = "canary_experimental"
 
-def setup_qt(target_arch=None):
-    """Setup Qt environment variables if not already set.
-
-    Args:
-      target_arch: Normalized target architecture ("arm64", "x64", or None).
-        When None or "x64", picks the x64 Qt tree (msvc*_64).
-        When "arm64", picks the ARM64 Qt tree (msvc*_arm64) — requires
-        the ARM64 Qt binaries to be installed (via aqtinstall or the
-        official installer).
-
-    Returns:
-        True if Qt is available and valid, False otherwise.
-    """
-    # Check if QT_DIR is already set and valid
-    existing_qt_dir = os.environ.get("QT_DIR")
-    if existing_qt_dir:
-        # Validate that the path exists
-        if os.path.exists(existing_qt_dir):
-            print(f"QT_DIR is set to {existing_qt_dir}")
-            return True
-        else:
-            print_warning(f"QT_DIR is set to {existing_qt_dir} but directory does not exist")
-        return False
-
-    # Determine Qt base directory based on platform
-    if sys.platform == "win32":
-        qt_base = "C:\\Qt"
-    else:
-        qt_base = "/opt/Qt"
-
-    if not os.path.exists(qt_base):
-        return False
-
-    # Get the first (latest) version directory
-    try:
-        # List all version directories (e.g., 6.8.1, 6.10.1)
-        version_dirs = [d for d in os.listdir(qt_base)
-                        if os.path.isdir(os.path.join(qt_base, d)) and d[0].isdigit()]
-        if not version_dirs:
-            return False
-
-        # Sort versions using semantic versioning (split by dots and compare as integers)
-        def version_key(v):
-            try:
-                return tuple(int(x) for x in v.split('.'))
-            except ValueError:
-                return (0,)
-        version_dirs.sort(key=version_key, reverse=True)
-        qt_version_dir = os.path.join(qt_base, version_dirs[0])
-
-        if sys.platform == "win32":
-            # Qt install dir names: msvc<year>_64 (x64), msvc<year>_arm64 or
-            # msvc<year>_arm64_cross_compiled (ARM64).
-            def _is_arm64(name):
-                return name.startswith("msvc") and "arm64" in name
-            def _is_x64(name):
-                return name.startswith("msvc") and "_64" in name and "arm64" not in name
-            def _pick(predicate):
-                dirs = [d for d in os.listdir(qt_version_dir)
-                        if os.path.isdir(os.path.join(qt_version_dir, d)) and predicate(d)]
-                if not dirs:
-                    return None
-                dirs.sort(reverse=True)
-                return os.path.join(qt_version_dir, dirs[0])
-
-            is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
-            native_arch = "arm64" if is_native_arm64 else "x64"
-            effective_target = target_arch or native_arch
-            qt_dir = _pick(_is_arm64 if effective_target == "arm64" else _is_x64)
-            if not qt_dir:
-                if effective_target == "arm64":
-                    print_error(
-                        f"No ARM64 Qt build found in {qt_version_dir}.\n"
-                        f"  Install via: python -m aqt install-qt windows desktop "
-                        f"{version_dirs[0]} win64_msvc2022_arm64_cross_compiled "
-                        f"-m qtmultimedia -O C:\\Qt")
-                    sys.exit(1)
-                return False
-
-            # Qt cross-compile needs QT_HOST_PATH pointing at the host-arch
-            # install (moc/rcc/uic run on the build machine).
-            if target_arch and target_arch != native_arch:
-                host_dir = _pick(_is_arm64 if is_native_arm64 else _is_x64)
-                if not host_dir:
-                    print_error(
-                        f"Cross-compiling to {target_arch} needs a host ({native_arch}) Qt "
-                        f"install at {qt_version_dir} for QT_HOST_PATH, but none was found.")
-                    sys.exit(1)
-                os.environ["QT_HOST_PATH"] = host_dir
-                print(f"Found host Qt at {host_dir} (QT_HOST_PATH)")
-        elif sys.platform == "darwin":
-            # macOS: look for "macos" directory
-            macos_dir = os.path.join(qt_version_dir, "macos")
-            if not os.path.isdir(macos_dir):
-                return False
-            qt_dir = macos_dir
-        else:
-            # On Linux, look for gcc_64 or similar compiler directories
-            compiler_dirs = [d for d in os.listdir(qt_version_dir)
-                             if os.path.isdir(os.path.join(qt_version_dir, d)) and
-                             (d.startswith("gcc") or d.startswith("linux"))]
-            if not compiler_dirs:
-                return False
-
-            # Prefer gcc_64 if available, otherwise use the first available
-            if "gcc_64" in compiler_dirs:
-                compiler_dir = "gcc_64"
-            elif "linux_gcc_64" in compiler_dirs:
-                compiler_dir = "linux_gcc_64"
-            else:
-                compiler_dirs.sort(reverse=True)
-                compiler_dir = compiler_dirs[0]
-
-            qt_dir = os.path.join(qt_version_dir, compiler_dir)
-
-        os.environ["QT_DIR"] = qt_dir
-        print(f"Found Qt at {qt_dir}")
-        return True
-    except Exception:
-        return False
-
-
 def main():
     # Add self to the root search path.
     sys.path.insert(0, self_path)
@@ -334,7 +212,6 @@ def main():
     args = vars(parser.parse_args(command_args))
     command_name = args["subcommand"]
 
-    qt_available = setup_qt(args.get("target_arch"))
     try:
         command = commands[command_name]
         return_code = command.execute(args, pass_args, os.getcwd())
@@ -552,21 +429,41 @@ def git_submodule_update():
         "--depth=1",
         "-j", f"{os.cpu_count()}",
         ])
+    # wxWidgets has its own nested submodules (pcre, libpng, etc.) needed when
+    # building from vendored source on Windows/macOS. The main `submodule update`
+    # above is non-recursive, so kick off a recursive update for wxWidgets only.
+    if sys.platform in ("win32", "darwin"):
+        shell_call([
+            "git",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+            "--depth=1",
+            "-j", f"{os.cpu_count()}",
+            "third_party/wxWidgets",
+            ])
 
 
 def fetch_data_repos():
-    """Fetches data repositories (game-patches, optimized-settings) into .data_repos/.
+    """Fetches data repositories (game-patches) into build/data_repos/.
 
     Removes and re-clones all data repos fresh each time. They are not submodules
     to avoid constant submodule updates in the main repo.
     """
     print("- fetching data repositories...")
 
-    data_dir = ".data_repos"
+    def remove_readonly(func, path, _):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    # Clean up the legacy in-source location if it's still around.
+    legacy_dir = ".data_repos"
+    if os.path.exists(legacy_dir):
+        rmtree(legacy_dir, onerror=remove_readonly)
+
+    data_dir = os.path.join("build", "data_repos")
     if os.path.exists(data_dir):
-        def remove_readonly(func, path, _):
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
         rmtree(data_dir, onerror=remove_readonly)
     os.makedirs(data_dir)
 
@@ -575,27 +472,46 @@ def fetch_data_repos():
         {
             "name": "game-patches",
             "url": "https://github.com/xenia-canary/game-patches.git",
-            "branch": "main"
+            "branch": "main",
         },
         {
-            "name": "optimized-settings",
-            "url": "https://github.com/xenia-manager/optimized-settings.git",
-            "branch": "main"
-        }
+            "name": "xenia-manager-database",
+            "url": "https://github.com/xenia-manager/database.git",
+            "branch": "main",
+            "sparse_paths": [
+                "data/game-compatibility/canary.json",
+                "data/game-compatibility/stable.json",
+            ],
+        },
     ]
 
     # Clone each repo fresh
     for repo in data_repos:
         repo_path = os.path.join(data_dir, repo["name"])
         print(f"  - cloning {repo['name']}...")
-        shell_call([
-            "git",
-            "clone",
-            "--depth=1",
-            "--branch", repo["branch"],
-            repo["url"],
-            repo_path
-        ])
+        sparse_paths = repo.get("sparse_paths")
+        if sparse_paths:
+            shell_call([
+                "git", "clone",
+                "--depth=1",
+                "--branch", repo["branch"],
+                "--filter=blob:none",
+                "--sparse",
+                "--no-checkout",
+                repo["url"],
+                repo_path,
+            ])
+            shell_call(["git", "-C", repo_path, "sparse-checkout", "init", "--no-cone"])
+            shell_call(["git", "-C", repo_path, "sparse-checkout", "set", *sparse_paths])
+            shell_call(["git", "-C", repo_path, "checkout"])
+        else:
+            shell_call([
+                "git", "clone",
+                "--depth=1",
+                "--branch", repo["branch"],
+                repo["url"],
+                repo_path,
+            ])
 
 
 def get_cc(cc=None):
@@ -752,9 +668,6 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     args += [f"-DXENIA_ENABLE_LTO={'OFF' if disable_lto else 'ON'}"]
     if config:
         args += [f"-DCMAKE_BUILD_TYPE={config.title()}"]
-    qt_host_path = os.environ.get("QT_HOST_PATH")
-    if qt_host_path:
-        args += [f"-DQT_HOST_PATH={qt_host_path.replace(os.sep, '/')}"]
     ret = subprocess.call(args)
     if ret == 0:
         generate_version_h(build_dir)
@@ -919,7 +832,7 @@ class FetchDataCommand(Command):
         super(FetchDataCommand, self).__init__(
             subparsers,
             name="fetchdata",
-            help_short="Fetches data repositories (game-patches, optimized-settings).",
+            help_short="Fetches data repositories (game-patches).",
             *args, **kwargs)
 
     def execute(self, args, pass_args, cwd):
@@ -947,7 +860,7 @@ class BaseBuildCommand(Command):
             "--cc", choices=["clang", "gcc", "msc"], default=None,
             help="Compiler toolchain.")
         self.parser.add_argument(
-            "--config", choices=["checked", "debug", "release", "valgrind"], default="debug",
+            "--config", choices=["checked", "debug", "release"], default="debug",
             type=str.lower, help="Chooses the build configuration.")
         self.parser.add_argument(
             "--target", action="append", default=[],
@@ -975,14 +888,6 @@ class BaseBuildCommand(Command):
                  "into a separate build-<arch>/ tree.")
 
     def execute(self, args, pass_args, cwd):
-        if not os.environ.get("QT_DIR"):
-            print_error("Qt not found!"
-                  "\nPlease install Qt 6.10.1 via aqtinstall:"
-                  "\n  pip install aqtinstall"
-                  "\n  python -m aqt install-qt <platform> desktop 6.10.1 <arch> -m qtmultimedia"
-                  f"\nSee: https://github.com/has207/xenia-edge/blob/{default_branch}/docs/building.md")
-            return 1
-
         target_arch = args.get("target_arch")
         if not args["no_configure"]:
             print("- running cmake configure...")
@@ -1086,14 +991,7 @@ class TestCommand(BaseBuildCommand):
                 print_error(f"Unable to find {test_targets[i]} - build it.")
                 return 1
 
-        # Prepare environment with Qt bin directory in PATH if available
         test_env = dict(os.environ)
-        qt_dir = os.environ.get("QT_DIR")
-        if qt_dir and sys.platform == "win32":
-            qt_bin = os.path.join(qt_dir, "bin")
-            if os.path.exists(qt_bin):
-                test_env["PATH"] = f"{qt_bin}{os.pathsep}{test_env['PATH']}"
-                print(f"- Qt bin directory added to PATH: {qt_bin}\n")
 
         # Run tests.
         any_failed = False
@@ -1551,7 +1449,7 @@ class DevenvCommand(Command):
                  "On Windows, non-native values enable cross-compilation into a "
                  "separate build-vs-<arch>/ tree.")
         self.parser.add_argument(
-            "--config", choices=["checked", "debug", "release", "valgrind"],
+            "--config", choices=["checked", "debug", "release"],
             default="debug", type=str.lower,
             help="Build configuration the IDE solution is pinned to. The VS "
                  "dropdown is restricted to this single config; re-run xb "

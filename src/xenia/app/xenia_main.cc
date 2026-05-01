@@ -131,22 +131,13 @@ DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
 
 DECLARE_bool(force_mount_devkit);
 
-DECLARE_path(target);  // Defined in windowed_app_main_qt.cc
+// Positional cvar bound to the first non-flag argv entry (see
+// EmulatorApp::EmulatorApp -> AddPositionalOption("target")).
+DEFINE_transient_path(target, "", "Specifies the target file to run.",
+                      "General");
 DEFINE_transient_bool(portable, false,
                       "Specifies if Xenia should run in portable mode.",
                       "General");
-
-DECLARE_uint32(window_size_ui_x);
-DECLARE_uint32(window_size_ui_y);
-
-DEFINE_CVar(window_size_game_x, 0,
-            "Game window width in pixels (0 = use internal resolution). "
-            "Command-line only.",
-            "Display", true, uint32_t);
-DEFINE_CVar(window_size_game_y, 0,
-            "Game window height in pixels (0 = use internal resolution). "
-            "Command-line only.",
-            "Display", true, uint32_t);
 
 DECLARE_bool(debug);
 DEFINE_int32(
@@ -243,6 +234,8 @@ class EmulatorApp final : public xe::ui::WindowedApp {
   }
 
   ~EmulatorApp();
+
+  std::string_view GetTitle() const override { return "xenia_edge"; }
 
   bool OnInitialize() override;
 
@@ -363,7 +356,7 @@ class EmulatorApp final : public xe::ui::WindowedApp {
   static std::vector<std::unique_ptr<hid::InputDriver>> CreateInputDrivers(
       ui::Window* window);
 
-  void EmulatorThread(bool is_game_process);
+  void EmulatorThread();
   void ShutdownEmulatorThreadFromUIThread();
 
   DebugWindowClosedListener debug_window_closed_listener_;
@@ -635,58 +628,29 @@ bool EmulatorApp::OnInitialize() {
   emulator_ =
       std::make_unique<Emulator>("", storage_root, content_root, cache_root);
 
-  // Check if this is a game process (has target) or UI process
-  bool is_game_process = !cvars::target.empty();
-
 #if XE_PLATFORM_WIN32 && XE_ARCH_AMD64 == 1
-  // Apply ntdll rdrand patch for game process only
-  if (is_game_process && cvars::enable_rdrand_ntdll_patch) {
+  if (cvars::enable_rdrand_ntdll_patch) {
     do_ntdll_rdrand_patch();
   }
 #endif
 
-  // Initialize Discord rich presence only for game process
-  if (is_game_process && cvars::discord) {
+  if (cvars::discord) {
     discord::DiscordPresence::Initialize();
     discord::DiscordPresence::NotPlaying();
   }
 
-  // Determine window size based on process type
-  uint32_t window_width, window_height;
-  if (is_game_process) {
-    // Game process - use internal resolution or command-line override
-    auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
-    window_width = res.first;
-    window_height = res.second;
-
-    // Override with command-line args if set (transient cvars)
-    if (cvars::window_size_game_x != 0) {
-      window_width = cvars::window_size_game_x;
-    }
-    if (cvars::window_size_game_y != 0) {
-      window_height = cvars::window_size_game_y;
-    }
-  } else {
-    // UI process - use persistent cvars (defaults to 950x750)
-    window_width = cvars::window_size_ui_x;
-    window_height = cvars::window_size_ui_y;
-  }
-
-  // Main emulator display window.
-  emulator_window_ =
-      EmulatorWindow::Create(emulator_.get(), app_context(), window_width,
-                             window_height, is_game_process);
+  auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
+  emulator_window_ = EmulatorWindow::Create(emulator_.get(), app_context(),
+                                            res.first, res.second);
   if (!emulator_window_) {
     XELOGE("Failed to create the main emulator window");
     return false;
   }
 
-  // Setup the emulator and run its loop in a separate thread.
   emulator_thread_quit_requested_.store(false, std::memory_order_relaxed);
   emulator_thread_event_ = xe::threading::Event::CreateAutoResetEvent(false);
   assert_not_null(emulator_thread_event_);
-  emulator_thread_ =
-      std::thread(&EmulatorApp::EmulatorThread, this, is_game_process);
+  emulator_thread_ = std::thread(&EmulatorApp::EmulatorThread, this);
 
   return true;
 }
@@ -708,35 +672,15 @@ void EmulatorApp::OnDestroy() {
   std::quick_exit(EXIT_SUCCESS);
 }
 
-void EmulatorApp::EmulatorThread(bool is_game_process) {
+void EmulatorApp::EmulatorThread() {
   assert_not_null(emulator_thread_event_);
 
   xe::threading::set_name("Emulator");
   Profiler::ThreadEnter("Emulator");
 
-  // UI process: Minimal setup for profiles/GPD only
-  if (!is_game_process) {
-    // Initialize just enough for profiles: kernel state with XAM module
-    X_STATUS result = emulator_->Setup(emulator_window_->window(), nullptr,
-                                       false, nullptr, nullptr, nullptr);
-    if (XFAILED(result)) {
-      XELOGE("Failed to setup minimal emulator for UI: {:08X}", result);
-      app_context().RequestDeferredQuit();
-      return;
-    }
-
-    // Notify that the UI is ready to be shown
-    app_context().CallInUIThread(
-        [this]() { emulator_window_->OnEmulatorInitialized(); });
-
-    // Keep the thread alive for UI process
-    while (!emulator_thread_quit_requested_.load(std::memory_order_relaxed)) {
-      xe::threading::Wait(emulator_thread_event_.get(), false);
-    }
-    return;
-  }
-
-  // Game process: Full emulator setup with graphics, audio, and input
+  // Setup is bare-essentials only (memory/cpu/kernel/vfs/input shell). The
+  // factories are stored for SetupSubsystems, which runs at first title
+  // launch — after per-game cvar overrides have been applied.
   X_STATUS result = emulator_->Setup(
       emulator_window_->window(), emulator_window_->imgui_drawer(), true,
       CreateAudioSystem, CreateGraphicsSystem, CreateInputDrivers);
@@ -745,10 +689,6 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     app_context().RequestDeferredQuit();
     return;
   }
-
-  // Setup graphics presenter painting for game process
-  app_context().CallInUIThread(
-      [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 
   emulator_->MountStandardDrives();
 
@@ -831,8 +771,12 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
   });
 
   // Enable emulator input now that the emulator is properly loaded.
-  app_context().CallInUIThread(
-      [this]() { emulator_window_->OnEmulatorInitialized(); });
+  app_context().CallInUIThread([this]() {
+    emulator_window_->OnEmulatorInitialized();
+    // Re-paint the title now that processor is up, so the game list shows
+    // the active backend tag instead of the bare app name.
+    emulator_window_->UpdateTitle();
+  });
 
   // Grab path from the flag or unnamed argument.
   std::filesystem::path path;
@@ -871,6 +815,17 @@ void EmulatorApp::EmulatorThread(bool is_game_process) {
     if (xam) {
       xam->loader_data().host_path = xe::path_to_utf8(abs_path);
     }
+
+    // Apply per-game cvar overrides before bringing up subsystems so the
+    // graphics/audio backends pick up the right values.
+    config::LoadGameConfigForFile(abs_path);
+    if (XFAILED(result = emulator_->SetupSubsystems())) {
+      xe::FatalError(fmt::format("Failed to setup subsystems: {:08X}", result));
+      app_context().RequestDeferredQuit();
+      return;
+    }
+    app_context().CallInUIThread(
+        [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 
     // TODO(has207): Add archive format check like in RunTitle?
     result = emulator_->LaunchPath(abs_path);

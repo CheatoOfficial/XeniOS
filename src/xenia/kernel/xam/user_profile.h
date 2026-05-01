@@ -123,6 +123,10 @@ class UserProfile {
   };
   bool IsLiveEnabled() const { return account_info_.IsLiveEnabled(); }
 
+  void ClearProfileIcon(XTileType icon_type) {
+    profile_images_.erase(icon_type);
+  }
+
   std::span<const uint8_t> GetProfileIcon(XTileType icon_type) {
     // First check if the requested type exists
     if (profile_images_.find(icon_type) != profile_images_.cend()) {
