@@ -13,7 +13,7 @@ from glob import glob
 from json import loads as jsonloads
 import os
 import platform
-from shutil import rmtree
+from shutil import rmtree, which as shutil_which
 import subprocess
 import sys
 import stat
@@ -149,6 +149,8 @@ def import_vs_environment():
     os.environ["VSVERSION"] = f"{version}"
     return version
 
+
+_user_path = os.environ.get("PATH", "")
 
 vs_version = import_vs_environment()
 
@@ -606,70 +608,15 @@ def get_cc(cc=None):
         return "msc"
 
 def get_clang_format_binary():
-    """Finds the highest-version clang-format on PATH (plus a few known
-    Windows absolute paths). Returns an absolute path; aborts if nothing
-    >= the minimum version is found."""
-    clang_format_version_min = 19
-
-    # Walk every PATH entry and collect every clang-format[.exe] and
-    # clang-format-N[.exe] we find, not just the first one — Visual
-    # Studio's bundled LLVM (often older) frequently shadows a newer
-    # standalone install when vcvars is sourced.
-    candidates = []
-    seen = set()
-    def add(path):
-        path = os.path.normcase(os.path.abspath(path))
-        if path in seen:
-            return
-        seen.add(path)
-        if os.path.isfile(path) and os.access(path, os.X_OK):
-            candidates.append(path)
-
-    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
-        path_dir = path_dir.strip('"')
-        if not path_dir or not os.path.isdir(path_dir):
-            continue
-        try:
-            entries = os.listdir(path_dir)
-        except OSError:
-            continue
-        for name in entries:
-            base, _, ext = name.rpartition(".") if "." in name else (name, "", "")
-            stem = (base if ext.lower() == "exe" else name).lower()
-            if stem == "clang-format" or (
-                stem.startswith("clang-format-")
-                and stem[len("clang-format-"):].isdigit()):
-                add(os.path.join(path_dir, name))
-
-    if sys.platform == "win32":
-        if "VCINSTALLDIR" in os.environ:
-            sub = "x64" if is_amd64() else "arm64" if is_arm() else None
-            if sub:
-                add(os.path.join(os.environ["VCINSTALLDIR"], "Tools",
-                                 "Llvm", sub, "bin", "clang-format.exe"))
-        add(os.path.join(os.environ.get("ProgramFiles", ""), "LLVM",
-                         "bin", "clang-format.exe"))
-
-    best_binary = None
-    best_version = 0
-    best_output = None
-    for binary in candidates:
-        try:
-            out = subprocess.check_output([binary, "--version"], text=True)
-            version = int(out.split("version ")[1].split(".")[0])
-        except (subprocess.CalledProcessError, OSError, ValueError, IndexError):
-            continue
-        if version >= clang_format_version_min and version > best_version:
-            best_version = version
-            best_binary = binary
-            best_output = out
-
-    if best_binary:
-        print(best_output)
-        return best_binary
-
-    print_error(f"clang-format {clang_format_version_min} or newer is not on PATH")
-    sys.exit(1)
+    # Use pre-vsvars PATH so VS's bundled Llvm clang-format doesn't shadow the user's.
+    binary = shutil_which("clang-format", path=_user_path) or "clang-format"
+    try:
+        out = subprocess.check_output([binary, "--version"], text=True)
+        print(out)
+    except (subprocess.CalledProcessError, OSError):
+        print_error("clang-format is not on PATH")
+        sys.exit(1)
+    return binary
 
 
 def normalize_target_arch(value):

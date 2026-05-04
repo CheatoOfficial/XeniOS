@@ -14,14 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@main
       - name: Setup
-        env:
-          LLVM_VERSION: 21
         run: |
-          UBUNTU_BASE=$(lsb_release -cs)
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo apt-add-repository "deb http://apt.llvm.org/${UBUNTU_BASE}/ llvm-toolchain-${UBUNTU_BASE}-$LLVM_VERSION main"
-          sudo apt-get -y update
-          sudo apt-get -y install clang-format-$LLVM_VERSION
+          pipx install clang-format==21.1.8
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Lint
         run: ./xenia-build.py lint --all
 
