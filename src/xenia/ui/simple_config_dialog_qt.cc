@@ -430,10 +430,14 @@ void SimpleConfigDialogQt::UpdateUIFromConfigVars() {
         }
       }
 
-      std::string actual_cvar_name =
-          (gpu_value == "vulkan")
-              ? "vulkan_allow_present_mode_immediate"
-              : "d3d12_allow_variable_refresh_rate_and_tearing";
+      std::string actual_cvar_name;
+      if (gpu_value == "vulkan") {
+        actual_cvar_name = "vulkan_allow_present_mode_immediate";
+      } else if (gpu_value == "metal") {
+        actual_cvar_name = "metal_allow_tearing";
+      } else {
+        actual_cvar_name = "d3d12_allow_variable_refresh_rate_and_tearing";
+      }
 
       auto it_vrr = (*cvar::ConfigVars).find(actual_cvar_name);
       if (it_vrr != (*cvar::ConfigVars).end()) {
@@ -582,10 +586,14 @@ void SimpleConfigDialogQt::SaveConfigChanges() {
         }
       }
 
-      std::string actual_cvar_name =
-          (gpu_value == "vulkan")
-              ? "vulkan_allow_present_mode_immediate"
-              : "d3d12_allow_variable_refresh_rate_and_tearing";
+      std::string actual_cvar_name;
+      if (gpu_value == "vulkan") {
+        actual_cvar_name = "vulkan_allow_present_mode_immediate";
+      } else if (gpu_value == "metal") {
+        actual_cvar_name = "metal_allow_tearing";
+      } else {
+        actual_cvar_name = "d3d12_allow_variable_refresh_rate_and_tearing";
+      }
 
       auto it_vrr = (*cvar::ConfigVars).find(actual_cvar_name);
       if (it_vrr != (*cvar::ConfigVars).end()) {

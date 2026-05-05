@@ -19,9 +19,13 @@
 #include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/backend/a64/a64_stack_layout.h"
 
 // libgcc/libunwind APIs for registering DWARF .eh_frame unwind info.
+// libgcc takes a pointer to a [CIE | FDEs | terminator] section and walks it.
+// Apple/LLVM libunwind takes a single FDE pointer and must be called once
+// per FDE, so on XE_PLATFORM_MAC we walk the buffer ourselves.
 extern "C" void __register_frame(void*);
 extern "C" void __deregister_frame(void*);
 
@@ -59,6 +63,7 @@ static constexpr uint8_t kDwarfRegD15 = 79;
 // DWARF CFA opcodes.
 static constexpr uint8_t kDW_CFA_advance_loc1 = 0x02;
 static constexpr uint8_t kDW_CFA_advance_loc2 = 0x03;
+static constexpr uint8_t kDW_CFA_offset_extended = 0x05;
 static constexpr uint8_t kDW_CFA_def_cfa = 0x0c;
 static constexpr uint8_t kDW_CFA_def_cfa_offset = 0x0e;
 static constexpr uint8_t kDW_CFA_nop = 0x00;
@@ -162,11 +167,30 @@ void PosixA64CodeCache::PlaceCode(uint32_t guest_address, void* machine_code,
   InitializeUnwindEntry(unwind_reservation.entry_address, code_execute_address,
                         func_info);
 
-  void* unwind_execute_address = unwind_reservation.entry_address -
-                                 generated_code_write_base_ +
-                                 generated_code_execute_base_;
+  uint8_t* unwind_execute_address = unwind_reservation.entry_address -
+                                    generated_code_write_base_ +
+                                    generated_code_execute_base_;
+#if XE_PLATFORM_MAC
+  // Walk [CIE | FDE | terminator] and register each FDE individually.
+  const uint8_t* p = unwind_reservation.entry_address;
+  uint8_t* p_execute = unwind_execute_address;
+  while (true) {
+    uint32_t length = *reinterpret_cast<const uint32_t*>(p);
+    if (length == 0) {
+      break;
+    }
+    uint32_t cie_id_or_ptr = *reinterpret_cast<const uint32_t*>(p + 4);
+    if (cie_id_or_ptr != 0) {
+      __register_frame(p_execute);
+      registered_frames_.push_back(p_execute);
+    }
+    p += 4 + length;
+    p_execute += 4 + length;
+  }
+#else
   __register_frame(unwind_execute_address);
   registered_frames_.push_back(unwind_execute_address);
+#endif
 }
 
 void PosixA64CodeCache::InitializeUnwindEntry(
@@ -316,22 +340,22 @@ void PosixA64CodeCache::InitializeUnwindEntry(
       // stp q10,q11 at sp+0x080: d10=sp+0x080, d11=sp+0x090
       // stp q12,q13 at sp+0x0A0: d12=sp+0x0A0, d13=sp+0x0B0
       // stp q14,q15 at sp+0x0C0: d14=sp+0x0C0, d15=sp+0x0D0
-      *p++ = 0x80 | kDwarfRegD8;
-      p += WriteULEB128(p, (cfa - 0x060) / 8);
-      *p++ = 0x80 | kDwarfRegD9;
-      p += WriteULEB128(p, (cfa - 0x070) / 8);
-      *p++ = 0x80 | kDwarfRegD10;
-      p += WriteULEB128(p, (cfa - 0x080) / 8);
-      *p++ = 0x80 | kDwarfRegD11;
-      p += WriteULEB128(p, (cfa - 0x090) / 8);
-      *p++ = 0x80 | kDwarfRegD12;
-      p += WriteULEB128(p, (cfa - 0x0A0) / 8);
-      *p++ = 0x80 | kDwarfRegD13;
-      p += WriteULEB128(p, (cfa - 0x0B0) / 8);
-      *p++ = 0x80 | kDwarfRegD14;
-      p += WriteULEB128(p, (cfa - 0x0C0) / 8);
-      *p++ = 0x80 | kDwarfRegD15;
-      p += WriteULEB128(p, (cfa - 0x0D0) / 8);
+      // d8-d15 are DWARF regs 72-79; the 0x80|reg shorthand only fits regs
+      // < 64, so encode them with DW_CFA_offset_extended (op, regULEB,
+      // offULEB).
+      auto emit_offset_extended = [&p](uint8_t reg, uint64_t factored_offset) {
+        *p++ = kDW_CFA_offset_extended;
+        p += WriteULEB128(p, reg);
+        p += WriteULEB128(p, factored_offset);
+      };
+      emit_offset_extended(kDwarfRegD8, (cfa - 0x060) / 8);
+      emit_offset_extended(kDwarfRegD9, (cfa - 0x070) / 8);
+      emit_offset_extended(kDwarfRegD10, (cfa - 0x080) / 8);
+      emit_offset_extended(kDwarfRegD11, (cfa - 0x090) / 8);
+      emit_offset_extended(kDwarfRegD12, (cfa - 0x0A0) / 8);
+      emit_offset_extended(kDwarfRegD13, (cfa - 0x0B0) / 8);
+      emit_offset_extended(kDwarfRegD14, (cfa - 0x0C0) / 8);
+      emit_offset_extended(kDwarfRegD15, (cfa - 0x0D0) / 8);
     } else if (func_info.lr_save_offset > 0) {
       // Record where x30 (LR / return address) is saved.
       // Without this, the unwinder cannot find the return address.
