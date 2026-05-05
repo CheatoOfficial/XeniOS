@@ -55,6 +55,12 @@ DEFINE_bool(metal_presenter_use_backing_scale, false,
             "Metal");
 DEFINE_bool(metal_presenter_debug_markers, false,
             "Add Metal debug markers for presenter passes and conversions.", "Metal");
+DEFINE_bool(metal_allow_tearing, true,
+            "Disable CAMetalLayer vsync so presents are not gated by the compositor. "
+            "Required for framerate_limit to behave as the authoritative pacer on "
+            "macOS; may introduce visible tearing if framerate_limit is disabled or "
+            "set above the display refresh rate.",
+            "Metal");
 
 namespace xe {
 namespace ui {
@@ -703,10 +709,14 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   metal_layer.drawableSize =
       CGSizeMake(new_surface_width * surface_scale, new_surface_height * surface_scale);
 
+  const bool tearing_allowed = cvars::metal_allow_tearing;
+  metal_layer.displaySyncEnabled = tearing_allowed ? NO : YES;
+
   metal_layer_ = metal_layer;
 
-  // Metal handles vsync through the CAMetalLayer
-  is_vsync_implicit_out = true;
+  // When displaySyncEnabled is YES, CAMetalLayer blocks nextDrawable on the
+  // compositor vsync; when NO, the framerate_limit throttle is authoritative.
+  is_vsync_implicit_out = !tearing_allowed;
 
   XELOGI("Metal surface connected successfully: {}x{} (scale={}, drawable={}x{})",
          new_surface_width, new_surface_height, surface_scale,
