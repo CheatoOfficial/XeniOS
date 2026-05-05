@@ -157,6 +157,8 @@ def import_vs_environment():
     return version
 
 
+_user_path = os.environ.get("PATH", "")
+
 vs_version = import_vs_environment()
 
 default_branch = "xenios"
