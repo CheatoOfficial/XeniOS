@@ -150,11 +150,11 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
           kernel_state_, 128 * 1024, 0,
           [this]() {
             uint64_t last_frame_time = Clock::QueryGuestTickCount();
-    // Sleep for 90% of the vblank duration on Windows, spin for 10%
+    // Sleep for 90% of the vblank duration on Windows/macOS, spin for 10%
     // Linux uses full sleep duration due to scheduler quantum issues
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 || XE_PLATFORM_MAC
             constexpr double duration_scalar = 0.90;
-#else
+#elif XE_PLATFORM_LINUX
             constexpr double duration_scalar = 1.0;
 #endif
 
@@ -171,14 +171,13 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                   GetInternalDisplayResolution().second;
 
               if (refresh_cap_enabled) {
-                // Fixed vblank rate mode
                 const uint32_t vblank_hz = GetGuestVblankRateHz();
                 const uint64_t sleep_ns = static_cast<uint64_t>(
                     (1000000000.0 / static_cast<double>(vblank_hz)) *
                     duration_scalar);
 
-#if XE_PLATFORM_WIN32
-                // Windows: time-gating + 90% sleep + 10% spin
+#if XE_PLATFORM_WIN32 || XE_PLATFORM_MAC
+                // Windows/macOS: time-gating + 90% sleep + 10% spin
                 const uint64_t tick_freq = Clock::guest_tick_frequency();
                 const uint64_t target_duration_ticks = tick_freq / vblank_hz;
                 const uint64_t current_time = Clock::QueryGuestTickCount();
@@ -192,9 +191,13 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                     last_frame_time += target_duration_ticks;
                   }
                   MarkVblank();
-                  threading::NanoSleep(sleep_ns);
-                }
+#if XE_PLATFORM_MAC
+                  threading::NanoSleepPrecise(sleep_ns);
 #else
+                  threading::NanoSleep(sleep_ns);
+#endif
+                }
+#elif XE_PLATFORM_LINUX
                 // Linux: simplified timing to avoid oversleeping
                 MarkVblank();
                 threading::NanoSleep(sleep_ns);
