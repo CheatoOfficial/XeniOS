@@ -59,6 +59,15 @@ option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
 option(XENIA_ENABLE_LTO "Enable link-time optimization in Release (slow link)" ON)
 
+# Toggle profiler
+add_compile_definitions(XE_OPTION_PROFILING=1)
+add_compile_definitions(XE_OPTION_PROFILING_UI=1)
+
+if(XENIA_BUILD_TESTS)
+  enable_testing()
+  include(${PROJECT_SOURCE_DIR}/third_party/catch/contrib/Catch.cmake)
+endif()
+
 get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(_is_multi_config)
   set(CMAKE_CONFIGURATION_TYPES "Checked;Debug;Release;Valgrind" CACHE STRING "")
