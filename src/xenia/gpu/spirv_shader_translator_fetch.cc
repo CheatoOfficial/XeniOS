@@ -1174,6 +1174,22 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
                              : spv::NoResult;
         spv::Id size_component = size[i];
         if (instr.attributes.unnormalized_coordinates) {
+          // Convert the guest-texel coord to host texels for resolution-
+          // scaled textures, since size below is in host texels. Done before
+          // the offset add so the offset stays at 1 host texel rather than
+          // being multiplied with the coord.
+          if (is_texture_resolved != spv::NoResult &&
+              ((i == 0 && draw_resolution_scale_x_ > 1) ||
+               (i == 1 && draw_resolution_scale_y_ > 1))) {
+            float scale = (i == 0) ? float(draw_resolution_scale_x_)
+                                   : float(draw_resolution_scale_y_);
+            spv::Id scaled_coord = builder_->createNoContractionBinOp(
+                spv::OpFMul, type_float_, coordinate_ref,
+                builder_->makeFloatConstant(scale));
+            coordinate_ref = builder_->createTriOp(
+                spv::OpSelect, type_float_, is_texture_resolved, scaled_coord,
+                coordinate_ref);
+          }
           if (component_offset != spv::NoResult) {
             coordinate_ref = builder_->createNoContractionBinOp(
                 spv::OpFAdd, type_float_, coordinate_ref, component_offset);
