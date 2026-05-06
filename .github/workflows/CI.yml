@@ -51,6 +51,11 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/edge'
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Download Linux artifacts
         uses: actions/download-artifact@main
         with:
@@ -76,7 +81,27 @@ jobs:
           7z a ../xenia_edge_windows.zip * -xr!'*.pdb' -mx9 -bb3
           cd ..
 
-          # Create release
+          # Build release body: commit list since last release + compare URL
           tag=${GITHUB_SHA::7}
+          prev_tag=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          prev_sha=""
+          if [ -n "$prev_tag" ]; then
+            prev_sha=$(git rev-parse "${prev_tag}^{}" 2>/dev/null || git rev-parse "$prev_tag" 2>/dev/null || echo "")
+          fi
+          {
+            if [ -n "$prev_sha" ]; then
+              echo "### Changes"
+              echo ""
+              git log --format="- %s (\`%h\`)" --abbrev=7 "${prev_sha}..${GITHUB_SHA}" --
+              echo ""
+              echo "**Full changelog**: https://github.com/${GH_REPO}/compare/${prev_tag}...${tag}"
+            else
+              echo "### Changes"
+              echo ""
+              git log --format="- %s (\`%h\`)" --abbrev=7 -1 "${GITHUB_SHA}" --
+            fi
+          } > release_notes.md
+
+          # Create release
           gh release create $tag xenia_edge_linux.AppImage xenia_edge_windows.zip \
-            --target $GITHUB_SHA -t "xenia_edge" --generate-notes
+            --target $GITHUB_SHA -t "xenia_edge" --notes-file release_notes.md
