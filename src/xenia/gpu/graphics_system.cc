@@ -167,9 +167,6 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
               // host presentation throttling
               bool refresh_cap_enabled = cvars::guest_display_refresh_cap;
 
-              register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
-                  GetInternalDisplayResolution().second;
-
               if (refresh_cap_enabled) {
                 const uint32_t vblank_hz = GetGuestVblankRateHz();
                 const uint64_t sleep_ns = static_cast<uint64_t>(
@@ -284,15 +281,47 @@ uint32_t GraphicsSystem::ReadRegister(uint32_t addr) {
   uint32_t r = (addr & 0xFFFF) / 4;
 
   switch (r) {
-    case 0x0F00:  // RB_EDRAM_TIMING
+    case XE_GPU_REG_RB_EDRAM_TIMING:
       return 0x08100748;
-    case 0x0F01:  // RB_BC_CONTROL
+    case XE_GPU_REG_RB_BC_CONTROL:
       return 0x0000200E;
-    case 0x1951:  // interrupt status
-      return 1;   // vblank
-    case 0x1961:  // AVIVO_D1MODE_VIEWPORT_SIZE
-                  // Screen res - 1280x720
-                  // maximum [width(0x0FFF), height(0x0FFF)]
+    case XE_GPU_REG_D1MODE_V_COUNTER: {
+      // Free-running scanline counter, like Xenos drives off the pixel clock.
+      // Cycles 0..(total_lines-1) every frame, including the vertical-blank
+      // region above the 720 active lines reported by D1MODE_VIEWPORT_SIZE
+      // below. Total ~= active + 4% blanking (720p60 -> 750, 576p50 -> 625).
+      // Period is measured from the MarkVblank cadence, so V_COUNTER stays
+      // coupled to whatever vblank rate is actually in effect (50Hz, 60Hz,
+      // or uncapped ~1ms) — matching how silicon raises vblank IRQs from
+      // V_COUNTER crossings.
+      const uint32_t vblank_hz = GetGuestVblankRateHz();
+      const uint32_t total_lines = (vblank_hz == 50) ? 625u : 750u;
+      uint64_t period = vblank_period_ticks_.load(std::memory_order_acquire);
+      if (!period) {
+        // Pre-first-vblank bootstrap: assume the configured rate.
+        period = Clock::guest_tick_frequency() / vblank_hz;
+        if (!period) {
+          return 0;
+        }
+      }
+      const uint64_t last =
+          last_vblank_guest_tick_.load(std::memory_order_acquire);
+      if (!last) {
+        return 0;
+      }
+      const uint64_t now = Clock::QueryGuestTickCount();
+      uint64_t delta = (now > last) ? (now - last) : 0;
+      if (delta >= period) {
+        // Reader outran the next vblank (stall, paused, etc.); park on the
+        // last line until MarkVblank advances the anchor.
+        delta = period - 1;
+      }
+      return static_cast<uint32_t>((delta * total_lines) / period);
+    }
+    case XE_GPU_REG_D1MODE_VBLANK_VLINE_STATUS:
+      return 1;  // vblank
+    case XE_GPU_REG_D1MODE_VIEWPORT_SIZE:
+      // 1280x720, [width(0x0FFF), height(0x0FFF)].
       return 0x050002D0;
     default:
       if (!register_file()->IsValidRegister(r)) {
@@ -345,6 +374,15 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
 
 void GraphicsSystem::MarkVblank() {
   SCOPE_profile_cpu_f("gpu");
+
+  // Capture vblank cadence so D1MODE_V_COUNTER tracks the actual rate
+  // (50Hz, 60Hz, or uncapped ~1ms), not just the configured one.
+  const uint64_t now = Clock::QueryGuestTickCount();
+  const uint64_t prev =
+      last_vblank_guest_tick_.exchange(now, std::memory_order_acq_rel);
+  if (prev && now > prev) {
+    vblank_period_ticks_.store(now - prev, std::memory_order_release);
+  }
 
   // Increment vblank counter (so the game sees us making progress).
   command_processor_->increment_counter();
