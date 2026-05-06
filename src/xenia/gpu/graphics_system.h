@@ -149,6 +149,13 @@ class GraphicsSystem {
   std::atomic<bool> frame_limiter_worker_running_;
   kernel::object_ref<kernel::XHostThread> frame_limiter_worker_thread_;
 
+  // Anchors for synthesizing D1MODE_V_COUNTER. last_vblank_guest_tick_ is
+  // the guest tick at the most recent MarkVblank; vblank_period_ticks_ is
+  // the most recent measured interval between MarkVblank calls. Both are
+  // 0 before the first vblank fires.
+  std::atomic<uint64_t> last_vblank_guest_tick_{0};
+  std::atomic<uint64_t> vblank_period_ticks_{0};
+
   RegisterFile* register_file_;
   std::unique_ptr<CommandProcessor> command_processor_;
 
