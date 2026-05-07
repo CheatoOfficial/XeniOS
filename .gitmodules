@@ -144,3 +144,7 @@
 	path = third_party/SPIRV-Cross
 	url = https://github.com/KhronosGroup/SPIRV-Cross.git
 	branch = vulkan-sdk-1.4.341
+[submodule "third_party/wxWidgets"]
+	path = third_party/wxWidgets
+	url = https://github.com/wxWidgets/wxWidgets.git
+	branch = v3.3.2

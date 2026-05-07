@@ -437,7 +437,7 @@ class Logger {
   }
 };
 
-void InitializeLogging(const std::string_view app_name, bool is_game_process) {
+void InitializeLogging(const std::string_view app_name) {
   auto mem = memory::AlignedAlloc<Logger>(0x10);
   logger_ = new (mem) Logger(app_name);
 
@@ -448,10 +448,8 @@ void InitializeLogging(const std::string_view app_name, bool is_game_process) {
     logger_->AddLogSink(std::make_unique<AndroidLogSink>(app_name));
   }
 #else
-  // Only enable file logging for game processes, not the UI process
-  if (is_game_process) {
+  {
     FILE* log_file = nullptr;
-    // Use append mode for title-to-title launches to preserve log history
     const char* file_mode = cvars::log_append ? "at" : "wt";
     if (cvars::log_file.empty()) {
       // Default log file name for game process.
@@ -477,7 +475,6 @@ void InitializeLogging(const std::string_view app_name, bool is_game_process) {
       xe::filesystem::CreateParentFolder(file_path);
       log_file = xe::filesystem::OpenFile(file_path, file_mode);
     } else {
-      // User specified log file - use as-is for game process
       xe::filesystem::CreateParentFolder(cvars::log_file);
       log_file = xe::filesystem::OpenFile(cvars::log_file, file_mode);
     }

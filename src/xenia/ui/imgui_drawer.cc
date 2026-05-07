@@ -13,6 +13,7 @@
 #include <cstring>
 #include <ranges>
 
+#include "embedded_font.h"
 #include "third_party/imgui/imgui.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
@@ -35,9 +36,12 @@
 #include <fontconfig/fontconfig.h>
 #endif
 
-DEFINE_path(custom_font_path, "assets/font/Inter-VariableFont_opsz,wght.ttf",
-            "Path to custom font file. Set to empty to use system fonts.",
+DEFINE_path(custom_font_path, "",
+            "Path to custom font file (overrides the embedded UI font). "
+            "Empty uses the bundled Inter font.",
             "UI");
+UPDATE_from_path(custom_font_path, 2026, 5, 1, 0,
+                 "assets/font/Inter-VariableFont_opsz,wght.ttf");
 
 DEFINE_uint32(font_size, 13, "Allows user to set custom font size.", "UI");
 UPDATE_from_uint32(font_size, 2024, 8, 31, 20, 12);
@@ -348,28 +352,33 @@ static constexpr ImWchar font_glyph_ranges[] = {
 
 bool ImGuiDrawer::LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config,
                                  float font_size) {
-  if (cvars::custom_font_path.empty()) {
-    return false;
+  ImFont* font = nullptr;
+  if (!cvars::custom_font_path.empty()) {
+    std::filesystem::path font_path = cvars::custom_font_path;
+    if (font_path.is_relative()) {
+      font_path = xe::filesystem::GetExecutableFolder() / font_path;
+    }
+    if (std::filesystem::exists(font_path)) {
+      font = io.Fonts->AddFontFromFileTTF(xe::path_to_utf8(font_path).c_str(),
+                                          font_size, &font_config,
+                                          font_glyph_ranges);
+    }
   }
-
-  // Resolve relative paths from executable directory
-  std::filesystem::path font_path = cvars::custom_font_path;
-  if (font_path.is_relative()) {
-    font_path = xe::filesystem::GetExecutableFolder() / font_path;
+  if (!font) {
+    // Embedded buffer is const and outlives the atlas; let ImGui read it
+    // in place rather than copy + own.
+    font_config.FontDataOwnedByAtlas = false;
+    font = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(
+            xe::ui::embedded_font::Inter_VariableFont_opsz_wght_ttf_data),
+        static_cast<int>(
+            xe::ui::embedded_font::Inter_VariableFont_opsz_wght_ttf_size),
+        font_size, &font_config, font_glyph_ranges);
   }
-
-  if (!std::filesystem::exists(font_path)) {
-    return false;
-  }
-
-  const std::string font_path_str = xe::path_to_utf8(font_path);
-  ImFont* font = io.Fonts->AddFontFromFileTTF(font_path_str.c_str(), font_size,
-                                              &font_config, font_glyph_ranges);
 
   io.Fonts->Build();
-
-  if (!font->IsLoaded()) {
-    XELOGE("Failed to load custom font: {}", font_path);
+  if (!font || !font->IsLoaded()) {
+    XELOGE("Failed to load UI font");
     io.Fonts->Clear();
     return false;
   }
@@ -852,11 +861,13 @@ void ImGuiDrawer::OnMouseDown(MouseEvent& e) {
     }
   }
   if (button >= 0 && button < std::size(io.MouseDown)) {
-    if (!io.MouseDown[button]) {
-      if (!ImGui::IsAnyMouseDown()) {
+    const uint32_t mask = uint32_t(1) << button;
+    if (!(mouse_buttons_held_ & mask)) {
+      if (mouse_buttons_held_ == 0) {
         window_->CaptureMouse();
       }
-      io.MouseDown[button] = true;
+      mouse_buttons_held_ |= mask;
+      io.AddMouseButtonEvent(button, true);
     }
   }
 }
@@ -884,9 +895,11 @@ void ImGuiDrawer::OnMouseUp(MouseEvent& e) {
     }
   }
   if (button >= 0 && button < std::size(io.MouseDown)) {
-    if (io.MouseDown[button]) {
-      io.MouseDown[button] = false;
-      if (!ImGui::IsAnyMouseDown()) {
+    const uint32_t mask = uint32_t(1) << button;
+    if (mouse_buttons_held_ & mask) {
+      mouse_buttons_held_ &= ~mask;
+      io.AddMouseButtonEvent(button, false);
+      if (mouse_buttons_held_ == 0) {
         window_->ReleaseMouse();
       }
     }
@@ -896,7 +909,8 @@ void ImGuiDrawer::OnMouseUp(MouseEvent& e) {
 void ImGuiDrawer::OnMouseWheel(MouseEvent& e) {
   SwitchToPhysicalMouseAndUpdateMousePosition(e);
   auto& io = GetIO();
-  io.MouseWheel += float(e.scroll_y()) / float(MouseEvent::kScrollPerDetent);
+  io.AddMouseWheelEvent(
+      0.0f, float(e.scroll_y()) / float(MouseEvent::kScrollPerDetent));
 }
 
 void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
@@ -974,8 +988,7 @@ void ImGuiDrawer::UpdateMousePosition(float x, float y) {
   auto& io = GetIO();
   float physical_to_logical =
       float(window_->GetMediumDpi()) / float(window_->GetDpi());
-  io.MousePos.x = x * physical_to_logical;
-  io.MousePos.y = y * physical_to_logical;
+  io.AddMousePosEvent(x * physical_to_logical, y * physical_to_logical);
 }
 
 void ImGuiDrawer::SwitchToPhysicalMouseAndUpdateMousePosition(

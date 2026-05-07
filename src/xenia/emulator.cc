@@ -142,6 +142,8 @@ DEFINE_bool(allow_game_relative_writes, false,
             "General");
 
 DECLARE_string(user_language);
+DECLARE_string(gpu);
+DECLARE_string(apu);
 
 DECLARE_bool(allow_plugins);
 
@@ -413,28 +415,8 @@ X_STATUS Emulator::Setup(
     return X_STATUS_UNSUCCESSFUL;
   }
 
-  // Initialize the APU (optional for UI process).
-  if (audio_system_factory_) {
-    XELOGI("{}: Initializing Audio...", __func__);
-    audio_system_ = audio_system_factory_(processor_.get());
-    if (!audio_system_) {
-      XELOGE("{}: Cannot initalize audio_system!", __func__);
-      return X_STATUS_NOT_IMPLEMENTED;
-    }
-  }
-
-  // Initialize the GPU (optional for UI process).
-  if (graphics_system_factory_) {
-    XELOGI("{}: Initializing Graphics...", __func__);
-    graphics_system_ = graphics_system_factory_();
-    if (!graphics_system_) {
-      XELOGE("{}: Cannot initalize graphics_system!", __func__);
-      return X_STATUS_NOT_IMPLEMENTED;
-    }
-  }
-
   // Input system persists across relaunch — SDL requires init/quit on the
-  // same thread.
+  // same thread, so drivers are attached here on the emulator thread.
   if (!input_system_) {
     XELOGI("{}: Initializing HID...", __func__);
     input_system_ = std::make_unique<xe::hid::InputSystem>(display_window_);
@@ -448,7 +430,6 @@ X_STATUS Emulator::Setup(
         input_system_->AddDriver(std::move(input_drivers[i]));
       }
     }
-
     result = input_system_->Setup();
     if (result) {
       return result;
@@ -464,7 +445,7 @@ X_STATUS Emulator::Setup(
   // Bring up the virtual filesystem used by the kernel.
   file_system_ = std::make_unique<xe::vfs::VirtualFileSystem>();
 
-  patcher_ = std::make_unique<xe::patcher::Patcher>(storage_root_);
+  patcher_ = std::make_unique<xe::patcher::Patcher>(storage_root_ / "patches");
 
   XELOGI("{}: Initializing Kernel...", __func__);
   // Shared kernel state.
@@ -479,9 +460,34 @@ X_STATUS Emulator::Setup(
   plugin_loader_ = std::make_unique<xe::patcher::PluginLoader>(
       kernel_state_.get(), storage_root() / "plugins");
 
+  ExceptionHandler::Install(Emulator::ExceptionCallbackThunk, this);
+
+  return result;
+}
+
+X_STATUS Emulator::SetupSubsystems() {
+  X_STATUS result = X_STATUS_SUCCESS;
+
+  if (audio_system_factory_ && !audio_system_) {
+    XELOGI("{}: Initializing Audio...", __func__);
+    audio_system_ = audio_system_factory_(processor_.get());
+    if (!audio_system_) {
+      XELOGE("{}: Cannot initalize audio_system!", __func__);
+      return X_STATUS_NOT_IMPLEMENTED;
+    }
+  }
+
+  if (graphics_system_factory_ && !graphics_system_) {
+    XELOGI("{}: Initializing Graphics...", __func__);
+    graphics_system_ = graphics_system_factory_();
+    if (!graphics_system_) {
+      XELOGE("{}: Cannot initalize graphics_system!", __func__);
+      return X_STATUS_NOT_IMPLEMENTED;
+    }
+  }
+
   if (graphics_system_) {
     XELOGI("{}: Starting graphics_system...", __func__);
-    // Setup the core components.
     result = graphics_system_->Setup(
         processor_.get(), kernel_state_.get(),
         display_window_ ? &display_window_->app_context() : nullptr,
@@ -508,6 +514,20 @@ X_STATUS Emulator::Setup(
   ExceptionHandler::Install(Emulator::ExceptionCallbackThunk, this);
 
   return X_STATUS_SUCCESS;
+}
+
+void Emulator::ShutdownSubsystems() {
+  // Dependents first: media player holds audio_system_, presenter holds the
+  // graphics_system_ provider.
+  audio_media_player_.reset();
+  if (audio_system_) {
+    audio_system_->Shutdown();
+    audio_system_.reset();
+  }
+  if (graphics_system_) {
+    graphics_system_->Shutdown();
+    graphics_system_.reset();
+  }
 }
 
 X_STATUS Emulator::TerminateTitle() {
@@ -1043,10 +1063,14 @@ X_STATUS Emulator::ProcessContentPackageHeader(
 
 X_STATUS Emulator::InstallContentPackage(
     const std::filesystem::path& path, ContentInstallEntry& installation_info) {
-  installation_info.installation_state_ = InstallState::preparing;
+  {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
+    installation_info.installation_state_ = InstallState::preparing;
+  }
 
   // Check if installation was cancelled before starting
   if (installation_info.cancelled_.load()) {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
     installation_info.installation_state_ = InstallState::failed;
     installation_info.installation_error_message_ = "Installation cancelled";
     installation_info.installation_result_ = X_ERROR_CANCELLED;
@@ -1057,6 +1081,7 @@ X_STATUS Emulator::InstallContentPackage(
       vfs::XContentContainerDevice::CreateContentDevice("", path);
 
   if (!device || !device->Initialize()) {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
     installation_info.installation_state_ = InstallState::failed;
     installation_info.installation_error_message_ =
         "Device initialization failed!";
@@ -1074,6 +1099,7 @@ X_STATUS Emulator::InstallContentPackage(
   if (!std::filesystem::exists(content_root())) {
     const std::error_code ec = xe::filesystem::CreateFolder(content_root());
     if (ec) {
+      std::lock_guard<std::mutex> lock(*installation_info.mutex_);
       installation_info.installation_state_ = InstallState::failed;
       installation_info.installation_error_message_ = ec.message();
       installation_info.installation_result_ = X_STATUS_ACCESS_DENIED;
@@ -1082,7 +1108,8 @@ X_STATUS Emulator::InstallContentPackage(
   }
 
   const auto disk_space = std::filesystem::space(content_root());
-  if (disk_space.available < installation_info.content_size_ * 1.1f) {
+  if (disk_space.available < installation_info.content_size_.load() * 1.1f) {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
     installation_info.installation_state_ = InstallState::failed;
     installation_info.installation_error_message_ = "Insufficient disk space!";
     installation_info.installation_result_ = X_STATUS_DISK_FULL;
@@ -1096,6 +1123,7 @@ X_STATUS Emulator::InstallContentPackage(
     std::error_code error_code;
     std::filesystem::create_directories(installation_path, error_code);
     if (error_code) {
+      std::lock_guard<std::mutex> lock(*installation_info.mutex_);
       installation_info.installation_state_ = InstallState::failed;
       installation_info.installation_error_message_ =
           "Cannot Create Content Directory!";
@@ -1104,8 +1132,11 @@ X_STATUS Emulator::InstallContentPackage(
     }
   }
 
-  installation_info.content_size_ = device->data_size();
-  installation_info.installation_state_ = InstallState::installing;
+  installation_info.content_size_.store(device->data_size());
+  {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
+    installation_info.installation_state_ = InstallState::installing;
+  }
 
   vfs::VirtualFileSystem::ExtractContentHeader(device.get(), header_path);
 
@@ -1129,6 +1160,7 @@ X_STATUS Emulator::InstallContentPackage(
     }
 
     // Set state AFTER cleanup is done, so dialog doesn't pop up prematurely
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
     installation_info.installation_result_ = X_ERROR_CANCELLED;
     installation_info.installation_error_message_ =
         cleanup_failed ? "Installation cancelled (cleanup failed)"
@@ -1154,12 +1186,17 @@ X_STATUS Emulator::InstallContentPackage(
   }
 
   if (error_code != X_ERROR_SUCCESS) {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
     installation_info.installation_state_ = InstallState::failed;
     return error_code;
   }
 
-  installation_info.installation_state_ = InstallState::installed;
-  installation_info.currently_installed_size_ = installation_info.content_size_;
+  installation_info.currently_installed_size_.store(
+      installation_info.content_size_.load());
+  {
+    std::lock_guard<std::mutex> lock(*installation_info.mutex_);
+    installation_info.installation_state_ = InstallState::installed;
+  }
   kernel_state()->BroadcastNotification(kXNotificationLiveContentInstalled, 0);
 
   if (installation_info.content_type_ == XContentType::kProfile) {
@@ -1173,9 +1210,13 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
   const auto& path = entry.path_;
   const auto& extract_dir = entry.data_installation_path_;
 
-  entry.installation_state_ = InstallState::preparing;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_state_ = InstallState::preparing;
+  }
 
   if (entry.cancelled_.load()) {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = X_ERROR_CANCELLED;
     entry.installation_error_message_ = "Cancelled";
     entry.installation_state_ = InstallState::failed;
@@ -1186,13 +1227,14 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
       std::make_unique<vfs::DiscZarchiveDevice>("", path);
   if (!device->Initialize()) {
     XELOGE("Failed to initialize device");
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = X_STATUS_INVALID_PARAMETER;
     entry.installation_error_message_ = "Failed to initialize device";
     entry.installation_state_ = InstallState::failed;
     return X_STATUS_INVALID_PARAMETER;
   }
 
-  entry.content_size_ = 0;
+  entry.content_size_.store(0);
   auto* root = device->ResolvePath("/");
   if (root) {
     std::function<void(vfs::Entry*)> calc_size = [&](vfs::Entry* e) {
@@ -1201,7 +1243,7 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
           calc_size(child.get());
         }
       } else {
-        entry.content_size_ += e->size();
+        entry.content_size_.fetch_add(e->size());
       }
     };
     calc_size(root);
@@ -1214,6 +1256,7 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
     std::error_code error_code;
     std::filesystem::create_directories(extract_dir, error_code);
     if (error_code) {
+      std::lock_guard<std::mutex> lock(*entry.mutex_);
       entry.installation_result_ = error_code.value();
       entry.installation_error_message_ =
           "Failed to create extraction directory";
@@ -1222,7 +1265,10 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
     }
   }
 
-  entry.installation_state_ = InstallState::installing;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_state_ = InstallState::installing;
+  }
 
   X_STATUS result = vfs::VirtualFileSystem::ExtractContentFiles(
       device.get(), extract_dir, entry.currently_installed_size_,
@@ -1232,6 +1278,7 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
     // Clean up partial extraction
     std::error_code ec;
     std::filesystem::remove_all(extract_dir, ec);
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = X_ERROR_CANCELLED;
     entry.installation_error_message_ = "Cancelled";
     entry.installation_state_ = InstallState::failed;
@@ -1239,14 +1286,18 @@ X_STATUS Emulator::ExtractZarchivePackage(ZarchiveEntry& entry) {
   }
 
   if (result != X_STATUS_SUCCESS) {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = result;
     entry.installation_error_message_ = "Extraction failed";
     entry.installation_state_ = InstallState::failed;
     return result;
   }
 
-  entry.installation_result_ = X_STATUS_SUCCESS;
-  entry.installation_state_ = InstallState::installed;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_result_ = X_STATUS_SUCCESS;
+    entry.installation_state_ = InstallState::installed;
+  }
   return X_STATUS_SUCCESS;
 }
 
@@ -1254,9 +1305,13 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
   const auto& inputDirectory = entry.path_;
   const auto& outputFile = entry.data_installation_path_;
 
-  entry.installation_state_ = InstallState::preparing;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_state_ = InstallState::preparing;
+  }
 
   if (entry.cancelled_.load()) {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = X_ERROR_CANCELLED;
     entry.installation_error_message_ = "Cancelled";
     entry.installation_state_ = InstallState::failed;
@@ -1271,6 +1326,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
     if (!stfs_device || !stfs_device->Initialize()) {
       XELOGE("CreateZarchivePackage: Failed to mount STFS content at '{}'",
              xe::path_to_utf8(entry.stfs_path_));
+      std::lock_guard<std::mutex> lock(*entry.mutex_);
       entry.installation_result_ = X_STATUS_UNSUCCESSFUL;
       entry.installation_error_message_ = "Failed to mount STFS content";
       entry.installation_state_ = InstallState::failed;
@@ -1281,7 +1337,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
   }
 
   std::error_code ec;
-  entry.content_size_ = 0;
+  entry.content_size_.store(0);
 
   if (stfs_device) {
     auto* root = stfs_device->ResolvePath("/");
@@ -1292,7 +1348,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
             calc_size(child.get());
           }
         } else {
-          entry.content_size_ += e->size();
+          entry.content_size_.fetch_add(e->size());
         }
       };
       calc_size(root);
@@ -1301,13 +1357,17 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
     for (auto const& dirEntry :
          std::filesystem::recursive_directory_iterator(inputDirectory, ec)) {
       if (dirEntry.is_regular_file() && dirEntry.path() != outputFile) {
-        entry.content_size_ += std::filesystem::file_size(dirEntry.path(), ec);
+        entry.content_size_.fetch_add(
+            std::filesystem::file_size(dirEntry.path(), ec));
       }
     }
   }
 
-  entry.installation_state_ = InstallState::installing;
-  entry.currently_installed_size_ = 0;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_state_ = InstallState::installing;
+  }
+  entry.currently_installed_size_.store(0);
 
   std::vector<uint8_t> buffer;
   buffer.resize(64 * 1024);
@@ -1335,6 +1395,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
       &packContext);
 
   if (packContext.hasError) {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_result_ = X_STATUS_UNSUCCESSFUL;
     entry.installation_error_message_ = "Failed to create output file";
     entry.installation_state_ = InstallState::failed;
@@ -1342,9 +1403,10 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
   }
 
   auto cleanup_and_fail = [&](const std::string& message, X_STATUS status) {
+    std::filesystem::remove(outputFile, ec);
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
     entry.installation_error_message_ = message;
     entry.installation_result_ = status;
-    std::filesystem::remove(outputFile, ec);
     entry.installation_state_ = InstallState::failed;
     return status;
   };
@@ -1413,7 +1475,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
           zWriter.AppendData(buffer.data(), bytes_read);
           offset += bytes_read;
           remaining -= bytes_read;
-          entry.currently_installed_size_ += bytes_read;
+          entry.currently_installed_size_.fetch_add(bytes_read);
         }
         vfs_file->Destroy();
       }
@@ -1491,7 +1553,7 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
           uint64_t bytes_read = fread(buffer.data(), 1, buffer.size(), file);
 
           total_bytes_read += bytes_read;
-          entry.currently_installed_size_ += bytes_read;
+          entry.currently_installed_size_.fetch_add(bytes_read);
 
           zWriter.AppendData(buffer.data(), bytes_read);
         }
@@ -1507,8 +1569,11 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
 
   zWriter.Finalize();
 
-  entry.installation_result_ = X_STATUS_SUCCESS;
-  entry.installation_state_ = InstallState::installed;
+  {
+    std::lock_guard<std::mutex> lock(*entry.mutex_);
+    entry.installation_result_ = X_STATUS_SUCCESS;
+    entry.installation_state_ = InstallState::installed;
+  }
   return X_STATUS_SUCCESS;
 }
 
@@ -1699,6 +1764,7 @@ void Emulator::RelaunchTitle(const std::string& host_path,
   Shutdown();
   Setup(nullptr, nullptr, require_cpu_backend_, nullptr, nullptr, nullptr);
   MountStandardDrives();
+  SetupSubsystems();
 
   // Populate launch data on the fresh xam module.
   auto xam_new =
@@ -1724,6 +1790,31 @@ void Emulator::RelaunchTitle(const std::string& host_path,
 
   relaunching_ = false;
   XELOGI("RelaunchTitle: relaunch complete");
+}
+
+void Emulator::ResetTitle() {
+  XELOGI("ResetTitle: stopping title and resetting kernel");
+
+  relaunching_ = true;
+
+  kernel_state_->ShutdownDispatchThread();
+
+  {
+    auto threads =
+        kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
+            kernel::XObject::Type::Thread);
+    XELOGI("ResetTitle: terminating {} threads", threads.size());
+    for (auto thread : threads) {
+      thread->Terminate(0);
+    }
+  }
+
+  Shutdown();
+  Setup(nullptr, nullptr, require_cpu_backend_, nullptr, nullptr, nullptr);
+  MountStandardDrives();
+
+  relaunching_ = false;
+  XELOGI("ResetTitle: complete");
 }
 
 void Emulator::MountStandardDrives() {
@@ -1944,10 +2035,10 @@ const std::filesystem::path Emulator::GetNewDiscPath(
       }
 
       file_picker->set_extensions({
-          {"Supported Files", "*.iso;*.xex;*.xcp;*.*"},
+          {"Supported Files", "*;*.iso;*.xex;*.xcp"},
           {"Disc Image (*.iso)", "*.iso"},
           {"Xbox Executable (*.xex)", "*.xex"},
-          {"All Files (*.*)", "*.*"},
+          {"All Files", "*"},
       });
 
       if (file_picker->Show(display_window_)) {

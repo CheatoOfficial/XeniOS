@@ -10,6 +10,7 @@
 #ifndef XENIA_VFS_VIRTUAL_FILE_SYSTEM_H_
 #define XENIA_VFS_VIRTUAL_FILE_SYSTEM_H_
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -53,10 +54,11 @@ class VirtualFileSystem {
 
   static X_STATUS ExtractContentFile(Entry* entry,
                                      std::filesystem::path base_path,
-                                     uint64_t& progress,
+                                     std::atomic<uint64_t>& progress,
                                      bool extract_to_root = false);
   static X_STATUS ExtractContentFiles(
-      Device* device, std::filesystem::path base_path, uint64_t& progress,
+      Device* device, std::filesystem::path base_path,
+      std::atomic<uint64_t>& progress,
       std::function<bool()> should_cancel = nullptr);
   static void ExtractContentHeader(Device* device,
                                    std::filesystem::path base_path);

@@ -606,7 +606,6 @@ def main():
     args = vars(parser.parse_args(command_args))
     command_name = args["subcommand"]
 
-    qt_available = setup_qt(args.get("target_arch"))
     try:
         command = commands[command_name]
         return_code = command.execute(args, pass_args, os.getcwd())
@@ -923,18 +922,24 @@ def git_submodule_update():
 
 
 def fetch_data_repos():
-    """Fetches data repositories (game-patches, optimized-settings) into .data_repos/.
+    """Fetches data repositories (game-patches) into build/data_repos/.
 
     Removes and re-clones all data repos fresh each time. They are not submodules
     to avoid constant submodule updates in the main repo.
     """
     print("- fetching data repositories...")
 
-    data_dir = ".data_repos"
+    def remove_readonly(func, path, _):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+
+    # Clean up the legacy in-source location if it's still around.
+    legacy_dir = ".data_repos"
+    if os.path.exists(legacy_dir):
+        rmtree(legacy_dir, onerror=remove_readonly)
+
+    data_dir = os.path.join("build", "data_repos")
     if os.path.exists(data_dir):
-        def remove_readonly(func, path, _):
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
         rmtree(data_dir, onerror=remove_readonly)
     os.makedirs(data_dir)
 
@@ -943,27 +948,46 @@ def fetch_data_repos():
         {
             "name": "game-patches",
             "url": "https://github.com/xenia-canary/game-patches.git",
-            "branch": "main"
+            "branch": "main",
         },
         {
-            "name": "optimized-settings",
-            "url": "https://github.com/xenia-manager/optimized-settings.git",
-            "branch": "main"
-        }
+            "name": "xenia-manager-database",
+            "url": "https://github.com/xenia-manager/database.git",
+            "branch": "main",
+            "sparse_paths": [
+                "data/game-compatibility/canary.json",
+                "data/game-compatibility/stable.json",
+            ],
+        },
     ]
 
     # Clone each repo fresh
     for repo in data_repos:
         repo_path = os.path.join(data_dir, repo["name"])
         print(f"  - cloning {repo['name']}...")
-        shell_call([
-            "git",
-            "clone",
-            "--depth=1",
-            "--branch", repo["branch"],
-            repo["url"],
-            repo_path
-        ])
+        sparse_paths = repo.get("sparse_paths")
+        if sparse_paths:
+            shell_call([
+                "git", "clone",
+                "--depth=1",
+                "--branch", repo["branch"],
+                "--filter=blob:none",
+                "--sparse",
+                "--no-checkout",
+                repo["url"],
+                repo_path,
+            ])
+            shell_call(["git", "-C", repo_path, "sparse-checkout", "init", "--no-cone"])
+            shell_call(["git", "-C", repo_path, "sparse-checkout", "set", *sparse_paths])
+            shell_call(["git", "-C", repo_path, "checkout"])
+        else:
+            shell_call([
+                "git", "clone",
+                "--depth=1",
+                "--branch", repo["branch"],
+                repo["url"],
+                repo_path,
+            ])
 
 
 def get_cc(cc=None):
@@ -1364,7 +1388,7 @@ class FetchDataCommand(Command):
         super(FetchDataCommand, self).__init__(
             subparsers,
             name="fetchdata",
-            help_short="Fetches data repositories (game-patches, optimized-settings).",
+            help_short="Fetches data repositories (game-patches).",
             *args, **kwargs)
 
     def execute(self, args, pass_args, cwd):
@@ -1477,7 +1501,7 @@ class BaseBuildCommand(Command):
             "--cc", choices=["clang", "gcc", "msc"], default=None,
             help="Compiler toolchain.")
         self.parser.add_argument(
-            "--config", choices=["checked", "debug", "release", "valgrind"], default="debug",
+            "--config", choices=["checked", "debug", "release"], default="debug",
             type=str.lower, help="Chooses the build configuration.")
         self.parser.add_argument(
             "--target", action="append", default=[],
@@ -2278,14 +2302,7 @@ class TestCommand(BaseBuildCommand):
                     return 1
             test_executable_sets.append((arch, executables))
 
-        # Prepare environment with Qt bin directory in PATH if available
         test_env = dict(os.environ)
-        qt_dir = os.environ.get("QT_DIR")
-        if qt_dir and sys.platform == "win32":
-            qt_bin = os.path.join(qt_dir, "bin")
-            if os.path.exists(qt_bin):
-                test_env["PATH"] = f"{qt_bin}{os.pathsep}{test_env['PATH']}"
-                print(f"- Qt bin directory added to PATH: {qt_bin}\n")
 
         # Run tests.
         any_failed = False
@@ -3036,7 +3053,7 @@ class DevenvCommand(Command):
                  "On Windows, non-native values enable cross-compilation into a "
                  "separate build-vs-<arch>/ tree.")
         self.parser.add_argument(
-            "--config", choices=["checked", "debug", "release", "valgrind"],
+            "--config", choices=["checked", "debug", "release"],
             default="debug", type=str.lower,
             help="Build configuration the IDE solution is pinned to. The VS "
                  "dropdown is restricted to this single config; re-run xb "

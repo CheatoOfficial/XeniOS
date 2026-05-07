@@ -40,8 +40,6 @@ std::filesystem::path to_path(const std::u16string_view source) {
 namespace filesystem {
 
 std::filesystem::path GetExecutablePath() {
-  // Don't use _get_wpgmptr in Qt apps - CRT may not be initialized properly
-  // Use GetModuleFileName directly instead
   wchar_t buffer[MAX_PATH];
   DWORD len = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
   return len > 0 ? std::filesystem::path(buffer) : std::filesystem::path();

@@ -316,7 +316,7 @@ else()  # _xe_use_host_shader_cc: x64→ARM64 cross-compile, use native build's 
 # Native x64 build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
 set(_xe_host_shader_cc_dir "${CMAKE_SOURCE_DIR}/build/host_tools")
 set(_xe_host_shader_cc_any "")
-foreach(_cfg Release Checked Debug Valgrind)
+foreach(_cfg Release Checked Debug)
   if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
     set(_xe_host_shader_cc_any "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
     break()
@@ -335,8 +335,7 @@ set_target_properties(xenia-shader-cc PROPERTIES
   IMPORTED_LOCATION "${_xe_host_shader_cc_any}"
   IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_dir}/Release/xenia-shader-cc.exe"
   IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_dir}/Checked/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_dir}/Debug/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_VALGRIND "${_xe_host_shader_cc_dir}/Valgrind/xenia-shader-cc.exe")
+  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_dir}/Debug/xenia-shader-cc.exe")
 
 endif()
 
@@ -1024,3 +1023,124 @@ if(WIN32)
 endif()
 target_link_libraries(libavformat PRIVATE libavutil libavcodec)
 ffmpeg_common(libavformat)
+
+# ==============================================================================
+# wxWidgets
+# ==============================================================================
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+    # Build from vendored source — matches what we ship on Windows/macOS, and
+    # on Linux gives us a known-good 3.3 (system 3.2 has GTK3/Wayland issues).
+    # Strip the directory-level /W0 (or -w) so wxWidgets's own /W3 doesn't
+    # spam D9025 "overriding /W0 with /W3", but keep everything else (e.g.
+    # /utf-8) so wxWidgets's UTF-8 source files compile cleanly under
+    # non-Latin code pages (CP932 → C4819 in languageinfo.cpp otherwise).
+    get_directory_property(_xe_save_thirdparty_options COMPILE_OPTIONS)
+    set(_xe_wx_options "${_xe_save_thirdparty_options}")
+    list(FILTER _xe_wx_options EXCLUDE REGEX "^(/W[0-4]|-w)$")
+    set_property(DIRECTORY PROPERTY COMPILE_OPTIONS "${_xe_wx_options}")
+    if(MSVC)
+      string(REGEX REPLACE " */W[0-4]" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+      string(REGEX REPLACE " */W[0-4]" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    endif()
+    if(UNIX)
+      set(wxUSE_ZLIB sys CACHE STRING "" FORCE)
+      set(wxUSE_EXPAT sys CACHE STRING "" FORCE)
+      # Resolve in this scope so the imported targets propagate to wx (its
+      # nested find_package calls would otherwise create them in wx's
+      # subdirectory scope, out of reach of the fixup below).
+      find_package(OpenGL REQUIRED)
+      find_package(ZLIB REQUIRED)
+      find_package(EXPAT REQUIRED)
+      # Tag bare IMPORTED_LOCATION imports with Release before wx is added —
+      # wx references these targets during its own configure pass, where
+      # CMAKE_MAP_IMPORTED_CONFIG_DEBUG="Release;NOCONFIG" can't resolve a
+      # target that has no IMPORTED_CONFIGURATIONS.
+      get_property(_xe_thirdparty_imports DIRECTORY PROPERTY IMPORTED_TARGETS)
+      foreach(_xe_imp ${_xe_thirdparty_imports})
+        get_target_property(_xe_imp_loc ${_xe_imp} IMPORTED_LOCATION)
+        if(_xe_imp_loc AND NOT _xe_imp_loc MATCHES "-NOTFOUND$")
+          get_target_property(_xe_imp_confs ${_xe_imp} IMPORTED_CONFIGURATIONS)
+          if(NOT _xe_imp_confs OR _xe_imp_confs MATCHES "-NOTFOUND$")
+            set_target_properties(${_xe_imp} PROPERTIES
+              IMPORTED_CONFIGURATIONS "Release"
+              IMPORTED_LOCATION_RELEASE "${_xe_imp_loc}"
+            )
+          endif()
+        endif()
+      endforeach()
+    endif()
+    set(wxBUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_INSTALL OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_DEMOS OFF CACHE BOOL "" FORCE)
+    set(wxBUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+    set(wxUSE_WEBVIEW OFF CACHE BOOL "" FORCE)
+    set(wxUSE_MEDIACTRL OFF CACHE BOOL "" FORCE)
+    set(wxUSE_RICHTEXT OFF CACHE BOOL "" FORCE)
+    set(wxUSE_RIBBON OFF CACHE BOOL "" FORCE)
+    set(wxUSE_PROPGRID OFF CACHE BOOL "" FORCE)
+    set(wxUSE_AUI ON CACHE BOOL "" FORCE)
+    set(wxUSE_STC OFF CACHE BOOL "" FORCE)
+    set(wxUSE_HTML OFF CACHE BOOL "" FORCE)
+    set(wxUSE_XRC OFF CACHE BOOL "" FORCE)
+    set(wxUSE_PRINTING_ARCHITECTURE OFF CACHE BOOL "" FORCE)
+    set(wxUSE_HELP OFF CACHE BOOL "" FORCE)
+    set(wxUSE_MS_HTML_HELP OFF CACHE BOOL "" FORCE)
+    set(wxUSE_WXHTML_HELP OFF CACHE BOOL "" FORCE)
+    set(wxUSE_DEBUGREPORT OFF CACHE BOOL "" FORCE)
+    set(wxUSE_SOCKETS OFF CACHE BOOL "" FORCE)
+    set(wxUSE_PROTOCOL OFF CACHE BOOL "" FORCE)
+    set(wxUSE_URL OFF CACHE BOOL "" FORCE)
+    set(wxUSE_FS_INET OFF CACHE BOOL "" FORCE)
+    set(wxUSE_FS_ARCHIVE OFF CACHE BOOL "" FORCE)
+    set(wxUSE_FS_ZIP OFF CACHE BOOL "" FORCE)
+    set(wxUSE_SOUND OFF CACHE BOOL "" FORCE)
+    set(wxUSE_LIBTIFF OFF CACHE BOOL "" FORCE)
+    set(wxUSE_LIBJPEG OFF CACHE BOOL "" FORCE)
+    set(wxUSE_LIBWEBP OFF CACHE BOOL "" FORCE)
+    set(wxUSE_NANOSVG OFF CACHE BOOL "" FORCE)
+    add_subdirectory(wxWidgets)
+    if(WIN32)
+      # Generic file dialog (not built by default on MSW) — used as a Wine
+      # fallback in file_picker_wx.cc since the native Win32 dialog stalls
+      # under Wine for arbitrary input.
+      target_sources(wxcore PRIVATE
+          ${CMAKE_CURRENT_SOURCE_DIR}/wxWidgets/src/generic/filedlgg.cpp)
+    endif()
+    # Walk the wx subdirectory tree to apply per-target fixups: rewrite the
+    # MSVC runtime so wx links the same CRT we pin (LNK2038 otherwise — wx's
+    # functions.cmake sets MSVC_RUNTIME_LIBRARY per target, shadowing our
+    # CMake-wide setting), and append -w on clang/gcc to suppress the
+    # -Wall/-Wundef/-Wunused-parameter wx adds via target_compile_options
+    # (the equivalent DEFAULT_WARNINGS opt-out is a function arg, not a cache
+    # variable, so we can't reach it from here without patching wx).
+    set(_xe_wx_dirs "${CMAKE_CURRENT_SOURCE_DIR}/wxWidgets")
+    set(_xe_wx_targets "")
+    while(_xe_wx_dirs)
+      list(POP_FRONT _xe_wx_dirs _xe_wx_dir)
+      get_property(_xe_dir_targets DIRECTORY "${_xe_wx_dir}"
+                   PROPERTY BUILDSYSTEM_TARGETS)
+      list(APPEND _xe_wx_targets ${_xe_dir_targets})
+      get_property(_xe_subdirs DIRECTORY "${_xe_wx_dir}"
+                   PROPERTY SUBDIRECTORIES)
+      list(APPEND _xe_wx_dirs ${_xe_subdirs})
+    endwhile()
+    foreach(_xe_t ${_xe_wx_targets})
+      get_target_property(_xe_t_type ${_xe_t} TYPE)
+      if(_xe_t_type STREQUAL "INTERFACE_LIBRARY"
+          OR _xe_t_type STREQUAL "UTILITY")
+        continue()
+      endif()
+      if(MSVC)
+        set_target_properties(${_xe_t} PROPERTIES
+          MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+      else()
+        target_compile_options(${_xe_t} PRIVATE -w)
+      endif()
+    endforeach()
+    set_property(DIRECTORY PROPERTY COMPILE_OPTIONS
+        "${_xe_save_thirdparty_options}")
+    add_library(xe-wxWidgets INTERFACE)
+    target_link_libraries(xe-wxWidgets INTERFACE wx::aui wx::adv wx::core wx::base)
+endif()

@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
+
+# Suppress macOS ranlib warnings for empty object files. wxWidgets's vendored
+# libpng compiles Intel/MIPS/PowerPC sources that are empty on ARM64.
+if(APPLE)
+  set(CMAKE_C_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
+  set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
+  set(CMAKE_OBJCXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
+endif()
+
 if(APPLE)
   project(xenia LANGUAGES C CXX OBJCXX)
   set(CMAKE_OBJCXX_STANDARD 20)
@@ -12,6 +21,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+# We don't use C++20 modules; skip the per-target dyndep scan Ninja runs by
+# default for CXX_STANDARD>=20.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Detect target architecture.
 # - VS generator: CMAKE_GENERATOR_PLATFORM (from -A flag) takes priority.
@@ -59,9 +71,9 @@ option(XENIA_BUILD_TESTS "Build test suites" OFF)
 option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
 option(XENIA_ENABLE_LTO "Enable link-time optimization in Release (slow link)" ON)
 
-# Toggle profiler
+# Toggle profiler. UI is Debug-only — shutdown dump spams the log otherwise.
 add_compile_definitions(XE_OPTION_PROFILING=1)
-add_compile_definitions(XE_OPTION_PROFILING_UI=1)
+add_compile_definitions($<$<CONFIG:Debug>:XE_OPTION_PROFILING_UI=1>)
 
 if(XENIA_BUILD_TESTS)
   enable_testing()
@@ -70,18 +82,16 @@ endif()
 
 get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(_is_multi_config)
-  set(CMAKE_CONFIGURATION_TYPES "Checked;Debug;Release;Valgrind" CACHE STRING "")
+  set(CMAKE_CONFIGURATION_TYPES "Checked;Debug;Release" CACHE STRING "")
 endif()
 
-# Checked and Valgrind inherit Debug's flags as a starting point; the
-# platform blocks below layer sanitizers and config-specific tweaks on top.
-foreach(_cfg CHECKED VALGRIND)
-  set(CMAKE_C_FLAGS_${_cfg} "${CMAKE_C_FLAGS_DEBUG}" CACHE STRING "" FORCE)
-  set(CMAKE_CXX_FLAGS_${_cfg} "${CMAKE_CXX_FLAGS_DEBUG}" CACHE STRING "" FORCE)
-  set(CMAKE_EXE_LINKER_FLAGS_${_cfg} "${CMAKE_EXE_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
-  set(CMAKE_SHARED_LINKER_FLAGS_${_cfg} "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
-  set(CMAKE_STATIC_LINKER_FLAGS_${_cfg} "${CMAKE_STATIC_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
-endforeach()
+# Checked inherits Debug's flags as a starting point; the platform blocks
+# below layer sanitizers on top.
+set(CMAKE_C_FLAGS_CHECKED "${CMAKE_C_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_CHECKED "${CMAKE_CXX_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_CHECKED "${CMAKE_EXE_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_CHECKED "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+set(CMAKE_STATIC_LINKER_FLAGS_CHECKED "${CMAKE_STATIC_LINKER_FLAGS_DEBUG}" CACHE STRING "" FORCE)
 
 if(WIN32)
   set(XE_PLATFORM_NAME "Windows")
@@ -99,17 +109,34 @@ file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/scratch")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# Debug/Checked/Valgrind are compiled against the release CRT (/MD) so
-# we can link Qt's release-only prebuilt DLLs — Qt6*d.dll drags in /MDd
-# and mixing two CRTs in one process corrupts std::string/QString
-# allocations. Force any imported library (Qt6::*, etc.) to resolve to
-# its Release variant in those configs too.
+# Debug/Checked compile against the release CRT (/MD) since the product
+# ships against release-only system DLLs and prebuilts. Force any imported
+# library to resolve to its Release variant in those configs too.
 # NOCONFIG is the fallback for imported targets that ship without a
 # configuration suffix (FindOpenGL on Linux creates OpenGL::OpenGL this
 # way — without NOCONFIG in the map we fail to resolve it in Debug et al).
 set(CMAKE_MAP_IMPORTED_CONFIG_DEBUG "Release;NOCONFIG" CACHE STRING "" FORCE)
 set(CMAKE_MAP_IMPORTED_CONFIG_CHECKED "Release;NOCONFIG" CACHE STRING "" FORCE)
-set(CMAKE_MAP_IMPORTED_CONFIG_VALGRIND "Release;NOCONFIG" CACHE STRING "" FORCE)
+
+# find_package targets like Python3::Interpreter (and various Find*-module
+# imports — FindOpenGL, FindXKB, etc.) ship with only a bare IMPORTED_LOCATION
+# and no IMPORTED_CONFIGURATIONS. Multi-config generators (VS, Ninja
+# Multi-Config) can't reliably resolve those through MAP_IMPORTED_CONFIG_*'s
+# NOCONFIG fallback and fail with "IMPORTED_LOCATION not set ... configuration
+# Debug". Re-tag every such target as Release so the existing MAP resolves.
+get_property(_imported_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
+foreach(_tgt IN LISTS _imported_targets)
+  get_target_property(_loc ${_tgt} IMPORTED_LOCATION)
+  if(_loc AND NOT _loc MATCHES "-NOTFOUND$")
+    get_target_property(_confs ${_tgt} IMPORTED_CONFIGURATIONS)
+    if(NOT _confs OR _confs MATCHES "-NOTFOUND$")
+      set_target_properties(${_tgt} PROPERTIES
+        IMPORTED_CONFIGURATIONS "Release"
+        IMPORTED_LOCATION_RELEASE "${_loc}"
+      )
+    endif()
+  endif()
+endforeach()
 
 include(cmake/XeniaHelpers.cmake)
 
@@ -137,51 +164,6 @@ add_compile_definitions(
 add_compile_definitions($<$<NOT:$<CONFIG:Checked>>:IMGUI_USE_STB_SPRINTF>)
 
 # ==============================================================================
-# Qt6 (optional, gated on the QT_DIR env var)
-# ==============================================================================
-
-set(XE_QT_DIR "$ENV{QT_DIR}")
-if(XE_QT_DIR)
-  list(PREPEND CMAKE_PREFIX_PATH "${XE_QT_DIR}")
-  set(QT_NO_PRIVATE_MODULE_WARNING ON)
-  find_package(Qt6 COMPONENTS Core Gui GuiPrivate Widgets QUIET)
-  if(Qt6_FOUND)
-    message(STATUS "Qt6: using QT_DIR=${XE_QT_DIR} (version ${Qt6_VERSION})")
-    # CMAKE_INCLUDE_CURRENT_DIR is intentionally off. Setting it globally
-    # would add each target's source dir to its include path, and
-    # src/xenia/base contains files named assert.h / string.h / memory.h /
-    # mutex.h that collide with C/C++ standard headers. Targets that need
-    # their source dir on the path (xenia-ui, so AUTOMOC-generated moc
-    # files can find Q_OBJECT headers) add it via target_include_directories.
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      add_link_options("-Wl,-rpath,${XE_QT_DIR}/lib")
-    endif()
-    set(XE_HAS_QT TRUE)
-
-    # Qt6 pulls in third-party find-modules (FindOpenGL, FindXKB, …) that
-    # create UNKNOWN IMPORTED targets with only a bare IMPORTED_LOCATION (no
-    # config suffix).  Ninja Multi-Config can't map NOCONFIG locations for
-    # custom configs even with CMAKE_MAP_IMPORTED_CONFIG_*.  Re-tag every
-    # such target as Release so the existing MAP resolves them correctly.
-    get_property(_imported_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
-    foreach(_tgt IN LISTS _imported_targets)
-      get_target_property(_loc ${_tgt} IMPORTED_LOCATION)
-      if(_loc AND NOT _loc MATCHES "-NOTFOUND$")
-        get_target_property(_confs ${_tgt} IMPORTED_CONFIGURATIONS)
-        if(NOT _confs OR _confs MATCHES "-NOTFOUND$")
-          set_target_properties(${_tgt} PROPERTIES
-            IMPORTED_CONFIGURATIONS "Release"
-            IMPORTED_LOCATION_RELEASE "${_loc}"
-          )
-        endif()
-      endif()
-    endforeach()
-  else()
-    message(WARNING "QT_DIR=${XE_QT_DIR} is set but find_package(Qt6) failed; building without Qt")
-  endif()
-endif()
-
-# ==============================================================================
 # Platform-specific global settings
 # ==============================================================================
 
@@ -193,9 +175,20 @@ if(MSVC)
       "MultiThreaded$<$<CONFIG:Checked>:Debug>DLL"
       CACHE STRING "" FORCE)
 
+  # Patch the cached CMAKE_C/CXX_FLAGS_DEBUG so /MDd → /MD for Debug builds.
+  # Required for vendored wxWidgets: its CMakeLists calls cmake_minimum_required
+  # (VERSION 3.5), leaving CMP0091 at OLD/WARN inside its scope. Under OLD,
+  # MSVC_RUNTIME_LIBRARY is ignored and wxWidgets uses CMAKE_CXX_FLAGS_DEBUG —
+  # so removing /MDd here is what makes wx's Debug objects link /MD, matching
+  # our /MD-pinned root and avoiding LNK2038 RuntimeLibrary mismatches.
+  string(REPLACE "/MDd" "/MD" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+  string(REPLACE "/MDd" "/MD" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+  set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+  set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}" CACHE STRING "" FORCE)
+
   add_compile_options(
     /utf-8             # non-Latin-codepage-safe source parsing
-    /Zc:__cplusplus    # correct __cplusplus macro value (Qt6 needs this)
+    /Zc:__cplusplus    # correct __cplusplus macro value
     /Zc:preprocessor   # conformant preprocessor
     /wd4201            # nameless struct/unions are ok
     /MP
@@ -234,7 +227,7 @@ if(MSVC)
 
   # Debug: /RTC1 requires the debug CRT, so strip it — we're on /MD. Pin
   # _ITERATOR_DEBUG_LEVEL=0 so our STL object layouts match release-CRT
-  # prebuilts (Qt, etc.) and we don't hit LNK2038.
+  # prebuilts and we don't hit LNK2038.
   string(REPLACE "/RTC1" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
   string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
   add_compile_definitions(
@@ -415,33 +408,13 @@ else()
         "<CMAKE_RANLIB> -no_warning_for_no_symbols -c <TARGET>")
   endif()
 
-  # Valgrind: -Og for debuggability without the pathological debug perf
-  # cost, no sanitizers (they fight valgrind), no inlining so stack
-  # traces reflect source structure.
-  string(APPEND CMAKE_C_FLAGS_VALGRIND " -Og -g3 -fno-omit-frame-pointer -fno-inline-functions")
-  string(APPEND CMAKE_CXX_FLAGS_VALGRIND " -Og -g3 -fno-omit-frame-pointer -fno-inline-functions")
-  add_compile_definitions(
-    $<$<CONFIG:Valgrind>:DEBUG>
-    $<$<CONFIG:Valgrind>:NDEBUG>
-    $<$<CONFIG:Valgrind>:_NO_DEBUG_HEAP=1>
-  )
 endif()
 
 # ==============================================================================
 # Subdirectories
 # ==============================================================================
 
-# third_party is added before Qt is made directory-global so its libs
-# don't pull Qt into their compile lines.
 add_subdirectory(third_party)
-
-# Qt headers reach into src/xenia/kernel, src/xenia/gpu, etc. via
-# transitive includes of app/emulator_window.h and ui/*_qt.h — not just
-# the targets with Q_OBJECT. Linking Qt at directory scope keeps all
-# xenia src libs consistent.
-if(XE_HAS_QT)
-  link_libraries(Qt6::Core Qt6::Gui Qt6::Widgets)
-endif()
 
 add_subdirectory(src/xenia)
 

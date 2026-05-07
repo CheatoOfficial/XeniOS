@@ -78,7 +78,7 @@ bool TraceViewer::OnInitialize() {
     file_picker->set_title("Select Trace File");
     file_picker->set_extensions({
         {"Supported Files", "*.xtr"},
-        {"All Files (*.*)", "*.*"},
+        {"All Files", "*"},
     });
     if (file_picker->Show()) {
       auto selected_files = file_picker->selected_files();
