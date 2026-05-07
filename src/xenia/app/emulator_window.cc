@@ -2659,17 +2659,18 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   if (cvars::fullscreen && !window_->IsFullscreen()) {
     SetFullscreen(true);
   }
-  SetupGraphicsSystemPresenterPainting();
   {
     auto res = xe::gpu::GraphicsSystem::GetInternalDisplayResolution();
     window_->SetDesiredLogicalSize(res.first, res.second);
-    // Render must be the visible center pane while we measure.
+    // Render must be the visible center pane before swap chain creation —
+    // otherwise the surface has zero area and vkCreateSwapchainKHR fails.
     target_pending_launch_ = true;
     ApplyContentVisibility();
     if (auto* wx = dynamic_cast<ui::WxWindow*>(window_.get())) {
       wx->EnsureInitialRenderSurfaceSize();
     }
   }
+  SetupGraphicsSystemPresenterPainting();
   auto result = emulator_->LaunchPath(abs_path);
 
   disable_hotkeys_ = false;
