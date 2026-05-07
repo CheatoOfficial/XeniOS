@@ -15,6 +15,7 @@
 #include <cstring>
 
 #include <wx/button.h>
+#include <wx/dcclient.h>
 #include <wx/dcmemory.h>
 #include <wx/dialog.h>
 #include <wx/filedlg.h>
@@ -230,26 +231,67 @@ GameListPanel::GameListPanel(wxWindow* parent, EmulatorWindow* emulator_window)
   list_ = new wxDataViewListCtrl(this, wxID_ANY, wxDefaultPosition,
                                  wxDefaultSize, wxDV_ROW_LINES | wxDV_SINGLE);
   list_->SetMinSize(wxSize(0, 0));
-  list_->SetRowHeight(kIconSize + 8);
-  list_->AppendBitmapColumn("Status", 0, wxDATAVIEW_CELL_INERT, 80,
-                            wxALIGN_CENTER, 0);
+
+  // Derive sizes from the list's actual font so the layout grows with the
+  // user's Windows text-scaling setting instead of clipping at fixed pixels.
+  wxClientDC dc(this);
+  dc.SetFont(list_->GetFont());
+  const int char_h = dc.GetCharHeight();
+  const int char_w = dc.GetCharWidth();
+  auto col_w = [&](const wxString& header, const wxString& sample) {
+    int hw = dc.GetTextExtent(header).GetWidth();
+    int sw = dc.GetTextExtent(sample).GetWidth();
+    // Leave room for the sort-indicator arrow and a small padding gap.
+    return std::max(hw, sw) + char_w * 4;
+  };
+  // Title is rendered with x-large markup (~1.5x base font); row must fit
+  // either that or the fixed 64px icon.
+  list_->SetRowHeight(
+      std::max(kIconSize + 8, static_cast<int>(char_h * 1.6f) + 8));
+  list_->AppendBitmapColumn("Status", 0, wxDATAVIEW_CELL_INERT,
+                            col_w("Status", "Status"), wxALIGN_CENTER, 0);
   list_->AppendBitmapColumn("Icon", 1, wxDATAVIEW_CELL_INERT, kIconSize + 8,
                             wxALIGN_CENTER, 0);
-  auto* title_col =
-      list_->AppendTextColumn("Title", wxDATAVIEW_CELL_INERT, 540, wxALIGN_LEFT,
-                              wxDATAVIEW_COL_RESIZABLE);
+  // Title is the only flexible column; the rest are pinned at their measured
+  // widths so a wider window doesn't stretch them.
+  auto* title_col = list_->AppendTextColumn(
+      "Title", wxDATAVIEW_CELL_INERT, static_cast<int>(char_w * 30 * 1.5f),
+      wxALIGN_LEFT, 0);
   if (title_col) {
     if (auto* tr =
             dynamic_cast<wxDataViewTextRenderer*>(title_col->GetRenderer())) {
       tr->EnableMarkup(true);
     }
   }
-  list_->AppendTextColumn("Achievements", wxDATAVIEW_CELL_INERT, 140,
-                          wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
-  list_->AppendTextColumn("Gamerscore", wxDATAVIEW_CELL_INERT, 140,
-                          wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
-  list_->AppendTextColumn("Last Played", wxDATAVIEW_CELL_INERT, 140,
-                          wxALIGN_RIGHT, wxDATAVIEW_COL_RESIZABLE);
+  list_->AppendTextColumn("Achievements", wxDATAVIEW_CELL_INERT,
+                          col_w("Achievements", "9999/9999"), wxALIGN_LEFT, 0);
+  list_->AppendTextColumn("Gamerscore", wxDATAVIEW_CELL_INERT,
+                          col_w("Gamerscore", "99999/999999 G"), wxALIGN_LEFT,
+                          0);
+  // Trim the standard padding a bit — Last Played is right-aligned, so the
+  // header's sort arrow doesn't fight with the value text.
+  const int last_played_width =
+      col_w("Last Played", "0000-00-00 00:00") - char_w * 2;
+  list_->AppendTextColumn("Last Played", wxDATAVIEW_CELL_INERT,
+                          last_played_width, wxALIGN_RIGHT, 0);
+
+  // wxDataViewCtrl always auto-expands the *last* column to fill leftover
+  // width regardless of flags. Pre-empt that by stretching the Title column
+  // ourselves so the last column has no slack to absorb.
+  const int min_title_width = char_w * 20;
+  list_->Bind(wxEVT_SIZE, [this, last_played_width,
+                           min_title_width](wxSizeEvent& event) {
+    event.Skip();
+    if (list_->GetColumnCount() < 6) return;
+    list_->GetColumn(5)->SetWidth(last_played_width);
+    int fixed = 0;
+    for (unsigned i = 0; i < list_->GetColumnCount(); ++i) {
+      if (i == 2) continue;
+      fixed += list_->GetColumn(i)->GetWidth();
+    }
+    int avail = list_->GetClientSize().GetWidth();
+    list_->GetColumn(2)->SetWidth(std::max(avail - fixed, min_title_width));
+  });
 
   search_->Bind(wxEVT_TEXT, &GameListPanel::OnSearch, this);
   search_->Bind(wxEVT_SEARCH_CANCEL,
