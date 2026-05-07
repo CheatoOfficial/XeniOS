@@ -824,7 +824,11 @@ void EmulatorApp::EmulatorThread() {
       app_context().RequestDeferredQuit();
       return;
     }
-    app_context().CallInUIThread(
+    // Must run before LaunchPath: creates the window surface and swap chain.
+    // If the game thread starts presenting before this lands on the UI thread,
+    // the Vulkan swap chain misses the early frames and the startup cover is
+    // never dropped (it's released on WM_PAINT once HasSurface() is true).
+    app_context().CallInUIThreadSynchronous(
         [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 
     // TODO(has207): Add archive format check like in RunTitle?
