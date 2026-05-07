@@ -1262,9 +1262,20 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
   swapchain_create_info.clipped = VK_TRUE;
   swapchain_create_info.oldSwapchain = old_swapchain;
   VkSwapchainKHR swapchain;
-  if (dfn.vkCreateSwapchainKHR(device, &swapchain_create_info, nullptr,
-                               &swapchain) != VK_SUCCESS) {
-    XELOGE("VulkanPresenter: Failed to create a swapchain");
+  VkResult swapchain_create_result = dfn.vkCreateSwapchainKHR(
+      device, &swapchain_create_info, nullptr, &swapchain);
+  if (swapchain_create_result != VK_SUCCESS) {
+    XELOGE(
+        "VulkanPresenter: Failed to create a swapchain (VkResult {}, "
+        "extent {}x{}, format {}, color space {}, present mode {}, "
+        "minImageCount {})",
+        int32_t(swapchain_create_result),
+        swapchain_create_info.imageExtent.width,
+        swapchain_create_info.imageExtent.height,
+        uint32_t(swapchain_create_info.imageFormat),
+        uint32_t(swapchain_create_info.imageColorSpace),
+        uint32_t(swapchain_create_info.presentMode),
+        swapchain_create_info.minImageCount);
     return VK_NULL_HANDLE;
   }
   XELOGI(
