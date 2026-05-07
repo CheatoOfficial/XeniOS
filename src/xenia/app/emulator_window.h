@@ -251,6 +251,7 @@ class EmulatorWindow {
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
   // Creation may fail, in this case immediate drawer UI must not be drawn.
   std::unique_ptr<ui::ImmediateDrawer> immediate_drawer_;
+  ui::Presenter* presenter_painting_ = nullptr;
 
   bool emulator_initialized_ = false;
   std::atomic<bool> disable_hotkeys_ = false;

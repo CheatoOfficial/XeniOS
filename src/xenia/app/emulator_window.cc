@@ -356,13 +356,18 @@ ui::Presenter* EmulatorWindow::GetGraphicsSystemPresenter() const {
 }
 
 void EmulatorWindow::SetupGraphicsSystemPresenterPainting() {
-  ShutdownGraphicsSystemPresenterPainting();
-
   if (!window_) {
     return;
   }
 
   ui::Presenter* presenter = GetGraphicsSystemPresenter();
+  // Skip if already wired — rebuilding mid-stream wedges Vulkan's swap chain.
+  if (presenter && presenter_painting_ == presenter) {
+    return;
+  }
+
+  ShutdownGraphicsSystemPresenterPainting();
+
   if (!presenter) {
     return;
   }
@@ -370,6 +375,7 @@ void EmulatorWindow::SetupGraphicsSystemPresenterPainting() {
   ApplyDisplayConfigForCvars();
 
   window_->SetPresenter(presenter);
+  presenter_painting_ = presenter;
 
   immediate_drawer_ =
       emulator_->graphics_system()->provider()->CreateImmediateDrawer();
@@ -389,6 +395,7 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
   if (window_) {
     window_->SetPresenter(nullptr);
   }
+  presenter_painting_ = nullptr;
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
@@ -420,9 +427,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
   if (game_list_panel_ && !emulator_->is_title_open()) {
     game_list_panel_->Reload();
   }
-  // When the user can see that the emulator isn't initializing anymore (the
-  // menu isn't disabled), enter fullscreen if requested.
-  if (cvars::fullscreen) {
+  // Skip when the game list is up — fullscreen is for the render surface.
+  if (cvars::fullscreen &&
+      (target_pending_launch_ || emulator_->is_title_open())) {
     SetFullscreen(true);
   }
 
@@ -2878,6 +2885,10 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   if (auto status = emulator_->SetupSubsystems(); XFAILED(status)) {
     XELOGE("Failed to setup subsystems: {:08X}", status);
     return status;
+  }
+  // Toggle before swap chain creation so it picks up the right size.
+  if (cvars::fullscreen && !window_->IsFullscreen()) {
+    SetFullscreen(true);
   }
   SetupGraphicsSystemPresenterPainting();
   {
