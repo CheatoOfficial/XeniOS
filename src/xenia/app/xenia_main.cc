@@ -824,10 +824,7 @@ void EmulatorApp::EmulatorThread() {
       app_context().RequestDeferredQuit();
       return;
     }
-    // Must run before LaunchPath: creates the window surface and swap chain.
-    // If the game thread starts presenting before this lands on the UI thread,
-    // the Vulkan swap chain misses the early frames and the startup cover is
-    // never dropped (it's released on WM_PAINT once HasSurface() is true).
+    // Surface/swap chain must exist before the game thread starts presenting.
     app_context().CallInUIThreadSynchronous(
         [this]() { emulator_window_->SetupGraphicsSystemPresenterPainting(); });
 

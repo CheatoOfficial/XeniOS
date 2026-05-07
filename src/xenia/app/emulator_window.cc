@@ -355,9 +355,7 @@ void EmulatorWindow::SetupGraphicsSystemPresenterPainting() {
   }
 
   ui::Presenter* presenter = GetGraphicsSystemPresenter();
-  // Idempotent: on_launch posts this redundantly after a direct command-line
-  // launch, and tearing down the Vulkan swap chain while the game thread is
-  // already presenting leaves it stuck.
+  // Skip if already wired — rebuilding mid-stream wedges Vulkan's swap chain.
   if (presenter && presenter_painting_ == presenter) {
     return;
   }
@@ -423,9 +421,9 @@ void EmulatorWindow::OnEmulatorInitialized() {
   if (game_list_panel_ && !emulator_->is_title_open()) {
     game_list_panel_->Reload();
   }
-  // When the user can see that the emulator isn't initializing anymore (the
-  // menu isn't disabled), enter fullscreen if requested.
-  if (cvars::fullscreen) {
+  // Skip when the game list is up — fullscreen is for the render surface.
+  if (cvars::fullscreen &&
+      (target_pending_launch_ || emulator_->is_title_open())) {
     SetFullscreen(true);
   }
 
@@ -2656,6 +2654,10 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   if (auto status = emulator_->SetupSubsystems(); XFAILED(status)) {
     XELOGE("Failed to setup subsystems: {:08X}", status);
     return status;
+  }
+  // Toggle before swap chain creation so it picks up the right size.
+  if (cvars::fullscreen && !window_->IsFullscreen()) {
+    SetFullscreen(true);
   }
   SetupGraphicsSystemPresenterPainting();
   {
