@@ -350,13 +350,20 @@ ui::Presenter* EmulatorWindow::GetGraphicsSystemPresenter() const {
 }
 
 void EmulatorWindow::SetupGraphicsSystemPresenterPainting() {
-  ShutdownGraphicsSystemPresenterPainting();
-
   if (!window_) {
     return;
   }
 
   ui::Presenter* presenter = GetGraphicsSystemPresenter();
+  // Idempotent: on_launch posts this redundantly after a direct command-line
+  // launch, and tearing down the Vulkan swap chain while the game thread is
+  // already presenting leaves it stuck.
+  if (presenter && presenter_painting_ == presenter) {
+    return;
+  }
+
+  ShutdownGraphicsSystemPresenterPainting();
+
   if (!presenter) {
     return;
   }
@@ -364,6 +371,7 @@ void EmulatorWindow::SetupGraphicsSystemPresenterPainting() {
   ApplyDisplayConfigForCvars();
 
   window_->SetPresenter(presenter);
+  presenter_painting_ = presenter;
 
   immediate_drawer_ =
       emulator_->graphics_system()->provider()->CreateImmediateDrawer();
@@ -383,6 +391,7 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
   if (window_) {
     window_->SetPresenter(nullptr);
   }
+  presenter_painting_ = nullptr;
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
