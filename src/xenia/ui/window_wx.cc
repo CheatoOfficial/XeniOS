@@ -252,11 +252,6 @@ bool WxWindow::OpenImpl() {
                       wxBORDER_NONE | wxWANTS_CHARS);
   render_panel->set_owner(this);
   render_panel_ = render_panel;
-  {
-    HWND hwnd = static_cast<HWND>(render_panel_->GetHandle());
-    DWORD class_style = GetClassLong(hwnd, GCL_STYLE);
-    SetClassLong(hwnd, GCL_STYLE, class_style | CS_OWNDC);
-  }
 #else
   render_panel_ = new wxWindow(frame_, wxID_ANY, wxDefaultPosition,
                                wxDefaultSize, wxBORDER_NONE | wxWANTS_CHARS);
