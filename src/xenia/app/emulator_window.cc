@@ -138,6 +138,7 @@
 #include <wx/aboutdlg.h>
 #include <wx/aui/auibar.h>
 #include <wx/aui/framemanager.h>
+#include <wx/config.h>
 #include <wx/dcmemory.h>
 #include <wx/graphics.h>
 #include <wx/menu.h>
@@ -627,10 +628,14 @@ void EmulatorWindow::OnEmulatorInitialized() {
     }
 #endif  // XE_PLATFORM_APPLE
 #endif
-    // Exit directly - don't go through window close path which would
-    // spawn a UI process if return_to_ui is set
     xe::FlushLog();
-    std::exit(0);
+    std::thread([]() {
+      std::this_thread::sleep_for(std::chrono::seconds(5));
+      XELOGW("UI loop drain exceeded watchdog timeout, forcing exit");
+      xe::FlushLog();
+      std::_Exit(0);
+    }).detach();
+    app_context_.RequestDeferredQuit();
   });
 
   // Register callback for disc swap to update title bar
@@ -798,6 +803,13 @@ bool EmulatorWindow::Initialize() {
 
   // FIXME: This code is really messy.
   {
+    if (auto* config = wxConfigBase::Get()) {
+      bool persisted = true;
+      if (config->Read("/ui/show_toolbar", &persisted)) {
+        show_toolbar_ = persisted;
+      }
+    }
+
     auto main_menu = MenuItem::Create(MenuItem::Type::kNormal);
 
     auto file_menu = MenuItem::Create(MenuItem::Type::kPopup, "&File");
@@ -833,6 +845,9 @@ bool EmulatorWindow::Initialize() {
     // actually compiled in.
     auto config_menu =
         MenuItem::Create(MenuItem::Type::kPopup, "&Configuration");
+    config_menu->AddChild(MenuItem::Create(MenuItem::Type::kString, "&Main", "",
+                                           [this]() { ShowQuickSettings(); }));
+    config_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
     if (cvar::ConfigVars) {
       std::set<std::string> categories;
       for (const auto& [name, var] : *cvar::ConfigVars) {
@@ -849,6 +864,17 @@ bool EmulatorWindow::Initialize() {
     }
     config_menu_ = config_menu.get();
     main_menu->AddChild(std::move(config_menu));
+
+    // View menu — toggles for chrome the user can hide.
+    auto view_menu = MenuItem::Create(MenuItem::Type::kPopup, "&View");
+    {
+      auto show_toolbar_item = MenuItem::CreateCheck(
+          "Show &Toolbar", show_toolbar_,
+          [this](bool checked) { SetToolbarVisible(checked); });
+      view_show_toolbar_item_ = show_toolbar_item.get();
+      view_menu->AddChild(std::move(show_toolbar_item));
+    }
+    main_menu->AddChild(std::move(view_menu));
 
     // Tools menu.
     auto tools_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Tools");
@@ -954,7 +980,8 @@ bool EmulatorWindow::Initialize() {
                                 .CaptionVisible(false)
                                 .Gripper(false)
                                 .CloseButton(false)
-                                .DockFixed());
+                                .DockFixed()
+                                .Show(show_toolbar_));
       frame->Bind(
           wxEVT_TOOL,
           [this](wxCommandEvent&) {
@@ -974,17 +1001,7 @@ bool EmulatorWindow::Initialize() {
             if (emulator_->is_title_open()) {
               ToggleContextMenu(false);
             } else {
-              auto* wx_window = dynamic_cast<ui::WxWindow*>(window_.get());
-              int rc;
-              {
-                QuickSettingsDialog dlg(
-                    wx_window ? wx_window->frame() : nullptr, this);
-                rc = dlg.ShowModal();
-              }
-              if (rc == QuickSettingsDialog::kReturnAdvancedRequested) {
-                config::ReloadConfig();
-                ToggleConfigDialog();
-              }
+              ShowQuickSettings();
             }
           },
           kToolIdSettings);
@@ -1494,7 +1511,6 @@ void EmulatorWindow::StopTitleAndReturnToList() {
     if (auto cb = emulator_->on_launch_new_title()) {
       cb(/*host_path=*/{}, /*launch_module=*/{}, /*launch_flags=*/0,
          /*launch_data=*/{});
-      // The callback std::exit()s on success.
     }
     return;
   }
@@ -1543,12 +1559,20 @@ void EmulatorWindow::ApplyContentVisibility() {
   auto& list_info = aui->GetPane(game_list_panel_);
   if (render_info.IsOk()) render_info.Show(show_render);
   if (list_info.IsOk()) list_info.Show(show_list);
-  // Hide the toolbar in fullscreen so only the render surface is visible.
+  // Hide the toolbar in fullscreen so only the render surface is visible;
+  // outside fullscreen, honor the user's View > Show Toolbar preference.
+  wxWindow* toolbar_window =
+      wx_toolbar_state_ ? wx_toolbar_state_->toolbar : nullptr;
   for (size_t i = 0; i < aui->GetAllPanes().GetCount(); ++i) {
     auto& pane = aui->GetAllPanes().Item(i);
-    if (pane.window != render_pane && pane.window != game_list_panel_) {
-      pane.Show(!fullscreen);
+    if (pane.window == render_pane || pane.window == game_list_panel_) {
+      continue;
     }
+    bool visible = !fullscreen;
+    if (pane.window == toolbar_window) {
+      visible = visible && show_toolbar_;
+    }
+    pane.Show(visible);
   }
   aui->Update();
   // AUI's pane.Show() doesn't always hide the underlying wxWindow.
@@ -1585,6 +1609,55 @@ void EmulatorWindow::ApplyContentVisibility() {
   // launches.
   if (config_menu_) config_menu_->SetEnabled(!title_open);
   if (tools_menu_) tools_menu_->SetEnabled(!title_open);
+}
+
+void EmulatorWindow::ShowQuickSettings() {
+  auto* wx_window = dynamic_cast<ui::WxWindow*>(window_.get());
+  int rc;
+  {
+    QuickSettingsDialog dlg(wx_window ? wx_window->frame() : nullptr, this);
+    rc = dlg.ShowModal();
+  }
+  if (rc == QuickSettingsDialog::kReturnAdvancedRequested) {
+    config::ReloadConfig();
+    ToggleConfigDialog();
+  }
+}
+
+void EmulatorWindow::SetToolbarVisible(bool visible) {
+  show_toolbar_ = visible;
+  if (auto* config = wxConfigBase::Get()) {
+    config->Write("/ui/show_toolbar", visible);
+    config->Flush();
+  }
+  if (view_show_toolbar_item_) {
+    view_show_toolbar_item_->SetChecked(visible);
+  }
+
+  // Shrink/grow the frame by the toolbar height so the render surface keeps
+  // its size — otherwise the swap chain letterboxes in the freed band.
+  auto* wx_window = dynamic_cast<ui::WxWindow*>(window_.get());
+  wxFrame* frame = wx_window ? wx_window->frame() : nullptr;
+  wxWindow* render_panel = wx_window ? wx_window->render_panel() : nullptr;
+  const bool can_resize_frame = frame && render_panel &&
+                                render_panel->IsShown() &&
+                                !frame->IsMaximized() && !frame->IsFullScreen();
+  wxSize preserved_render_size =
+      can_resize_frame ? render_panel->GetClientSize() : wxSize(-1, -1);
+
+  ApplyContentVisibility();
+
+  if (can_resize_frame) {
+    wxSize client_size = frame->GetClientSize();
+    wxSize render_size_now = render_panel->GetClientSize();
+    int target_w =
+        preserved_render_size.x + (client_size.x - render_size_now.x);
+    int target_h =
+        preserved_render_size.y + (client_size.y - render_size_now.y);
+    if (target_w != client_size.x || target_h != client_size.y) {
+      frame->SetClientSize(target_w, target_h);
+    }
+  }
 }
 
 void EmulatorWindow::InstallContent() {
@@ -2834,7 +2907,6 @@ xe::X_STATUS EmulatorWindow::RunTitle(
     if (cb) {
       cb(host_path, /*launch_module=*/{}, /*launch_flags=*/0,
          /*launch_data=*/{});
-      // cb calls std::exit() on success.
     }
     return X_STATUS_UNSUCCESSFUL;
 #endif
