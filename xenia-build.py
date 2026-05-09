@@ -1306,6 +1306,7 @@ def discover_commands(subparsers):
         "lint": LintCommand(subparsers),
         "format": FormatCommand(subparsers),
         "tidy": TidyCommand(subparsers),
+        "i18n": I18nCommand(subparsers),
         }
     return commands
 
