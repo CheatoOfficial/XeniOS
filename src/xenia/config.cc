@@ -55,9 +55,15 @@ std::filesystem::path GetBundledDataPath(const std::string& subdirectory) {
 }
 
 bool sortCvar(cvar::IConfigVar* a, cvar::IConfigVar* b) {
-  if (a->category() < b->category()) return true;
-  if (a->category() > b->category()) return false;
-  if (a->name() < b->name()) return true;
+  if (a->category() < b->category()) {
+    return true;
+  }
+  if (a->category() > b->category()) {
+    return false;
+  }
+  if (a->name() < b->name()) {
+    return true;
+  }
   return false;
 }
 
@@ -460,9 +466,15 @@ void SaveConfig() {
     }
   }
   std::sort(vars.begin(), vars.end(), [](auto a, auto b) {
-    if (a->category() < b->category()) return true;
-    if (a->category() > b->category()) return false;
-    if (a->name() < b->name()) return true;
+    if (a->category() < b->category()) {
+      return true;
+    }
+    if (a->category() > b->category()) {
+      return false;
+    }
+    if (a->name() < b->name()) {
+      return true;
+    }
     return false;
   });
 
