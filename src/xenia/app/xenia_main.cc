@@ -279,7 +279,9 @@ class EmulatorApp final : public xe::ui::WindowedApp {
 
       auto is_always_on = [&](std::string_view n) {
         for (auto a : kAlwaysOn) {
-          if (n == a) return true;
+          if (n == a) {
+            return true;
+          }
         }
         return false;
       };

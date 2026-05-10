@@ -1018,8 +1018,12 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     }
     WaitStarted();
     std::unique_lock lock(state_mutex_);
-    if (state_ != State::kSuspended) return false;
-    if (suspend_count_ == 0) return false;
+    if (state_ != State::kSuspended) {
+      return false;
+    }
+    if (suspend_count_ == 0) {
+      return false;
+    }
     if (out_previous_suspend_count) {
       *out_previous_suspend_count = suspend_count_;
     }

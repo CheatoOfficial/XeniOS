@@ -309,8 +309,9 @@ std::string ConfigVar<T>::config_value() const {
 }
 template <class T>
 std::string ConfigVar<T>::commandline_value() const {
-  if (this->commandline_value_)
+  if (this->commandline_value_) {
     return this->ToString(*this->commandline_value_);
+  }
   return config_value();
 }
 template <class T>
@@ -334,7 +335,9 @@ void ConfigVar<T>::SetGameConfigValue(T val) {
 }
 template <class T>
 void ConfigVar<T>::ClearGameConfigValue() {
-  if (!game_config_value_) return;
+  if (!game_config_value_) {
+    return;
+  }
   game_config_value_.reset();
   UpdateValue();
 }

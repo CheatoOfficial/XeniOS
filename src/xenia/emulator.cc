@@ -288,13 +288,22 @@ X_STATUS Emulator::Setup(
 
   // Store parameters for reuse across Shutdown/Setup cycles.
   // Only overwrite if non-null so re-calls after Shutdown keep prior values.
-  if (display_window) display_window_ = display_window;
-  if (imgui_drawer) imgui_drawer_ = imgui_drawer;
+  if (display_window) {
+    display_window_ = display_window;
+  }
+  if (imgui_drawer) {
+    imgui_drawer_ = imgui_drawer;
+  }
   require_cpu_backend_ = require_cpu_backend;
-  if (audio_system_factory) audio_system_factory_ = audio_system_factory;
-  if (graphics_system_factory)
+  if (audio_system_factory) {
+    audio_system_factory_ = audio_system_factory;
+  }
+  if (graphics_system_factory) {
     graphics_system_factory_ = graphics_system_factory;
-  if (input_driver_factory) input_driver_factory_ = input_driver_factory;
+  }
+  if (input_driver_factory) {
+    input_driver_factory_ = input_driver_factory;
+  }
 
   // Initialize clock.
   // 360 uses a 50MHz clock.
@@ -1470,7 +1479,9 @@ X_STATUS Emulator::CreateZarchivePackage(ZarchiveEntry& entry) {
           size_t bytes_read = 0;
           vfs_file->ReadSync(std::span<uint8_t>(buffer.data(), buffer.size()),
                              offset, &bytes_read);
-          if (bytes_read == 0) break;
+          if (bytes_read == 0) {
+            break;
+          }
 
           zWriter.AppendData(buffer.data(), bytes_read);
           offset += bytes_read;

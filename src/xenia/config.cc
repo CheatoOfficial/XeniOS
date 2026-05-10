@@ -117,7 +117,9 @@ void MigrateLegacyCvars(const toml::table& config) {
   }
 
   for (const auto& [category_name, category_table] : config) {
-    if (!category_table.is_table()) continue;
+    if (!category_table.is_table()) {
+      continue;
+    }
 
     for (const auto& [key, value] : *category_table.as_table()) {
       std::string var_name = std::string(key);
