@@ -382,7 +382,9 @@ class TestRunner {
         auto p = memory_->TranslateVirtual(address);
         const char* c = bytes_str.c_str();
         while (*c) {
-          while (*c == ' ') ++c;
+          while (*c == ' ') {
+            ++c;
+          }
           if (!*c) {
             break;
           }
@@ -431,7 +433,9 @@ class TestRunner {
         StringBuffer expecteds;
         StringBuffer actuals;
         while (*c) {
-          while (*c == ' ') ++c;
+          while (*c == ' ') {
+            ++c;
+          }
           if (!*c) {
             break;
           }
@@ -743,7 +747,9 @@ bool RunTests(const std::vector<std::string>& test_names) {
   // instance per thread (avoids shm name collisions between concurrent
   // children).
   unsigned int num_cores = std::thread::hardware_concurrency();
-  if (num_cores == 0) num_cores = 4;
+  if (num_cores == 0) {
+    num_cores = 4;
+  }
   num_cores = std::max(1u, num_cores * 3 / 4);
 
   fprintf(stderr, "Running tests in parallel using %u workers\n", num_cores);
@@ -785,7 +791,9 @@ bool RunTests(const std::vector<std::string>& test_names) {
 
     while (true) {
       size_t idx = test_index.fetch_add(1);
-      if (idx >= all_tests.size()) break;
+      if (idx >= all_tests.size()) {
+        break;
+      }
 
       auto& [test_suite, test_case] = all_tests[idx];
       int local_failed = 0;

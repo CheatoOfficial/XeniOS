@@ -961,8 +961,9 @@ struct COMPARE_EQ_I8
           [](X64Emitter& e, const Reg8& src1, int32_t constant) {
             if (constant == 0) {
               e.test(src1, src1);
-            } else
+            } else {
               e.cmp(src1, constant);
+            }
           });
     }
     CompareEqDoSete(e, i.instr, i.dest);
@@ -980,8 +981,9 @@ struct COMPARE_EQ_I16
           [](X64Emitter& e, const Reg16& src1, int32_t constant) {
             if (constant == 0) {
               e.test(src1, src1);
-            } else
+            } else {
               e.cmp(src1, constant);
+            }
           });
     }
     CompareEqDoSete(e, i.instr, i.dest);
@@ -999,8 +1001,9 @@ struct COMPARE_EQ_I32
           [](X64Emitter& e, const Reg32& src1, int32_t constant) {
             if (constant == 0) {
               e.test(src1, src1);
-            } else
+            } else {
               e.cmp(src1, constant);
+            }
           });
     }
     CompareEqDoSete(e, i.instr, i.dest);
@@ -1018,8 +1021,9 @@ struct COMPARE_EQ_I64
           [](X64Emitter& e, const Reg64& src1, int32_t constant) {
             if (constant == 0) {
               e.test(src1, src1);
-            } else
+            } else {
               e.cmp(src1, constant);
+            }
           });
     }
     CompareEqDoSete(e, i.instr, i.dest);

@@ -501,7 +501,9 @@ class PosixCondition<Semaphore> final : public PosixConditionBase {
     if (count_ + release_count > maximum_count_) {
       return false;
     }
-    if (out_previous_count) *out_previous_count = count_;
+    if (out_previous_count) {
+      *out_previous_count = count_;
+    }
     count_ += release_count;
     cond_.notify_all();
     return true;
@@ -970,8 +972,12 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     }
     // Map SCHED_FIFO range (1..32) to nice range (19..-19), fifo 16 → nice 0.
     int nice_val = 16 - new_priority;
-    if (nice_val < -20) nice_val = -20;
-    if (nice_val > 19) nice_val = 19;
+    if (nice_val < -20) {
+      nice_val = -20;
+    }
+    if (nice_val > 19) {
+      nice_val = 19;
+    }
     if (tid_ > 0) {
       setpriority(PRIO_PROCESS, tid_, nice_val);
     }
@@ -1230,9 +1236,13 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable,
   if (posix_wait_handle == nullptr) {
     return WaitResult::kFailed;
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   auto result = posix_wait_handle->condition().Wait(timeout);
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -1248,11 +1258,15 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal,
       posix_wait_handle_to_wait_on == nullptr) {
     return WaitResult::kFailed;
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   if (posix_wait_handle_to_signal->condition().Signal()) {
     result = posix_wait_handle_to_wait_on->condition().Wait(timeout);
   }
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -1269,10 +1283,14 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[],
     }
     conditions.push_back(&handle->condition());
   }
-  if (is_alertable) alertable_state_ = true;
+  if (is_alertable) {
+    alertable_state_ = true;
+  }
   auto result = PosixConditionBase::WaitMultiple(std::move(conditions),
                                                  wait_all, timeout);
-  if (is_alertable) alertable_state_ = false;
+  if (is_alertable) {
+    alertable_state_ = false;
+  }
   return result;
 }
 
@@ -1516,7 +1534,9 @@ std::unique_ptr<Thread> Thread::Create(CreationParameters params,
   install_signal_handler(SignalType::kThreadTerminate);
 #endif
   auto thread = std::make_unique<PosixThread>();
-  if (!thread->Initialize(params, std::move(start_routine))) return nullptr;
+  if (!thread->Initialize(params, std::move(start_routine))) {
+    return nullptr;
+  }
   assert_not_null(thread);
   return thread;
 }
