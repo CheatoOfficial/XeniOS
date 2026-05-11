@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu disk)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (varsayılan)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " - %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " - %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Yapılandırma Geçersiz Kılmaları"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Ayrılmış İş Parçacığı:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Varsayılan"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Danimarka"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Oyuncu Kartı Düzenleyici"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Oyuncu Kartı Düzenleyici — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuveyt"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kırgızistan"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Etiket"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Yama #%zu"
 msgid "Patches"
 msgstr "Yamalar"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Yol"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Listeden kaldır"
 msgid "Remove this override"
 msgstr "Bu geçersiz kılmayı kaldır"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Diski Yeniden Adlandır"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Etiketi Yeniden Adlandır"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Yeniden Adlandır…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Etiketi Yeniden Adlandır…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "tarafından %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "oyun %08X"
+
+msgid "Scan for Games"
+msgstr "Oyunları Tara"
+
+msgid "Scanning: %s"
+msgstr "Taranıyor: %s"
+
+msgid "Loading titles..."
+msgstr "Oyunlar yükleniyor…"
+
+msgid "Cancelled."
+msgstr "İptal edildi."
+
+msgid "(unknown title)"
+msgstr "(bilinmeyen oyun)"
+
+msgid "Type: %s"
+msgstr "Tür: %s"
+
+msgid "Publisher: %s"
+msgstr "Yayıncı: %s"
+
+msgid "Module: %s"
+msgstr "Modül: %s"
+
+msgid "Version: %s"
+msgstr "Sürüm: %s"
+
+msgid "Status: Installed"
+msgstr "Durum: Kuruldu"
+
+msgid "(Installed) "
+msgstr "(Kuruldu) "
+
+msgid "Import"
+msgstr "İçe Aktar"
+
+msgid "Import %zu New Items"
+msgstr "%zu Yeni Öğeyi İçe Aktar"
+
+msgid "Import failed"
+msgstr "İçe aktarma başarısız"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia henüz tamamen başlatılmadı. Uygulama başlatılmayı tamamladıktan sonra tekrar deneyin."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "İçe aktarılacak oturum açmış profil yok. Bir profil oluşturun veya bir profile giriş yapın (Profil menüsü), sonra tekrar deneyin."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "İçe aktarmayı etkinleştirmek için bir profile giriş yapın (Profil menüsü)."
+
+msgid "&Add Games..."
+msgstr "Oyun &Ekle…"
+
+msgid "   %zu already installed"
+msgstr "   %zu zaten kurulu"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu dizin tarandı   %zu dosya incelendi   %zu oyun bulundu"
+

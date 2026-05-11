@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (光盘数: %zu)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:545
-msgid " (default)"
-msgstr " (默认)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " - %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " - %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — 配置覆盖"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "专用线程:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "默认"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "丹麦"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "玩家卡编辑器"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "玩家卡编辑器 — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:256
@@ -697,6 +701,10 @@ msgstr "科威特"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "吉尔吉斯斯坦"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "标签"
 
 #: src/xenia/ui/game_list_panel_wx.cc:582
 msgid "Label cannot contain '::'."
@@ -933,6 +941,10 @@ msgstr "补丁 #%zu"
 msgid "Patches"
 msgstr "补丁"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "路径"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "秘鲁"
@@ -1025,13 +1037,13 @@ msgstr "从列表中删除"
 msgid "Remove this override"
 msgstr "删除此覆盖"
 
-#: src/xenia/ui/game_list_panel_wx.cc:577
-msgid "Rename Disc"
-msgstr "重命名光盘"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "重命名标签"
 
-#: src/xenia/ui/game_list_panel_wx.cc:556
-msgid "Rename..."
-msgstr "重命名…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "重命名标签…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1330,3 +1342,64 @@ msgstr "作者: %s"
 #: src/xenia/ui/game_list_panel_wx.cc:856
 msgid "title %08X"
 msgstr "游戏 %08X"
+
+msgid "Scan for Games"
+msgstr "扫描游戏"
+
+msgid "Scanning: %s"
+msgstr "正在扫描: %s"
+
+msgid "Loading titles..."
+msgstr "正在加载游戏…"
+
+msgid "Cancelled."
+msgstr "已取消。"
+
+msgid "(unknown title)"
+msgstr "(未知游戏)"
+
+msgid "Type: %s"
+msgstr "类型: %s"
+
+msgid "Publisher: %s"
+msgstr "发行商: %s"
+
+msgid "Module: %s"
+msgstr "模块: %s"
+
+msgid "Version: %s"
+msgstr "版本: %s"
+
+msgid "Status: Installed"
+msgstr "状态: 已安装"
+
+msgid "(Installed) "
+msgstr "(已安装) "
+
+msgid "Import"
+msgstr "导入"
+
+msgid "Import %zu New Items"
+msgstr "导入 %zu 个新项目"
+
+msgid "Import failed"
+msgstr "导入失败"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia 尚未完全初始化。请在应用启动完成后重试。"
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "没有可导入的已登录档案。请创建或登录一个档案（档案菜单），然后重试。"
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "登录档案（档案菜单）以启用导入。"
+
+msgid "&Add Games..."
+msgstr "添加游戏(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   已安装 %zu 个"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "已扫描 %zu 个目录   已探测 %zu 个文件   找到 %zu 个游戏"
+

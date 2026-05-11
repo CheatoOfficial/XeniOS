@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu đĩa)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (mặc định)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " - %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " - %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Ghi đè cấu hình"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Luồng riêng:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Mặc định"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Đan Mạch"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Trình chỉnh sửa thẻ game thủ"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Trình chỉnh sửa thẻ game thủ — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuwait"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kyrgyzstan"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Nhãn"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Bản vá #%zu"
 msgid "Patches"
 msgstr "Bản vá"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Đường dẫn"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Gỡ khỏi danh sách"
 msgid "Remove this override"
 msgstr "Gỡ ghi đè này"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Đổi tên đĩa"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Đổi tên nhãn"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Đổi tên…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Đổi tên nhãn…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "bởi %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "tựa game %08X"
+
+msgid "Scan for Games"
+msgstr "Quét tìm trò chơi"
+
+msgid "Scanning: %s"
+msgstr "Đang quét: %s"
+
+msgid "Loading titles..."
+msgstr "Đang nạp tựa game…"
+
+msgid "Cancelled."
+msgstr "Đã huỷ."
+
+msgid "(unknown title)"
+msgstr "(tựa game không rõ)"
+
+msgid "Type: %s"
+msgstr "Loại: %s"
+
+msgid "Publisher: %s"
+msgstr "Nhà phát hành: %s"
+
+msgid "Module: %s"
+msgstr "Mô-đun: %s"
+
+msgid "Version: %s"
+msgstr "Phiên bản: %s"
+
+msgid "Status: Installed"
+msgstr "Trạng thái: Đã cài đặt"
+
+msgid "(Installed) "
+msgstr "(Đã cài đặt) "
+
+msgid "Import"
+msgstr "Nhập"
+
+msgid "Import %zu New Items"
+msgstr "Nhập %zu mục mới"
+
+msgid "Import failed"
+msgstr "Nhập thất bại"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia chưa khởi tạo xong. Hãy thử lại sau khi ứng dụng khởi động xong."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Không có hồ sơ đã đăng nhập để nhập vào. Hãy tạo hoặc đăng nhập một hồ sơ (menu Hồ sơ), rồi thử lại."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Đăng nhập một hồ sơ (menu Hồ sơ) để bật chức năng nhập."
+
+msgid "&Add Games..."
+msgstr "Thêm trò chơi(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu đã được cài đặt"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu thư mục đã quét   %zu tệp đã dò   %zu trò chơi tìm thấy"
+

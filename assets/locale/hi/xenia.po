@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu डिस्क)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (डिफ़ॉल्ट)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — कॉन्फ़िग ओवरराइड"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "समर्पित थ्रेड:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "डिफ़ॉल्ट"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "डेनमार्क"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "गेमरकार्ड संपादक"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "गेमरकार्ड संपादक — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "कुवैत"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "किर्गिज़स्तान"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "लेबल"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -933,6 +941,10 @@ msgstr "पैच #%zu"
 msgid "Patches"
 msgstr "पैच"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "पथ"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "पेरू"
@@ -1025,13 +1037,13 @@ msgstr "सूची से हटाएँ"
 msgid "Remove this override"
 msgstr "यह ओवरराइड हटाएँ"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "डिस्क का नाम बदलें"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "लेबल बदलें"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "नाम बदलें…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "लेबल बदलें…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1330,3 +1342,64 @@ msgstr "%s द्वारा"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "टाइटल %08X"
+
+msgid "Scan for Games"
+msgstr "गेम के लिए स्कैन करें"
+
+msgid "Scanning: %s"
+msgstr "स्कैन हो रहा है: %s"
+
+msgid "Loading titles..."
+msgstr "टाइटल लोड हो रहे हैं…"
+
+msgid "Cancelled."
+msgstr "रद्द किया गया।"
+
+msgid "(unknown title)"
+msgstr "(अज्ञात टाइटल)"
+
+msgid "Type: %s"
+msgstr "प्रकार: %s"
+
+msgid "Publisher: %s"
+msgstr "प्रकाशक: %s"
+
+msgid "Module: %s"
+msgstr "मॉड्यूल: %s"
+
+msgid "Version: %s"
+msgstr "संस्करण: %s"
+
+msgid "Status: Installed"
+msgstr "स्थिति: इंस्टॉल किया गया"
+
+msgid "(Installed) "
+msgstr "(इंस्टॉल किया गया) "
+
+msgid "Import"
+msgstr "आयात करें"
+
+msgid "Import %zu New Items"
+msgstr "%zu नए आइटम आयात करें"
+
+msgid "Import failed"
+msgstr "आयात विफल"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia अभी पूरी तरह से प्रारंभ नहीं हुआ है। ऐप के चालू होने के बाद पुनः प्रयास करें।"
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "आयात करने के लिए कोई साइन-इन प्रोफ़ाइल नहीं है। एक प्रोफ़ाइल बनाएँ या साइन इन करें (प्रोफ़ाइल मेनू), फिर पुनः प्रयास करें।"
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "आयात सक्षम करने हेतु किसी प्रोफ़ाइल में साइन इन करें (प्रोफ़ाइल मेनू)।"
+
+msgid "&Add Games..."
+msgstr "गेम जोड़ें(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu पहले से इंस्टॉल किए गए"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu निर्देशिकाएँ स्कैन की गईं   %zu फ़ाइलें जाँची गईं   %zu गेम मिले"
+

@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu diske)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (standard)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Konfigurationstilsidesættelser"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Dedikeret tråd:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Standard"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Danmark"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Spillerkort-editor"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Spillerkort-editor — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuwait"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kirgisistan"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Etiket"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Patch #%zu"
 msgid "Patches"
 msgstr "Patches"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Sti"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Fjern fra liste"
 msgid "Remove this override"
 msgstr "Fjern denne tilsidesættelse"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Omdøb disk"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Omdøb etiket"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Omdøb…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Omdøb etiket…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,63 @@ msgstr "af %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "titel %08X"
+msgid "Scan for Games"
+msgstr "Søg efter spil"
+
+msgid "Scanning: %s"
+msgstr "Søger: %s"
+
+msgid "Loading titles..."
+msgstr "Indlæser titler…"
+
+msgid "Cancelled."
+msgstr "Annulleret."
+
+msgid "(unknown title)"
+msgstr "(ukendt titel)"
+
+msgid "Type: %s"
+msgstr "Type: %s"
+
+msgid "Publisher: %s"
+msgstr "Udgiver: %s"
+
+msgid "Module: %s"
+msgstr "Modul: %s"
+
+msgid "Version: %s"
+msgstr "Version: %s"
+
+msgid "Status: Installed"
+msgstr "Status: Installeret"
+
+msgid "(Installed) "
+msgstr "(Installeret) "
+
+msgid "Import"
+msgstr "Importér"
+
+msgid "Import %zu New Items"
+msgstr "Importér %zu nye emner"
+
+msgid "Import failed"
+msgstr "Import mislykkedes"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia er endnu ikke fuldt initialiseret. Prøv igen, når appen er færdig med at starte op."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Ingen profil er logget ind at importere til. Opret eller log ind på en profil (Profil-menuen), og prøv igen."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Log ind på en profil (Profil-menuen) for at aktivere import."
+
+msgid "&Add Games..."
+msgstr "Tilføj spil(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu allerede installeret"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu mapper scannet   %zu filer undersøgt   %zu spil fundet"
+

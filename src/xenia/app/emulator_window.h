@@ -108,6 +108,7 @@ class EmulatorWindow {
   void ToggleControllerVibration();
   void SetHotkeysState(bool enabled) { disable_hotkeys_ = !enabled; }
   void FileOpen();
+  void FileAddGames();
 
   // Helper methods for updating cvars from config dialogs.
   void UpdateAntiAliasingCvar(gpu::CommandProcessor::SwapPostEffect effect);
@@ -204,6 +205,7 @@ class EmulatorWindow {
   void FileDrop(const std::filesystem::path& filename);
   void OnMouseUp(const ui::MouseEvent& e);
   void FileClose();
+  void UpdateAddGamesMenuState();
   void InstallContent();
   void ShowContentDirectory();
   void CpuTimeScalarReset();
@@ -284,6 +286,7 @@ class EmulatorWindow {
   uint32_t default_logical_width_ = 0;
   uint32_t default_logical_height_ = 0;
   ui::MenuItem* file_open_menu_item_ = nullptr;
+  ui::MenuItem* file_add_games_menu_item_ = nullptr;
   ui::MenuItem* file_stop_menu_item_ = nullptr;
   ui::MenuItem* profile_menu_ = nullptr;
   ui::MenuItem* config_menu_ = nullptr;

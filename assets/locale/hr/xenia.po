@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (broj diskova: %zu)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (zadano)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — zamjene konfiguracije"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Namjenska dretva:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Zadano"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Danska"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Uređivač igračke kartice"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Uređivač igračke kartice — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuvajt"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kirgistan"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Oznaka"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -933,6 +941,10 @@ msgstr "Zakrpa #%zu"
 msgid "Patches"
 msgstr "Zakrpe"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Putanja"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1025,13 +1037,13 @@ msgstr "Ukloni s popisa"
 msgid "Remove this override"
 msgstr "Ukloni ovu zamjenu"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Preimenuj disk"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Preimenuj oznaku"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Preimenuj…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Preimenuj oznaku…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1330,3 +1342,64 @@ msgstr "od %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "naslov %08X"
+
+msgid "Scan for Games"
+msgstr "Traži igre"
+
+msgid "Scanning: %s"
+msgstr "Pretražujem: %s"
+
+msgid "Loading titles..."
+msgstr "Učitavanje naslova..."
+
+msgid "Cancelled."
+msgstr "Otkazano."
+
+msgid "(unknown title)"
+msgstr "(nepoznat naslov)"
+
+msgid "Type: %s"
+msgstr "Vrsta: %s"
+
+msgid "Publisher: %s"
+msgstr "Izdavač: %s"
+
+msgid "Module: %s"
+msgstr "Modul: %s"
+
+msgid "Version: %s"
+msgstr "Verzija: %s"
+
+msgid "Status: Installed"
+msgstr "Stanje: Instalirano"
+
+msgid "(Installed) "
+msgstr "(Instalirano) "
+
+msgid "Import"
+msgstr "Uvezi"
+
+msgid "Import %zu New Items"
+msgstr "Uvezi novih stavki: %zu"
+
+msgid "Import failed"
+msgstr "Uvoz nije uspio"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia još nije potpuno pokrenuta. Pokušajte ponovno nakon što aplikacija završi pokretanje."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Nema prijavljenog profila za uvoz. Stvorite profil ili se prijavite (izbornik Profil), zatim pokušajte ponovno."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Prijavite se u profil (izbornik Profil) za omogućavanje uvoza."
+
+msgid "&Add Games..."
+msgstr "&Dodaj igre..."
+
+msgid "   %zu already installed"
+msgstr "   već instalirano: %zu"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "pretraženih mapa: %zu   provjerenih datoteka: %zu   pronađenih igara: %zu"
+

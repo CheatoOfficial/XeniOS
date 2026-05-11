@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu na disc)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (default)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " - %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " - %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Mga Config Override"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Dedicated Thread:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Default"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Denmark"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Gamercard Editor"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Gamercard Editor — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuwait"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kyrgyzstan"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Label"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Patch #%zu"
 msgid "Patches"
 msgstr "Mga Patch"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Path"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Alisin sa listahan"
 msgid "Remove this override"
 msgstr "Alisin ang override na ito"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Palitan ang Pangalan ng Disc"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Palitan ang Label"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Palitan ang Pangalan…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Palitan ang Label…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "ni %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "title %08X"
+
+msgid "Scan for Games"
+msgstr "Mag-scan ng mga Laro"
+
+msgid "Scanning: %s"
+msgstr "Sina-scan: %s"
+
+msgid "Loading titles..."
+msgstr "Nilo-load ang mga title…"
+
+msgid "Cancelled."
+msgstr "Kinansela."
+
+msgid "(unknown title)"
+msgstr "(hindi kilalang title)"
+
+msgid "Type: %s"
+msgstr "Uri: %s"
+
+msgid "Publisher: %s"
+msgstr "Publisher: %s"
+
+msgid "Module: %s"
+msgstr "Module: %s"
+
+msgid "Version: %s"
+msgstr "Bersyon: %s"
+
+msgid "Status: Installed"
+msgstr "Status: Naka-install"
+
+msgid "(Installed) "
+msgstr "(Naka-install) "
+
+msgid "Import"
+msgstr "Mag-import"
+
+msgid "Import %zu New Items"
+msgstr "Mag-import ng %zu (na) Bagong Item"
+
+msgid "Import failed"
+msgstr "Nabigo ang pag-import"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Hindi pa lubos na na-initialize ang Xenia. Subukan ulit pagkatapos matapos ang pagsisimula ng app."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Walang naka-sign in na profile na puwedeng pag-import-an. Gumawa o mag-sign in sa isang profile (Profile menu), tapos subukan ulit."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Mag-sign in sa isang profile (Profile menu) para paganahin ang pag-import."
+
+msgid "&Add Games..."
+msgstr "Magdagdag ng mga Laro(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu ang naka-install na"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu (na) directory ang na-scan   %zu (na) file ang nasuri   %zu (na) laro ang nahanap"
+

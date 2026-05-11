@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (дисков: %zu)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:545
-msgid " (default)"
-msgstr " (по умолчанию)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — переопределения конфигурации"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Отдельный поток:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "По умолчанию"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Дания"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Редактор Gamercard"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Редактор Gamercard — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:256
@@ -697,6 +701,10 @@ msgstr "Кувейт"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Киргизия"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Метка"
 
 #: src/xenia/ui/game_list_panel_wx.cc:582
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Патч №%zu"
 msgid "Patches"
 msgstr "Патчи"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Путь"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Перу"
@@ -1029,13 +1041,13 @@ msgstr "Удалить из списка"
 msgid "Remove this override"
 msgstr "Удалить это переопределение"
 
-#: src/xenia/ui/game_list_panel_wx.cc:577
-msgid "Rename Disc"
-msgstr "Переименование диска"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Переименование метки"
 
-#: src/xenia/ui/game_list_panel_wx.cc:556
-msgid "Rename..."
-msgstr "Переименовать…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Переименовать метку…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "автор: %s"
 #: src/xenia/ui/game_list_panel_wx.cc:856
 msgid "title %08X"
 msgstr "игра %08X"
+
+msgid "Scan for Games"
+msgstr "Поиск игр"
+
+msgid "Scanning: %s"
+msgstr "Сканирование: %s"
+
+msgid "Loading titles..."
+msgstr "Загрузка игр…"
+
+msgid "Cancelled."
+msgstr "Отменено."
+
+msgid "(unknown title)"
+msgstr "(неизвестная игра)"
+
+msgid "Type: %s"
+msgstr "Тип: %s"
+
+msgid "Publisher: %s"
+msgstr "Издатель: %s"
+
+msgid "Module: %s"
+msgstr "Модуль: %s"
+
+msgid "Version: %s"
+msgstr "Версия: %s"
+
+msgid "Status: Installed"
+msgstr "Статус: установлено"
+
+msgid "(Installed) "
+msgstr "(установлено) "
+
+msgid "Import"
+msgstr "Импорт"
+
+msgid "Import %zu New Items"
+msgstr "Импортировать новых элементов: %zu"
+
+msgid "Import failed"
+msgstr "Ошибка импорта"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia ещё не полностью инициализирована. Повторите попытку после завершения запуска приложения."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Нет активного профиля для импорта. Создайте профиль или войдите в него (меню «Профиль»), затем повторите попытку."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Войдите в профиль (меню «Профиль»), чтобы включить импорт."
+
+msgid "&Add Games..."
+msgstr "&Добавить игры…"
+
+msgid "   %zu already installed"
+msgstr "   уже установлено: %zu"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "просканировано папок: %zu   проверено файлов: %zu   найдено игр: %zu"
+

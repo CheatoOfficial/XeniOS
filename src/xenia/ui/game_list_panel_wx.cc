@@ -21,10 +21,8 @@
 #include <wx/filedlg.h>
 #include <wx/font.h>
 #include <wx/image.h>
-#include <wx/listbox.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
-#include <wx/mstream.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/textdlg.h>
@@ -49,6 +47,7 @@
 #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
 #include "xenia/patcher/patch_db.h"
 #include "xenia/ui/game_config_dialog_wx.h"
+#include "xenia/ui/icon_decode.h"
 #include "xenia/ui/patches_dialog_wx.h"
 #include "xenia/xbox.h"
 
@@ -196,24 +195,6 @@ wxString EscapeMarkup(const wxString& s) {
     }
   }
   return out;
-}
-
-wxBitmapBundle DecodeIcon(const std::vector<uint8_t>& data, int size_px,
-                          double scale) {
-  if (data.empty()) {
-    return wxBitmapBundle();
-  }
-  wxMemoryInputStream stream(data.data(), data.size());
-  wxImage image;
-  if (!image.LoadFile(stream, wxBITMAP_TYPE_ANY)) {
-    return wxBitmapBundle();
-  }
-  if (image.GetWidth() != size_px || image.GetHeight() != size_px) {
-    image.Rescale(size_px, size_px, wxIMAGE_QUALITY_HIGH);
-  }
-  wxBitmap bmp(image);
-  bmp.SetScaleFactor(scale);
-  return wxBitmapBundle::FromBitmap(bmp);
 }
 
 }  // namespace
@@ -502,7 +483,7 @@ void GameListPanel::ProcessIconChunk(size_t start, int gen) {
     if (data.empty()) {
       continue;
     }
-    entry.icon = DecodeIcon(data, icon_size_px_, dpi_scale_);
+    entry.icon = ui::DecodePngIcon(data, icon_size_px_, dpi_scale_);
     if (!entry.icon.IsOk()) {
       continue;
     }
@@ -592,14 +573,60 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
   uint32_t title_id = entries_[entry_index].title_id;
 
   wxDialog dlg(this, wxID_ANY, _("Edit Discs"), wxDefaultPosition,
-               wxSize(500, 320), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+               wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
   auto* sizer = new wxBoxSizer(wxVERTICAL);
 
-  auto* list = new wxListBox(&dlg, wxID_ANY);
+  auto* list =
+      new wxDataViewListCtrl(&dlg, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                             wxDV_ROW_LINES | wxDV_SINGLE);
+  // Font-measured widths scale with DPI and text scaling; column widths feed
+  // wxDataViewCtrl as device pixels, so no FromDIP.
+  wxClientDC dc(&dlg);
+  dc.SetFont(list->GetFont());
+  const int char_w = dc.GetCharWidth();
+  const int char_h = dc.GetCharHeight();
+  auto fit = [&](const wxString& header, const wxString& sample) {
+    int hw = dc.GetTextExtent(header).GetWidth();
+    int sw = dc.GetTextExtent(sample).GetWidth();
+    return std::max(hw, sw) + char_w * 4;
+  };
+  wxString widest_label;
+  wxString widest_path;
+  int widest_label_w = 0;
+  int widest_path_w = 0;
+  {
+    size_t disc_num = 1;
+    for (const auto& disc : entries_[entry_index].discs) {
+      wxString l = disc.label.empty()
+                       ? wxString::Format(_("Disc %zu"), disc_num)
+                       : wxString::FromUTF8(disc.label);
+      int lw = dc.GetTextExtent(l).GetWidth();
+      if (lw > widest_label_w) {
+        widest_label_w = lw;
+        widest_label = l;
+      }
+      wxString p = wxString::FromUTF8(disc.path.string());
+      int pw = dc.GetTextExtent(p).GetWidth();
+      if (pw > widest_path_w) {
+        widest_path_w = pw;
+        widest_path = p;
+      }
+      ++disc_num;
+    }
+  }
+  const int col_default_w = fit(_("Default"), "[*]");
+  const int col_label_w = fit(_("Label"), widest_label);
+  const int col_path_w = fit(_("Path"), widest_path);
+  list->AppendTextColumn(_("Default"), wxDATAVIEW_CELL_INERT, col_default_w,
+                         wxALIGN_CENTER, 0);
+  list->AppendTextColumn(_("Label"), wxDATAVIEW_CELL_INERT, col_label_w,
+                         wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
+  list->AppendTextColumn(_("Path"), wxDATAVIEW_CELL_INERT, col_path_w,
+                         wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
   sizer->Add(list, 1, wxEXPAND | wxALL, 8);
 
   auto refresh = [&]() {
-    list->Clear();
+    list->DeleteAllItems();
     if (entry_index >= entries_.size()) {
       return;
     }
@@ -609,21 +636,23 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
       wxString label = disc.label.empty()
                            ? wxString::Format(_("Disc %zu"), disc_num)
                            : wxString::FromUTF8(disc.label);
-      if (!default_path.empty() && disc.path == default_path) {
-        label += _(" (default)");
-      }
-      list->Append(label, new wxStringClientData(
-                              wxString::FromUTF8(disc.path.string())));
+      const bool is_default =
+          !default_path.empty() && disc.path == default_path;
+      wxVector<wxVariant> row;
+      row.push_back(wxVariant(is_default ? wxString("[*]") : wxString()));
+      row.push_back(wxVariant(label));
+      row.push_back(wxVariant(wxString::FromUTF8(disc.path.string())));
+      list->AppendItem(row);
       ++disc_num;
     }
-    if (list->GetCount() > 0) {
-      list->SetSelection(0);
+    if (list->GetItemCount() > 0) {
+      list->SelectRow(0);
     }
   };
   refresh();
 
   auto* button_row = new wxBoxSizer(wxHORIZONTAL);
-  auto* rename = new wxButton(&dlg, wxID_ANY, _("Rename..."));
+  auto* rename = new wxButton(&dlg, wxID_ANY, _("Rename Label..."));
   auto* remove = new wxButton(&dlg, wxID_ANY, _("Remove"));
   auto* close = new wxButton(&dlg, wxID_CLOSE, _("Close"));
   button_row->Add(rename, 0, wxRIGHT, 4);
@@ -633,22 +662,23 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
   sizer->Add(button_row, 0, wxEXPAND | wxALL, 8);
 
   auto current_disc_path = [&]() -> std::filesystem::path {
-    int sel = list->GetSelection();
-    if (sel == wxNOT_FOUND) {
+    int sel = list->GetSelectedRow();
+    if (sel == wxNOT_FOUND || entry_index >= entries_.size() ||
+        size_t(sel) >= entries_[entry_index].discs.size()) {
       return {};
     }
-    auto* data = static_cast<wxStringClientData*>(list->GetClientObject(sel));
-    return data ? std::filesystem::path(data->GetData().utf8_string())
-                : std::filesystem::path{};
+    return entries_[entry_index].discs[sel].path;
   };
 
   rename->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) {
-    int sel = list->GetSelection();
-    if (sel == wxNOT_FOUND) {
+    int sel = list->GetSelectedRow();
+    if (sel == wxNOT_FOUND || entry_index >= entries_.size() ||
+        size_t(sel) >= entries_[entry_index].discs.size()) {
       return;
     }
-    wxString current = list->GetString(sel);
-    wxTextEntryDialog input(&dlg, _("Enter new label:"), _("Rename Disc"),
+    wxString current =
+        wxString::FromUTF8(entries_[entry_index].discs[sel].label);
+    wxTextEntryDialog input(&dlg, _("Enter new label:"), _("Rename Label"),
                             current);
     if (input.ShowModal() != wxID_OK) {
       return;
@@ -661,20 +691,20 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
       return;
     }
     profile->SetDiscLabel(title_id, current_disc_path(), new_label);
-    if (entry_index < entries_.size() &&
-        size_t(sel) < entries_[entry_index].discs.size()) {
-      entries_[entry_index].discs[sel].label = new_label;
-    }
+    entries_[entry_index].discs[sel].label = new_label;
     refresh();
-    list->SetSelection(sel);
+    list->SelectRow(sel);
   });
 
   remove->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) {
-    int sel = list->GetSelection();
-    if (sel == wxNOT_FOUND) {
+    int sel = list->GetSelectedRow();
+    if (sel == wxNOT_FOUND || entry_index >= entries_.size() ||
+        size_t(sel) >= entries_[entry_index].discs.size()) {
       return;
     }
-    wxString label = list->GetString(sel);
+    const auto& disc = entries_[entry_index].discs[sel];
+    wxString label = disc.label.empty() ? wxString::FromUTF8(disc.path.string())
+                                        : wxString::FromUTF8(disc.label);
     wxMessageDialog confirm(
         &dlg, wxString::Format(_("Remove '%s' from the disc list?"), label),
         _("Remove Disc"), wxYES_NO | wxICON_WARNING);
@@ -682,17 +712,22 @@ void GameListPanel::ShowEditDiscsDialog(size_t entry_index) {
       return;
     }
     profile->RemoveDiscPath(title_id, current_disc_path());
-    if (entry_index < entries_.size() &&
-        size_t(sel) < entries_[entry_index].discs.size()) {
-      entries_[entry_index].discs.erase(entries_[entry_index].discs.begin() +
-                                        sel);
-    }
+    entries_[entry_index].discs.erase(entries_[entry_index].discs.begin() +
+                                      sel);
     refresh();
   });
 
   close->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { dlg.EndModal(wxID_CLOSE); });
 
   dlg.SetSizer(sizer);
+  {
+    const int frame_slack = char_w * 6;
+    const int desired_w =
+        col_default_w + col_label_w + col_path_w + frame_slack;
+    dlg.SetSize(
+        wxSize(std::clamp(desired_w, char_w * 60, char_w * 140), char_h * 18));
+    dlg.CentreOnParent();
+  }
   dlg.ShowModal();
 
   // Reflect any changes in the main list view.
@@ -1132,13 +1167,18 @@ void GameListPanel::Repopulate() {
       title_markup += EscapeMarkup(disc_suffix);
     }
     row.push_back(wxVariant(title_markup));
+    // SPA-driven totals aren't known until first launch — "?" instead of
+    // a misleading 0/0 for titles that have never been launched.
     std::string achievements_text;
     std::string gamerscore_text;
-    if (e.achievements_total > 0) {
+    if (e.achievements_total > 0 || e.last_run_time != 0) {
       achievements_text =
           fmt::format("{}/{}", e.achievements_unlocked, e.achievements_total);
       gamerscore_text =
           fmt::format("{}/{} G", e.gamerscore_earned, e.gamerscore_total);
+    } else {
+      achievements_text = "?";
+      gamerscore_text = "?";
     }
     row.push_back(wxVariant(wxString::FromUTF8(achievements_text)));
     row.push_back(wxVariant(wxString::FromUTF8(gamerscore_text)));

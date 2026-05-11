@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (عدد الأقراص: %zu)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:545
-msgid " (default)"
-msgstr " (افتراضي)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " - %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " - %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — تجاوزات الإعدادات"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "خيط مخصص:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "افتراضي"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "الدنمارك"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "محرر بطاقة اللاعب"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "محرر بطاقة اللاعب — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:256
@@ -697,6 +701,10 @@ msgstr "الكويت"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "قرغيزستان"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "تسمية"
 
 #: src/xenia/ui/game_list_panel_wx.cc:582
 msgid "Label cannot contain '::'."
@@ -933,6 +941,10 @@ msgstr "التصحيح رقم %zu"
 msgid "Patches"
 msgstr "التصحيحات"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "مسار"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "بيرو"
@@ -1025,13 +1037,13 @@ msgstr "إزالة من القائمة"
 msgid "Remove this override"
 msgstr "إزالة هذا التجاوز"
 
-#: src/xenia/ui/game_list_panel_wx.cc:577
-msgid "Rename Disc"
-msgstr "إعادة تسمية القرص"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "تغيير التسمية"
 
-#: src/xenia/ui/game_list_panel_wx.cc:556
-msgid "Rename..."
-msgstr "إعادة تسمية…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "تغيير التسمية…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1330,3 +1342,64 @@ msgstr "بواسطة %s"
 #: src/xenia/ui/game_list_panel_wx.cc:856
 msgid "title %08X"
 msgstr "اللعبة %08X"
+
+msgid "Scan for Games"
+msgstr "البحث عن الألعاب"
+
+msgid "Scanning: %s"
+msgstr "جارٍ الفحص: %s"
+
+msgid "Loading titles..."
+msgstr "جارٍ تحميل الألعاب…"
+
+msgid "Cancelled."
+msgstr "تم الإلغاء."
+
+msgid "(unknown title)"
+msgstr "(لعبة غير معروفة)"
+
+msgid "Type: %s"
+msgstr "النوع: %s"
+
+msgid "Publisher: %s"
+msgstr "الناشر: %s"
+
+msgid "Module: %s"
+msgstr "الوحدة: %s"
+
+msgid "Version: %s"
+msgstr "الإصدار: %s"
+
+msgid "Status: Installed"
+msgstr "الحالة: مثبتة"
+
+msgid "(Installed) "
+msgstr "(مثبتة) "
+
+msgid "Import"
+msgstr "استيراد"
+
+msgid "Import %zu New Items"
+msgstr "استيراد %zu عنصر جديد"
+
+msgid "Import failed"
+msgstr "فشل الاستيراد"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "لم يكتمل تهيئة Xenia بعد. حاول مرة أخرى بعد انتهاء بدء تشغيل التطبيق."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "لا يوجد ملف شخصي مسجَّل الدخول للاستيراد إليه. أنشئ ملفًا شخصيًا أو سجّل الدخول إليه (قائمة الملف الشخصي)، ثم حاول مرة أخرى."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "سجّل الدخول إلى ملف شخصي (قائمة الملف الشخصي) لتمكين الاستيراد."
+
+msgid "&Add Games..."
+msgstr "إضافة ألعاب(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu مثبتة مسبقًا"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu مجلد تم فحصه   %zu ملف تم فحصه   %zu لعبة تم العثور عليها"
+

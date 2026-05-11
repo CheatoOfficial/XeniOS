@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu levyä)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (oletus)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Asetusten ohitukset"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Oma säie:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Oletus"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Tanska"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Pelaajakortin muokkain"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Pelaajakortin muokkain — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuwait"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kirgisia"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Nimike"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "Korjaus #%zu"
 msgid "Patches"
 msgstr "Korjaukset"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Polku"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Poista listalta"
 msgid "Remove this override"
 msgstr "Poista tämä ohitus"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Nimeä levy uudelleen"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Nimeä nimike uudelleen"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Nimeä uudelleen…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Nimeä nimike uudelleen…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "tekijä: %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "nimike %08X"
+
+msgid "Scan for Games"
+msgstr "Etsi pelejä"
+
+msgid "Scanning: %s"
+msgstr "Tutkitaan: %s"
+
+msgid "Loading titles..."
+msgstr "Ladataan nimikkeitä…"
+
+msgid "Cancelled."
+msgstr "Peruutettu."
+
+msgid "(unknown title)"
+msgstr "(tuntematon nimike)"
+
+msgid "Type: %s"
+msgstr "Tyyppi: %s"
+
+msgid "Publisher: %s"
+msgstr "Julkaisija: %s"
+
+msgid "Module: %s"
+msgstr "Moduuli: %s"
+
+msgid "Version: %s"
+msgstr "Versio: %s"
+
+msgid "Status: Installed"
+msgstr "Tila: Asennettu"
+
+msgid "(Installed) "
+msgstr "(Asennettu) "
+
+msgid "Import"
+msgstr "Tuo"
+
+msgid "Import %zu New Items"
+msgstr "Tuo %zu uutta kohdetta"
+
+msgid "Import failed"
+msgstr "Tuonti epäonnistui"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xeniaa ei ole vielä alustettu kokonaan. Yritä uudelleen, kun sovellus on käynnistynyt loppuun."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Ei kirjautunutta profiilia, johon tuoda. Luo profiili tai kirjaudu sisään (Profiili-valikko) ja yritä uudelleen."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Kirjaudu profiiliin (Profiili-valikko) ottaaksesi tuonnin käyttöön."
+
+msgid "&Add Games..."
+msgstr "Lisää pelejä(&L)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu jo asennettu"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu hakemistoa tutkittu   %zu tiedostoa tarkistettu   %zu peliä löytyi"
+

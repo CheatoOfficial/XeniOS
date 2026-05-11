@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (%zu lemez)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (alapértelmezett)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — Konfigurációs felülbírálatok"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Dedikált szál:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Alapértelmezett"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Dánia"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Játékoskártya-szerkesztő"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Játékoskártya-szerkesztő — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuvait"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kirgizisztán"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Címke"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -937,6 +945,10 @@ msgstr "#%zu javítás"
 msgid "Patches"
 msgstr "Javítások"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Útvonal"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1029,13 +1041,13 @@ msgstr "Eltávolítás a listáról"
 msgid "Remove this override"
 msgstr "Felülbírálat eltávolítása"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Lemez átnevezése"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Címke átnevezése"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Átnevezés…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Címke átnevezése…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1334,3 +1346,64 @@ msgstr "készítette: %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "%08X cím"
+
+msgid "Scan for Games"
+msgstr "Játékok keresése"
+
+msgid "Scanning: %s"
+msgstr "Vizsgálat: %s"
+
+msgid "Loading titles..."
+msgstr "Címek betöltése…"
+
+msgid "Cancelled."
+msgstr "Megszakítva."
+
+msgid "(unknown title)"
+msgstr "(ismeretlen cím)"
+
+msgid "Type: %s"
+msgstr "Típus: %s"
+
+msgid "Publisher: %s"
+msgstr "Kiadó: %s"
+
+msgid "Module: %s"
+msgstr "Modul: %s"
+
+msgid "Version: %s"
+msgstr "Verzió: %s"
+
+msgid "Status: Installed"
+msgstr "Állapot: telepítve"
+
+msgid "(Installed) "
+msgstr "(telepítve) "
+
+msgid "Import"
+msgstr "Importálás"
+
+msgid "Import %zu New Items"
+msgstr "%zu új elem importálása"
+
+msgid "Import failed"
+msgstr "Az importálás sikertelen"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "A Xenia még nem inicializálódott teljesen. Próbálja újra, miután az alkalmazás befejezte az indulást."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Nincs olyan profil bejelentkezve, amelybe importálni lehetne. Hozzon létre egy profilt vagy jelentkezzen be (Profil menü), majd próbálja újra."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Az importálás engedélyezéséhez jelentkezzen be egy profilba (Profil menü)."
+
+msgid "&Add Games..."
+msgstr "Játékok hozzáadása(&J)…"
+
+msgid "   %zu already installed"
+msgstr "   %zu már telepítve"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "%zu könyvtár átvizsgálva   %zu fájl ellenőrizve   %zu játék találva"
+

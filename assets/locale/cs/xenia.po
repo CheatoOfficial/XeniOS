@@ -24,10 +24,6 @@ msgstr ""
 msgid " (%zu discs)"
 msgstr " (počet disků: %zu)"
 
-#: src/xenia/ui/game_list_panel_wx.cc:553
-msgid " (default)"
-msgstr " (výchozí)"
-
 #: src/xenia/ui/install_progress_dialog_wx.cc:252
 msgid " - %s (%08X)"
 msgstr " — %s (%08X)"
@@ -36,8 +32,12 @@ msgstr " — %s (%08X)"
 msgid "%s (%08X)"
 msgstr "%s (%08X)"
 
+#: src/xenia/ui/game_config_dialog_wx.cc:286
+msgid "%08X - Config Overrides"
+msgstr ""
+
 #: src/xenia/ui/game_config_dialog_wx.cc:266
-msgid "%s (%08X) — Config Overrides"
+msgid "%s (%08X) - Config Overrides"
 msgstr "%s (%08X) — přepsání konfigurace"
 
 #: src/xenia/app/emulator_window.cc:1683
@@ -310,6 +310,10 @@ msgstr "DLC"
 msgid "Dedicated Thread:"
 msgstr "Vyhrazené vlákno:"
 
+#: src/xenia/ui/game_list_panel_wx.cc:617
+msgid "Default"
+msgstr "Výchozí"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:90
 msgid "Denmark"
 msgstr "Dánsko"
@@ -518,7 +522,7 @@ msgid "Gamercard Editor"
 msgstr "Editor hráčské karty"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:271
-msgid "Gamercard Editor — %s"
+msgid "Gamercard Editor - %s"
 msgstr "Editor hráčské karty — %s"
 
 #: src/xenia/ui/game_list_panel_wx.cc:264
@@ -697,6 +701,10 @@ msgstr "Kuvajt"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:120
 msgid "Kyrgyzstan"
 msgstr "Kyrgyzstán"
+
+#: src/xenia/ui/game_list_panel_wx.cc:618
+msgid "Label"
+msgstr "Popisek"
 
 #: src/xenia/ui/game_list_panel_wx.cc:590
 msgid "Label cannot contain '::'."
@@ -935,6 +943,10 @@ msgstr "Patch #%zu"
 msgid "Patches"
 msgstr "Patche"
 
+#: src/xenia/ui/game_list_panel_wx.cc:619
+msgid "Path"
+msgstr "Cesta"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:144
 msgid "Peru"
 msgstr "Peru"
@@ -1027,13 +1039,13 @@ msgstr "Odebrat ze seznamu"
 msgid "Remove this override"
 msgstr "Odebrat toto přepsání"
 
-#: src/xenia/ui/game_list_panel_wx.cc:585
-msgid "Rename Disc"
-msgstr "Přejmenovat disk"
+#: src/xenia/ui/game_list_panel_wx.cc:681
+msgid "Rename Label"
+msgstr "Přejmenovat popisek"
 
-#: src/xenia/ui/game_list_panel_wx.cc:564
-msgid "Rename..."
-msgstr "Přejmenovat…"
+#: src/xenia/ui/game_list_panel_wx.cc:655
+msgid "Rename Label..."
+msgstr "Přejmenovat popisek…"
 
 #: src/xenia/ui/quick_settings_dialog_wx.cc:157
 msgid "Rendering:"
@@ -1332,3 +1344,64 @@ msgstr "od %s"
 #: src/xenia/ui/game_list_panel_wx.cc:864
 msgid "title %08X"
 msgstr "titul %08X"
+
+msgid "Scan for Games"
+msgstr "Vyhledat hry"
+
+msgid "Scanning: %s"
+msgstr "Prohledávání: %s"
+
+msgid "Loading titles..."
+msgstr "Načítání titulů…"
+
+msgid "Cancelled."
+msgstr "Zrušeno."
+
+msgid "(unknown title)"
+msgstr "(neznámý titul)"
+
+msgid "Type: %s"
+msgstr "Typ: %s"
+
+msgid "Publisher: %s"
+msgstr "Vydavatel: %s"
+
+msgid "Module: %s"
+msgstr "Modul: %s"
+
+msgid "Version: %s"
+msgstr "Verze: %s"
+
+msgid "Status: Installed"
+msgstr "Stav: Nainstalováno"
+
+msgid "(Installed) "
+msgstr "(Nainstalováno) "
+
+msgid "Import"
+msgstr "Importovat"
+
+msgid "Import %zu New Items"
+msgstr "Importovat nové položky: %zu"
+
+msgid "Import failed"
+msgstr "Import selhal"
+
+msgid "Xenia is not fully initialized yet. Try again after the app finishes starting up."
+msgstr "Xenia ještě není plně inicializována. Zkuste to znovu, až se aplikace spustí."
+
+msgid "No signed-in profile to import into. Create or sign in to a profile (Profile menu), then try again."
+msgstr "Žádný přihlášený profil pro import. Vytvořte profil nebo se přihlaste (nabídka Profil) a zkuste to znovu."
+
+msgid "Sign in to a profile (Profile menu) to enable importing."
+msgstr "Pro povolení importu se přihlaste do profilu (nabídka Profil)."
+
+msgid "&Add Games..."
+msgstr "Přidat hry(&A)…"
+
+msgid "   %zu already installed"
+msgstr "   již nainstalováno: %zu"
+
+msgid "%zu directories scanned   %zu files probed   %zu games found"
+msgstr "prohledaných složek: %zu   prozkoumaných souborů: %zu   nalezených her: %zu"
+
