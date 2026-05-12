@@ -9,6 +9,9 @@
 
 #include "xenia/kernel/xthread.h"
 
+#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC
+#include <pthread.h>
+#endif
 #if !XE_PLATFORM_WIN32
 #include <signal.h>
 #endif
