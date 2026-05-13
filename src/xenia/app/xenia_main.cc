@@ -561,6 +561,9 @@ bool EmulatorApp::OnInitialize() {
 
   config::SetupConfig(storage_root);
 
+  // Must follow SetupConfig so cvars::ui_locale from the TOML is visible.
+  xe::ui::InitializeWxLocale();
+
   // Load game-specific config if a target is specified.
   if (!cvars::target.empty()) {
     config::LoadGameConfigForFile(cvars::target);
