@@ -85,7 +85,8 @@ VulkanCommandProcessor::VulkanCommandProcessor(
     : CommandProcessor(graphics_system, kernel_state),
       completion_timeline_(static_cast<const ui::vulkan::VulkanProvider*>(
                                graphics_system->provider())
-                               ->vulkan_device()),
+                               ->vulkan_device(),
+                           "cp"),
       deferred_command_buffer_(*this),
       transient_descriptor_allocator_uniform_buffer_(
           static_cast<const ui::vulkan::VulkanProvider*>(
@@ -2096,6 +2097,7 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         // Dispatch compute shader. Local size is 16x8.
         uint32_t group_count_x = (frontbuffer_width_scaled + 15) / 16;
         uint32_t group_count_y = (frontbuffer_height_scaled + 7) / 8;
+        ++submission_in_progress_.dispatch_count;
         deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y, 1);
 
         PopDebugMarker();
@@ -2216,6 +2218,7 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
               fxaa_descriptor_sets.data(), 0, nullptr);
 
           // Dispatch FXAA compute shader.
+          ++submission_in_progress_.dispatch_count;
           deferred_command_buffer_.CmdVkDispatch(group_count_x, group_count_y,
                                                  1);
 
@@ -3527,6 +3530,14 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
       render_target_cache_->last_update_render_pass(),
       render_target_cache_->last_update_framebuffer());
 
+  // Track for device-lost diagnostics.
+  ++submission_in_progress_.draw_count;
+  submission_in_progress_.last_vs_hash = vertex_shader->ucode_data_hash();
+  submission_in_progress_.last_ps_hash =
+      pixel_shader ? pixel_shader->ucode_data_hash() : 0;
+  submission_in_progress_.last_render_pass_key =
+      render_target_cache_->last_update_render_pass_key().key;
+
   // Draw.
   if (primitive_processing_result.index_buffer_type ==
           PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
@@ -3790,6 +3801,14 @@ void VulkanCommandProcessor::IssueDraw_MemexportReadbackFastPath(
 
   // Ensure shared memory is ready for transfer and end any active render pass.
   shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+  // Sync against any prior write to this readback buffer (across submissions
+  // or earlier in the frame). The host read at `read_index` (other slot) is
+  // unaffected.
+  PushBufferMemoryBarrier(
+      rb.buffers[write_index], 0, VK_WHOLE_SIZE, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+      VK_ACCESS_TRANSFER_WRITE_BIT, VK_QUEUE_FAMILY_IGNORED,
+      VK_QUEUE_FAMILY_IGNORED, false);
   SubmitBarriers(true);
 
   InsertDebugMarker("Memexport Readback (async): %u bytes, %zu ranges",
@@ -3909,6 +3928,7 @@ bool VulkanCommandProcessor::IssueCopy() {
     }
     return false;
   }
+  ++submission_in_progress_.resolve_count;
 
   // CPU readback resolve path (if not disabled).
   ReadbackResolveMode readback_mode = GetReadbackResolveMode();
@@ -4059,6 +4079,12 @@ bool VulkanCommandProcessor::IssueCopy() {
     // Ensure shared memory is ready for transfer and end any active render
     // pass.
     shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
+    // Sync against any prior write to this readback buffer.
+    PushBufferMemoryBarrier(
+        rb.buffers[write_index], 0, VK_WHOLE_SIZE,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
     SubmitBarriers(true);
 
     InsertDebugMarker("Resolve Readback: 0x%08X, %u bytes", written_address,
@@ -4550,21 +4576,34 @@ bool VulkanCommandProcessor::IssueCopy() {
         1, &descriptor_set, 0, nullptr);
 
     // Dispatch compute shader - one thread group per 32x32 tile
+    ++submission_in_progress_.dispatch_count;
     deferred_command_buffer_.CmdVkDispatch(tile_count, 1, 1);
 
-    // Barrier for compute shader output before copy
-    VkBufferMemoryBarrier downscale_barrier = {};
-    downscale_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    downscale_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    downscale_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    downscale_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    downscale_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    downscale_barrier.buffer = resolve_downscale_buffer_;
-    downscale_barrier.offset = 0;
-    downscale_barrier.size = written_length;
+    // Barriers before copy: compute-write -> transfer-read on the source, and
+    // transfer-write -> transfer-write on the readback destination (to sync
+    // against any prior write to this slot, across submissions or within the
+    // frame).
+    VkBufferMemoryBarrier pre_copy_barriers[2] = {};
+    pre_copy_barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    pre_copy_barriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    pre_copy_barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    pre_copy_barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre_copy_barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre_copy_barriers[0].buffer = resolve_downscale_buffer_;
+    pre_copy_barriers[0].offset = 0;
+    pre_copy_barriers[0].size = written_length;
+    pre_copy_barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    pre_copy_barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre_copy_barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    pre_copy_barriers[1].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre_copy_barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre_copy_barriers[1].buffer = rb.buffers[write_index];
+    pre_copy_barriers[1].offset = 0;
+    pre_copy_barriers[1].size = VK_WHOLE_SIZE;
     deferred_command_buffer_.CmdVkPipelineBarrier(
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-        0, nullptr, 1, &downscale_barrier, 0, nullptr);
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 2, pre_copy_barriers, 0,
+        nullptr);
 
     // Copy downscaled data to readback buffer
     VkBufferCopy copy_region = {};
@@ -5152,6 +5191,37 @@ void VulkanCommandProcessor::InitializeTrace() {
   }
 }
 
+void VulkanCommandProcessor::LogRecentSubmissions(const char* context) {
+  XELOGE(
+      "VulkanCommandProcessor: recent submission history ({}) - oldest first, "
+      "current in-progress last:",
+      context);
+  // Walk the ring starting from the oldest entry.
+  for (size_t i = 0; i < kSubmissionHistorySize; ++i) {
+    const SubmissionSummary& s =
+        submission_history_[(submission_history_next_ + i) %
+                            kSubmissionHistorySize];
+    if (!s.submission_index) {
+      continue;
+    }
+    XELOGE(
+        "  sub {:>5} frame {:>5}: draws={} dispatches={} resolves={} "
+        "VS={:016X} PS={:016X} RP=0x{:08X}",
+        s.submission_index, s.frame_index, s.draw_count, s.dispatch_count,
+        s.resolve_count, s.last_vs_hash, s.last_ps_hash,
+        uint32_t(s.last_render_pass_key));
+  }
+  if (submission_open_) {
+    const SubmissionSummary& s = submission_in_progress_;
+    XELOGE(
+        "  sub {:>5} frame {:>5} (in-progress): draws={} dispatches={} "
+        "resolves={} VS={:016X} PS={:016X} RP=0x{:08X}",
+        s.submission_index, s.frame_index, s.draw_count, s.dispatch_count,
+        s.resolve_count, s.last_vs_hash, s.last_ps_hash,
+        uint32_t(s.last_render_pass_key));
+  }
+}
+
 void VulkanCommandProcessor::CheckSubmissionCompletionAndDeviceLoss(
     uint64_t await_submission) {
   // Only report once, no need to retry a wait that won't succeed anyway.
@@ -5173,6 +5243,14 @@ void VulkanCommandProcessor::CheckSubmissionCompletionAndDeviceLoss(
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
 
   if (vulkan_device->IsLost()) {
+    XELOGE(
+        "VulkanCommandProcessor: device lost observed in submission-check - "
+        "awaiting submission {}, current {}, completed {}, in-flight {}, "
+        "frame {} (frame_open: {}, submission_open: {})",
+        await_submission, GetCurrentSubmission(), GetCompletedSubmission(),
+        command_buffers_submitted_.size(), frame_current_, frame_open_,
+        submission_open_);
+    LogRecentSubmissions("submission-check");
     device_lost_ = true;
     graphics_system_->OnHostGpuLossFromAnyThread(true);
     return;
@@ -5307,6 +5385,10 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
 
   if (!submission_open_) {
     submission_open_ = true;
+
+    submission_in_progress_ = SubmissionSummary{};
+    submission_in_progress_.submission_index = GetCurrentSubmission();
+    submission_in_progress_.frame_index = frame_current_;
 
     // Start a new deferred command buffer - will submit it to the real one in
     // the end of the submission (when async pipeline object creation requests
@@ -5604,11 +5686,14 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
         vulkan_device->queue_family_graphics_compute(), 0, 1, &submit_info);
     if (submit_result != VK_SUCCESS) {
       XELOGE(
-          "Failed to submit a Vulkan command buffer - VkResult: {} (0x{:08X}), "
-          "submission_index: {}, wait_semaphores: {}, draw_resolution_scale: "
-          "{}x{}",
+          "VulkanCommandProcessor: Failed to submit a Vulkan command buffer - "
+          "VkResult: {} (0x{:08X}), submission: {} (completed: {}, in-flight: "
+          "{}), frame: {} (frame_open: {}, is_closing_frame: {}), "
+          "wait_semaphores: {}, draw_resolution_scale: {}x{}",
           static_cast<int32_t>(submit_result),
           static_cast<uint32_t>(submit_result), GetCurrentSubmission(),
+          GetCompletedSubmission(), command_buffers_submitted_.size(),
+          frame_current_, frame_open_, is_closing_frame,
           submit_info.waitSemaphoreCount,
           render_target_cache_ ? render_target_cache_->draw_resolution_scale_x()
                                : 0,
@@ -5619,6 +5704,7 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
             "VK_ERROR_DEVICE_LOST - GPU crashed or hung. This may be caused by "
             "an invalid shader, out-of-bounds memory access, or driver bug.");
       }
+      LogRecentSubmissions("submit-failure");
       if (vulkan_device->IsLost() && !device_lost_) {
         device_lost_ = true;
         graphics_system_->OnHostGpuLossFromAnyThread(true);
@@ -5633,6 +5719,10 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     current_submission_wait_semaphores_.clear();
     command_buffers_submitted_.emplace_back(submission_index, command_buffer);
     command_buffers_writable_.pop_back();
+
+    submission_history_[submission_history_next_] = submission_in_progress_;
+    submission_history_next_ =
+        (submission_history_next_ + 1) % kSubmissionHistorySize;
 
     // Mark descriptor pool chains with submission index for reclaim tracking.
     if (resolve_downscale_descriptor_pool_chain_) {
