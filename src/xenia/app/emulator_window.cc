@@ -575,44 +575,44 @@ void EmulatorWindow::OnEmulatorInitialized() {
       std::string gamemode_cmd;
       if (cvars::use_gamemode) {
         gamemode_cmd = "gamemoderun";
-        argv.push_back(gamemode_cmd.c_str());
       }
 #endif  // XE_PLATFORM_LINUX
       arg_storage.push_back(executable_path.string());
-      argv.push_back(arg_storage.back().c_str());
 
       if (!cvars::config.empty()) {
         arg_storage.push_back("--config=" + cvars::config);
-        argv.push_back(arg_storage.back().c_str());
       }
       // Append to log file instead of overwriting
       arg_storage.push_back("--log_append=true");
-      argv.push_back(arg_storage.back().c_str());
       // Preserve return_to_ui through the title-to-title chain
       if (cvars::return_to_ui) {
         arg_storage.push_back("--return_to_ui=true");
-        argv.push_back(arg_storage.back().c_str());
       }
       // Preserve fullscreen state, except when returning to UI (no game).
       if (window_->IsFullscreen() && !host_path.empty()) {
         arg_storage.push_back("--fullscreen=true");
-        argv.push_back(arg_storage.back().c_str());
       }
       if (!launch_module.empty()) {
         arg_storage.push_back("--launch_module=" + launch_module);
-        argv.push_back(arg_storage.back().c_str());
       }
       if (launch_flags != 0) {
         arg_storage.push_back(fmt::format("--launch_flags={}", launch_flags));
-        argv.push_back(arg_storage.back().c_str());
       }
       if (!launch_data.empty()) {
         arg_storage.push_back("--launch_data=" + launch_data);
-        argv.push_back(arg_storage.back().c_str());
       }
       if (!host_path.empty()) {
         arg_storage.push_back(host_path);
-        argv.push_back(arg_storage.back().c_str());
+      }
+
+      // arg_storage is fully populated now — take c_str() pointers only after
+      // the last push_back, otherwise a reallocation leaves them dangling.
+      std::vector<const char*> argv;
+      if (!gamemode_cmd.empty()) {
+        argv.push_back(gamemode_cmd.c_str());
+      }
+      for (const std::string& arg : arg_storage) {
+        argv.push_back(arg.c_str());
       }
       argv.push_back(nullptr);
 
