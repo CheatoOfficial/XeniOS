@@ -74,6 +74,10 @@ class VulkanInstance {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
 #include "xenia/ui/vulkan/functions/instance_khr_android_surface.inc"
 #endif
+    // VK_EXT_metal_surface (#218)
+#ifdef VK_USE_PLATFORM_METAL_EXT
+#include "xenia/ui/vulkan/functions/instance_ext_metal_surface.inc"
+#endif
     // VK_KHR_win32_surface (#10)
 #ifdef VK_USE_PLATFORM_WIN32_KHR
 #include "xenia/ui/vulkan/functions/instance_khr_win32_surface.inc"
@@ -102,6 +106,9 @@ class VulkanInstance {
 #endif
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
     bool ext_KHR_android_surface = false;  // #9
+#endif
+#ifdef VK_USE_PLATFORM_METAL_EXT
+    bool ext_EXT_metal_surface = false;  // #218
 #endif
 #ifdef VK_USE_PLATFORM_WIN32_KHR
     bool ext_KHR_win32_surface = false;  // #10

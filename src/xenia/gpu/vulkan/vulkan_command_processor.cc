@@ -3002,7 +3002,6 @@ void VulkanCommandProcessor::SetScissor(const VkRect2D& scissor) {
 }
 
 Shader* VulkanCommandProcessor::LoadShader(xenos::ShaderType shader_type,
-                                           uint32_t guest_address,
                                            const uint32_t* host_address,
                                            uint32_t dword_count) {
   return pipeline_cache_->LoadShader(shader_type, host_address, dword_count);
@@ -3114,11 +3113,15 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
     // compute.
     // Skip unsupported host vertex shader types (but allow tessellation types
     // through - they will be handled in pipeline creation or rejected there if
-    // not fully supported yet).
+    // not fully supported yet). Both AsTriangleStrip fallbacks are needed on
+    // hosts without geometry shader support (MoltenVK / MoltenVK-like); the
+    // SPIR-V translator and pipeline cache both handle them end-to-end.
     if (primitive_processing_result.host_vertex_shader_type !=
             Shader::HostVertexShaderType::kVertex &&
         primitive_processing_result.host_vertex_shader_type !=
             Shader::HostVertexShaderType::kPointListAsTriangleStrip &&
+        primitive_processing_result.host_vertex_shader_type !=
+            Shader::HostVertexShaderType::kRectangleListAsTriangleStrip &&
         !Shader::IsHostVertexShaderTypeDomain(
             primitive_processing_result.host_vertex_shader_type)) {
       return false;
@@ -6230,6 +6233,22 @@ void VulkanCommandProcessor::UpdateSystemConstantValues(
     system_constants_.vertex_index_load_address =
         primitive_processing_result.guest_index_base;
   }
+
+  // Guest-side vertex index count, used for bounds-safe shared-memory loads in
+  // VS expansion (kPointListAsTriangleStrip / kRectangleListAsTriangleStrip)
+  // and in the full 32-bit index DMA load path. Out-of-bounds lanes read 0
+  // instead of random memory, which otherwise produces scattered/skewed
+  // geometry when expansion fans out past the guest draw count.
+  const bool is_vs_expansion_draw =
+      primitive_processing_result.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kPointListAsTriangleStrip ||
+      primitive_processing_result.host_vertex_shader_type ==
+          Shader::HostVertexShaderType::kRectangleListAsTriangleStrip;
+  const uint32_t vertex_index_count =
+      is_vs_expansion_draw ? primitive_processing_result.guest_draw_vertex_count
+                           : primitive_processing_result.host_draw_vertex_count;
+  dirty |= system_constants_.vertex_index_count != vertex_index_count;
+  system_constants_.vertex_index_count = vertex_index_count;
 
   // Index or tessellation edge factor buffer endianness.
   dirty |= system_constants_.vertex_index_endian !=

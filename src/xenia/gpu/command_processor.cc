@@ -609,6 +609,12 @@ bool CommandProcessor::SetupContext() {
 
 void CommandProcessor::ShutdownContext() { ResetZPDState(); }
 
+uint32_t CommandProcessor::GuestReadPtrOffset(int32_t offset) const {
+  return uint32_t(reader_.read_ptr() -
+                  reinterpret_cast<uintptr_t>(memory_->physical_membase()) +
+                  offset);
+}
+
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
   read_ptr_index_.store(0, std::memory_order_relaxed);
   const uint32_t buffer_ptr = ptr;

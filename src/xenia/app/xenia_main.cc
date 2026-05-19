@@ -89,7 +89,7 @@ DEFINE_string(gpu, "vulkan", "Graphics system. Use: " GPU_OPTIONS, "GPU");
 DEFINE_string(hid, "sdl", "Input system. Use: " HID_OPTIONS, "HID");
 #elif XE_PLATFORM_MAC
 #define APU_OPTIONS "[sdl, nop]"
-#define GPU_OPTIONS "[metal, null]"
+#define GPU_OPTIONS "[metal, vulkan, null]"
 #define HID_OPTIONS "[sdl, nop]"
 DEFINE_string(apu, "sdl", "Audio system. Use: " APU_OPTIONS, "APU");
 DEFINE_string(gpu, "metal", "Graphics system. Use: " GPU_OPTIONS, "GPU");

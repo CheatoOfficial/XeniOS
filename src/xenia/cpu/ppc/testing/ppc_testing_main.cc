@@ -21,10 +21,7 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/raw_module.h"
 
-#include <atomic>
 #include <chrono>
-#include <mutex>
-#include <thread>
 #include <unordered_set>
 
 #if XE_ARCH_AMD64
@@ -246,23 +243,49 @@ class TestRunner {
     std::unique_ptr<xe::cpu::backend::Backend> backend;
     if (!backend) {
 #if XE_ARCH_AMD64
-      if (cvars::cpu == "x64") {
+      if (cvars::cpu == "x64" || cvars::cpu == "any") {
         backend.reset(new xe::cpu::backend::x64::X64Backend());
       }
 #elif XE_ARCH_ARM64
-      if (cvars::cpu == "a64") {
+      if (cvars::cpu == "a64" || cvars::cpu == "any") {
         backend.reset(new xe::cpu::backend::a64::A64Backend());
       }
 #endif  // XE_ARCH
-      if (cvars::cpu == "any") {
-        if (!backend) {
-#if XE_ARCH_AMD64
-          backend.reset(new xe::cpu::backend::x64::X64Backend());
-#elif XE_ARCH_ARM64
-          backend.reset(new xe::cpu::backend::a64::A64Backend());
-#endif  // XE_ARCH
-        }
+
+      processor_.reset(new Processor(memory_.get(), nullptr));
+      processor_->Setup(std::move(backend));
+      processor_->set_debug_info_flags(DebugInfoFlags::kDebugInfoAll);
+
+      auto module = std::make_unique<xe::cpu::RawModule>(processor_.get());
+      if (!module->LoadFile(START_ADDRESS, suite.bin_file_path())) {
+        XELOGE("Unable to load test binary {}", suite.bin_file_path());
+        return false;
       }
+      processor_->AddModule(std::move(module));
+
+      // Snapshot the .bin so the same-suite path can repopulate v80000000
+      // without re-reading from disk.
+      bin_size_ = static_cast<uint32_t>(
+          std::filesystem::file_size(suite.bin_file_path()));
+      bin_cache_.assign(memory_->TranslateVirtual(START_ADDRESS),
+                        memory_->TranslateVirtual(START_ADDRESS) + bin_size_);
+
+      processor_->backend()->CommitExecutableRange(START_ADDRESS,
+                                                   START_ADDRESS + 1024 * 1024);
+
+      current_suite_ = &suite;
+    } else {
+      // Same suite as last test: reuse Processor/Backend. Memory::Reset
+      // wipes v80000000 so restore the .bin from the cached snapshot.
+      memory_->Reset();
+      auto* heap = memory_->LookupHeap(START_ADDRESS);
+      if (!heap->AllocFixed(START_ADDRESS, bin_size_, 0,
+                            kMemoryAllocationReserve | kMemoryAllocationCommit,
+                            kMemoryProtectRead | kMemoryProtectWrite)) {
+        return false;
+      }
+      std::memcpy(memory_->TranslateVirtual(START_ADDRESS), bin_cache_.data(),
+                  bin_size_);
     }
 
     // Setup a fresh processor.
@@ -385,7 +408,9 @@ class TestRunner {
           while (*c == ' ') {
             ++c;
           }
-          if (!*c) {
+          // Need at least two chars for a hex pair; otherwise c+=2 below
+          // would jump past the null terminator into adjacent heap.
+          if (!*c || !c[1]) {
             break;
           }
           char ccs[3] = {c[0], c[1], 0};
@@ -425,25 +450,20 @@ class TestRunner {
         auto address_str = it.second.substr(0, space_pos);
         auto bytes_str = it.second.substr(space_pos + 1);
         uint32_t address = std::strtoul(address_str.c_str(), nullptr, 16);
-        auto base_address = memory_->TranslateVirtual(address);
-        auto p = base_address;
+        auto p = memory_->TranslateVirtual(address);
         const char* c = bytes_str.c_str();
         bool failed = false;
-        size_t count = 0;
         StringBuffer expecteds;
         StringBuffer actuals;
         while (*c) {
           while (*c == ' ') {
             ++c;
           }
-          if (!*c) {
+          if (!*c || !c[1]) {
             break;
           }
           char ccs[3] = {c[0], c[1], 0};
           c += 2;
-          count++;
-          uint32_t current_address =
-              address + static_cast<uint32_t>(p - base_address);
           uint32_t expected = std::strtoul(ccs, nullptr, 16);
           uint8_t actual = *p;
 
@@ -472,6 +492,11 @@ class TestRunner {
   std::unique_ptr<Memory> memory_;
   std::unique_ptr<Processor> processor_;
   std::unique_ptr<ThreadState> thread_state_;
+
+  // Reuse Processor/Backend/Module across tests in the same suite.
+  TestSuite* current_suite_ = nullptr;
+  std::vector<uint8_t> bin_cache_;
+  uint32_t bin_size_ = 0;
 };
 
 bool DiscoverTests(const std::filesystem::path& test_path,
@@ -642,14 +667,19 @@ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
     ++failed_count;
   }
 #else
-  // Use fork to isolate crashes on POSIX systems
-  // Note: runner parameter is not used on POSIX
-  (void)runner;  // Suppress unused parameter warning
-  TestResult result = RunTestInChildProcess(test_suite, test_case);
-
-  if (result == TestResult::kPassed) {
+  // Run directly in-process; the amortized runner makes fork-per-test
+  // both expensive and impossible (cache would not survive).
+  if (!runner.Setup(test_suite)) {
+    fprintf(stderr, "  [%s] FAILED SETUP\n", test_case.name.c_str());
+    fflush(stderr);
+    ++failed_count;
+    return;
+  }
+  if (runner.Run(test_case)) {
     ++passed_count;
   } else {
+    fprintf(stderr, "  [%s] FAILED\n", test_case.name.c_str());
+    fflush(stderr);
     ++failed_count;
   }
 #endif  // XE_COMPILER_MSVC
@@ -741,103 +771,6 @@ bool RunTests(const std::vector<std::string>& test_names) {
     ProtectedRunTest(*test_suite, runner, *test_case, failed_count,
                      passed_count);
   }
-#else
-  // On POSIX, run tests in parallel using thread pool + fork per test.
-  // Each thread forks one child at a time, ensuring only one Memory/shm
-  // instance per thread (avoids shm name collisions between concurrent
-  // children).
-  unsigned int num_cores = std::thread::hardware_concurrency();
-  if (num_cores == 0) {
-    num_cores = 4;
-  }
-  num_cores = std::max(1u, num_cores * 3 / 4);
-
-  fprintf(stderr, "Running tests in parallel using %u workers\n", num_cores);
-
-  // Per-suite tracking for progress output
-  struct SuiteInfo {
-    TestSuite* suite;
-    size_t total;
-    std::atomic<size_t> completed{0};
-  };
-  std::unordered_map<TestSuite*, size_t> suite_map;
-  std::vector<std::unique_ptr<SuiteInfo>> suite_info;
-  std::vector<size_t> test_to_suite(all_tests.size());
-  for (size_t i = 0; i < all_tests.size(); i++) {
-    auto* suite = all_tests[i].first;
-    auto it = suite_map.find(suite);
-    if (it == suite_map.end()) {
-      it = suite_map.emplace(suite, suite_info.size()).first;
-      auto si = std::make_unique<SuiteInfo>();
-      si->suite = suite;
-      si->total = 0;
-      suite_info.push_back(std::move(si));
-    }
-    test_to_suite[i] = it->second;
-    suite_info[it->second]->total++;
-  }
-  int suite_total = static_cast<int>(suite_info.size());
-  std::atomic<int> suites_completed{0};
-  std::atomic<size_t> tests_completed{0};
-  size_t total_tests = all_tests.size();
-
-  std::mutex result_mutex;
-  std::atomic<size_t> test_index{0};
-
-  auto worker = [&]() {
-    // Dummy runner for API compatibility (not used on POSIX)
-    TestRunner* runner_ptr = nullptr;
-    TestRunner& runner = *runner_ptr;
-
-    while (true) {
-      size_t idx = test_index.fetch_add(1);
-      if (idx >= all_tests.size()) {
-        break;
-      }
-
-      auto& [test_suite, test_case] = all_tests[idx];
-      int local_failed = 0;
-      int local_passed = 0;
-
-      ProtectedRunTest(*test_suite, runner, *test_case, local_failed,
-                       local_passed);
-
-      {
-        std::lock_guard<std::mutex> lock(result_mutex);
-        failed_count += local_failed;
-        passed_count += local_passed;
-      }
-
-      size_t done = tests_completed.fetch_add(1) + 1;
-      auto& si = *suite_info[test_to_suite[idx]];
-      size_t suite_done = si.completed.fetch_add(1) + 1;
-
-      if (suite_done == si.total) {
-        int num = suites_completed.fetch_add(1) + 1;
-        int pct = static_cast<int>(done * 100 / total_tests);
-        std::lock_guard<std::mutex> lock(result_mutex);
-        fprintf(stdout, "[%d/%d] %s (%zu tests) %d%%\n", num, suite_total,
-                si.suite->name().c_str(), si.total, pct);
-        fflush(stdout);
-      } else if (suite_done % 500 == 0) {
-        int pct = static_cast<int>(done * 100 / total_tests);
-        std::lock_guard<std::mutex> lock(result_mutex);
-        fprintf(stdout, "  ... %s %zu/%zu %d%%\n", si.suite->name().c_str(),
-                suite_done, si.total, pct);
-        fflush(stdout);
-      }
-    }
-  };
-
-  std::vector<std::thread> threads;
-  for (unsigned int i = 0; i < num_cores; ++i) {
-    threads.emplace_back(worker);
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-#endif
 
   auto end_time = std::chrono::steady_clock::now();
   auto elapsed_sec =

@@ -25,6 +25,7 @@ typedef struct objc_object NSView;
 typedef struct objc_object CAMetalLayer;
 #endif
 #endif
+#endif
 
 namespace xe {
 namespace ui {
@@ -34,6 +35,9 @@ class MacNSViewSurface final : public Surface {
   explicit MacNSViewSurface(NSView* view) : view_(view) {}
   TypeIndex GetType() const override { return kTypeIndex_MacNSView; }
   NSView* view() const { return view_; }
+  double GetBackingScale() const;
+  void ConfigureMetalLayer(uint32_t drawable_width, uint32_t drawable_height,
+                           double contents_scale) const;
   CAMetalLayer* GetOrCreateMetalLayer() const;
 
  protected:

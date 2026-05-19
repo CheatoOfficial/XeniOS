@@ -52,6 +52,13 @@ DEFINE_bool(
     "interpolated values. Requires VK_KHR_fragment_shader_barycentric.",
     "GPU");
 
+DEFINE_bool(
+    spirv_moltenvk_allow_contraction, true,
+    "When translating SPIR-V for MoltenVK, omit NoContraction decorations so "
+    "SPIRV-Cross doesn't emit MSL NoContraction helper wrappers with "
+    "[[clang::optnone]]. Other Vulkan drivers keep NoContraction enabled.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 
@@ -160,7 +167,10 @@ SpirvShaderTranslator::Features::Features(
       demote_to_helper_invocation(
           vulkan_device->properties().shaderDemoteToHelperInvocation),
       fragment_shader_barycentric(
-          vulkan_device->properties().fragmentShaderBarycentric) {
+          vulkan_device->properties().fragmentShaderBarycentric),
+      allow_float_contraction(cvars::spirv_moltenvk_allow_contraction &&
+                              vulkan_device->properties().driverID ==
+                                  VK_DRIVER_ID_MOLTENVK) {
   // Check for SPIR-V version override from CVAR.
   const std::string& override_version = cvars::spirv_version_override;
   if (override_version == "1.0") {
@@ -316,6 +326,7 @@ void SpirvShaderTranslator::StartTranslation() {
   // TODO(Triang3l): Logger.
   builder_ = std::make_unique<SpirvBuilder>(
       features_.spirv_version, (kSpirvMagicToolId << 16) | 1, nullptr);
+  builder_->SetAllowContraction(features_.allow_float_contraction);
 
   builder_->addCapability(IsSpirvTessEvalShader() ? spv::CapabilityTessellation
                                                   : spv::CapabilityShader);
@@ -759,15 +770,16 @@ void SpirvShaderTranslator::StartTranslation() {
     id_vector_temp_.push_back(main_rect_list_loop_continue_->getId());
     main_rect_list_loop_vertex_index_ =
         builder_->createOp(spv::OpPhi, type_int_, id_vector_temp_);
+    spv::Id main_rect_list_loop_condition = builder_->createBinOp(
+        spv::OpSLessThan, type_bool_, main_rect_list_loop_vertex_index_,
+        builder_->makeIntConstant(3));
     uint_vector_temp_.clear();
     builder_->createLoopMerge(
         main_rect_list_loop_merge_, main_rect_list_loop_continue_,
         spv::LoopControlDontUnrollMask, uint_vector_temp_);
-    builder_->createConditionalBranch(
-        builder_->createBinOp(spv::OpSLessThan, type_bool_,
-                              main_rect_list_loop_vertex_index_,
-                              builder_->makeIntConstant(3)),
-        &main_rect_list_loop_body, main_rect_list_loop_merge_);
+    builder_->createConditionalBranch(main_rect_list_loop_condition,
+                                      &main_rect_list_loop_body,
+                                      main_rect_list_loop_merge_);
 
     builder_->setBuildPoint(&main_rect_list_loop_body);
     ResetUcodeInvocationStateInMain();
