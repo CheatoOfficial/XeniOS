@@ -27,6 +27,7 @@
 #include "xenia/cpu/backend/x64/x64_function.h"
 #include "xenia/cpu/backend/x64/x64_sequences.h"
 #include "xenia/cpu/backend/x64/x64_stack_layout.h"
+#include "xenia/cpu/backend/x64/x64_tracers.h"
 #include "xenia/cpu/breakpoint.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/cpu/stack_walker.h"
@@ -1676,6 +1677,23 @@ void X64HelperEmitter::EmitSaveVolatileRegs() {
   vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[3])], xmm3);
   vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[4])], xmm4);
   vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[5])], xmm5);
+#if XE_PLATFORM_LINUX || XE_PLATFORM_MAC
+  // System V xmm6-15 are caller-saved and allocatable, but only trace
+  // instrumentation injects guest→host calls the register allocator can't see,
+  // so preserve them only when tracing is compiled in.
+  if (GetTracingMode()) {
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[6])], xmm6);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[7])], xmm7);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[8])], xmm8);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[9])], xmm9);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[10])], xmm10);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[11])], xmm11);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[12])], xmm12);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[13])], xmm13);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[14])], xmm14);
+    vmovups(qword[rsp + offsetof(StackLayout::Thunk, xmm[15])], xmm15);
+  }
+#endif
 }
 
 void X64HelperEmitter::EmitLoadVolatileRegs() {
@@ -1697,6 +1715,21 @@ void X64HelperEmitter::EmitLoadVolatileRegs() {
   vmovups(xmm3, qword[rsp + offsetof(StackLayout::Thunk, xmm[3])]);
   vmovups(xmm4, qword[rsp + offsetof(StackLayout::Thunk, xmm[4])]);
   vmovups(xmm5, qword[rsp + offsetof(StackLayout::Thunk, xmm[5])]);
+#if XE_PLATFORM_LINUX || XE_PLATFORM_MAC
+  // Mirror of the gated saves in EmitSaveVolatileRegs.
+  if (GetTracingMode()) {
+    vmovups(xmm6, qword[rsp + offsetof(StackLayout::Thunk, xmm[6])]);
+    vmovups(xmm7, qword[rsp + offsetof(StackLayout::Thunk, xmm[7])]);
+    vmovups(xmm8, qword[rsp + offsetof(StackLayout::Thunk, xmm[8])]);
+    vmovups(xmm9, qword[rsp + offsetof(StackLayout::Thunk, xmm[9])]);
+    vmovups(xmm10, qword[rsp + offsetof(StackLayout::Thunk, xmm[10])]);
+    vmovups(xmm11, qword[rsp + offsetof(StackLayout::Thunk, xmm[11])]);
+    vmovups(xmm12, qword[rsp + offsetof(StackLayout::Thunk, xmm[12])]);
+    vmovups(xmm13, qword[rsp + offsetof(StackLayout::Thunk, xmm[13])]);
+    vmovups(xmm14, qword[rsp + offsetof(StackLayout::Thunk, xmm[14])]);
+    vmovups(xmm15, qword[rsp + offsetof(StackLayout::Thunk, xmm[15])]);
+  }
+#endif
 }
 
 void X64HelperEmitter::EmitSaveNonvolatileRegs() {
@@ -1901,6 +1934,22 @@ void X64Backend::FreeGuestTrampoline(uint32_t trampoline_addr) {
   size_t index =
       (trampoline_addr - GUEST_TRAMPOLINE_BASE) / GUEST_TRAMPOLINE_MIN_LEN;
   guest_trampoline_address_bitmap_.Release(index);
+}
+
+bool X64Backend::trace_instr_available() const { return IsTracingInstr(); }
+bool X64Backend::trace_data_available() const { return IsTracingData(); }
+bool X64Backend::trace_func_available() const { return IsTracingFunc(); }
+bool X64Backend::trace_instr_enabled() const { return GetTraceInstrEnabled(); }
+void X64Backend::set_trace_instr_enabled(bool value) {
+  SetTraceInstrEnabled(value);
+}
+bool X64Backend::trace_data_enabled() const { return GetTraceDataEnabled(); }
+void X64Backend::set_trace_data_enabled(bool value) {
+  SetTraceDataEnabled(value);
+}
+bool X64Backend::trace_func_enabled() const { return GetTraceFuncEnabled(); }
+void X64Backend::set_trace_func_enabled(bool value) {
+  SetTraceFuncEnabled(value);
 }
 }  // namespace x64
 }  // namespace backend

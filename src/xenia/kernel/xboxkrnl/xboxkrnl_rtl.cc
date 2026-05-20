@@ -578,7 +578,7 @@ static void RecoverCriticalSection(pointer_t<X_RTL_CRITICAL_SECTION> cs,
 
 void xeRtlInitializeCriticalSection(X_RTL_CRITICAL_SECTION* cs,
                                     uint32_t cs_ptr) {
-  cs->header.type = 1;      // EventSynchronizationObject (auto reset)
+  cs->header.type = X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_EVENT;
   cs->header.absolute = 0;  // spin count div 256
   cs->header.signal_state = 0;
   cs->lock_count = -1;
@@ -601,7 +601,7 @@ X_STATUS xeRtlInitializeCriticalSectionAndSpinCount(X_RTL_CRITICAL_SECTION* cs,
     spin_count_div_256 = 255;
   }
 
-  cs->header.type = 1;  // EventSynchronizationObject (auto reset)
+  cs->header.type = X_DISPATCHER_FLAGS::DISPATCHER_AUTO_RESET_EVENT;
   cs->header.absolute = spin_count_div_256;
   cs->header.signal_state = 0;
   cs->lock_count = -1;
