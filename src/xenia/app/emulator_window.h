@@ -22,6 +22,7 @@ class QTimer;
 
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
+#include "xenia/ui/imgui_audio_dialog.h"
 #include "xenia/ui/imgui_confirm_dialog.h"
 #include "xenia/ui/imgui_context_menu.h"
 #include "xenia/ui/imgui_debug_dialog.h"
@@ -102,6 +103,7 @@ class EmulatorWindow {
                  const xe::ui::RawImage& image);
 
   void ToggleProfilesConfigDialog();
+  void ToggleAudioDialog();
   void ToggleConfigDialog();
   void OpenConfigDialog(const std::string& category = "");
   void ToggleControllerVibration();
@@ -290,6 +292,9 @@ class EmulatorWindow {
   ui::MenuItem* profile_menu_ = nullptr;
   ui::MenuItem* config_menu_ = nullptr;
   ui::MenuItem* tools_menu_ = nullptr;
+  ui::MenuItem* audio_menu_ = nullptr;
+  // Dedupes toolbar volume-button updates (enabled state + icon bucket).
+  int audio_icon_key_ = -1;
   ui::MenuItem* view_show_toolbar_item_ = nullptr;
   bool show_toolbar_ = true;
   void RefreshProfileMenu();
@@ -298,6 +303,8 @@ class EmulatorWindow {
   // surface.
   void ShowNoProfilePrompt();
   void RefreshProfileIcon();
+  // Toolbar volume button: enabled while a title runs, icon picked from volume.
+  void RefreshAudioIcon();
   void ShowProfilePopupMenu();
   // Show or hide the icon toolbar pane and persist the preference.
   void SetToolbarVisible(bool visible);
