@@ -122,10 +122,10 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
   auto custom_res_y = cvars::internal_display_resolution_y;
   if (!custom_res_x || custom_res_x > 1920 || !custom_res_y ||
       custom_res_y > 1080) {
-    OVERRIDE_uint32(internal_display_resolution_x,
-                    internal_display_resolution_entries[8].first);
-    OVERRIDE_uint32(internal_display_resolution_y,
-                    internal_display_resolution_entries[8].second);
+    OVERRIDE_PERSIST_uint32(internal_display_resolution_x,
+                            internal_display_resolution_entries[8].first);
+    OVERRIDE_PERSIST_uint32(internal_display_resolution_y,
+                            internal_display_resolution_entries[8].second);
     config::SaveConfig();
     xe::FatalError(fmt::format(
         "Invalid custom resolution specified: {}x{}\n"
@@ -223,9 +223,9 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                 threading::NanoSleep(sleep_ns);
 #endif
               } else {
-                // Unlimited mode (vsync=false) - fire vblanks as fast as
-                // possible Host presentation is separately throttled by
-                // framerate_limit
+                // Unlimited mode (guest_display_refresh_cap=false) - fire
+                // vblanks as fast as possible Host presentation is separately
+                // throttled by framerate_limit
                 MarkVblank();
                 threading::Sleep(std::chrono::milliseconds(1));
               }
