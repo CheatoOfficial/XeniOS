@@ -29,7 +29,6 @@ class QTimer;
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_performance_dialog.h"
 #include "xenia/ui/imgui_postprocessing_dialog.h"
-#include "xenia/ui/imgui_xmp_dialog.h"
 #include "xenia/ui/immediate_drawer.h"
 #include "xenia/ui/menu_item.h"
 #include "xenia/ui/presenter.h"
@@ -103,7 +102,6 @@ class EmulatorWindow {
                  const xe::ui::RawImage& image);
 
   void ToggleProfilesConfigDialog();
-  void ToggleXMPConfigDialog();
   void ToggleConfigDialog();
   void OpenConfigDialog(const std::string& category = "");
   void ToggleControllerVibration();
@@ -276,7 +274,6 @@ class EmulatorWindow {
   QPointer<class ConfigDialogQt> config_dialog_qt_;
 #endif
   ui::ImGuiContextMenu* context_menu_ = nullptr;
-  ui::ImGuiXmpDialog* xmp_dialog_ = nullptr;
 
   GameListPanel* game_list_panel_ = nullptr;
   std::unique_ptr<WxToolbarState> wx_toolbar_state_;
