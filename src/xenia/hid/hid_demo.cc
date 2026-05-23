@@ -40,15 +40,9 @@
 #if !XE_PLATFORM_ANDROID
 #include "xenia/hid/sdl/sdl_hid.h"
 #endif  // !XE_PLATFORM_ANDROID
-#if !XE_PLATFORM_WIN32
 #include "xenia/hid/keyboard/keyboard_hid.h"
-#endif
-#if XE_PLATFORM_WIN32
-#include "xenia/hid/winkey/winkey_hid.h"
-#include "xenia/hid/xinput/xinput_hid.h"
-#endif  // XE_PLATFORM_WIN32
 
-DEFINE_string(hid, "any", "Input system. Use: [any, nop, sdl, winkey, xinput]",
+DEFINE_string(hid, "any", "Input system. Use: [any, nop, sdl, keyboard]",
               "General");
 
 #define MAX_USERS 4
@@ -135,25 +129,11 @@ std::vector<std::unique_ptr<hid::InputDriver>> HidDemoApp::CreateInputDrivers(
       drivers.emplace_back(std::move(driver));
     }
 #endif  // !XE_PLATFORM_ANDROID
-#if !XE_PLATFORM_WIN32
   } else if (cvars::hid.compare("keyboard") == 0) {
     auto driver = xe::hid::keyboard::Create(window, kZOrderHidInput);
     if (driver && XSUCCEEDED(driver->Setup())) {
       drivers.emplace_back(std::move(driver));
     }
-#endif
-#if XE_PLATFORM_WIN32
-  } else if (cvars::hid.compare("winkey") == 0) {
-    auto driver = xe::hid::winkey::Create(window, kZOrderHidInput);
-    if (XSUCCEEDED(driver->Setup())) {
-      drivers.emplace_back(std::move(driver));
-    }
-  } else if (cvars::hid.compare("xinput") == 0) {
-    auto driver = xe::hid::xinput::Create(window, kZOrderHidInput);
-    if (XSUCCEEDED(driver->Setup())) {
-      drivers.emplace_back(std::move(driver));
-    }
-#endif  // XE_PLATFORM_WIN32
   } else {
 #if !XE_PLATFORM_ANDROID
     auto sdl_driver = xe::hid::sdl::Create(window, kZOrderHidInput);
@@ -161,22 +141,10 @@ std::vector<std::unique_ptr<hid::InputDriver>> HidDemoApp::CreateInputDrivers(
       drivers.emplace_back(std::move(sdl_driver));
     }
 #endif  // !XE_PLATFORM_ANDROID
-#if !XE_PLATFORM_WIN32
     auto keyboard_driver = xe::hid::keyboard::Create(window, kZOrderHidInput);
     if (keyboard_driver && XSUCCEEDED(keyboard_driver->Setup())) {
       drivers.emplace_back(std::move(keyboard_driver));
     }
-#endif
-#if XE_PLATFORM_WIN32
-    auto xinput_driver = xe::hid::xinput::Create(window, kZOrderHidInput);
-    if (xinput_driver && XSUCCEEDED(xinput_driver->Setup())) {
-      drivers.emplace_back(std::move(xinput_driver));
-    }
-    auto winkey_driver = xe::hid::winkey::Create(window, kZOrderHidInput);
-    if (winkey_driver && XSUCCEEDED(winkey_driver->Setup())) {
-      drivers.emplace_back(std::move(winkey_driver));
-    }
-#endif  // XE_PLATFORM_WIN32
     if (drivers.empty()) {
       // Fallback to nop if none created.
       drivers.emplace_back(xe::hid::nop::Create(window, kZOrderHidInput));

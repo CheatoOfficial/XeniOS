@@ -108,8 +108,7 @@ if(WIN32)
     xenia-apu-xaudio2
     xenia-debug-gdb
     xenia-gpu-d3d12
-    xenia-hid-winkey
-    xenia-hid-xinput
+    xenia-hid-keyboard
     xenia-ui-d3d12
   )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
