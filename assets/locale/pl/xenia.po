@@ -58,59 +58,63 @@ msgstr ""
 
 #: src/xenia/app/emulator_window.cc:895
 msgid "&About..."
-msgstr "O programie(&A)…"
+msgstr "O progr&amie…"
 
 #: src/xenia/app/emulator_window.cc:794
 msgid "&Add Games..."
-msgstr "Dodaj gry(&D)…"
+msgstr "&Dodaj gry…"
 
 #: src/xenia/app/emulator_window.cc:864
 msgid "&Audio"
-msgstr "Dźwięk(&A)"
+msgstr "&Dźwięk"
 
 #: src/xenia/app/emulator_window.cc:824
 msgid "&Configuration"
-msgstr "Konfiguracja(&C)"
+msgstr "Konfigura&cja"
+
+#: src/xenia/app/emulator_window.cc:898
+msgid "&Controllers"
+msgstr "&Kontrolery"
 
 #: src/xenia/app/emulator_window.cc:786
 msgid "&File"
-msgstr "Plik(&F)"
+msgstr "&Plik"
 
 #: src/xenia/app/emulator_window.cc:884
 msgid "&Help"
-msgstr "Pomoc(&H)"
+msgstr "&Pomoc"
 
 #: src/xenia/app/emulator_window.cc:877
 msgid "&Install Content..."
-msgstr "Zainstaluj zawartość(&I)…"
+msgstr "Za&instaluj zawartość…"
 
 #: src/xenia/app/emulator_window.cc:826
 msgid "&Main"
-msgstr "Główne(&M)"
+msgstr "&Główne"
 
 #: src/xenia/app/emulator_window.cc:789
 msgid "&Open..."
-msgstr "Otwórz(&O)…"
+msgstr "&Otwórz…"
 
 #: src/xenia/app/emulator_window.cc:816
 msgid "&Profile"
-msgstr "Profil(&P)"
+msgstr "&Profil"
 
 #: src/xenia/app/emulator_window.cc:799
 msgid "&Stop Game"
-msgstr "Zatrzymaj grę(&S)"
+msgstr "&Zatrzymaj grę"
 
 #: src/xenia/app/emulator_window.cc:874
 msgid "&Tools"
-msgstr "Narzędzia(&T)"
+msgstr "&Narzędzia"
 
 #: src/xenia/app/emulator_window.cc:853
 msgid "&View"
-msgstr "Widok(&V)"
+msgstr "&Widok"
 
 #: src/xenia/app/emulator_window.cc:867
 msgid "&Volume"
-msgstr "Głośność(&V)"
+msgstr "&Głośność"
 
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
 msgid "(Installed) "
@@ -173,6 +177,14 @@ msgstr "Wszystkie pliki"
 msgid "All cvars are already overridden."
 msgstr "Wszystkie zmienne cvar są już przesłonięte."
 
+#: src/xenia/app/emulator_window.cc:343
+msgid "Arcade Pad"
+msgstr "Pad arcade"
+
+#: src/xenia/app/emulator_window.cc:331
+msgid "Arcade Stick"
+msgstr "Joystick arcade"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:69
 msgid "Argentina"
 msgstr "Argentyna"
@@ -188,6 +200,10 @@ msgstr "Dźwięk"
 #: src/xenia/ui/quick_settings_dialog_wx.cc:258
 msgid "Audio Backend:"
 msgstr "Backend dźwięku:"
+
+#: src/xenia/app/emulator_window.cc:2402
+msgid "Auto (%s)"
+msgstr "Automatycznie (%s)"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:71
 msgid "Australia"
@@ -354,6 +370,10 @@ msgstr "Czechy"
 msgid "DLC"
 msgstr "DLC"
 
+#: src/xenia/app/emulator_window.cc:335
+msgid "Dance Pad"
+msgstr "Mata do tańca"
+
 #: src/xenia/ui/game_list_panel_wx.cc:690
 #: src/xenia/ui/game_list_panel_wx.cc:693
 msgid "Default"
@@ -382,6 +402,10 @@ msgstr "Odrzuć zmiany"
 msgid "Discard all unsaved changes?"
 msgstr "Odrzucić wszystkie niezapisane zmiany?"
 
+#: src/xenia/app/emulator_window.cc:2317
+msgid "Disconnect"
+msgstr "Odłącz"
+
 #: src/xenia/ui/quick_settings_dialog_wx.cc:297
 msgid "Discord Rich Presence:"
 msgstr "Discord Rich Presence:"
@@ -392,7 +416,7 @@ msgstr "Dominikana"
 
 #: src/xenia/app/emulator_window.cc:809
 msgid "E&xit"
-msgstr "Wyjdź(&X)"
+msgstr "&Wyjdź"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:93
 msgid "Ecuador"
@@ -474,7 +498,7 @@ msgstr ""
 
 #: src/xenia/app/emulator_window.cc:887
 msgid "FA&Q..."
-msgstr "FAQ(&Q)…"
+msgstr "FA&Q…"
 
 #: src/xenia/ui/patches_dialog_wx.cc:225
 msgid "Failed to save changes."
@@ -496,6 +520,10 @@ msgstr "Family"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:98
 msgid "Faroe Islands"
 msgstr "Wyspy Owcze"
+
+#: src/xenia/app/emulator_window.cc:341
+msgid "Drum Kit"
+msgstr "Zestaw perkusyjny"
 
 #: src/xenia/ui/game_list_panel_wx.cc:1236
 msgid "File Corrupted"
@@ -537,13 +565,21 @@ msgstr "Pełne"
 msgid "Full Screen:"
 msgstr "Pełny ekran:"
 
+#: src/xenia/app/emulator_window.cc:333
+msgid "Flight Stick"
+msgstr "Joystick lotniczy"
+
 #: src/xenia/app/emulator_window.cc:891
 msgid "Game &compatibility..."
-msgstr "Kompatybilność gier(&C)…"
+msgstr "&Kompatybilność gier…"
 
 #: src/xenia/ui/advanced_settings_dialog_wx.cc:277
 msgid "GameMode not in PATH; install to enable."
 msgstr "GameMode nie jest w PATH; zainstaluj, aby włączyć."
+
+#: src/xenia/app/emulator_window.cc:345
+msgid "Gamepad"
+msgstr "Gamepad"
 
 #: src/xenia/ui/game_list_panel_wx.cc:96
 msgid "Gameplay"
@@ -620,6 +656,10 @@ msgstr "Gwatemala"
 #: src/xenia/app/emulator_window.cc:1722
 msgid "Guide"
 msgstr "Przewodnik"
+
+#: src/xenia/app/emulator_window.cc:339
+msgid "Guitar"
+msgstr "Gitara"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:105
 msgid "Honduras"
@@ -1216,7 +1256,7 @@ msgstr "Ustawienia"
 
 #: src/xenia/app/emulator_window.cc:856
 msgid "Show &Toolbar"
-msgstr "Pokaż pasek narzędzi(&T)"
+msgstr "&Pokaż pasek narzędzi"
 
 #: src/xenia/app/emulator_window.cc:805
 msgid "Show content directory..."
@@ -1435,6 +1475,10 @@ msgid ""
 msgstr ""
 "Xenia nie jest jeszcze w pełni zainicjowana. Spróbuj ponownie po zakończeniu "
 "uruchamiania aplikacji."
+
+#: src/xenia/app/emulator_window.cc:329
+msgid "Wheel"
+msgstr "Kierownica"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:173
 msgid "Yemen"

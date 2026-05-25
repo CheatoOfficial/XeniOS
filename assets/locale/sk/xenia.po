@@ -56,59 +56,63 @@ msgstr ""
 
 #: src/xenia/app/emulator_window.cc:895
 msgid "&About..."
-msgstr "O programe(&A)…"
+msgstr "O progr&ame…"
 
 #: src/xenia/app/emulator_window.cc:794
 msgid "&Add Games..."
-msgstr "Pridať hry(&A)…"
+msgstr "Prid&ať hry…"
 
 #: src/xenia/app/emulator_window.cc:864
 msgid "&Audio"
-msgstr "Zvuk(&A)"
+msgstr "&Zvuk"
 
 #: src/xenia/app/emulator_window.cc:824
 msgid "&Configuration"
-msgstr "Konfigurácia(&C)"
+msgstr "Konfigurá&cia"
+
+#: src/xenia/app/emulator_window.cc:898
+msgid "&Controllers"
+msgstr "&Ovládače"
 
 #: src/xenia/app/emulator_window.cc:786
 msgid "&File"
-msgstr "Súbor(&F)"
+msgstr "&Súbor"
 
 #: src/xenia/app/emulator_window.cc:884
 msgid "&Help"
-msgstr "Pomocník(&H)"
+msgstr "&Pomocník"
 
 #: src/xenia/app/emulator_window.cc:877
 msgid "&Install Content..."
-msgstr "Nainštalovať obsah(&I)…"
+msgstr "Na&inštalovať obsah…"
 
 #: src/xenia/app/emulator_window.cc:826
 msgid "&Main"
-msgstr "Hlavné(&M)"
+msgstr "&Hlavné"
 
 #: src/xenia/app/emulator_window.cc:789
 msgid "&Open..."
-msgstr "Otvoriť(&O)…"
+msgstr "&Otvoriť…"
 
 #: src/xenia/app/emulator_window.cc:816
 msgid "&Profile"
-msgstr "Profil(&P)"
+msgstr "&Profil"
 
 #: src/xenia/app/emulator_window.cc:799
 msgid "&Stop Game"
-msgstr "Zastaviť hru(&S)"
+msgstr "Za&staviť hru"
 
 #: src/xenia/app/emulator_window.cc:874
 msgid "&Tools"
-msgstr "Nástroje(&T)"
+msgstr "Nás&troje"
 
 #: src/xenia/app/emulator_window.cc:853
 msgid "&View"
-msgstr "Zobrazenie(&V)"
+msgstr "&Zobrazenie"
 
 #: src/xenia/app/emulator_window.cc:867
 msgid "&Volume"
-msgstr "Hlasitosť(&V)"
+msgstr "&Hlasitosť"
 
 #: src/xenia/ui/game_scan_progress_dialog_wx.cc:276
 msgid "(Installed) "
@@ -171,6 +175,14 @@ msgstr "Všetky súbory"
 msgid "All cvars are already overridden."
 msgstr "Všetky cvars sú už prepísané."
 
+#: src/xenia/app/emulator_window.cc:343
+msgid "Arcade Pad"
+msgstr "Arkádový panel"
+
+#: src/xenia/app/emulator_window.cc:331
+msgid "Arcade Stick"
+msgstr "Arkádový joystick"
+
 #: src/xenia/ui/profile_editor_dialog_wx.cc:69
 msgid "Argentina"
 msgstr "Argentína"
@@ -186,6 +198,10 @@ msgstr "Zvuk"
 #: src/xenia/ui/quick_settings_dialog_wx.cc:258
 msgid "Audio Backend:"
 msgstr "Zvukový backend:"
+
+#: src/xenia/app/emulator_window.cc:2402
+msgid "Auto (%s)"
+msgstr "Automaticky (%s)"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:71
 msgid "Australia"
@@ -352,6 +368,10 @@ msgstr "Česká republika"
 msgid "DLC"
 msgstr "DLC"
 
+#: src/xenia/app/emulator_window.cc:335
+msgid "Dance Pad"
+msgstr "Tanečná podložka"
+
 #: src/xenia/ui/game_list_panel_wx.cc:690
 #: src/xenia/ui/game_list_panel_wx.cc:693
 msgid "Default"
@@ -380,6 +400,10 @@ msgstr "Zahodiť zmeny"
 msgid "Discard all unsaved changes?"
 msgstr "Zahodiť všetky neuložené zmeny?"
 
+#: src/xenia/app/emulator_window.cc:2317
+msgid "Disconnect"
+msgstr "Odpojiť"
+
 #: src/xenia/ui/quick_settings_dialog_wx.cc:297
 msgid "Discord Rich Presence:"
 msgstr "Discord Rich Presence:"
@@ -390,7 +414,7 @@ msgstr "Dominikánska republika"
 
 #: src/xenia/app/emulator_window.cc:809
 msgid "E&xit"
-msgstr "Koniec(&X)"
+msgstr "&Koniec"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:93
 msgid "Ecuador"
@@ -472,7 +496,7 @@ msgstr ""
 
 #: src/xenia/app/emulator_window.cc:887
 msgid "FA&Q..."
-msgstr "FAQ(&Q)…"
+msgstr "FA&Q…"
 
 #: src/xenia/ui/patches_dialog_wx.cc:225
 msgid "Failed to save changes."
@@ -494,6 +518,10 @@ msgstr "Family"
 #: src/xenia/ui/profile_editor_dialog_wx.cc:98
 msgid "Faroe Islands"
 msgstr "Faerské ostrovy"
+
+#: src/xenia/app/emulator_window.cc:341
+msgid "Drum Kit"
+msgstr "Bicia súprava"
 
 #: src/xenia/ui/game_list_panel_wx.cc:1236
 msgid "File Corrupted"
@@ -535,13 +563,21 @@ msgstr "Plné"
 msgid "Full Screen:"
 msgstr "Celá obrazovka:"
 
+#: src/xenia/app/emulator_window.cc:333
+msgid "Flight Stick"
+msgstr "Letecká páka"
+
 #: src/xenia/app/emulator_window.cc:891
 msgid "Game &compatibility..."
-msgstr "Kompatibilita hier(&C)…"
+msgstr "&Kompatibilita hier…"
 
 #: src/xenia/ui/advanced_settings_dialog_wx.cc:277
 msgid "GameMode not in PATH; install to enable."
 msgstr "GameMode nie je v PATH; nainštalujte ho na povolenie."
+
+#: src/xenia/app/emulator_window.cc:345
+msgid "Gamepad"
+msgstr "Gamepad"
 
 #: src/xenia/ui/game_list_panel_wx.cc:96
 msgid "Gameplay"
@@ -618,6 +654,10 @@ msgstr "Guatemala"
 #: src/xenia/app/emulator_window.cc:1722
 msgid "Guide"
 msgstr "Sprievodca"
+
+#: src/xenia/app/emulator_window.cc:339
+msgid "Guitar"
+msgstr "Gitara"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:105
 msgid "Honduras"
@@ -1212,7 +1252,7 @@ msgstr "Nastavenia"
 
 #: src/xenia/app/emulator_window.cc:856
 msgid "Show &Toolbar"
-msgstr "Zobraziť panel nástrojov(&T)"
+msgstr "Zobraziť panel nás&trojov"
 
 #: src/xenia/app/emulator_window.cc:805
 msgid "Show content directory..."
@@ -1431,6 +1471,10 @@ msgid ""
 msgstr ""
 "Xenia ešte nie je úplne pripravená. Skúste to znova po dokončení spúšťania "
 "aplikácie."
+
+#: src/xenia/app/emulator_window.cc:329
+msgid "Wheel"
+msgstr "Volant"
 
 #: src/xenia/ui/profile_editor_dialog_wx.cc:173
 msgid "Yemen"
