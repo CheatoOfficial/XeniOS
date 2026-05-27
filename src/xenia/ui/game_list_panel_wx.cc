@@ -13,7 +13,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
-#include <fstream>
 
 #include <wx/button.h>
 #include <wx/dcclient.h>
@@ -26,6 +25,7 @@
 #include <wx/msgdlg.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
+#include <wx/stattext.h>
 #include <wx/textdlg.h>
 #include <wx/variant.h>
 
@@ -399,8 +399,25 @@ GameListPanel::GameListPanel(wxWindow* parent, EmulatorWindow* emulator_window)
     main->Bind(wxEVT_MOTION, &GameListPanel::OnListMouseMotion, this);
   }
 
+  loading_panel_ = new wxPanel(this, wxID_ANY);
+  {
+    auto* loading_sizer = new wxBoxSizer(wxVERTICAL);
+    loading_sizer->AddStretchSpacer(1);
+    auto* loading_label =
+        new wxStaticText(loading_panel_, wxID_ANY, _("Loading titles..."));
+    wxFont loading_font = loading_label->GetFont();
+    loading_font.Scale(1.2f);
+    loading_label->SetFont(loading_font);
+    loading_sizer->Add(loading_label, 0, wxALIGN_CENTER_HORIZONTAL);
+    loading_sizer->AddStretchSpacer(1);
+    loading_panel_->SetSizer(loading_sizer);
+  }
+  list_->Hide();
+
   auto* sizer = new wxBoxSizer(wxVERTICAL);
   sizer->Add(search_, wxSizerFlags().Expand().Border(wxALL, 4));
+  sizer->Add(loading_panel_,
+             wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 4));
   sizer->Add(list_,
              wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 4));
   SetSizer(sizer);
@@ -415,14 +432,23 @@ GameListPanel::GameListPanel(wxWindow* parent, EmulatorWindow* emulator_window)
 
 void GameListPanel::Reload() {
   entries_.clear();
+  auto reveal_list = [this]() {
+    if (loading_panel_ && loading_panel_->IsShown()) {
+      loading_panel_->Hide();
+      list_->Show();
+      Layout();
+    }
+  };
 
   if (!emulator_window_) {
     Repopulate();
+    reveal_list();
     return;
   }
   auto* library = emulator_window_->game_library();
   if (!library) {
     Repopulate();
+    reveal_list();
     return;
   }
 
@@ -445,6 +471,7 @@ void GameListPanel::Reload() {
   LoadTimestampsFromProfiles();
   Repopulate();
   UpdateSearchPlaceholder();
+  reveal_list();
   StartIconLoad();
 }
 
@@ -514,24 +541,6 @@ void GameListPanel::StartIconLoad() {
   CallAfter([this, gen]() { ProcessIconChunk(0, gen); });
 }
 
-static std::vector<uint8_t> ReadIconFile(const std::filesystem::path& path) {
-  std::ifstream file(path, std::ios::binary | std::ios::ate);
-  if (!file) {
-    return {};
-  }
-  const std::streamoff size = file.tellg();
-  if (size <= 0) {
-    return {};
-  }
-  std::vector<uint8_t> data(static_cast<size_t>(size));
-  file.seekg(0);
-  file.read(reinterpret_cast<char*>(data.data()), data.size());
-  if (!file) {
-    return {};
-  }
-  return data;
-}
-
 void GameListPanel::ProcessIconChunk(size_t start, int gen) {
   if (gen != icon_load_generation_) {
     return;
@@ -553,7 +562,8 @@ void GameListPanel::ProcessIconChunk(size_t start, int gen) {
     if (entry.icon.IsOk()) {
       continue;
     }
-    std::vector<uint8_t> data = ReadIconFile(library->IconPath(entry.title_id));
+    std::vector<uint8_t> data =
+        xe::filesystem::ReadAllBytes(library->IconPath(entry.title_id));
     if (data.empty()) {
       continue;
     }
@@ -1060,7 +1070,10 @@ void GameListPanel::OnItemContextMenu(wxDataViewEvent& event) {
               title_id));
         },
         master->GetId());
-    menu.AppendSubMenu(compat, _("Compatibility"));
+    auto* compat_item = menu.AppendSubMenu(compat, _("Compatibility"));
+    if (GetCompatState(entry.title_id) == CompatState::kUnknown) {
+      compat_item->Enable(false);
+    }
 
     menu.AppendSeparator();
     auto* remove = menu.Append(wxID_ANY, _("Remove from list"));
