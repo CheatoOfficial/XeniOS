@@ -56,6 +56,9 @@ struct ReserveHelper {
   uint64_t blocks[RESERVE_NUM_ENTRIES / 64] = {};
 };
 
+uint32_t FindStackpointSyncDepth(const A64BackendStackpoint* stackpoints,
+                                 uint32_t current_depth, uint32_t guest_sp);
+
 enum : uint32_t {
   kA64BackendHasReserveBit = 0,
   kA64BackendNJMOn = 1,
