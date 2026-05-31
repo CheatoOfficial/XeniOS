@@ -187,6 +187,9 @@ void D3D12ZPDQueryPool::Shutdown() {
     rov_counter_readback_buffer_->Unmap(0, &written_range);
   }
 
+  readback_mapping_ = nullptr;
+  readback_buffer_.Reset();
+  query_heap_.Reset();
   rov_counter_readback_mapping_ = nullptr;
   rov_counter_readback_buffer_.Reset();
   rov_counter_buffer_.Reset();

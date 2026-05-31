@@ -1177,6 +1177,7 @@ bool CommandProcessor::BeginZPDReport(uint32_t report_address) {
         if (!wait_succeeded) {
           if (pending_slot.cached_delta != 0) {
             carried_cached_delta = pending_slot.cached_delta;
+            has_carried_cached_delta = true;
             carried_from_slot_base = slot_base;
           }
           break;
