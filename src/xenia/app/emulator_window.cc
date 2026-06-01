@@ -118,6 +118,10 @@
 #endif
 #endif
 
+#if XE_PLATFORM_MAC
+#include <sys/sysctl.h>
+#endif
+
 #include "xenia/apu/apu_flags.h"
 #include "xenia/apu/audio_system.h"
 #include "xenia/cpu/backend/backend.h"
@@ -284,6 +288,11 @@ DEFINE_bool(
     "Enable the Metal performance HUD (MTL_HUD_ENABLED=1) when launching "
     "games in separate processes.",
     "MacOS");
+DEFINE_bool(
+    use_rosetta, false,
+    "Launch games under Rosetta 2 (x86_64) instead of native arm64.\n"
+    "Only meaningful on Apple Silicon hosts running a universal app bundle.",
+    "MacOS");
 #endif
 DEFINE_bool(disable_game_window_mouse, false,
             "Disables mouse interactions in the game window, including "
@@ -318,6 +327,25 @@ struct WxToolbarState {
 };
 
 namespace {
+
+#if XE_PLATFORM_MAC
+// execv of a universal binary inherits the parent's arch; arch(1) is the
+// only way to switch (e.g. Rosetta-running game spawning the native arm64
+// UI back). Returns "-arm64" / "-x86_64" when a switch is needed, or null
+// when default exec already picks the right slice.
+const char* RosettaArchFlagIfSwitchNeeded(bool want_rosetta) {
+  int translated = 0;
+  size_t sz = sizeof(translated);
+  // Missing sysctl => assume native; only Rosetta children set this to 1.
+  sysctlbyname("sysctl.proc_translated", &translated, &sz, nullptr, 0);
+  const bool parent_rosetta = (translated != 0);
+  if (parent_rosetta == want_rosetta) {
+    return nullptr;
+  }
+  return want_rosetta ? "-x86_64" : "-arm64";
+}
+#endif
+
 // The first tool flips between "Open" (no title) and "Back" (title running).
 constexpr int kToolIdOpenBack = 11000;
 constexpr int kToolIdSettings = 11001;
@@ -782,8 +810,13 @@ void EmulatorWindow::OnEmulatorInitialized() {
     if (pid == 0) {
       // Child process
 #if XE_PLATFORM_LINUX
+      // unsetenv on the false branch: the env var is inherited across the
+      // UI <-> title spawn chain, so a stale "1" from a previous launch
+      // would otherwise outlive the unchecked cvar.
       if (cvars::use_mangohud) {
         setenv("MANGOHUD", "1", 1);
+      } else {
+        unsetenv("MANGOHUD");
       }
 #endif  // XE_PLATFORM_LINUX
       std::vector<std::string> arg_storage;
@@ -839,6 +872,10 @@ void EmulatorWindow::OnEmulatorInitialized() {
       if (!gamemode_cmd.empty()) {
         argv.push_back(gamemode_cmd.c_str());
       }
+      if (use_arch_wrapper) {
+        argv.push_back("arch");
+        argv.push_back(arch_flag);
+      }
       for (const std::string& arg : arg_storage) {
         argv.push_back(arg.c_str());
       }
@@ -847,6 +884,8 @@ void EmulatorWindow::OnEmulatorInitialized() {
 #if XE_PLATFORM_LINUX
       if (cvars::use_gamemode) {
         execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
+      } else if (use_arch_wrapper) {
+        execvp("arch", const_cast<char**>(argv.data()));
       } else {
         execv(executable_path.c_str(), const_cast<char**>(argv.data()));
       }
@@ -3686,8 +3725,11 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     std::string gamemode_cmd;
 
 #if XE_PLATFORM_LINUX
+    // See OnEmulatorInitialized: env vars survive the UI<->title spawn chain.
     if (cvars::use_mangohud) {
       setenv("MANGOHUD", "1", 1);
+    } else {
+      unsetenv("MANGOHUD");
     }
     if (cvars::use_gamemode) {
       gamemode_cmd = "gamemoderun";
@@ -3733,6 +3775,8 @@ void EmulatorWindow::LaunchTitleInNewProcess(
     if (cvars::use_gamemode) {
       // Use execvp to search PATH for gamemoderun
       execvp(gamemode_cmd.c_str(), const_cast<char**>(argv.data()));
+    } else if (use_arch_wrapper) {
+      execvp("arch", const_cast<char**>(argv.data()));
     } else {
       execv(executable_path.c_str(), const_cast<char**>(argv.data()));
     }
@@ -3848,7 +3892,12 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   }
 
 #if XE_PLATFORM_LINUX || XE_PLATFORM_MAC
-  // In-process launch is unstable here; spawn a fresh process.
+  // In-process launch is unstable here; spawn a fresh process. Apply the
+  // title's overrides first — LaunchTitleInNewProcess reads cvars (e.g.
+  // use_rosetta, use_gamemode) before fork, so the child needs the
+  // overridden values inherited from the parent.
+  config::ReloadConfig();
+  config::LoadGameConfigForFile(abs_path);
   LaunchTitleInNewProcess(abs_path);
   return X_STATUS_SUCCESS;
 #endif
