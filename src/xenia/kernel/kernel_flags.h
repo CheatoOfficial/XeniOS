@@ -13,5 +13,7 @@
 
 DECLARE_bool(headless);
 DECLARE_bool(log_high_frequency_kernel_calls);
+DECLARE_bool(guest_scheduler);
+DECLARE_uint32(guest_scheduler_cpus);
 
 #endif  // XENIA_KERNEL_KERNEL_FLAGS_H_
