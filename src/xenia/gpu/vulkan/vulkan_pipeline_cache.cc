@@ -67,6 +67,27 @@ namespace xe {
 namespace gpu {
 namespace vulkan {
 
+namespace {
+
+bool IsPrimitiveRestartAlwaysEnabledOnMoltenVK(
+    const ui::vulkan::VulkanDevice::Properties& device_properties,
+    VkPrimitiveTopology topology) {
+  if (device_properties.driverID != VK_DRIVER_ID_MOLTENVK) {
+    return false;
+  }
+
+  switch (topology) {
+    case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+    case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
+      return true;
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+
 VulkanPipelineCache::VulkanPipelineCache(
     VulkanCommandProcessor& command_processor,
     const RegisterFile& register_file,
@@ -2773,8 +2794,15 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
       assert_unhandled_case(description.primitive_topology);
       return false;
   }
+  // MoltenVK lowers strip/fan primitive restart to Metal, where it can't be
+  // disabled for these topologies. Request the behavior Metal will use anyway
+  // so MoltenVK doesn't warn on every affected pipeline.
   input_assembly_state.primitiveRestartEnable =
-      description.primitive_restart ? VK_TRUE : VK_FALSE;
+      description.primitive_restart ||
+              IsPrimitiveRestartAlwaysEnabledOnMoltenVK(
+                  vulkan_device->properties(), input_assembly_state.topology)
+          ? VK_TRUE
+          : VK_FALSE;
 
   VkPipelineViewportStateCreateInfo viewport_state;
   viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;

@@ -2601,6 +2601,11 @@ VkPipeline VulkanPresenter::CreateGuestOutputPaintPipeline(
   input_assembly_state.sType =
       VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   input_assembly_state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+  // MoltenVK uses Metal primitive restart behavior for strip topologies, where
+  // disabling restart isn't supported. The presenter draws non-indexed strips,
+  // so enabling it here only avoids the unsupported-state warning.
+  input_assembly_state.primitiveRestartEnable =
+      vulkan_device_->properties().driverID == VK_DRIVER_ID_MOLTENVK;
 
   VkPipelineViewportStateCreateInfo viewport_state = {};
   viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;

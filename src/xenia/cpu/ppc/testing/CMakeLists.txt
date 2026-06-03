@@ -4,6 +4,7 @@ endif()
 
 add_executable(xenia-cpu-ppc-tests
   ${CMAKE_CURRENT_SOURCE_DIR}/ppc_testing_main.cc
+  ${PROJECT_SOURCE_DIR}/src/xenia/cpu/testing/test_backend_cvars.cc
 )
 
 if(WIN32)

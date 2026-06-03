@@ -16,10 +16,18 @@ target_link_libraries(xenia-ui-metal PUBLIC
   "-framework Foundation"
   "-framework Metal"
   "-framework MetalKit"
-  "-framework MetalFX"
   "-framework QuartzCore"
-  "-framework AppKit"
 )
+if(XE_PLATFORM_IOS)
+  target_link_libraries(xenia-ui-metal PUBLIC
+    "-framework UIKit"
+  )
+elseif(XE_PLATFORM_MACOS)
+  target_link_libraries(xenia-ui-metal PUBLIC
+    "-framework AppKit"
+    "-framework MetalFX"
+  )
+endif()
 xe_shader_rules_metal(xenia-ui-metal ${CMAKE_CURRENT_SOURCE_DIR}/../shaders)
 if(TARGET xenia-gpu-metal-metal-shaders)
   add_dependencies(xenia-ui-metal xenia-gpu-metal-metal-shaders)

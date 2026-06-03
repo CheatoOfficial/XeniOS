@@ -25,7 +25,7 @@
 #if XE_ARCH_ARM64 && XE_COMPILER_MSVC
 #include <intrin.h>
 #endif
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
 #include <pthread.h>
 #endif
 #include "xenia/cpu/backend/a64/a64_assembler.h"
@@ -452,9 +452,8 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
                                                    current_stackpoint_depth))));
 
   // w13 = target depth computed by ResolveFunction.
-  ldr(w13, ptr(x19, static_cast<uint32_t>(
-                        offsetof(A64BackendContext,
-                                 pending_stackpoint_sync_depth))));
+  ldr(w13, ptr(x19, static_cast<uint32_t>(offsetof(
+                        A64BackendContext, pending_stackpoint_sync_depth))));
   auto& underflow = NewCachedLabel();
 
   cbz(x10, underflow);
@@ -484,9 +483,8 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   str(w13, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
   mov(w15, 0);
-  str(w15, ptr(x19, static_cast<uint32_t>(
-                        offsetof(A64BackendContext,
-                                 pending_stackpoint_sync_depth))));
+  str(w15, ptr(x19, static_cast<uint32_t>(offsetof(
+                        A64BackendContext, pending_stackpoint_sync_depth))));
 
   // Jump back to the caller.
   br(x8);
@@ -752,6 +750,15 @@ static void BuildGuestTrampoline(uint8_t* buf, void* proc, void* userdata1,
 A64Backend::A64Backend() {
   code_cache_ = A64CodeCache::Create();
 
+#if XE_PLATFORM_IOS
+  // iOS's JIT entitlement permits writable/executable mappings in place.
+  // Flipping anonymous pages from RW back to RX with mprotect is rejected
+  // under TXM and produces launch-time failures.
+  const bool wx_trampolines = true;
+#else
+  const bool wx_trampolines = memory::IsWritableExecutableMemoryPreferred();
+#endif
+
   // Prefer a sub-2GB slot so fast indirection (rel32) is usable; fall back
   // to an OS-chosen address if none is available. macOS rejects fixed
   // PROT_EXEC mappings in this range, so skip the scan entirely there.
@@ -778,6 +785,7 @@ A64Backend::A64Backend() {
   xenia_assert(buf);
   guest_trampoline_memory_ = reinterpret_cast<uint8_t*>(buf);
   guest_trampolines_sub4gb_ = reinterpret_cast<uintptr_t>(buf) < 0x100000000ull;
+  guest_trampolines_need_write_protect_ = !wx_trampolines;
   guest_trampoline_address_bitmap_.Resize(MAX_GUEST_TRAMPOLINES);
 }
 
@@ -981,13 +989,31 @@ uint32_t A64Backend::CreateGuestTrampoline(GuestTrampolineProc proc,
   uint8_t* write_pos =
       &guest_trampoline_memory_[kGuestTrampolineSize * new_index];
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
   pthread_jit_write_protect_np(0);
 #endif
+  void* protected_page_base = nullptr;
+  size_t protected_page_size = 0;
+  if (guest_trampolines_need_write_protect_) {
+    const size_t page_size = xe::memory::page_size();
+    const uintptr_t page_start =
+        reinterpret_cast<uintptr_t>(write_pos) & ~(page_size - 1);
+    const uintptr_t page_end = (reinterpret_cast<uintptr_t>(write_pos) +
+                                kGuestTrampolineSize + page_size - 1) &
+                               ~(page_size - 1);
+    protected_page_base = reinterpret_cast<void*>(page_start);
+    protected_page_size = page_end - page_start;
+    xenia_assert(memory::Protect(protected_page_base, protected_page_size,
+                                 xe::memory::PageAccess::kReadWrite));
+  }
   BuildGuestTrampoline(write_pos, reinterpret_cast<void*>(proc), userdata1,
                        userdata2,
                        reinterpret_cast<void*>(guest_to_host_thunk_));
-#if XE_PLATFORM_MAC
+  if (guest_trampolines_need_write_protect_) {
+    xenia_assert(memory::Protect(protected_page_base, protected_page_size,
+                                 xe::memory::PageAccess::kExecuteReadOnly));
+  }
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
   pthread_jit_write_protect_np(1);
 #endif
 

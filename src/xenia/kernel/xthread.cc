@@ -9,7 +9,10 @@
 
 #include "xenia/kernel/xthread.h"
 
-#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC
+#include <algorithm>
+#include <cstring>
+
+#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_APPLE
 #include <pthread.h>
 #endif
 #if !XE_PLATFORM_WIN32
@@ -34,6 +37,13 @@ DEFINE_bool(ignore_thread_priorities, false,
 UPDATE_from_bool(ignore_thread_priorities, 2026, 4, 9, 12, true);
 DEFINE_bool(ignore_thread_affinities, true,
             "Ignores game-specified thread affinities.", "Kernel");
+#if XE_PLATFORM_IOS
+DEFINE_bool(
+    ios_guest_threads_user_initiated_qos, false,
+    "Run guest XThreads at user-initiated QoS on iOS. This is an iOS "
+    "scheduler experiment for devices where guest CPU execution falls behind.",
+    "iOS");
+#endif  // XE_PLATFORM_IOS
 
 #if 0
 DEFINE_int64(stack_size_multiplier_hack, 1,
@@ -334,6 +344,12 @@ void XThread::FreeStack() {
 }
 
 X_STATUS XThread::Create() {
+#if XE_PLATFORM_IOS
+  if (kernel_state_ && kernel_state_->IsTitleStopRequestedIOS()) {
+    return X_STATUS_PROCESS_IS_TERMINATING;
+  }
+#endif  // XE_PLATFORM_IOS
+
   // Thread kernel object.
   if (!CreateNative<X_KTHREAD>()) {
     XELOGW("Unable to allocate thread object");
@@ -433,6 +449,13 @@ X_STATUS XThread::Create() {
 
   // Always retain when starting - the thread owns itself until exited.
   RetainHandle();
+#if XE_PLATFORM_IOS
+  // iOS title-exit reset clears the object table while native thread lambdas
+  // may still be unwinding. Keep the XThread object itself alive independently
+  // of its guest handle until the native thread function has returned.
+  Retain();
+  object_ref<XThread> ios_thread_lifetime(this);
+#endif  // XE_PLATFORM_IOS
 
   if (GuestScheduler::enabled() && !is_host_thread()) {
     // Cooperative fiber path: the guest thread runs on a fiber the scheduler
@@ -567,10 +590,27 @@ X_STATUS XThread::Exit(int exit_code) {
   xboxkrnl::xeKeKfReleaseSpinLock(cpu_context, &kprocess->thread_list_spinlock,
                                   old_irql);
 
-  kernel_state()->OnThreadExit(this);
+#if XE_PLATFORM_IOS
+  const bool ios_title_stop_host_thread =
+      !guest_thread_ && kernel_state_ &&
+      kernel_state_->IsTitleStopRequestedIOS();
+  if (ios_title_stop_host_thread) {
+    emulator()->processor()->OnThreadExit(thread_id_);
+  } else {
+#endif  // XE_PLATFORM_IOS
+    kernel_state()->OnThreadExit(this);
+#if XE_PLATFORM_IOS
+  }
+#endif  // XE_PLATFORM_IOS
 
   // Notify processor of our exit.
+#if XE_PLATFORM_IOS
+  if (!ios_title_stop_host_thread) {
+    emulator()->processor()->OnThreadExit(thread_id_);
+  }
+#else
   emulator()->processor()->OnThreadExit(thread_id_);
+#endif  // XE_PLATFORM_IOS
 
   if (fiber_) {
     // On a fiber, Thread::Exit() would kill the shared dispatch thread. Wake
@@ -584,13 +624,13 @@ X_STATUS XThread::Exit(int exit_code) {
   }
 
   // NOTE: unless PlatformExit fails, expect it to never return!
-#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC)
+#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_APPLE)
   current_xthread_tls_ = nullptr;
   current_thread_ = nullptr;
   xe::Profiler::ThreadExit();
 #endif
   running_ = false;
-#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC)
+#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_APPLE)
   ReleaseHandle();
 #endif
 
@@ -630,7 +670,7 @@ X_STATUS XThread::Terminate(int exit_code) {
     xe::threading::Thread::Exit(exit_code);
   } else if (thread_) {
     thread_->Terminate(exit_code);
-#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC)
+#if !(XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_APPLE)
     ReleaseHandle();
 #endif
   } else {
@@ -1161,6 +1201,15 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable,
 
   timeout_ms = Clock::ScaleGuestDurationMillis(timeout_ms);
 
+#if XE_PLATFORM_IOS
+  auto exit_if_title_stop_requested = [this]() {
+    if (XThread::IsInThread(this) && kernel_state_ &&
+        kernel_state_->IsTitleStopRequestedIOS()) {
+      Exit(0);
+    }
+  };
+#endif  // XE_PLATFORM_IOS
+
   if (fiber_) {
     // Cooperative path: yield/park the fiber instead of sleeping the dispatch
     // host thread. A zero timeout is a plain yield, otherwise park until the
@@ -1181,6 +1230,22 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable,
   }
 
   if (alertable) {
+#if XE_PLATFORM_IOS
+    if ((guest_thread_ || can_debugger_suspend()) && timeout_ms > 0) {
+      uint32_t remaining_ms = timeout_ms;
+      while (remaining_ms > 0) {
+        const uint32_t slice_ms = std::min<uint32_t>(remaining_ms, 10);
+        auto result =
+            xe::threading::AlertableSleep(std::chrono::milliseconds(slice_ms));
+        if (result == xe::threading::SleepResult::kAlerted) {
+          return X_STATUS_USER_APC;
+        }
+        exit_if_title_stop_requested();
+        remaining_ms -= slice_ms;
+      }
+      return X_STATUS_SUCCESS;
+    }
+#endif  // XE_PLATFORM_IOS
     auto result =
         xe::threading::AlertableSleep(std::chrono::milliseconds(timeout_ms));
     switch (result) {
@@ -1197,8 +1262,25 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable,
       } else {
         xe::threading::MaybeYield();
       }
+#if XE_PLATFORM_IOS
+      exit_if_title_stop_requested();
+#endif  // XE_PLATFORM_IOS
     } else {
-      xe::threading::Sleep(std::chrono::milliseconds(timeout_ms));
+#if XE_PLATFORM_IOS
+      if (guest_thread_ || can_debugger_suspend()) {
+        uint32_t remaining_ms = timeout_ms;
+        while (remaining_ms > 0) {
+          const uint32_t slice_ms = std::min<uint32_t>(remaining_ms, 10);
+          xe::threading::Sleep(std::chrono::milliseconds(slice_ms));
+          exit_if_title_stop_requested();
+          remaining_ms -= slice_ms;
+        }
+      } else {
+#endif  // XE_PLATFORM_IOS
+        xe::threading::Sleep(std::chrono::milliseconds(timeout_ms));
+#if XE_PLATFORM_IOS
+      }
+#endif  // XE_PLATFORM_IOS
     }
   }
 
@@ -1369,45 +1451,69 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state,
 
     // Always retain when starting - the thread owns itself until exited.
     thread->RetainHandle();
+#if XE_PLATFORM_IOS
+    thread->Retain();
+    object_ref<XThread> ios_thread_lifetime(thread);
+#endif  // XE_PLATFORM_IOS
 
     xe::threading::Thread::CreationParameters params;
     params.create_suspended = true;  // Not done restoring yet.
     params.stack_size = 16_MiB;
-    thread->thread_ = xe::threading::Thread::Create(params, [thread, state]() {
-      // Set thread ID override. This is used by logging.
-      xe::threading::set_current_thread_id(thread->handle());
+    thread->thread_ = xe::threading::Thread::Create(
+        params, [thread, state
+#if XE_PLATFORM_IOS
+                 ,
+                 ios_thread_lifetime = std::move(ios_thread_lifetime)
+#endif  // XE_PLATFORM_IOS
+    ]() {
+          // Set thread ID override. This is used by logging.
+          xe::threading::set_current_thread_id(thread->handle());
 
-      // Set name immediately, if we have one.
-      thread->thread_->set_name(thread->name());
+          // Set name immediately, if we have one.
+          thread->thread_->set_name(thread->name());
 
-      // Profiler needs to know about the thread.
-      xe::Profiler::ThreadEnter(thread->name().c_str());
+          // Profiler needs to know about the thread.
+          xe::Profiler::ThreadEnter(thread->name().c_str());
 
-      current_xthread_tls_ = thread;
-      current_thread_ = thread;
+          current_xthread_tls_ = thread;
+          current_thread_ = thread;
 
-      // Acquire any mutants
-      for (auto mutant : thread->pending_mutant_acquires_) {
-        uint64_t timeout = 0;
-        auto status = mutant->Wait(0, 0, 0, &timeout);
-        assert_true(status == X_STATUS_SUCCESS);
-      }
-      thread->pending_mutant_acquires_.clear();
+          // Acquire any mutants
+          for (auto mutant : thread->pending_mutant_acquires_) {
+            uint64_t timeout = 0;
+            auto status = mutant->Wait(0, 0, 0, &timeout);
+            assert_true(status == X_STATUS_SUCCESS);
+          }
+          thread->pending_mutant_acquires_.clear();
 
-      // Execute user code.
-      thread->running_ = true;
+          // Execute user code.
+          thread->running_ = true;
 
-#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_MAC
-      pthread_cleanup_push(HostThreadExitCleanupThunk, thread);
-      uint32_t pc = state.context.pc;
-      thread->kernel_state_->processor()->ExecuteRaw(thread->thread_state_, pc);
-      pthread_cleanup_pop(1);
+#if XE_PLATFORM_LINUX || XE_PLATFORM_ANDROID || XE_PLATFORM_APPLE
+          pthread_cleanup_push(HostThreadExitCleanupThunk, thread);
+          uint32_t pc = state.context.pc;
+#if XE_PLATFORM_IOS
+          const bool execute_thread =
+              !(thread->kernel_state_ &&
+                thread->kernel_state_->IsTitleStopRequestedIOS());
+#else
+      const bool execute_thread = true;
+#endif  // XE_PLATFORM_IOS
+          if (execute_thread) {
+            thread->kernel_state_->processor()->ExecuteRaw(
+                thread->thread_state_, pc);
+#if XE_PLATFORM_IOS
+          } else {
+            thread->Exit(0);
+#endif  // XE_PLATFORM_IOS
+          }
+          pthread_cleanup_pop(1);
 #else
       uint32_t pc = state.context.pc;
       thread->kernel_state_->processor()->ExecuteRaw(thread->thread_state_, pc);
       thread->OnHostThreadExitCleanup();
 #endif
-    });
+        });
     assert_not_null(thread->thread_);
 
     // Notify processor we were recreated.

@@ -902,6 +902,13 @@ DECLARE_XAM_EXPORT1(XamLoaderGetMediaInfo, kNone, kStub);
 
 dword_result_t XamContentLaunchImageFromFileInternal_entry(
     lpstring_t image_location, lpstring_t xex_name, dword_t unk) {
+#if XE_PLATFORM_IOS
+  if (kernel_state()->IsTitleStopRequestedIOS()) {
+    kernel_state()->TerminateTitle();
+    return X_ERROR_FUNCTION_FAILED;
+  }
+#endif  // XE_PLATFORM_IOS
+
   const std::string image_path = static_cast<std::string>(image_location);
   const std::string xex_name_ = static_cast<std::string>(xex_name);
 
@@ -934,6 +941,13 @@ DECLARE_XAM_EXPORT1(XamContentLaunchImageFromFileInternal, kContent, kStub);
 
 dword_result_t XamContentLaunchImageInternal_entry(lpvoid_t content_data_ptr,
                                                    lpstring_t xex_path) {
+#if XE_PLATFORM_IOS
+  if (kernel_state()->IsTitleStopRequestedIOS()) {
+    kernel_state()->TerminateTitle();
+    return X_ERROR_FUNCTION_FAILED;
+  }
+#endif  // XE_PLATFORM_IOS
+
   XCONTENT_AGGREGATE_DATA content_data = *content_data_ptr.as<XCONTENT_DATA*>();
 
   // title_id is written into first 8 characters of filename

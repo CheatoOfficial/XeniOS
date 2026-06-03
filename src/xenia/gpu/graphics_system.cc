@@ -174,9 +174,10 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
           kernel_state_, 128 * 1024, 0,
           [this]() {
             uint64_t last_frame_time = Clock::QueryGuestTickCount();
-    // Sleep for 90% of the vblank duration on Windows/macOS, spin for 10%
-    // Linux uses full sleep duration due to scheduler quantum issues
-#if XE_PLATFORM_WIN32 || XE_PLATFORM_MAC
+    // Sleep for 90% of the vblank duration on Windows/Apple, spin for
+    // 10%. Linux uses full sleep duration due to scheduler quantum
+    // issues.
+#if XE_PLATFORM_WIN32 || XE_PLATFORM_APPLE
             constexpr double duration_scalar = 0.90;
 #elif XE_PLATFORM_LINUX
             constexpr double duration_scalar = 1.0;
@@ -197,8 +198,8 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                     (1000000000.0 / static_cast<double>(vblank_hz)) *
                     duration_scalar);
 
-#if XE_PLATFORM_WIN32 || XE_PLATFORM_MAC
-                // Windows/macOS: time-gating + 90% sleep + 10% spin
+#if XE_PLATFORM_WIN32 || XE_PLATFORM_APPLE
+                // Windows/Apple: time-gating + 90% sleep + 10% spin.
                 const uint64_t tick_freq = Clock::guest_tick_frequency();
                 const uint64_t target_duration_ticks = tick_freq / vblank_hz;
                 const uint64_t current_time = Clock::QueryGuestTickCount();
@@ -212,7 +213,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                     last_frame_time += target_duration_ticks;
                   }
                   MarkVblank();
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
                   threading::NanoSleepPrecise(sleep_ns);
 #else
                   threading::NanoSleep(sleep_ns);
@@ -248,16 +249,18 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
 }
 
 void GraphicsSystem::Shutdown() {
-  if (command_processor_) {
-    EndTracing();
-    command_processor_->Shutdown();
-    command_processor_.reset();
-  }
-
+  // The frame limiter thread calls MarkVblank, which touches the command
+  // processor. Stop it before tearing the command processor down.
   if (frame_limiter_worker_thread_) {
     frame_limiter_worker_running_ = false;
     frame_limiter_worker_thread_->Wait(0, 0, 0, nullptr);
     frame_limiter_worker_thread_.reset();
+  }
+
+  if (command_processor_) {
+    EndTracing();
+    command_processor_->Shutdown();
+    command_processor_.reset();
   }
 
   if (presenter_) {

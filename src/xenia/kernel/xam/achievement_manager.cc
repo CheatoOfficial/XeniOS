@@ -8,6 +8,7 @@
  */
 
 #include "xenia/kernel/xam/achievement_manager.h"
+#include "xenia/base/platform.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/kernel/kernel_state.h"
@@ -16,6 +17,10 @@
 #include "xenia/kernel/xam/xdbf/gpd_info.h"
 #include "xenia/ui/audio_helper.h"
 #include "xenia/ui/imgui_guest_notification.h"
+#if XE_PLATFORM_IOS
+#include "xenia/ui/achievement_notification_payload.h"
+#include "xenia/ui/ios/app/windowed_app_context_ios.h"
+#endif  // XE_PLATFORM_IOS
 
 DEFINE_bool(show_achievement_notification, true,
             "Show achievement notification on screen.", "UI");
@@ -88,7 +93,7 @@ void AchievementManager::EarnAchievement(const uint64_t xuid,
     // Something went really wrong!
     return;
   }
-  ShowAchievementEarnedNotification(&achievement.value());
+  ShowAchievementEarnedNotification(xuid, title_id, &achievement.value());
 }
 
 void AchievementManager::LoadTitleAchievements(const uint64_t xuid) const {
@@ -146,14 +151,19 @@ bool AchievementManager::DoesAchievementExist(
 }
 
 void AchievementManager::ShowAchievementEarnedNotification(
-    const Achievement* achievement) const {
+    uint64_t xuid, uint32_t title_id, const Achievement* achievement) const {
+  const std::string title = "Achievement unlocked";
   const std::string description =
       fmt::format("{}G - {}", achievement->gamerscore,
                   xe::to_utf8(achievement->achievement_name));
 
   const Emulator* emulator = kernel_state()->emulator();
-  ui::WindowedAppContext& app_context =
-      emulator->display_window()->app_context();
+  ui::Window* display_window = emulator ? emulator->display_window() : nullptr;
+  if (!display_window) {
+    XELOGI("Achievement notification skipped: no display window available");
+    return;
+  }
+  ui::WindowedAppContext* app_context = &display_window->app_context();
   ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
   // Use game-specified position if enabled, otherwise default to center-bottom
@@ -161,13 +171,49 @@ void AchievementManager::ShowAchievementEarnedNotification(
                                ? kernel_state()->notification_position_
                                : 2;
 
-  app_context.CallInUIThread([imgui_drawer, description, position]() {
+#if XE_PLATFORM_IOS
+  static constexpr size_t kMaxIOSAchievementIconBytes = 512 * 1024;
+  ui::AchievementNotificationPayload payload;
+  payload.user_index = 0;
+  payload.position_id = position;
+  payload.xuid = xuid;
+  payload.title_id = title_id;
+  payload.achievement_id = achievement->achievement_id;
+  payload.gamerscore = achievement->gamerscore;
+  payload.title = "Achievement unlocked";
+  payload.description = description;
+  const auto icon = default_achievements_backend_->GetAchievementIcon(
+      xuid, title_id, achievement->achievement_id);
+  if (icon.size() <= kMaxIOSAchievementIconBytes) {
+    payload.icon_data.assign(icon.begin(), icon.end());
+  } else {
+    XELOGW("Achievement notification icon skipped: {} bytes exceeds cap",
+           icon.size());
+  }
+
+  app_context->CallInUIThread([app_context, imgui_drawer, title, description,
+                               position, payload = std::move(payload)]() {
+#else
+  app_context->CallInUIThread([imgui_drawer, title, description, position]() {
+#endif  // XE_PLATFORM_IOS
     // Play achievement sound
     ui::AudioHelper::Instance().PlayAchievementSound();
 
+#if XE_PLATFORM_IOS
+    auto* ios_context = dynamic_cast<ui::IOSWindowedAppContext*>(app_context);
+    if (ios_context && ios_context->PresentAchievementNotification(payload)) {
+      return;
+    }
+#endif  // XE_PLATFORM_IOS
+
+    if (!imgui_drawer) {
+      XELOGI("Achievement notification skipped: no ImGui drawer available");
+      return;
+    }
+
     // Show notification
-    new ui::AchievementNotificationWindow(imgui_drawer, "Achievement unlocked",
-                                          description, 0, position);
+    new ui::AchievementNotificationWindow(imgui_drawer, title, description, 0,
+                                          position);
   });
 }
 

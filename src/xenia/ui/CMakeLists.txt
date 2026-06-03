@@ -1,16 +1,18 @@
 add_library(xenia-ui STATIC)
 xe_platform_sources(xenia-ui ${CMAKE_CURRENT_SOURCE_DIR})
 # Demo files are standalone executables in XENIA_BUILD_MISC; windowed_app_main_*
-# files are added explicitly per-target. wx files are excluded on Android (no
-# xe-wxWidgets target there).
+# files are added explicitly per-target. wx files are excluded where no
+# xe-wxWidgets target exists.
 file(GLOB _ui_exclude
   "${CMAKE_CURRENT_SOURCE_DIR}/*_demo.cc"
   "${CMAKE_CURRENT_SOURCE_DIR}/windowed_app_main_*.cc"
 )
-if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR XE_PLATFORM_IOS)
   file(GLOB _wx_exclude
     "${CMAKE_CURRENT_SOURCE_DIR}/*_wx.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/*_wx.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/icon_decode.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/icon_decode.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/wx_locale.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/wx_locale.h"
   )
@@ -22,7 +24,7 @@ if(_ui_exclude AND _ui_srcs)
   set_target_properties(xenia-ui PROPERTIES SOURCES "${_ui_srcs}")
 endif()
 target_link_libraries(xenia-ui PUBLIC xenia-base)
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT XE_PLATFORM_IOS)
   target_link_libraries(xenia-ui PUBLIC xe-wxWidgets)
 endif()
 if(WIN32)
@@ -32,7 +34,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # fontconfig: imgui_drawer.cc font lookup.
   # GTK3: XCB handle extraction in window_wx.cc (gtk_widget_realize, etc.).
   target_link_libraries(xenia-ui PRIVATE xcb X11 X11-xcb fontconfig ${GTK3_LIBRARIES})
-elseif(APPLE)
+elseif(XE_PLATFORM_IOS)
+  set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/audio_helper.cc
+    PROPERTIES LANGUAGE OBJCXX
+  )
+elseif(XE_PLATFORM_MACOS)
   # xe_platform_sources globs *.cc only; .mm sources need explicit listing.
   target_sources(xenia-ui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/surface_mac.mm
@@ -54,7 +61,7 @@ xe_embed_binary_assets(xenia-ui
 # time, then bundle the staging tree into the binary. wx_locale.cc decodes
 # the bundle and feeds it to wxTranslations via a custom loader, so no
 # .mo files ship alongside the exe.
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT XE_PLATFORM_IOS)
   set(_xe_locale_stage "${CMAKE_CURRENT_BINARY_DIR}/locale_staged")
   file(GLOB _xe_po_files
        "${PROJECT_SOURCE_DIR}/assets/locale/*/xenia.po")

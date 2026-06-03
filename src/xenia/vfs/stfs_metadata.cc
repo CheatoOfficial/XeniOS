@@ -81,9 +81,9 @@ std::optional<StfsMetadata> ExtractStfsMetadata(
   metadata.disc_number = exec_info.disc_number;
   metadata.disc_count = exec_info.disc_count;
 
-  metadata.content_type = static_cast<uint32_t>(
-      static_cast<XContentType>(content_meta.content_type));
-  metadata.content_size = content_meta.content_size;
+  metadata.content_type = content_meta.content_type_value();
+  metadata.content_size = content_meta.content_size_value();
+  metadata.data_file_count = content_meta.data_file_count_value();
 
   // Tiered: requested language → English → first populated slot. Publishers
   // routinely misuse slots (e.g. Japanese text in the English slot for
@@ -116,7 +116,7 @@ std::optional<StfsMetadata> ExtractStfsMetadata(
   metadata.publisher = U16ToUtf8(content_meta.publisher());
   metadata.title_name = U16ToUtf8(content_meta.title_name());
 
-  const uint32_t thumb_size = content_meta.title_thumbnail_size;
+  const uint32_t thumb_size = content_meta.title_thumbnail_size_value();
   if (thumb_size > 0 && thumb_size <= XContentMetadata::kThumbLengthV1) {
     metadata.icon_data.assign(content_meta.title_thumbnail,
                               content_meta.title_thumbnail + thumb_size);

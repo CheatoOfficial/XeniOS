@@ -142,7 +142,11 @@ if(WIN32)
     discord-rpc/src/connection_win.cpp
     discord-rpc/src/discord_register_win.cpp
   )
-elseif(APPLE)
+elseif(XE_PLATFORM_IOS)
+  target_sources(discord-rpc PRIVATE
+    discord-rpc/src/connection_unix.cpp
+  )
+elseif(XE_PLATFORM_MACOS)
   target_sources(discord-rpc PRIVATE
     discord-rpc/src/connection_unix.cpp
     discord-rpc/src/discord_register_osx.m
@@ -165,6 +169,28 @@ add_library(fmt STATIC
 target_include_directories(fmt PUBLIC fmt/include)
 
 # ==============================================================================
+# MoltenVK (iOS Vulkan backend)
+# ==============================================================================
+if(XE_PLATFORM_IOS AND XENIA_ENABLE_IOS_MOLTENVK)
+  set(_xe_moltenvk_ios_framework
+      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/ios/MoltenVK.framework")
+  set(_xe_moltenvk_ios_binary "${_xe_moltenvk_ios_framework}/MoltenVK")
+  if(NOT EXISTS "${_xe_moltenvk_ios_binary}")
+    message(FATAL_ERROR
+      "MoltenVK iOS framework not found at ${_xe_moltenvk_ios_binary}. "
+      "Run tools/fetch_moltenvk.py --platform ios before configuring.")
+  endif()
+  add_library(xenia-third-party-moltenvk SHARED IMPORTED GLOBAL)
+  set_target_properties(xenia-third-party-moltenvk PROPERTIES
+    FRAMEWORK TRUE
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_moltenvk_ios_binary}"
+    IMPORTED_LOCATION_RELEASE "${_xe_moltenvk_ios_binary}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/include")
+endif()
+
+# ==============================================================================
 # glslang-spirv (runtime: SPIR-V emission primitives for Xenia's own
 # SpirvShaderTranslator; used by the Vulkan backend and by the Metal backend's
 # SPIRV-Cross path)
@@ -182,14 +208,15 @@ add_library(glslang-spirv STATIC
 )
 target_include_directories(glslang-spirv PUBLIC glslang)
 
-# Cross-compiling x64-host → ARM64-target on Windows: the cross
-# toolchain produces an ARM64 PE for xenia-shader-cc that won't run on
-# the x64 host, so reuse the binary from a previous native build instead
-# (Windows-on-ARM runs x64 fine via Prism, and macOS handles its own
-# x86_64↔arm64 via Rosetta — both directions are unaffected).
+# Some target builds can't execute their own xenia-shader-cc. Reuse the
+# binary from a previous native build instead.
 set(_xe_use_host_shader_cc FALSE)
-if(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
+if(XE_PLATFORM_IOS)
+  set(_xe_use_host_shader_cc TRUE)
+elseif(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
     AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+  # Cross-compiling x64-host -> ARM64-target on Windows produces an ARM64 PE
+  # that won't run on the x64 host.
   set(_xe_use_host_shader_cc TRUE)
 endif()
 
@@ -284,7 +311,7 @@ endif()  # NOT _xe_use_host_shader_cc (SPIRV-Tools + glslang block)
 # SPIRV-Cross (Apple only — used at runtime by xenia-gpu-metal for SPIR-V → MSL
 # via MslShader, and by MoltenVKShaderConverter below)
 # ==============================================================================
-if(APPLE)
+if(XE_PLATFORM_MACOS)
   add_library(spirv-cross STATIC
     SPIRV-Cross/spirv_cross.cpp
     SPIRV-Cross/spirv_cross_parsed_ir.cpp
@@ -580,31 +607,47 @@ if(MSVC)
   target_compile_options(xenia-shader-cc PRIVATE /EHsc)
 endif()
 
-else()  # _xe_use_host_shader_cc: x64→ARM64 cross-compile, use native build's binary
+else()  # _xe_use_host_shader_cc: use native build's binary
 
-# Native x64 build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
+# Native host build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
 set(_xe_host_shader_cc_dir "${CMAKE_SOURCE_DIR}/build/host_tools")
+set(_xe_host_shader_cc_name "xenia-shader-cc")
+if(WIN32)
+  set(_xe_host_shader_cc_name "xenia-shader-cc.exe")
+endif()
 set(_xe_host_shader_cc_any "")
 foreach(_cfg Release Checked Debug)
-  if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
-    set(_xe_host_shader_cc_any "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
+  if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/${_xe_host_shader_cc_name}")
+    set(_xe_host_shader_cc_any
+        "${_xe_host_shader_cc_dir}/${_cfg}/${_xe_host_shader_cc_name}")
     break()
   endif()
 endforeach()
 if(NOT _xe_host_shader_cc_any)
+  if(XE_PLATFORM_IOS)
+    set(_xe_host_shader_cc_build_hint
+        "./xb build --target=xenia-shader-cc --config=Release")
+    set(_xe_host_shader_cc_target_desc
+        "iOS device builds need a native macOS host xenia-shader-cc")
+  else()
+    set(_xe_host_shader_cc_build_hint
+        "xb build --target=xenia-shader-cc --config=Release")
+    set(_xe_host_shader_cc_target_desc
+        "Cross-compile to ARM64 needs a host xenia-shader-cc.exe")
+  endif()
   message(FATAL_ERROR
-    "Cross-compile to ARM64 needs a host xenia-shader-cc.exe but none was found "
+    "${_xe_host_shader_cc_target_desc} but none was found "
     "under ${_xe_host_shader_cc_dir}/<Config>/.\n"
     "  Run a native build first to produce it, e.g.:\n"
-    "    xb build --target xenia-shader-cc --config=release\n"
-    "  Then re-run the cross-compile.")
+    "    ${_xe_host_shader_cc_build_hint}\n"
+    "  Then re-run the target build.")
 endif()
 add_executable(xenia-shader-cc IMPORTED GLOBAL)
 set_target_properties(xenia-shader-cc PROPERTIES
-  IMPORTED_LOCATION "${_xe_host_shader_cc_any}"
-  IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_dir}/Release/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_dir}/Checked/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_dir}/Debug/xenia-shader-cc.exe")
+  IMPORTED_CONFIGURATIONS "Debug;Release;Checked"
+  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_any}"
+  IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_any}"
+  IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_any}")
 
 endif()
 
@@ -1280,7 +1323,7 @@ ffmpeg_common(libavformat)
 # ==============================================================================
 # wxWidgets
 # ==============================================================================
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT XE_PLATFORM_IOS)
     # Build from vendored source — matches what we ship on Windows/macOS, and
     # on Linux gives us a known-good 3.3 (system 3.2 has GTK3/Wayland issues).
     # Strip the directory-level /W0 (or -w) so wxWidgets's own /W3 doesn't

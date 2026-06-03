@@ -19,20 +19,27 @@
 #include "xenia/base/autorelease_pool_mac.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/gpu/shaders/bytecode/metal/apply_gamma_pwl_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/apply_gamma_table_cs.h"
 #include "xenia/ui/metal/metal_provider.h"
 #include "xenia/ui/shaders/bytecode/metal/guest_output_bilinear_dither_ps.h"
 #include "xenia/ui/shaders/bytecode/metal/guest_output_bilinear_ps.h"
 #include "xenia/ui/shaders/bytecode/metal/guest_output_triangle_strip_rect_vs.h"
-#include "xenia/ui/surface_mac.h"
 
+#if XE_PLATFORM_IOS
+#import <UIKit/UIKit.h>
+#include "xenia/ui/ios/game/surface_ios.h"
+#else
 #import <Cocoa/Cocoa.h>
+#include "xenia/ui/surface_mac.h"
+#endif
+
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <dispatch/dispatch.h>
-#if __has_include(<MetalFX/MetalFX.h>)
+#if !XE_PLATFORM_IOS && __has_include(<MetalFX/MetalFX.h>)
 #import <MetalFX/MetalFX.h>
 #define XE_METALFX_AVAILABLE 1
 #else
@@ -271,7 +278,11 @@ MTL::Texture* MetalPresenter::GetCachedPresenterTextureView(
 }
 
 Surface::TypeFlags MetalPresenter::GetSupportedSurfaceTypes() const {
+#if XE_PLATFORM_IOS
+  return Surface::kTypeFlag_iOSUIView;
+#else
   return Surface::kTypeFlag_MacNSView;
+#endif
 }
 
 bool MetalPresenter::CaptureGuestOutput(RawImage& image_out) {
@@ -749,6 +760,17 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   CAMetalLayer* metal_layer = nullptr;
   CGFloat surface_scale = 1.0;
 
+#if XE_PLATFORM_IOS
+  if (surface_type != Surface::kTypeIndex_iOSUIView) {
+    XELOGE("Metal presenter requires iOSUIView surface, got: {}", static_cast<int>(surface_type));
+    return SurfacePaintConnectResult::kFailure;
+  }
+  iOSUIViewSurface& ios_surface = static_cast<iOSUIViewSurface&>(new_surface);
+  metal_layer = ios_surface.GetOrCreateMetalLayer();
+  // iOS intentionally presents to a fixed 720p-class drawable and lets the
+  // UIView frame handle screen placement, Fit/Stretch/Zoom, and device scaling.
+  surface_scale = 1.0;
+#else
   if (surface_type != Surface::kTypeIndex_MacNSView) {
     XELOGE("Metal presenter requires MacNSView surface, got: {}", static_cast<int>(surface_type));
     return SurfacePaintConnectResult::kFailure;
@@ -767,6 +789,7 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
       surface_scale = view.window.backingScaleFactor;
     }
   }
+#endif
 
   if (!metal_layer) {
     XELOGE("Metal presenter failed to get CAMetalLayer from surface");
@@ -778,9 +801,11 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   if (surface_scale <= 0.0) {
     surface_scale = 1.0;
   }
+#if !XE_PLATFORM_IOS
   if (!cvars::metal_presenter_use_backing_scale) {
     surface_scale = 1.0;
   }
+#endif
   surface_scale_ = static_cast<float>(surface_scale);
   surface_width_in_points_ = new_surface_width;
   surface_height_in_points_ = new_surface_height;
@@ -790,9 +815,13 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   metal_layer.minificationFilter = kCAFilterNearest;
   metal_layer.magnificationFilter = kCAFilterNearest;
 
+#if XE_PLATFORM_IOS
+  is_vsync_implicit_out = true;
+#else
   const bool tearing_allowed = cvars::metal_allow_tearing;
   metal_layer.displaySyncEnabled = tearing_allowed ? NO : YES;
   is_vsync_implicit_out = !tearing_allowed;
+#endif
 
   metal_layer_ = metal_layer;
 

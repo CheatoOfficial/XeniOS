@@ -10,6 +10,12 @@ if(_base_exclude AND _base_srcs)
   list(REMOVE_ITEM _base_srcs ${_base_exclude})
   set_target_properties(xenia-base PROPERTIES SOURCES "${_base_srcs}")
 endif()
+if(XE_PLATFORM_IOS)
+  # This file is named for the original macOS implementation, but the
+  # Objective-C autorelease pool runtime is Apple-wide.
+  target_sources(xenia-base PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/autorelease_pool_mac.cc)
+endif()
 target_link_libraries(xenia-base PUBLIC fmt)
 target_link_libraries(xenia-base PRIVATE zlib-ng boost_context)
 xe_target_defaults(xenia-base)

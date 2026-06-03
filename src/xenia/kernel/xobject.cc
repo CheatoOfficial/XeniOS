@@ -31,6 +31,101 @@
 namespace xe {
 namespace kernel {
 
+#if XE_PLATFORM_IOS
+namespace {
+
+constexpr std::chrono::milliseconds kTitleStopWaitPollIntervalIOS(10);
+
+XThread* CurrentXThreadIOS() {
+  if (!XThread::IsInThread()) {
+    return nullptr;
+  }
+
+  return XThread::GetCurrentThread();
+}
+
+bool IsTitleStopPollThreadIOS(XThread* thread) {
+  return thread &&
+         (thread->is_guest_thread() || thread->can_debugger_suspend());
+}
+
+XThread* CurrentTitleStopPollThreadIOS() {
+  auto* current_thread = CurrentXThreadIOS();
+  return IsTitleStopPollThreadIOS(current_thread) ? current_thread : nullptr;
+}
+
+bool ShouldPollTitleStopIOS(KernelState* kernel_state) {
+  return kernel_state && CurrentTitleStopPollThreadIOS();
+}
+
+void ExitCurrentTitleStopThreadIfRequestedIOS(KernelState* kernel_state) {
+  auto* current_thread = CurrentTitleStopPollThreadIOS();
+  if (!current_thread || !kernel_state ||
+      !kernel_state->IsTitleStopRequestedIOS()) {
+    return;
+  }
+
+  current_thread->Exit(0);
+}
+
+std::chrono::milliseconds TitleStopWaitSliceIOS(
+    bool infinite_timeout, std::chrono::steady_clock::time_point deadline) {
+  if (infinite_timeout) {
+    return kTitleStopWaitPollIntervalIOS;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  if (now >= deadline) {
+    return std::chrono::milliseconds::zero();
+  }
+
+  auto remaining =
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+  return std::max(std::chrono::milliseconds(1),
+                  std::min(kTitleStopWaitPollIntervalIOS, remaining));
+}
+
+bool TitleStopWaitTimedOutIOS(xe::threading::WaitResult result) {
+  return result == xe::threading::WaitResult::kTimeout;
+}
+
+bool TitleStopWaitTimedOutIOS(
+    const std::pair<xe::threading::WaitResult, size_t>& result) {
+  return result.first == xe::threading::WaitResult::kTimeout;
+}
+
+template <typename WaitCall>
+auto WaitWithTitleStopPollIOS(KernelState* kernel_state,
+                              std::chrono::milliseconds timeout,
+                              WaitCall wait_call) {
+  if (!ShouldPollTitleStopIOS(kernel_state) ||
+      timeout == std::chrono::milliseconds::zero()) {
+    return wait_call(timeout);
+  }
+
+  const bool infinite_timeout = timeout == std::chrono::milliseconds::max();
+  const auto deadline = infinite_timeout
+                            ? std::chrono::steady_clock::time_point::max()
+                            : std::chrono::steady_clock::now() + timeout;
+
+  while (true) {
+    ExitCurrentTitleStopThreadIfRequestedIOS(kernel_state);
+
+    auto result = wait_call(TitleStopWaitSliceIOS(infinite_timeout, deadline));
+    if (!TitleStopWaitTimedOutIOS(result)) {
+      return result;
+    }
+
+    ExitCurrentTitleStopThreadIfRequestedIOS(kernel_state);
+    if (!infinite_timeout && std::chrono::steady_clock::now() >= deadline) {
+      return result;
+    }
+  }
+}
+
+}  // namespace
+#endif  // XE_PLATFORM_IOS
+
 XObject::XObject(Type type)
     : kernel_state_(nullptr), pointer_ref_count_(1), type_(type) {
   handles_.reserve(10);
@@ -75,10 +170,20 @@ Memory* XObject::memory() const { return kernel_state_->memory(); }
 XObject::Type XObject::type() const { return type_; }
 
 void XObject::RetainHandle() {
+#if XE_PLATFORM_IOS
+  if (handles_.empty()) {
+    return;
+  }
+#endif  // XE_PLATFORM_IOS
   kernel_state_->object_table()->RetainHandle(handles_[0]);
 }
 
 bool XObject::ReleaseHandle() {
+#if XE_PLATFORM_IOS
+  if (handles_.empty()) {
+    return false;
+  }
+#endif  // XE_PLATFORM_IOS
   // FIXME: Return true when handle is actually released.
   return kernel_state_->object_table()->ReleaseHandle(handles_[0]) ==
          X_STATUS_SUCCESS;
@@ -304,7 +409,16 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode,
 
   X_KTHREAD* kthread = WaitEnter(wait_reason, processor_mode, alertable);
   auto result =
+#if XE_PLATFORM_IOS
+      WaitWithTitleStopPollIOS(
+          kernel_state_, timeout_ms,
+          [wait_handle, alertable](std::chrono::milliseconds wait_timeout) {
+            return xe::threading::Wait(wait_handle, alertable ? true : false,
+                                       wait_timeout);
+          });
+#else
       xe::threading::Wait(wait_handle, alertable ? true : false, timeout_ms);
+#endif  // XE_PLATFORM_IOS
 
   switch (result) {
     case xe::threading::WaitResult::kSuccess:
@@ -443,6 +557,9 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
     wait_handles[i] = objects[i]->GetWaitHandle();
     assert_not_null(wait_handles[i]);
   }
+#if XE_PLATFORM_IOS
+  KernelState* wait_kernel_state = count ? objects[0]->kernel_state_ : nullptr;
+#endif  // XE_PLATFORM_IOS
 
   if (GuestScheduler::enabled() && count > 0 &&
       XThread::GetCurrentFiberThread()) {
@@ -521,8 +638,18 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
   X_STATUS status;
   uint32_t boost_increment = 0;
   if (wait_type) {
-    auto result = xe::threading::WaitAny(wait_handles, count,
-                                         alertable ? true : false, timeout_ms);
+    auto result =
+#if XE_PLATFORM_IOS
+        WaitWithTitleStopPollIOS(wait_kernel_state, timeout_ms,
+                                 [&](std::chrono::milliseconds wait_timeout) {
+                                   return xe::threading::WaitAny(
+                                       wait_handles, count,
+                                       alertable ? true : false, wait_timeout);
+                                 });
+#else
+        xe::threading::WaitAny(wait_handles, count, alertable ? true : false,
+                               timeout_ms);
+#endif  // XE_PLATFORM_IOS
     switch (result.first) {
       case xe::threading::WaitResult::kSuccess:
         objects[result.second]->WaitCallback();
@@ -545,8 +672,18 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects,
         break;
     }
   } else {
-    auto result = xe::threading::WaitAll(wait_handles, count,
-                                         alertable ? true : false, timeout_ms);
+    auto result =
+#if XE_PLATFORM_IOS
+        WaitWithTitleStopPollIOS(wait_kernel_state, timeout_ms,
+                                 [&](std::chrono::milliseconds wait_timeout) {
+                                   return xe::threading::WaitAll(
+                                       wait_handles, count,
+                                       alertable ? true : false, wait_timeout);
+                                 });
+#else
+        xe::threading::WaitAll(wait_handles, count, alertable ? true : false,
+                               timeout_ms);
+#endif  // XE_PLATFORM_IOS
     switch (result) {
       case xe::threading::WaitResult::kSuccess:
         for (uint32_t i = 0; i < count; i++) {

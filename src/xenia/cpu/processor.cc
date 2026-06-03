@@ -105,6 +105,10 @@ Processor::~Processor() {
 }
 
 bool Processor::Setup(std::unique_ptr<backend::Backend> backend) {
+#if XE_PLATFORM_IOS
+  ClearTitleStopRequestIOS();
+#endif  // XE_PLATFORM_IOS
+
   // TODO(benvanik): query mode from debugger?
   debug_info_flags_ = 0;
 

@@ -12,6 +12,13 @@
 #include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 
+#if XE_PLATFORM_IOS
+#ifndef SDL_MAIN_HANDLED
+#define SDL_MAIN_HANDLED
+#endif
+#include <SDL3/SDL_main.h>
+#endif
+
 namespace xe {
 namespace helper {
 namespace sdl {
@@ -22,6 +29,12 @@ bool SDLHelper::Prepare() {
     return true;
   }
   is_prepared_ = true;
+
+#if XE_PLATFORM_IOS
+  // iOS uses UIApplicationMain directly, not SDL_main.
+  // Tell SDL that app bootstrap is complete before any subsystem init.
+  SDL_SetMainReady();
+#endif
 
   is_prepared_ &= SetHints();
   is_prepared_ &= RedirectLog();

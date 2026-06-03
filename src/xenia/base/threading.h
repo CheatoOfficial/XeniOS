@@ -107,6 +107,18 @@ void set_current_thread_id(uint32_t id);
 // Sets the current thread name.
 void set_name(const std::string_view name);
 
+#if XE_PLATFORM_IOS
+enum class ThreadQoS {
+  kDefault,
+  kUtility,
+  kUserInitiated,
+  kUserInteractive,
+};
+
+// Sets the current thread's Darwin QoS class on iOS.
+bool set_current_thread_qos(ThreadQoS qos);
+#endif  // XE_PLATFORM_IOS
+
 // Yields the current thread to the scheduler. Maybe.
 void MaybeYield();
 

@@ -12,8 +12,9 @@
 // SHADING_LANGUAGE_GLSL_XE=1 and includes resolved relative to the
 // input's directory.
 //
-// --msl (Apple only): .xesl -> .metallib via `xcrun metal -x metal -D
-// SHADING_LANGUAGE_MSL_XE=1`, emitted as `const uint8_t <id>_metallib[]`.
+// --msl (Apple only): .xesl -> .metallib via `xcrun -sdk <sdk> metal -x
+// metal -D SHADING_LANGUAGE_MSL_XE=1`, emitted as
+// `const uint8_t <id>_metallib[]`.
 //
 // --dxbc: HLSL/XeSL -> DXBC via fxc.exe with /Fh writing the header
 // directly (SHADING_LANGUAGE_HLSL_XE=1). FXC_PATH env overrides the
@@ -546,7 +547,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> metal_cmd = {
         "xcrun",
         "-sdk",
-        "macosx",
+        metal_sdk,
         "metal",
         "-x",
         "metal",
@@ -589,7 +590,7 @@ int main(int argc, char** argv) {
       cleanup();
       return 1;
     }
-    if (RunCommand({"xcrun", "-sdk", "macosx", "metallib", air_path.string(),
+    if (RunCommand({"xcrun", "-sdk", metal_sdk, "metallib", air_path.string(),
                     "-o", lib_path.string()}) != 0) {
       std::fprintf(stderr, "metallib failed for %s\n",
                    input_path.string().c_str());

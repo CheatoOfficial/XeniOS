@@ -233,6 +233,15 @@ void Emulator::Shutdown() {
   XELOGI("Emulator::Shutdown: teardown complete");
 }
 
+#if XE_PLATFORM_IOS
+void Emulator::ShutdownForTitleExitIOS() {
+  const bool was_relaunching = relaunching_;
+  relaunching_ = true;
+  Shutdown();
+  relaunching_ = was_relaunching;
+}
+#endif  // XE_PLATFORM_IOS
+
 uint32_t Emulator::main_thread_id() {
   return main_thread_ ? main_thread_->thread_id() : 0;
 }
@@ -317,22 +326,29 @@ X_STATUS Emulator::Setup(
   export_resolver_ = std::make_unique<xe::cpu::ExportResolver>();
 
   std::unique_ptr<xe::cpu::backend::Backend> backend;
+  const bool profile_only_mode =
+      !require_cpu_backend_ && !audio_system_factory_ &&
+      !graphics_system_factory_ && !input_driver_factory_;
+  if (profile_only_mode) {
+    backend = std::make_unique<xe::cpu::backend::NullBackend>();
+  } else {
 #if XE_ARCH_AMD64
-  if (cvars::cpu == "x64") {
-    backend.reset(new xe::cpu::backend::x64::X64Backend());
-  }
-#elif XE_ARCH_ARM64
-  if (cvars::cpu == "a64") {
-    backend.reset(new xe::cpu::backend::a64::A64Backend());
-  }
-#endif  // XE_ARCH
-  if (cvars::cpu == "any") {
-    if (!backend) {
-#if XE_ARCH_AMD64
+    if (cvars::cpu == "x64") {
       backend.reset(new xe::cpu::backend::x64::X64Backend());
+    }
 #elif XE_ARCH_ARM64
+    if (cvars::cpu == "a64") {
       backend.reset(new xe::cpu::backend::a64::A64Backend());
+    }
 #endif  // XE_ARCH
+    if (cvars::cpu == "any") {
+      if (!backend) {
+#if XE_ARCH_AMD64
+        backend.reset(new xe::cpu::backend::x64::X64Backend());
+#elif XE_ARCH_ARM64
+        backend.reset(new xe::cpu::backend::a64::A64Backend());
+#endif  // XE_ARCH
+      }
     }
   }
   if (!backend && !require_cpu_backend_) {
@@ -349,8 +365,15 @@ X_STATUS Emulator::Setup(
   }
 
   // Input system persists across relaunch — SDL requires init/quit on the
-  // same thread, so drivers are attached here on the emulator thread.
-  if (!input_system_) {
+  // same thread, so drivers are attached here on the emulator thread. Profile
+  // services may call Setup before a real input factory exists; don't pin an
+  // empty input system across the later game-mode setup.
+#if XE_PLATFORM_IOS
+  const bool should_create_input_system = input_driver_factory_ != nullptr;
+#else
+  const bool should_create_input_system = true;
+#endif  // XE_PLATFORM_IOS
+  if (!input_system_ && should_create_input_system) {
     XELOGI("{}: Initializing HID...", __func__);
     input_system_ = std::make_unique<xe::hid::InputSystem>(display_window_);
     if (!input_system_) {
@@ -367,6 +390,19 @@ X_STATUS Emulator::Setup(
     if (result) {
       return result;
     }
+  } else if (input_system_ && input_system_->driver_count() == 0 &&
+             input_driver_factory_) {
+    XELOGI("{}: Attaching HID drivers...", __func__);
+    auto input_drivers = input_driver_factory_(display_window_);
+    for (size_t i = 0; i < input_drivers.size(); ++i) {
+      input_system_->AddDriver(std::move(input_drivers[i]));
+    }
+    result = input_system_->Setup();
+    if (result) {
+      return result;
+    }
+  } else {
+    result = X_STATUS_SUCCESS;
   }
 
   // Add inputSystem to UI (if imgui is enabled)
@@ -956,38 +992,37 @@ X_STATUS Emulator::ProcessContentPackageHeader(
       kernel_state_->xam_state()->profile_manager()->GetProfile(
           static_cast<uint8_t>(0));
 
-  uint64_t xuid = header->content_metadata.profile_id;
-  if (header->content_metadata.content_type == XContentType::kSavedGame &&
-      profile) {
+  const XContentType content_type =
+      static_cast<XContentType>(header->content_metadata.content_type_value());
+  uint64_t xuid = header->content_metadata.profile_id_value();
+  if (content_type == XContentType::kSavedGame && profile) {
     xuid = profile->xuid();
   }
 
-  installation_info.data_installation_path_ = fmt::format(
-      "{:016X}/{:08X}/{:08X}/{}", xuid,
-      header->content_metadata.execution_info.title_id.get(),
-      static_cast<uint32_t>(header->content_metadata.content_type.get()),
-      path.filename());
+  installation_info.data_installation_path_ =
+      fmt::format("{:016X}/{:08X}/{:08X}/{}", xuid,
+                  header->content_metadata.execution_info.title_id.get(),
+                  static_cast<uint32_t>(content_type), path.filename());
 
-  installation_info.header_installation_path_ = fmt::format(
-      "{:016X}/{:08X}/Headers/{:08X}/{}", xuid,
-      header->content_metadata.execution_info.title_id.get(),
-      static_cast<uint32_t>(header->content_metadata.content_type.get()),
-      path.filename());
+  installation_info.header_installation_path_ =
+      fmt::format("{:016X}/{:08X}/Headers/{:08X}/{}", xuid,
+                  header->content_metadata.execution_info.title_id.get(),
+                  static_cast<uint32_t>(content_type), path.filename());
 
   installation_info.name_ =
       xe::to_utf8(header->content_metadata.display_name(XLanguage::kEnglish));
-  installation_info.content_type_ =
-      static_cast<XContentType>(header->content_metadata.content_type);
-  installation_info.content_size_ = header->content_metadata.content_size;
+  installation_info.content_type_ = content_type;
+  installation_info.content_size_ =
+      header->content_metadata.content_size_value();
   installation_info.installation_state_ = InstallState::pending;
 
-  if (header->content_metadata.title_thumbnail_size > 0 &&
-      header->content_metadata.title_thumbnail_size <=
-          vfs::XContentMetadata::kThumbLengthV1) {
+  const uint32_t title_thumbnail_size =
+      header->content_metadata.title_thumbnail_size_value();
+  if (title_thumbnail_size > 0 &&
+      title_thumbnail_size <= vfs::XContentMetadata::kThumbLengthV1) {
     installation_info.icon_data_.assign(
         header->content_metadata.title_thumbnail,
-        header->content_metadata.title_thumbnail +
-            header->content_metadata.title_thumbnail_size);
+        header->content_metadata.title_thumbnail + title_thumbnail_size);
   }
 
   return X_STATUS_SUCCESS;
@@ -1865,6 +1900,15 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     return result;
   }
 
+#if XE_PLATFORM_IOS
+  auto ios_title_stop_requested = [this]() {
+    return kernel_state_ && kernel_state_->IsTitleStopRequestedIOS();
+  };
+  if (ios_title_stop_requested()) {
+    return X_STATUS_PROCESS_IS_TERMINATING;
+  }
+#endif  // XE_PLATFORM_IOS
+
   // Setup NullDevices for raw HDD partition accesses
   // Cache/STFC code baked into games tries reading/writing to these
   // By using a NullDevice that just returns success to all IO requests it
@@ -1896,6 +1940,11 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   XELOGI("Loading module {}", module_path);
   auto module = kernel_state_->LoadUserModule(module_path);
   if (!module) {
+#if XE_PLATFORM_IOS
+    if (ios_title_stop_requested()) {
+      return X_STATUS_PROCESS_IS_TERMINATING;
+    }
+#endif  // XE_PLATFORM_IOS
     XELOGE("Failed to load user module {}", path);
     return X_STATUS_NOT_FOUND;
   }
@@ -1912,11 +1961,22 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     return result;
   }
 
+#if XE_PLATFORM_IOS
+  if (ios_title_stop_requested()) {
+    return X_STATUS_PROCESS_IS_TERMINATING;
+  }
+#endif  // XE_PLATFORM_IOS
+
   result = kernel_state_->FinishLoadingUserModule(module);
   if (XFAILED(result)) {
     XELOGE("Failed to initialize user module {}", path);
     return result;
   }
+#if XE_PLATFORM_IOS
+  if (ios_title_stop_requested()) {
+    return X_STATUS_PROCESS_IS_TERMINATING;
+  }
+#endif  // XE_PLATFORM_IOS
   // Grab the current title ID.
   xex2_opt_execution_info* info = nullptr;
   uint32_t workspace_address = 0;
@@ -2069,11 +2129,22 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // skipped until pipelines are ready, so this is safe. By the time actual
   // gameplay starts, most cached pipelines should be compiled.
   if (graphics_system_) {
+#if XE_PLATFORM_IOS
+    if (ios_title_stop_requested()) {
+      return X_STATUS_PROCESS_IS_TERMINATING;
+    }
+#endif  // XE_PLATFORM_IOS
     on_shader_storage_initialization(true);
     graphics_system_->InitializeShaderStorage(
         cache_root_, title_id_.value(), false,
         [this]() { on_shader_storage_initialization(false); });
   }
+
+#if XE_PLATFORM_IOS
+  if (ios_title_stop_requested()) {
+    return X_STATUS_PROCESS_IS_TERMINATING;
+  }
+#endif  // XE_PLATFORM_IOS
 
   auto main_thread = kernel_state_->LaunchModule(module);
   if (!main_thread) {
@@ -2086,11 +2157,17 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // FinishLoadingUserModule() which will apply TUs and patching to the main
   // xex.
   if (cvars::allow_plugins) {
-    if (plugin_loader_->IsAnyPluginForTitleAvailable(title_id_.value(),
-                                                     module->hash().value())) {
-      plugin_loader_->LoadTitlePlugins(title_id_.value(),
-                                       module->hash().value());
+#if XE_PLATFORM_IOS
+    if (!ios_title_stop_requested()) {
+#endif  // XE_PLATFORM_IOS
+      if (plugin_loader_->IsAnyPluginForTitleAvailable(
+              title_id_.value(), module->hash().value())) {
+        plugin_loader_->LoadTitlePlugins(title_id_.value(),
+                                         module->hash().value());
+      }
+#if XE_PLATFORM_IOS
     }
+#endif  // XE_PLATFORM_IOS
   }
 
   // Resume the main thread now.
