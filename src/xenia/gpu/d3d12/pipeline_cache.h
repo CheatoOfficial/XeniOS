@@ -32,6 +32,7 @@
 #include "xenia/base/threading.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
 #include "xenia/gpu/d3d12/d3d12_shader.h"
+#include "xenia/gpu/dxbc_geometry_shader.h"
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/primitive_processor.h"
@@ -151,12 +152,9 @@ class PipelineCache {
     kTriangle,
   };
 
-  enum class PipelineGeometryShader : uint32_t {
-    kNone,
-    kPointList,
-    kRectangleList,
-    kQuadList,
-  };
+  // Geometry-shader key + DXBC generation are shared across backends; see
+  // xenia/gpu/dxbc_geometry_shader.h.
+  using PipelineGeometryShader = xe::gpu::PipelineGeometryShader;
 
   enum class PipelineCullMode : uint32_t {
     kNone,
@@ -251,32 +249,7 @@ class PipelineCache {
     PipelineDescription description;
   };
 
-  union GeometryShaderKey {
-    uint32_t key;
-    struct {
-      PipelineGeometryShader type : 2;
-      uint32_t interpolator_count : 5;
-      uint32_t user_clip_plane_count : 3;
-      uint32_t user_clip_plane_cull : 1;
-      uint32_t has_vertex_kill_and : 1;
-      uint32_t has_point_size : 1;
-      uint32_t has_point_coordinates : 1;
-    };
-
-    GeometryShaderKey() : key(0) { static_assert_size(*this, sizeof(key)); }
-
-    struct Hasher {
-      size_t operator()(const GeometryShaderKey& key) const {
-        return std::hash<uint32_t>{}(key.key);
-      }
-    };
-    bool operator==(const GeometryShaderKey& other_key) const {
-      return key == other_key.key;
-    }
-    bool operator!=(const GeometryShaderKey& other_key) const {
-      return !(*this == other_key);
-    }
-  };
+  using GeometryShaderKey = xe::gpu::GeometryShaderKey;
 
   D3D12Shader* LoadShader(xenos::ShaderType shader_type,
                           const uint32_t* host_address, uint32_t dword_count,
@@ -312,13 +285,6 @@ class PipelineCache {
       PipelineRuntimeDescription& runtime_description_out,
       bool for_placeholder = false);
 
-  static bool GetGeometryShaderKey(
-      PipelineGeometryShader geometry_shader_type,
-      DxbcShaderTranslator::Modification vertex_shader_modification,
-      DxbcShaderTranslator::Modification pixel_shader_modification,
-      GeometryShaderKey& key_out);
-  static void CreateDxbcGeometryShader(GeometryShaderKey key,
-                                       std::vector<uint32_t>& shader_out);
   const std::vector<uint32_t>& GetGeometryShader(GeometryShaderKey key);
 
   ID3D12PipelineState* CreateD3D12Pipeline(

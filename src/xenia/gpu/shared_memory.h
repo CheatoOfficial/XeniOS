@@ -75,7 +75,33 @@ class SharedMemory {
   // Checks if the range has been updated, uploads new data if needed and
   // ensures the host GPU memory backing the range are resident. Returns true if
   // the range has been fully updated and is usable.
+  struct Range {
+    uint32_t start;
+    uint32_t length;
+  };
+  struct RequestRangeStats {
+    uint32_t input_ranges = 0;
+    uint32_t invalid_input_ranges = 0;
+    uint32_t upload_page_ranges_before_coalesce = 0;
+    uint32_t upload_page_ranges_after_coalesce = 0;
+    uint64_t upload_bytes = 0;
+  };
   bool RequestRange(uint32_t start, uint32_t length);
+  bool RequestRanges(const Range* ranges, uint32_t range_count,
+                     RequestRangeStats* stats = nullptr);
+  // Non-mutating residency check for paths that must not open transfer
+  // encoders. Returns true only if RequestRange would fast-path without upload.
+  bool IsRangeValid(uint32_t start, uint32_t length) const;
+  // Non-mutating check for CPU-backed upload paths. Returns true only if no
+  // page in the range is currently valid in the host GPU shared-memory copy.
+  bool IsRangeInvalid(uint32_t start, uint32_t length) const;
+  // Enables CPU write invalidation callbacks for a range without changing
+  // shared-memory residency. Used by paths that upload directly from CPU memory
+  // to a derived resource rather than to the shared-memory buffer.
+  void WatchRangeForCpuWrites(uint32_t start, uint32_t length);
+  uint64_t GetInvalidationEpoch() const {
+    return invalidation_epoch_.load(std::memory_order_relaxed);
+  }
 
   void TryFindUploadRange(const uint32_t& block_first,
                           const uint32_t& block_last,
@@ -230,6 +256,7 @@ class SharedMemory {
   // Total: 32 chunks requiring 32 bits. When GPU writes are localized,
   // this reduces copy overhead by 80-95%.
   std::atomic<uint32_t> dirty_blocks_{0};
+  std::atomic<uint64_t> invalidation_epoch_{0};
 
   uint64_t* system_page_flags_valid_and_gpu_written_ = nullptr;
   unsigned num_system_page_flags_ = 0;

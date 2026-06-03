@@ -206,7 +206,7 @@ std::unique_ptr<ImmediateTexture> MetalImmediateDrawer::CreateTexture(uint32_t w
   texture_desc->setArrayLength(1);
   texture_desc->setSampleCount(1);
   texture_desc->setUsage(MTL::TextureUsageShaderRead);
-  texture_desc->setStorageMode(MTL::StorageModeManaged);
+  texture_desc->setStorageMode(MTL::StorageModeShared);
   MTL::Texture* metal_texture = device_->newTexture(texture_desc);
   texture_desc->release();
   if (!metal_texture) {
@@ -334,6 +334,9 @@ void MetalImmediateDrawer::BeginDrawBatch(const ImmediateDrawBatch& batch) {
   // XeSL MSL backend places push constants at buffer(0), so vertex attributes
   // bind at buffer(1) (matches the VertexDescriptor's bufferIndex=1).
   [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:1];
+  // newBufferWithBytes returns +1; keep the batch vertex data alive until all
+  // draws using the encoder state have been encoded.
+  current_vertex_buffer_ = (__bridge void*)vertex_buffer;
 
   if (batch.indices && batch.index_count > 0) {
     size_t index_buffer_size = batch.index_count * sizeof(uint16_t);
@@ -402,6 +405,10 @@ void MetalImmediateDrawer::Draw(const ImmediateDraw& draw) {
 void MetalImmediateDrawer::EndDrawBatch() {
   assert_true(batch_open_);
   batch_open_ = false;
+  if (current_vertex_buffer_) {
+    CFRelease(current_vertex_buffer_);
+    current_vertex_buffer_ = nullptr;
+  }
   if (current_index_buffer_) {
     CFRelease(current_index_buffer_);
     current_index_buffer_ = nullptr;

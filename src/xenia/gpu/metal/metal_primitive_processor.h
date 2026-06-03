@@ -11,7 +11,7 @@
 #define XENIA_GPU_METAL_METAL_PRIMITIVE_PROCESSOR_H_
 
 #include <memory>
-#include <unordered_map>
+#include <vector>
 #include "third_party/metal-cpp/Metal/Metal.hpp"
 
 #include "xenia/gpu/primitive_processor.h"
@@ -21,6 +21,7 @@ namespace gpu {
 namespace metal {
 
 class MetalCommandProcessor;
+class MetalUploadBufferPool;
 
 class MetalPrimitiveProcessor : public PrimitiveProcessor {
  public:
@@ -33,15 +34,10 @@ class MetalPrimitiveProcessor : public PrimitiveProcessor {
   bool Initialize();
   void Shutdown(bool from_destructor = false);
 
-  void CompletedSubmissionUpdated();
-  void BeginSubmission();
   void BeginFrame();
   void EndFrame();
 
   MTL::Buffer* GetBuiltinIndexBuffer() const { return builtin_index_buffer_; }
-  MTL::Buffer* GetExpansionTriangleListIndexBuffer() const {
-    return expansion_triangle_list_index_buffer_;
-  }
   MTL::Buffer* GetConvertedIndexBuffer(size_t handle,
                                        uint64_t& offset_bytes_out) const;
 
@@ -53,6 +49,9 @@ class MetalPrimitiveProcessor : public PrimitiveProcessor {
       xenos::IndexFormat format, uint32_t index_count, bool coalign_for_simd,
       uint32_t coalignment_original_address,
       size_t& backend_handle_out) override;
+  bool RequestGuestIndexSharedMemoryRange(
+      uint32_t guest_index_base, uint32_t guest_index_buffer_needed_bytes,
+      ProcessedIndexBufferType index_buffer_type) override;
 
  private:
   MetalCommandProcessor& command_processor_;
@@ -63,23 +62,11 @@ class MetalPrimitiveProcessor : public PrimitiveProcessor {
   };
 
   std::vector<ConvertedIndexBufferBinding> converted_index_buffers_;
-  uint64_t current_frame_ = 0;
 
   // Built-in index buffer for primitive type conversion
   MTL::Buffer* builtin_index_buffer_ = nullptr;
-  uint64_t builtin_index_buffer_gpu_address_ = 0;
   size_t builtin_index_buffer_size_ = 0;
-  // Fallback index buffer for SPIRV-Cross point/rectangle VS expansion.
-  // Uses triangle-list topology to avoid relying on primitive restart.
-  MTL::Buffer* expansion_triangle_list_index_buffer_ = nullptr;
-
-  // Per-frame index buffer for primitive conversion
-  struct FrameIndexBuffer {
-    MTL::Buffer* buffer = nullptr;
-    size_t size = 0;
-    uint64_t last_frame_used = 0;
-  };
-  std::vector<FrameIndexBuffer> frame_index_buffers_;
+  std::unique_ptr<MetalUploadBufferPool> frame_index_buffer_pool_;
 };
 
 }  // namespace metal

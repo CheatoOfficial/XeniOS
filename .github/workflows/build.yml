@@ -154,11 +154,11 @@ jobs:
 
       - name: Setup
         run: |
-          # Update submodules. Skip DirectXShaderCompiler (we don't use the
-          # Metal shader converter / dxilconv pipeline on edge).
+          # Update submodules.
           git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) \
-            $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' \
-              | grep -v 'DirectXShaderCompiler')
+            $(grep -oE 'path = .+' .gitmodules | sed 's/path = //')
+          git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 \
+            external/SPIRV-Headers external/SPIRV-Tools
 
           # wxWidgets has nested submodules (pcre, libpng, ...) needed when
           # building from vendored source.
@@ -245,8 +245,9 @@ jobs:
       - name: Setup
         run: |
           git submodule update --init --depth=1 -j$(sysctl -n hw.ncpu) \
-            $(grep -oE 'path = .+' .gitmodules | sed 's/path = //' \
-              | grep -v 'DirectXShaderCompiler')
+            $(grep -oE 'path = .+' .gitmodules | sed 's/path = //')
+          git -C third_party/DirectXShaderCompiler submodule update --init --depth=1 \
+            external/SPIRV-Headers external/SPIRV-Tools
           git submodule update --init --recursive --depth=1 \
             -j$(sysctl -n hw.ncpu) third_party/wxWidgets
           ./xenia-build.py fetchdata

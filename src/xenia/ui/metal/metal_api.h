@@ -14,4 +14,11 @@
 #include "third_party/metal-cpp/Metal/MTLDevice.hpp"
 #include "third_party/metal-cpp/Metal/Metal.hpp"
 
+#ifdef METAL_SHADER_CONVERTER_AVAILABLE
+#ifndef IR_RUNTIME_METALCPP
+#define IR_RUNTIME_METALCPP
+#endif
+#include "third_party/metal-shader-converter/include/metal_irconverter/metal_irconverter.h"
+#endif  // METAL_SHADER_CONVERTER_AVAILABLE
+
 #endif

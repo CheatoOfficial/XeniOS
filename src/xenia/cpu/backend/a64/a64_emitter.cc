@@ -738,8 +738,9 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
   // still point at a skipped frame here.
   auto& return_from_sync = NewCachedLabel();
 
-  ldr(w16, ptr(x19, static_cast<uint32_t>(offsetof(
-                        A64BackendContext, pending_stackpoint_sync_depth))));
+  ldr(w16, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext,
+                                 pending_stackpoint_sync_depth))));
   cbz(w16, return_from_sync);
 
   auto& sync_label = AddToTail([](A64Emitter& e, Label& lbl) {

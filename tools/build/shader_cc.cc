@@ -1,6 +1,9 @@
 // Build-time shader compiler for Xenia's built-in shaders.
 //
 // Usage: xenia-shader-cc [--msl | --dxbc] [--depfile <path>]
+//                       [--define <name=value>] [--identifier <name>]
+//                       [--metal-sdk <sdk>] [--metal-std <std>]
+//                       [--metal-min-version-flag <flag>]
 //                       <input> <output.h>
 //
 // Default: GLSL/XeSL -> SPIR-V, linked in-process via glslang and
@@ -60,6 +63,13 @@ struct StageInfo {
   EShLanguage language;
 };
 
+struct ShaderDefine {
+  std::string name;
+  std::string value;
+
+  std::string argument() const { return name + "=" + value; }
+};
+
 constexpr StageInfo kStages[] = {
     {"vs", EShLangVertex},         {"hs", EShLangTessControl},
     {"ds", EShLangTessEvaluation}, {"gs", EShLangGeometry},
@@ -96,6 +106,69 @@ std::string IdentifierFromFilename(const std::string& filename) {
   std::string stem = filename.substr(0, last_dot);
   std::replace(stem.begin(), stem.end(), '.', '_');
   return stem;
+}
+
+bool IsCIdentifier(std::string_view value) {
+  if (value.empty()) {
+    return false;
+  }
+  auto is_alpha_or_underscore = [](unsigned char c) {
+    return std::isalpha(c) || c == '_';
+  };
+  auto is_alnum_or_underscore = [](unsigned char c) {
+    return std::isalnum(c) || c == '_';
+  };
+  if (!is_alpha_or_underscore(static_cast<unsigned char>(value.front()))) {
+    return false;
+  }
+  for (char c : value.substr(1)) {
+    if (!is_alnum_or_underscore(static_cast<unsigned char>(c))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ParseDefine(std::string_view text, ShaderDefine* out) {
+  size_t equals = text.find('=');
+  if (equals == std::string_view::npos || equals == 0 ||
+      equals + 1 == text.size()) {
+    return false;
+  }
+  std::string_view name = text.substr(0, equals);
+  std::string_view value = text.substr(equals + 1);
+  if (!IsCIdentifier(name)) {
+    return false;
+  }
+  for (char c : value) {
+    if (c == '\n' || c == '\r') {
+      return false;
+    }
+  }
+  out->name.assign(name);
+  out->value.assign(value);
+  return true;
+}
+
+void AppendDefines(std::vector<std::string>* args,
+                   const std::vector<ShaderDefine>& defines,
+                   const char* flag) {
+  for (const auto& define : defines) {
+    args->push_back(flag);
+    args->push_back(define.argument());
+  }
+}
+
+std::string SpirvPreamble(const std::vector<ShaderDefine>& defines) {
+  std::string preamble = "#define SHADING_LANGUAGE_GLSL_XE 1\n";
+  for (const auto& define : defines) {
+    preamble += "#define ";
+    preamble += define.name;
+    preamble += " ";
+    preamble += define.value;
+    preamble += "\n";
+  }
+  return preamble;
 }
 
 bool ReadFile(const std::filesystem::path& path, std::string* out) {
@@ -342,7 +415,16 @@ std::string FindFxc() {
 int main(int argc, char** argv) {
   bool msl_mode = false;
   bool dxbc_mode = false;
+  bool metal_debug = false;
+#ifdef XE_SHADER_CC_METAL
+  std::string metal_sdk = "macosx";
+  std::string metal_std = "macos-metal2.4";
+  std::string metal_min_version_flag =
+      std::string("-mmacosx-version-min=") + XE_METAL_MIN_OS;
+#endif
   std::string depfile_path;
+  std::vector<ShaderDefine> defines;
+  std::string identifier_override;
   int arg_idx = 1;
   while (arg_idx < argc && argv[arg_idx][0] == '-') {
     if (std::strcmp(argv[arg_idx], "--msl") == 0) {
@@ -353,6 +435,39 @@ int main(int argc, char** argv) {
 #endif
       msl_mode = true;
       ++arg_idx;
+    } else if (std::strcmp(argv[arg_idx], "--metal-debug") == 0) {
+      // Embed MSL source + line tables in the .metallib so the shader is
+      // viewable with per-line cost in the Xcode GPU trace. Increases size.
+      metal_debug = true;
+      ++arg_idx;
+    } else if (std::strcmp(argv[arg_idx], "--metal-sdk") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr, "--metal-sdk requires an SDK name\n");
+        return 1;
+      }
+#ifdef XE_SHADER_CC_METAL
+      metal_sdk = argv[arg_idx + 1];
+#endif
+      arg_idx += 2;
+    } else if (std::strcmp(argv[arg_idx], "--metal-std") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr, "--metal-std requires a standard name\n");
+        return 1;
+      }
+#ifdef XE_SHADER_CC_METAL
+      metal_std = argv[arg_idx + 1];
+#endif
+      arg_idx += 2;
+    } else if (std::strcmp(argv[arg_idx], "--metal-min-version-flag") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr,
+                     "--metal-min-version-flag requires a compiler flag\n");
+        return 1;
+      }
+#ifdef XE_SHADER_CC_METAL
+      metal_min_version_flag = argv[arg_idx + 1];
+#endif
+      arg_idx += 2;
     } else if (std::strcmp(argv[arg_idx], "--dxbc") == 0) {
       dxbc_mode = true;
       ++arg_idx;
@@ -363,16 +478,44 @@ int main(int argc, char** argv) {
       }
       depfile_path = argv[arg_idx + 1];
       arg_idx += 2;
+    } else if (std::strcmp(argv[arg_idx], "--define") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr, "--define requires NAME=VALUE\n");
+        return 1;
+      }
+      ShaderDefine define;
+      if (!ParseDefine(argv[arg_idx + 1], &define)) {
+        std::fprintf(stderr, "invalid --define value: %s\n",
+                     argv[arg_idx + 1]);
+        return 1;
+      }
+      defines.push_back(std::move(define));
+      arg_idx += 2;
+    } else if (std::strcmp(argv[arg_idx], "--identifier") == 0) {
+      if (arg_idx + 1 >= argc) {
+        std::fprintf(stderr, "--identifier requires a name\n");
+        return 1;
+      }
+      if (!IsCIdentifier(argv[arg_idx + 1])) {
+        std::fprintf(stderr, "invalid --identifier value: %s\n",
+                     argv[arg_idx + 1]);
+        return 1;
+      }
+      identifier_override = argv[arg_idx + 1];
+      arg_idx += 2;
     } else {
       std::fprintf(stderr, "unknown flag: %s\n", argv[arg_idx]);
       return 1;
     }
   }
   if (argc - arg_idx != 2) {
-    std::fprintf(
-        stderr,
-        "Usage: %s [--msl | --dxbc] [--depfile <path>] <input> <output>\n",
-        argv[0]);
+    std::fprintf(stderr,
+                 "Usage: %s [--msl | --dxbc] [--depfile <path>] "
+                 "[--define <name=value>] [--identifier <name>] "
+                 "[--metal-sdk <sdk>] [--metal-std <std>] "
+                 "[--metal-min-version-flag <flag>] "
+                 "<input> <output>\n",
+                 argv[0]);
     return 1;
   }
   if (msl_mode && dxbc_mode) {
@@ -383,7 +526,9 @@ int main(int argc, char** argv) {
   std::filesystem::path input_path = argv[arg_idx];
   std::filesystem::path output_path = argv[arg_idx + 1];
   std::string input_filename = input_path.filename().string();
-  std::string identifier = IdentifierFromFilename(input_filename);
+  std::string identifier = identifier_override.empty()
+                               ? IdentifierFromFilename(input_filename)
+                               : identifier_override;
 
   if (msl_mode) {
 #ifdef XE_SHADER_CC_METAL
@@ -405,12 +550,20 @@ int main(int argc, char** argv) {
         "metal",
         "-x",
         "metal",
-        "-std=macos-metal2.3",
-        "-mmacosx-version-min=" XE_METAL_MIN_OS,
+        "-std=" + metal_std,
+        metal_min_version_flag,
         "-D",
         "SHADING_LANGUAGE_MSL_XE=1",
         "-w",
     };
+    if (metal_debug) {
+      // Record preprocessed MSL source and line tables into the AIR/metallib
+      // so Xcode's GPU trace can show source + per-line cost for these
+      // offline-compiled compute/resolve shaders.
+      metal_cmd.push_back("-frecord-sources");
+      metal_cmd.push_back("-gline-tables-only");
+    }
+    AppendDefines(&metal_cmd, defines, "-D");
     std::string input_dir = input_path.parent_path().string();
     if (!input_dir.empty()) {
       metal_cmd.push_back("-I");
@@ -507,8 +660,9 @@ int main(int argc, char** argv) {
                                 "-Fh", output_path.string(),
                                 "-Vn", identifier,
                                 "-nologo",
-                                input_path.string(),
                             });
+      AppendDefines(&cmd, defines, "-D");
+      cmd.push_back(input_path.string());
     } else {
       cmd.insert(cmd.end(), {
                                 "/D", "SHADING_LANGUAGE_HLSL_XE=1",
@@ -522,8 +676,9 @@ int main(int argc, char** argv) {
                                 "/Qstrip_priv",
                                 "/Gfp",
                                 "/nologo",
-                                input_path.string(),
                             });
+      AppendDefines(&cmd, defines, "/D");
+      cmd.push_back(input_path.string());
     }
     if (RunCommand(cmd, /*silent_stdout=*/true) != 0) {
       std::fprintf(stderr, "fxc failed for %s\n",
@@ -560,8 +715,9 @@ int main(int argc, char** argv) {
                                         "-I",
                                         src_dir,
                                         "-nologo",
-                                        input_path.string(),
                                     });
+        AppendDefines(&pp_cmd, defines, "-D");
+        pp_cmd.push_back(input_path.string());
       } else {
         pp_cmd.insert(pp_cmd.end(), {
                                         "/P",
@@ -571,8 +727,9 @@ int main(int argc, char** argv) {
                                         "/I",
                                         src_dir,
                                         "/nologo",
-                                        input_path.string(),
                                     });
+        AppendDefines(&pp_cmd, defines, "/D");
+        pp_cmd.push_back(input_path.string());
       }
       if (RunCommand(pp_cmd, /*silent_stdout=*/true) != 0) {
         std::fprintf(stderr,
@@ -668,7 +825,8 @@ int main(int argc, char** argv) {
   }
   shader.setStringsWithLengthsAndNames(source_strings, source_lengths,
                                        source_names, 1);
-  shader.setPreamble("#define SHADING_LANGUAGE_GLSL_XE 1\n");
+  std::string preamble = SpirvPreamble(defines);
+  shader.setPreamble(preamble.c_str());
   // Match the old `glslangValidator -V` default: Vulkan 1.0 / SPV 1.0, which
   // stays compatible with the Vulkan 1.0 devices the runtime still supports.
   shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan,

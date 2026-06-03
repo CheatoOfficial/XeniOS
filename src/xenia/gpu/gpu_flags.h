@@ -37,6 +37,8 @@ DECLARE_int32(occlusion_query_fake_upper_threshold);
 
 DECLARE_bool(occlusion_query_log);
 
+DECLARE_bool(occlusion_query_fast_trust_report);
+
 DECLARE_int32(occlusion_query_querybatch_range);
 
 DECLARE_double(occlusion_query_saturation);
@@ -67,6 +69,19 @@ DECLARE_bool(async_shader_compilation);
 DECLARE_bool(readback_resolve_half_pixel_offset);
 
 DECLARE_bool(gpu_3d_to_2d_texture);
+
+DECLARE_bool(metal_shader_disk_cache);
+DECLARE_bool(metal_pipeline_binary_archive);
+DECLARE_int32(metal_draw_ring_count);
+DECLARE_bool(metal_use_heaps);
+DECLARE_int32(metal_heap_min_bytes);
+DECLARE_bool(metal_texture_cache_use_private);
+DECLARE_bool(metal_texture_upload_via_blit);
+DECLARE_bool(metal_constant_payload_cache);
+DECLARE_string(metal_residency_sets);
+DECLARE_bool(metal_backend_telemetry);
+DECLARE_int32(metal_backend_telemetry_interval);
+DECLARE_bool(metal_root_rebuild_detail_telemetry);
 
 DECLARE_bool(ac6_ground_fix);
 

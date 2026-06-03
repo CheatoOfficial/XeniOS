@@ -10,6 +10,7 @@
 #ifndef XENIA_GPU_DXBC_SHADER_H_
 #define XENIA_GPU_DXBC_SHADER_H_
 
+#include <array>
 #include <atomic>
 #include <vector>
 
@@ -74,6 +75,31 @@ class DxbcShader : public Shader {
     return sampler_bindings_;
   }
 
+  static constexpr uint32_t kFetchConstantDwordCount =
+      xenos::kTextureFetchConstantCount * 6;
+  static constexpr uint32_t kFetchConstantDwordMaskWordCount =
+      kFetchConstantDwordCount / 32;
+  using FetchConstantDwordMask =
+      std::array<uint32_t, kFetchConstantDwordMaskWordCount>;
+  uint32_t GetUsedCbufferMaskAfterTranslation() const {
+    return used_cbuffer_mask_;
+  }
+  const FetchConstantDwordMask& GetFetchConstantDwordMaskAfterTranslation()
+      const {
+    return fetch_constant_dword_mask_;
+  }
+
+  struct TranslationMetadata {
+    std::vector<TextureBinding> texture_bindings;
+    std::vector<SamplerBinding> sampler_bindings;
+    uint32_t used_texture_mask = 0;
+    uint32_t used_cbuffer_mask = 0;
+    FetchConstantDwordMask fetch_constant_dword_mask = {};
+  };
+
+  TranslationMetadata GetTranslationMetadata() const;
+  void SetTranslationMetadata(const TranslationMetadata& metadata);
+
  protected:
   Translation* CreateTranslationInstance(uint64_t modification) override;
 
@@ -84,6 +110,8 @@ class DxbcShader : public Shader {
   std::vector<TextureBinding> texture_bindings_;
   std::vector<SamplerBinding> sampler_bindings_;
   uint32_t used_texture_mask_ = 0;
+  uint32_t used_cbuffer_mask_ = 0;
+  FetchConstantDwordMask fetch_constant_dword_mask_ = {};
 };
 
 }  // namespace gpu
