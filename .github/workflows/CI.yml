@@ -2,6 +2,12 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - "preview"
+      - "xenios"
+    tags-ignore:
+      - "v*"
+      - "release-*"
     paths-ignore:
       - '*.md'
       - 'docs/**'
