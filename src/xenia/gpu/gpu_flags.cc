@@ -108,7 +108,7 @@ DEFINE_int32(occlusion_query_querybatch_range, 0,
              "specific title.",
              "GPU");
 DEFINE_double(
-    occlusion_query_sample_count_saturation, 1.0,
+    occlusion_query_saturation, 1.0,
     "Compress higher occlusion query sample counts before guest writeback.\n"
     "This can be useful if effects such as lens flares appear too bright\n"
     "or too strong.\n"
