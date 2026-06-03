@@ -300,6 +300,7 @@ else()
        CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20)
       add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-literal-operator>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-invalid-specialization>
         $<$<COMPILE_LANGUAGE:CXX>:-Wno-nontrivial-memcall>
       )
     endif()

@@ -83,6 +83,30 @@ GraphicsSystem::GraphicsSystem() : frame_limiter_worker_running_(false) {
 
 GraphicsSystem::~GraphicsSystem() = default;
 
+void GraphicsSystem::SetScaledAspectRatio(uint32_t x, uint32_t y) {
+  uint32_t old_x = scaled_aspect_x_.exchange(x, std::memory_order_relaxed);
+  uint32_t old_y = scaled_aspect_y_.exchange(y, std::memory_order_relaxed);
+  if (old_x == x && old_y == y) {
+    return;
+  }
+
+  ScaledAspectRatioChangedCallback callback;
+  {
+    std::lock_guard<std::mutex> lock(
+        scaled_aspect_ratio_changed_callback_mutex_);
+    callback = scaled_aspect_ratio_changed_callback_;
+  }
+  if (callback) {
+    callback(x, y);
+  }
+}
+
+void GraphicsSystem::SetScaledAspectRatioChangedCallback(
+    ScaledAspectRatioChangedCallback callback) {
+  std::lock_guard<std::mutex> lock(scaled_aspect_ratio_changed_callback_mutex_);
+  scaled_aspect_ratio_changed_callback_ = std::move(callback);
+}
+
 X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                                kernel::KernelState* kernel_state,
                                ui::WindowedAppContext* app_context,

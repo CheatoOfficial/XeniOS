@@ -128,6 +128,14 @@ class TextureCache {
   // bindings or reload texture data from guest memory. Used as a cheap
   // pre-check to skip the full RequestTextures call when nothing changed.
   bool AnyUsedTextureRequestWorkPending(uint32_t used_texture_mask) const;
+  // Conservative non-mutating check for whether RequestTextures may call
+  // LoadTextureDataFromResidentMemoryImpl for any used texture.
+  bool MayRequestTexturesLoadData(uint32_t used_texture_mask) const;
+  uint32_t GetUsedTextureRequestWorkMask(uint32_t used_texture_mask) const;
+  uint32_t GetUsedTextureRangeOverlapMask(uint32_t used_texture_mask,
+                                          uint32_t start,
+                                          uint32_t length) const;
+  size_t GetTotalTextureCount() const { return textures_.size(); }
 
   // "ActiveTexture" means as of the latest RequestTextures call.
 
@@ -165,6 +173,8 @@ class TextureCache {
   }
 
  protected:
+  void RequestTextures(uint32_t used_texture_mask, bool load_data);
+
   struct TextureKey {
     // Dimensions minus 1 are stored similarly to how they're stored in fetch
     // constants so fewer bits can be used, while the maximum size (8192 for 2D)
@@ -293,6 +303,9 @@ class TextureCache {
     bool base_outdated_lockless() const { return base_outdated_; }
     bool mips_outdated_lockless() const { return mips_outdated_; }
     void MakeUpToDateAndWatch(const global_unique_lock_type& global_lock);
+    void MakeLoadedDataUpToDateAndWatch(
+        const global_unique_lock_type& global_lock, bool loaded_base,
+        bool loaded_mips);
 
     void WatchCallback(const global_unique_lock_type& global_lock, bool is_mip);
 
@@ -551,6 +564,7 @@ class TextureCache {
   // to the implementation that are used in their destructor, and will become
   // invalid if the implementation is destroyed before the texture.
   void DestroyAllTextures(bool from_destructor = false);
+  bool DestroyOldestTextureIfUnused(uint64_t completed_submission_index);
 
   // Whether the signed version of the texture has a different representation on
   // the host than its unsigned version (for example, if it's a fixed-point
@@ -597,6 +611,23 @@ class TextureCache {
   }
   bool LoadTextureData(Texture& texture);
   void LoadTexturesData(Texture** textures, uint32_t n_textures);
+  virtual bool PrepareTextureDataLoadRanges(Texture** textures,
+                                            uint32_t texture_count,
+                                            uint64_t base_outdated_mask,
+                                            uint64_t mips_outdated_mask) {
+    return true;
+  }
+  enum class TextureDataRangeSource {
+    kBase,
+    kMips,
+  };
+  virtual bool RequestTextureDataRange(Texture&, TextureDataRangeSource,
+                                       uint32_t start, uint32_t length) {
+    // TODO(xenios-jp): Backend texture caches with encoder-lifetime ownership
+    // must not use this default direct shared-memory request while an encoder
+    // is active. Metal routes texture residency through backend preflight.
+    return shared_memory().RequestRange(start, length);
+  }
   // Writes the texture data (for base, mips or both - but not neither) from the
   // shared memory or the scaled resolve memory. The shared memory management is
   // done outside this function, the implementation just needs to load the data
@@ -604,6 +635,9 @@ class TextureCache {
   virtual bool LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                                                      bool load_base,
                                                      bool load_mips) = 0;
+  global_unique_lock_type AcquireGlobalLock() {
+    return global_critical_region_.Acquire();
+  }
 
   // Converts a texture fetch constant to a texture key, normalizing and
   // validating the values, or creating an invalid key, and also gets the
@@ -630,6 +664,7 @@ class TextureCache {
 
  private:
   void UpdateTexturesTotalHostMemoryUsage(uint64_t add, uint64_t subtract);
+  TextureKey GetHostTextureKey(TextureKey key) const;
 
   // Shared memory callback for texture data invalidation.
   static void WatchCallback(const global_unique_lock_type& global_lock,
@@ -638,7 +673,8 @@ class TextureCache {
 
   // Checks if there are any pages that contain scaled resolve data within the
   // range.
-  bool IsRangeScaledResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+  bool IsRangeScaledResolved(uint32_t start_unscaled,
+                             uint32_t length_unscaled) const;
   // Global shared memory invalidation callback for invalidating scaled resolved
   // texture data.
   static void ScaledResolveGlobalWatchCallbackThunk(

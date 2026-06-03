@@ -136,6 +136,7 @@ void DxbcShaderTranslator::Reset() {
   cbuffer_index_bool_loop_constants_ = kBindingIndexUnallocated;
   cbuffer_index_fetch_constants_ = kBindingIndexUnallocated;
   cbuffer_index_descriptor_indices_ = kBindingIndexUnallocated;
+  texture_fetch_constant_dword_mask_.fill(0);
 
   system_constants_used_ = 0;
 
@@ -1368,6 +1369,44 @@ void DxbcShaderTranslator::PostTranslation() {
   DxbcShader* dxbc_shader = dynamic_cast<DxbcShader*>(&translation.shader());
   if (dxbc_shader && !dxbc_shader->bindings_setup_entered_.test_and_set(
                          std::memory_order_relaxed)) {
+    uint32_t used_cbuffer_mask = 0;
+    auto mark_used_cbuffer = [&](CbufferRegister cbuffer_register) {
+      used_cbuffer_mask |= uint32_t(1) << uint32_t(cbuffer_register);
+    };
+    mark_used_cbuffer(CbufferRegister::kSystemConstants);
+    if (cbuffer_index_float_constants_ != kBindingIndexUnallocated) {
+      mark_used_cbuffer(CbufferRegister::kFloatConstants);
+    }
+    if (cbuffer_index_bool_loop_constants_ != kBindingIndexUnallocated) {
+      mark_used_cbuffer(CbufferRegister::kBoolLoopConstants);
+    }
+    if (cbuffer_index_fetch_constants_ != kBindingIndexUnallocated) {
+      mark_used_cbuffer(CbufferRegister::kFetchConstants);
+    }
+    if (cbuffer_index_descriptor_indices_ != kBindingIndexUnallocated) {
+      mark_used_cbuffer(CbufferRegister::kDescriptorIndices);
+    }
+    dxbc_shader->used_cbuffer_mask_ = used_cbuffer_mask;
+
+    dxbc_shader->fetch_constant_dword_mask_ =
+        texture_fetch_constant_dword_mask_;
+    const Shader::ConstantRegisterMap& constant_map =
+        dxbc_shader->constant_register_map();
+    for (uint32_t i = 0; i < xe::countof(constant_map.vertex_fetch_bitmap);
+         ++i) {
+      uint32_t vfetch_bits_remaining = constant_map.vertex_fetch_bitmap[i];
+      uint32_t bit_index;
+      while (xe::bit_scan_forward(vfetch_bits_remaining, &bit_index)) {
+        vfetch_bits_remaining = xe::clear_lowest_bit(vfetch_bits_remaining);
+        const uint32_t vfetch_index = i * 32 + bit_index;
+        const uint32_t dword_index = vfetch_index * 2;
+        dxbc_shader->fetch_constant_dword_mask_[dword_index >> 5] |=
+            uint32_t(1) << (dword_index & 31);
+        dxbc_shader->fetch_constant_dword_mask_[(dword_index + 1) >> 5] |=
+            uint32_t(1) << ((dword_index + 1) & 31);
+      }
+    }
+
     dxbc_shader->texture_bindings_.clear();
     dxbc_shader->texture_bindings_.reserve(texture_bindings_.size());
     dxbc_shader->used_texture_mask_ = 0;

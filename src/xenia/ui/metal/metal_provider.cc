@@ -19,7 +19,21 @@ namespace xe {
 namespace ui {
 namespace metal {
 
+namespace {
+
+void ConfigureMetalValidationEnvironment() {
+  // Enable the Metal validation layer in Debug and Checked builds before any
+  // Metal device is created.
+#if !defined(NDEBUG) || defined(MTL_DEBUG_LAYER)
+  setenv("METAL_DEVICE_WRAPPER_TYPE", "1", 1);
+  setenv("METAL_DEBUG_ERROR_MODE", "assert", 1);
+#endif
+}
+
+}  // namespace
+
 bool MetalProvider::IsMetalAPIAvailable() {
+  ConfigureMetalValidationEnvironment();
   MTL::Device* device = MTL::CreateSystemDefaultDevice();
   bool available = (device != nullptr);
   if (device) {
@@ -52,6 +66,7 @@ MetalProvider::~MetalProvider() {
 }
 
 bool MetalProvider::Initialize() {
+  ConfigureMetalValidationEnvironment();
   device_ = MTL::CreateSystemDefaultDevice();
   if (!device_) {
     XELOGE("Failed to create Metal device");
@@ -64,10 +79,7 @@ bool MetalProvider::Initialize() {
     return false;
   }
 
-  // Enable the Metal validation layer in Debug and Checked builds.
 #if !defined(NDEBUG) || defined(MTL_DEBUG_LAYER)
-  setenv("METAL_DEVICE_WRAPPER_TYPE", "1", 1);
-  setenv("METAL_DEBUG_ERROR_MODE", "assert", 1);
   XELOGI("Metal validation layer enabled");
 #endif
   return true;

@@ -10,6 +10,7 @@
 #include "xenia/gpu/metal/metal_heap_pool.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -49,6 +50,10 @@ MetalHeapPool::MetalHeapPool(MTL::Device* device, MTL::StorageMode storage_mode,
       label_prefix_(label_prefix ? label_prefix : "") {}
 
 MetalHeapPool::~MetalHeapPool() { Shutdown(); }
+
+void MetalHeapPool::SetHeapCreatedCallback(HeapCreatedCallback callback) {
+  heap_created_callback_ = std::move(callback);
+}
 
 void MetalHeapPool::Shutdown() {
   for (auto& entry : heaps_) {
@@ -115,6 +120,9 @@ MTL::Heap* MetalHeapPool::GetHeapForSize(size_t size, size_t alignment) {
     std::string label =
         label_prefix_ + "_heap_" + std::to_string(heaps_.size());
     heap->setLabel(NS::String::string(label.c_str(), NS::UTF8StringEncoding));
+  }
+  if (heap_created_callback_) {
+    heap_created_callback_(heap);
   }
 
   heaps_.push_back({heap, heap_size});

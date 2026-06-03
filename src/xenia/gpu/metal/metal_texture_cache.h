@@ -16,10 +16,11 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "xenia/gpu/dxbc_shader.h"
 #include "xenia/gpu/register_file.h"
-#include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/texture_cache.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/xenos.h"
@@ -48,24 +49,37 @@ class MetalTextureCache : public TextureCache {
   void Shutdown();
   void ClearCache() override;
   void CompletedSubmissionUpdated(uint64_t completed_submission_index) override;
+  bool TrimViewBindlessPressure(uint32_t needed_slot_count = 1);
 
-  bool UploadTexture2D(const TextureInfo& texture_info);
-  bool UploadTextureCube(const TextureInfo& texture_info);
+  // Bindless persistent heap index lookups.
+  // Returns the persistent view_bindless_heap_ slot for the texture that
+  // would be resolved for the given binding parameters.  Falls back to the
+  // null texture's persistent slot when no valid texture is found.  If
+  // texture_for_encoder_out is provided, also returns the Metal texture/view
+  // that must be marked as used by the active render encoder.
+  uint32_t GetBindlessSRVIndexForBinding(
+      uint32_t fetch_constant, xenos::FetchOpDimension dimension,
+      bool is_signed, MTL::Texture** texture_for_encoder_out = nullptr);
+  // Returns the persistent sampler_bindless_heap_ slot for the sampler that
+  // would be created for the given binding.  Falls back to
+  // null_sampler_bindless_index_ when no sampler can be resolved.
+  uint32_t GetBindlessSamplerIndexForBinding(
+      const DxbcShader::SamplerBinding& binding);
 
-  // Pixel format conversion
-  MTL::PixelFormat ConvertXenosFormat(
-      xenos::TextureFormat format,
-      xenos::Endian endian = xenos::Endian::k8in32);
+  struct TextureSRVKey {
+    TextureKey key;
+    uint32_t host_swizzle;
+    uint8_t swizzled_signs;
+  };
 
-  // Null texture accessors for invalid bindings (following D3D12/Vulkan
-  // pattern)
-  MTL::Texture* GetNullTexture2D() const { return null_texture_2d_; }
-  MTL::Texture* GetNullTexture3D() const { return null_texture_3d_; }
-  MTL::Texture* GetNullTextureCube() const { return null_texture_cube_; }
-
-  MTL::Texture* GetTextureForBinding(uint32_t fetch_constant,
-                                     xenos::FetchOpDimension dimension,
-                                     bool is_signed);
+  bool AreActiveTextureSRVKeysUpToDate(
+      const TextureSRVKey* keys,
+      const DxbcShader::TextureBinding* host_shader_bindings,
+      size_t host_shader_binding_count) const;
+  void WriteActiveTextureSRVKeys(
+      TextureSRVKey* keys,
+      const DxbcShader::TextureBinding* host_shader_bindings,
+      size_t host_shader_binding_count) const;
 
   MTL::Texture* RequestSwapTexture(uint32_t& width_scaled_out,
                                    uint32_t& height_scaled_out,
@@ -96,11 +110,48 @@ class MetalTextureCache : public TextureCache {
   };
 
   SamplerParameters GetSamplerParameters(
-      const SpirvShader::SamplerBinding& binding) const;
+      const DxbcShader::SamplerBinding& binding) const;
   MTL::SamplerState* GetOrCreateSampler(SamplerParameters parameters);
 
   // TextureCache virtual method overrides
   void RequestTextures(uint32_t used_texture_mask) override;
+  void RequestTexturesWithoutLoading(uint32_t used_texture_mask);
+  struct TextureMaterializationPlan {
+    std::vector<SharedMemory::Range> source_ranges;
+    uint32_t request_count = 0;
+    uint32_t planned_load_count = 0;
+    uint32_t executed_load_count = 0;
+
+    void Reset() {
+      source_ranges.clear();
+      texture_loads_.clear();
+      request_count = 0;
+      planned_load_count = 0;
+      executed_load_count = 0;
+    }
+    bool NeedsTextureUpload() const { return !texture_loads_.empty(); }
+
+   private:
+    friend class MetalTextureCache;
+    struct TextureLoad {
+      Texture* texture = nullptr;
+      bool load_base = false;
+      bool load_mips = false;
+      bool use_cpu_source = false;
+    };
+    std::vector<TextureLoad> texture_loads_;
+  };
+  bool PrepareTextureMaterialization(const RegisterFile& regs,
+                                     uint32_t used_texture_mask,
+                                     TextureMaterializationPlan& plan);
+  bool ExecuteTextureMaterialization(TextureMaterializationPlan& plan);
+  void BeginTextureUploadBatch();
+  bool EndTextureUploadBatch();
+  bool PrepareTextureDataLoadRanges(Texture** textures, uint32_t texture_count,
+                                    uint64_t base_outdated_mask,
+                                    uint64_t mips_outdated_mask) override;
+  bool RequestTextureDataRange(Texture& texture, TextureDataRangeSource source,
+                               uint32_t start, uint32_t length) override;
 
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;
   bool IsScaledResolveSupportedForFormat(TextureKey key) const override;
@@ -113,12 +164,6 @@ class MetalTextureCache : public TextureCache {
   bool GetCurrentScaledResolveBuffer(MTL::Buffer*& buffer_out,
                                      size_t& buffer_offset_out,
                                      size_t& buffer_length_out) const;
-  uint64_t GetCurrentScaledResolveRangeStartScaled() const {
-    return scaled_resolve_current_range_start_scaled_;
-  }
-  uint64_t GetCurrentScaledResolveRangeLengthScaled() const {
-    return scaled_resolve_current_range_length_scaled_;
-  }
   uint32_t GetHostFormatSwizzle(TextureKey key) const override;
   uint32_t GetMaxHostTextureWidthHeight(
       xenos::DataDimension dimension) const override;
@@ -127,18 +172,39 @@ class MetalTextureCache : public TextureCache {
   std::unique_ptr<Texture> CreateTexture(TextureKey key) override;
   bool LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
                                              bool load_mips) override;
-  // Whether GPU texture uploads can be encoded into the currently open command
-  // buffer (without creating a separate upload command buffer).
-  bool CanUseCurrentCommandBufferForTextureUploads() const;
+  bool FlushPendingUploadEncodersForCommandEncoderBoundary();
 
  private:
+  bool EnsureViewBindlessHeadroom(uint32_t target_free_slots) const;
+  enum class TextureLoadSourceMode {
+    kResidentMemory,
+    kCpuGuestMemory,
+  };
   // GPU-based texture loading entry point. Returns true on success.
-  bool TryGpuLoadTexture(Texture& texture, bool load_base, bool load_mips);
+  bool TryGpuLoadTexture(Texture& texture, bool load_base, bool load_mips,
+                         TextureLoadSourceMode source_mode =
+                             TextureLoadSourceMode::kResidentMemory);
+  bool LoadTextureDataFromCpuGuestMemory(Texture& texture, bool load_base,
+                                         bool load_mips);
   MTL::StorageMode GetCacheTextureStorageMode() const;
   bool ShouldUploadViaBlit() const;
   void BeginUploadCommandBufferBatch();
   void EndUploadCommandBufferBatch();
   void AbortUploadCommandBufferBatch(bool commit_if_has_work = true);
+  void BeginDeferredUploadEncoderBatch();
+  bool EndDeferredUploadEncoderBatch();
+  bool FlushDeferredUploadEncoderBatch();
+  class UploadBatchScope;
+  MTL::ComputeCommandEncoder* GetDeferredUploadComputeEncoder(
+      MTL::CommandBuffer* command_buffer);
+  void QueueDeferredUploadCopy(MTL::Buffer* source_buffer,
+                               size_t source_offset_bytes,
+                               size_t source_row_pitch,
+                               size_t source_bytes_per_image,
+                               MTL::Texture* destination_texture,
+                               uint32_t destination_slice,
+                               uint32_t destination_level, uint32_t width,
+                               uint32_t height, uint32_t depth);
 
   // Format / load shader mapping for Metal texture loading.
   bool IsDecompressionNeededForKey(TextureKey key) const;
@@ -159,13 +225,18 @@ class MetalTextureCache : public TextureCache {
   // resolution-scaled variants), indexed by TextureCache::LoadShaderIndex.
   MTL::ComputePipelineState* load_pipelines_[kLoadShaderCount] = {};
   MTL::ComputePipelineState* load_pipelines_scaled_[kLoadShaderCount] = {};
+  MTL::ComputePipelineState* texture_upload_repack_pipeline_ = nullptr;
+  // Number of LoadTextureDataFromResidentMemoryImpl calls. Used only to derive
+  // the per-request load count reported to command-processor telemetry.
+  uint64_t loaded_texture_data_count_ = 0;
 
   // Metal-specific Texture implementation
 
   class MetalTexture : public Texture {
    public:
     MetalTexture(MetalTextureCache& texture_cache, const TextureKey& key,
-                 MTL::Texture* metal_texture, bool track_usage = true);
+                 MTL::Texture* metal_texture, bool track_usage = true,
+                 bool is_3d_as_2d_wrapper = false);
     ~MetalTexture() override;
 
     MTL::Texture* metal_texture() const { return metal_texture_; }
@@ -175,16 +246,31 @@ class MetalTextureCache : public TextureCache {
     MTL::Texture* GetOrCreate3DAs2DView(uint32_t host_swizzle,
                                         xenos::FetchOpDimension dimension,
                                         bool is_signed);
+    uint32_t GetOrCreateBindlessSRVIndexAndView(
+        uint32_t host_swizzle, xenos::FetchOpDimension dimension,
+        bool is_signed, MTL::Texture** view_out);
 
    private:
+    uint64_t GetViewKey(uint32_t host_swizzle,
+                        xenos::FetchOpDimension dimension, bool is_signed,
+                        MTL::PixelFormat view_format) const;
+    MTL::PixelFormat GetViewPixelFormat(bool is_signed) const;
+    MTL::TextureType GetViewType(xenos::FetchOpDimension dimension) const;
+    uint32_t GetOrCreateBindlessSRVIndexForResolvedView(uint64_t view_key,
+                                                        MTL::Texture* view);
+
     MetalTextureCache& texture_cache_;
     MTL::Texture* metal_texture_;
+    uint32_t bindless_srv_index_ = UINT32_MAX;
     std::unique_ptr<MetalTexture> texture_3d_as_2d_;
+    bool is_3d_as_2d_wrapper_ = false;
     std::unordered_map<uint64_t, MTL::Texture*> swizzled_view_cache_;
+    std::unordered_map<uint64_t, uint32_t> swizzled_view_bindless_srv_indices_;
   };
 
  private:
   // Metal texture creation helpers
+  MTL::Texture* CreateTexture(MTL::TextureDescriptor* descriptor);
   MTL::Texture* CreateTexture2D(uint32_t width, uint32_t height,
                                 uint32_t array_length, MTL::PixelFormat format,
                                 MTL::TextureSwizzleChannels swizzle,
@@ -197,9 +283,6 @@ class MetalTextureCache : public TextureCache {
                                   MTL::TextureSwizzleChannels swizzle,
                                   uint32_t mip_levels = 1,
                                   uint32_t cube_count = 1);
-  void DumpTextureToFile(MTL::Texture* texture, const std::string& filename,
-                         uint32_t width, uint32_t height);
-
   struct ScaledResolveBuffer {
     MTL::Buffer* buffer = nullptr;
     uint64_t base_scaled = 0;
@@ -209,6 +292,10 @@ class MetalTextureCache : public TextureCache {
     MTL::Buffer* buffer = nullptr;
     uint64_t submission_id = 0;
     uint64_t length_scaled = 0;
+  };
+  struct RetiredSamplerState {
+    MTL::SamplerState* sampler = nullptr;
+    uint64_t submission_id = 0;
   };
 
   bool GetScaledResolveRange(uint32_t start_unscaled, uint32_t length_unscaled,
@@ -221,6 +308,7 @@ class MetalTextureCache : public TextureCache {
   bool EnsureScaledResolveBufferRange(uint64_t start_scaled,
                                       uint64_t length_scaled);
   void ClearScaledResolveBuffers();
+  void ReleaseOrRetireSamplerState(MTL::SamplerState* sampler);
 
   // Null texture factory methods (following existing CreateTexture pattern)
   MTL::Texture* CreateNullTexture2D();
@@ -237,25 +325,53 @@ class MetalTextureCache : public TextureCache {
   MTL::Texture* null_texture_3d_ = nullptr;
   MTL::Texture* null_texture_cube_ = nullptr;
 
+  // Persistent bindless heap indices for null textures/samplers.
+  // Allocated during Initialize, released during Shutdown.
+  uint32_t null_texture_2d_bindless_index_ = UINT32_MAX;
+  uint32_t null_texture_3d_bindless_index_ = UINT32_MAX;
+  uint32_t null_texture_cube_bindless_index_ = UINT32_MAX;
+  uint32_t null_sampler_bindless_index_ = UINT32_MAX;
+  MTL::SamplerState* null_sampler_bindless_ = nullptr;
+
   Norm16Selection r16_selection_;
   Norm16Selection rg16_selection_;
   Norm16Selection rgba16_selection_;
 
   std::unordered_map<uint32_t, MTL::SamplerState*> sampler_cache_;
+  // Maps sampler parameter key -> persistent bindless heap index.
+  std::unordered_map<uint32_t, uint32_t> sampler_bindless_indices_;
 
   class UploadBufferPool;
+  struct DeferredUploadCopy {
+    MTL::Buffer* source_buffer = nullptr;
+    size_t source_offset_bytes = 0;
+    size_t source_row_pitch = 0;
+    size_t source_bytes_per_image = 0;
+    MTL::Texture* destination_texture = nullptr;
+    uint32_t destination_slice = 0;
+    uint32_t destination_level = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
+  };
+
   mutable std::mutex upload_buffer_pool_mutex_;
   std::shared_ptr<UploadBufferPool> upload_buffer_pool_;
   MTL::CommandBuffer* upload_batch_command_buffer_ = nullptr;
   bool upload_batch_command_buffer_has_work_ = false;
+  std::vector<std::pair<uint32_t, uint32_t>>
+      upload_batch_command_buffer_shared_memory_ranges_;
   uint32_t upload_batch_depth_ = 0;
-  MetalTexture* bindless_used_first_ = nullptr;
-  MetalTexture* bindless_used_last_ = nullptr;
+  MTL::CommandBuffer* deferred_upload_command_buffer_ = nullptr;
+  MTL::ComputeCommandEncoder* deferred_upload_compute_encoder_ = nullptr;
+  std::vector<DeferredUploadCopy> deferred_upload_copies_;
+  uint32_t deferred_upload_batch_depth_ = 0;
   std::unique_ptr<MetalHeapPool> texture_heap_pool_;
   bool supports_bc_texture_compression_ = false;
 
   std::vector<ScaledResolveBuffer> scaled_resolve_buffers_;
   std::vector<RetiredScaledResolveBuffer> scaled_resolve_retired_buffers_;
+  std::vector<RetiredSamplerState> retired_sampler_states_;
   uint64_t scaled_resolve_retired_bytes_ = 0;
   size_t scaled_resolve_current_buffer_index_ = size_t(-1);
   uint64_t scaled_resolve_current_range_start_scaled_ = 0;

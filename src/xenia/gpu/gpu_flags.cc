@@ -93,6 +93,13 @@ DEFINE_int32(occlusion_query_fake_upper_threshold, 100,
              "GPU");
 DEFINE_bool(occlusion_query_log, false,
             "Log occlusion query lifetime and summary stats.", "GPU");
+DEFINE_bool(
+    occlusion_query_fast_trust_report, false,
+    "Prefer the current query report over cached fast mode values.\n"
+    "Can improve occlusion accuracy in fast mode by reducing stale results,\n"
+    "but may also regress occlusion culling in titles that already have\n"
+    "issues with fast mode.",
+    "GPU");
 DEFINE_int32(occlusion_query_querybatch_range, 0,
              "Range of fake sample count values to walk for titles using the\n"
              "D3D QueryBatch standard before wrapping back to\n"
@@ -209,6 +216,53 @@ DEFINE_int32(anisotropic_override, -1,
              "  4 = Force 8x anisotropic filtering\n"
              "  5 = Force 16x anisotropic filtering",
              "GPU");
+
+DEFINE_bool(metal_shader_disk_cache, true,
+            "Cache translated Metal shader artifacts and binding metadata in "
+            "the packed Metal artifact store.",
+            "Metal");
+
+DEFINE_bool(metal_pipeline_binary_archive, true,
+            "Use MTLBinaryArchive for Metal pipeline compilation caching. "
+            "Requires store_shaders and a compatible OS/driver.",
+            "Metal");
+
+DEFINE_int32(
+    metal_draw_ring_count, 128,
+    "Metal per-command-buffer draw ring size (descriptor-table pages). "
+    "Higher reduces ring churn but uses more memory.",
+    "Metal");
+
+DEFINE_bool(metal_backend_telemetry, true,
+            "Log concise Metal backend decision counters for render encoder "
+            "lifetime, resolve/transfer planning, bindless binding, and "
+            "texture upload/load behavior.",
+            "Metal");
+DEFINE_int32(metal_backend_telemetry_interval, 120,
+             "Number of guest swaps between Metal backend telemetry summaries. "
+             "Set to 0 to log only on shutdown.",
+             "Metal");
+DEFINE_bool(
+    metal_root_rebuild_detail_telemetry, false,
+    "Collect expensive Metal root argument rebuild diagnostics, including slot "
+    "change histograms and CBV resource identity details. Leave disabled for "
+    "normal profiling.",
+    "Metal");
+
+DEFINE_bool(metal_constant_payload_cache, false,
+            "Reuse identical Metal constant/descriptor payload uploads across "
+            "draws within a frame. Disable to A/B hash/cache CPU cost against "
+            "extra CBV uploads and root argument churn.",
+            "Metal");
+
+DEFINE_string(
+    metal_residency_sets, "auto",
+    "Use Metal residency sets for stable Metal allocations where supported.\n"
+    "  auto: Enable when the runtime exposes MTLResidencySet.\n"
+    "  true: Require creating a residency set, falling back only if creation "
+    "fails.\n"
+    "  false: Use per-encoder useResource/useHeap only.",
+    "Metal");
 
 DEFINE_bool(
     ac6_ground_fix, false,

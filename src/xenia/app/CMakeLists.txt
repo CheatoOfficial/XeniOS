@@ -183,6 +183,20 @@ elseif(APPLE)
   target_link_options(xenia-app PRIVATE
     "-Wl,-rpath,@executable_path/../Frameworks"
     "-Wl,-rpath,@loader_path/../Frameworks")
+
+  foreach(_xe_app_runtime_dylib
+          xenia-third-party-metal-shader-converter
+          xenia-third-party-dxilconv)
+    if(TARGET ${_xe_app_runtime_dylib})
+      add_custom_command(TARGET xenia-app POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "$<TARGET_BUNDLE_DIR:xenia-app>/Contents/Frameworks"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<TARGET_FILE:${_xe_app_runtime_dylib}>"
+                "$<TARGET_BUNDLE_DIR:xenia-app>/Contents/Frameworks/$<TARGET_FILE_NAME:${_xe_app_runtime_dylib}>"
+        VERBATIM)
+    endif()
+  endforeach()
 endif()
 
 xe_target_defaults(xenia-app)

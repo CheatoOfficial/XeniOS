@@ -61,7 +61,8 @@ namespace a64 {
 uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
 
 uint32_t FindStackpointSyncDepth(const A64BackendStackpoint* stackpoints,
-                                 uint32_t current_depth, uint32_t guest_sp) {
+                                 uint32_t current_depth, uint32_t guest_sp,
+                                 uint32_t guest_return_address) {
   if (!stackpoints || current_depth == 0) {
     return 0;
   }
@@ -77,6 +78,26 @@ uint32_t FindStackpointSyncDepth(const A64BackendStackpoint* stackpoints,
   if (idx == 0xFFFFFFFFu || frames_skipped <= 1) {
     return 0;
   }
+
+  // x64 breaks ties between equal guest stacks with guest_return_address_ and
+  // restores the caller of the matching frame. Without this, A64 can choose a
+  // deeper equal-stack frame and resume a return-site with the wrong host SP.
+  if (guest_return_address) {
+    const uint32_t matching_guest_sp = stackpoints[idx].guest_stack_;
+    uint32_t search_idx = idx;
+    while (stackpoints[search_idx].guest_stack_ == matching_guest_sp) {
+      if (stackpoints[search_idx].guest_return_address_ ==
+          guest_return_address) {
+        return search_idx == 0 ? 0 : search_idx;
+      }
+      if (search_idx == 0) {
+        return 1;
+      }
+      --search_idx;
+    }
+    return search_idx + 2;
+  }
+
   return idx + 1;
 }
 
@@ -431,8 +452,9 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
                                                    current_stackpoint_depth))));
 
   // w13 = target depth computed by ResolveFunction.
-  ldr(w13, ptr(x19, static_cast<uint32_t>(offsetof(
-                        A64BackendContext, pending_stackpoint_sync_depth))));
+  ldr(w13, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext,
+                                 pending_stackpoint_sync_depth))));
   auto& underflow = NewCachedLabel();
 
   cbz(x10, underflow);
@@ -462,8 +484,9 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   str(w13, ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext,
                                                    current_stackpoint_depth))));
   mov(w15, 0);
-  str(w15, ptr(x19, static_cast<uint32_t>(offsetof(
-                        A64BackendContext, pending_stackpoint_sync_depth))));
+  str(w15, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext,
+                                 pending_stackpoint_sync_depth))));
 
   // Jump back to the caller.
   br(x8);
@@ -647,7 +670,8 @@ uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
             const uint32_t sync_depth = FindStackpointSyncDepth(
                 backend_context->stackpoints,
                 backend_context->current_stackpoint_depth,
-                static_cast<uint32_t>(guest_context->r[1]));
+                static_cast<uint32_t>(guest_context->r[1]),
+                static_cast<uint32_t>(target_address));
             if (sync_depth != 0) {
               backend_context->pending_stackpoint_sync_depth = sync_depth;
               return host_address;

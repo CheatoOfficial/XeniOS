@@ -73,8 +73,9 @@ class MetalImmediateDrawer : public ImmediateDrawer {
   MTL::RenderCommandEncoder* current_render_encoder_ = nullptr;
   bool batch_open_ = false;
 
-  // void* holds an Obj-C id<MTLBuffer> — the .mm retains on store and
+  // void* holds Obj-C id<MTLBuffer> values - the .mm retains on store and
   // CFReleases here, so the header stays ObjC-free.
+  void* current_vertex_buffer_ = nullptr;
   void* current_index_buffer_ = nullptr;
 };
 

@@ -16,6 +16,7 @@
 
 #include "third_party/metal-cpp/Metal/Metal.hpp"
 
+#include "xenia/base/autorelease_pool_mac.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/gpu/shaders/bytecode/metal/apply_gamma_pwl_cs.h"
@@ -74,7 +75,7 @@ MetalPresenter::MetalPresenter(MetalProvider* provider, HostGpuLossCallback host
   guest_output_waited_submission_ = 0;
 }
 
-MetalPresenter::~MetalPresenter() = default;
+MetalPresenter::~MetalPresenter() { Shutdown(); }
 
 bool MetalPresenter::Initialize() {
   // Use the shared MetalProvider command queue so presenter work is serialized
@@ -105,6 +106,7 @@ void MetalPresenter::Shutdown() {
   if (shared_event_ && last_submission) {
     [(id<MTLSharedEvent>)shared_event_ waitUntilSignaledValue:last_submission timeoutMS:UINT64_MAX];
   }
+  ReleaseCachedPresenterTextureViews();
   if (command_queue_) {
     command_queue_ = nullptr;
   }
@@ -191,6 +193,81 @@ void MetalPresenter::Shutdown() {
   surface_height_in_points_ = 0;
   metal_layer_ = nullptr;
   XELOGD("Metal presenter shut down");
+}
+
+void MetalPresenter::ReleaseCachedPresenterTextureView(
+    PresenterTextureViewCacheEntry& entry) {
+  if (entry.view) {
+    entry.view->release();
+  }
+  entry = {};
+}
+
+void MetalPresenter::ReleaseCachedPresenterTextureViews() {
+  ReleaseCachedPresenterTextureView(linear_presenter_view_);
+  ReleaseCachedPresenterTextureView(array_presenter_view_);
+  ReleaseCachedPresenterTextureView(swizzle_presenter_view_);
+}
+
+MTL::Texture* MetalPresenter::GetCachedPresenterPixelFormatView(
+    PresenterTextureViewCacheEntry& entry, MTL::Texture* parent,
+    MTL::PixelFormat pixel_format) {
+  if (!parent) {
+    return nullptr;
+  }
+  if (entry.view && entry.parent == parent && !entry.full_descriptor &&
+      entry.pixel_format == pixel_format) {
+    return entry.view;
+  }
+  ReleaseCachedPresenterTextureView(entry);
+  MTL::Texture* view = parent->newTextureView(pixel_format);
+  if (!view) {
+    return nullptr;
+  }
+  entry.parent = parent;
+  entry.view = view;
+  entry.full_descriptor = false;
+  entry.pixel_format = pixel_format;
+  return view;
+}
+
+MTL::Texture* MetalPresenter::GetCachedPresenterTextureView(
+    PresenterTextureViewCacheEntry& entry, MTL::Texture* parent,
+    MTL::PixelFormat pixel_format, MTL::TextureType texture_type,
+    NS::Range level_range, NS::Range slice_range,
+    MTL::TextureSwizzleChannels swizzle) {
+  if (!parent) {
+    return nullptr;
+  }
+  if (entry.view && entry.parent == parent && entry.full_descriptor &&
+      entry.pixel_format == pixel_format && entry.texture_type == texture_type &&
+      entry.level_location == level_range.location &&
+      entry.level_length == level_range.length &&
+      entry.slice_location == slice_range.location &&
+      entry.slice_length == slice_range.length &&
+      entry.swizzle.red == swizzle.red && entry.swizzle.green == swizzle.green &&
+      entry.swizzle.blue == swizzle.blue &&
+      entry.swizzle.alpha == swizzle.alpha) {
+    return entry.view;
+  }
+  ReleaseCachedPresenterTextureView(entry);
+  MTL::Texture* view =
+      parent->newTextureView(pixel_format, texture_type, level_range,
+                             slice_range, swizzle);
+  if (!view) {
+    return nullptr;
+  }
+  entry.parent = parent;
+  entry.view = view;
+  entry.full_descriptor = true;
+  entry.pixel_format = pixel_format;
+  entry.texture_type = texture_type;
+  entry.level_location = level_range.location;
+  entry.level_length = level_range.length;
+  entry.slice_location = slice_range.location;
+  entry.slice_length = slice_range.length;
+  entry.swizzle = swizzle;
+  return view;
 }
 
 Surface::TypeFlags MetalPresenter::GetSupportedSurfaceTypes() const {
@@ -352,6 +429,8 @@ Presenter::PaintResult MetalPresenter::PaintAndPresentImpl(bool execute_ui_drawe
     XELOGW("Metal PaintAndPresentImpl called without command queue");
     return PaintResult::kNotPresented;
   }
+
+  XE_SCOPED_AUTORELEASE_POOL("MetalPresenter::PaintAndPresentImpl");
 
   if (surface_width_in_points_ && surface_height_in_points_) {
     CGFloat drawable_width = CGFloat(surface_width_in_points_) * surface_scale_;
@@ -708,15 +787,14 @@ MetalPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
   metal_layer.contentsScale = surface_scale;
   metal_layer.drawableSize =
       CGSizeMake(new_surface_width * surface_scale, new_surface_height * surface_scale);
+  metal_layer.minificationFilter = kCAFilterNearest;
+  metal_layer.magnificationFilter = kCAFilterNearest;
 
   const bool tearing_allowed = cvars::metal_allow_tearing;
   metal_layer.displaySyncEnabled = tearing_allowed ? NO : YES;
+  is_vsync_implicit_out = !tearing_allowed;
 
   metal_layer_ = metal_layer;
-
-  // When displaySyncEnabled is YES, CAMetalLayer blocks nextDrawable on the
-  // compositor vsync; when NO, the framerate_limit throttle is authoritative.
-  is_vsync_implicit_out = !tearing_allowed;
 
   XELOGI("Metal surface connected successfully: {}x{} (scale={}, drawable={}x{})",
          new_surface_width, new_surface_height, surface_scale,
@@ -1230,14 +1308,20 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
     copy_command_buffer.label = @"XeniaGuestOutputCopy";
   }
 
-  uint64_t submission_id =
-      guest_output_submission_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (submission_out) {
-    *submission_out = submission_id;
-  }
-  if (shared_event_) {
-    [copy_command_buffer encodeSignalEvent:(id<MTLSharedEvent>)shared_event_ value:submission_id];
-  }
+  auto commit_copy_command_buffer = [&]() {
+    uint64_t submission_id =
+        guest_output_submission_counter_.fetch_add(1,
+                                                   std::memory_order_relaxed) +
+        1;
+    if (submission_out) {
+      *submission_out = submission_id;
+    }
+    if (shared_event_) {
+      [copy_command_buffer encodeSignalEvent:(id<MTLSharedEvent>)shared_event_
+                                       value:submission_id];
+    }
+    [copy_command_buffer commit];
+  };
 
   // Cast dest_texture to proper Metal texture type
   id<MTLTexture> dest_metal_texture = (id<MTLTexture>)dest_texture;
@@ -1350,13 +1434,13 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
   bool decode_srgb = false;
   bool encode_srgb = false;
   MTL::Texture* sample_texture = source_texture;
-  MTL::Texture* linear_view = nullptr;
-  MTL::Texture* swizzle_view = nullptr;
-  MTL::Texture* present_view = nullptr;
+  bool swizzle_view_used = false;
   if (is_srgb_format(src_format)) {
     MTLPixelFormat linear_format = linear_format_for_srgb(src_format);
     if (linear_format != src_format) {
-      linear_view = source_texture->newTextureView(static_cast<MTL::PixelFormat>(linear_format));
+      MTL::Texture* linear_view = GetCachedPresenterPixelFormatView(
+          linear_presenter_view_, source_texture,
+          static_cast<MTL::PixelFormat>(linear_format));
       if (linear_view) {
         sample_texture = linear_view;
         src_format = linear_format;
@@ -1375,8 +1459,9 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
     NS::Range level_range = NS::Range::Make(0, sample_texture->mipmapLevelCount());
     NS::Range slice_range = NS::Range::Make(0, 1);
     MTL::TextureSwizzleChannels swizzle = sample_texture->swizzle();
-    present_view = sample_texture->newTextureView(sample_texture->pixelFormat(), MTL::TextureType2D,
-                                                  level_range, slice_range, swizzle);
+    MTL::Texture* present_view = GetCachedPresenterTextureView(
+        array_presenter_view_, sample_texture, sample_texture->pixelFormat(),
+        MTL::TextureType2D, level_range, slice_range, swizzle);
     if (present_view) {
       sample_texture = present_view;
     } else {
@@ -1391,29 +1476,15 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
     NS::Range slice_range = NS::Range::Make(0, sample_texture->arrayLength());
     MTL::TextureSwizzleChannels swizzle = {MTL::TextureSwizzleBlue, MTL::TextureSwizzleGreen,
                                            MTL::TextureSwizzleRed, MTL::TextureSwizzleAlpha};
-    swizzle_view =
-        sample_texture->newTextureView(sample_texture->pixelFormat(), sample_texture->textureType(),
-                                       level_range, slice_range, swizzle);
+    MTL::Texture* swizzle_view = GetCachedPresenterTextureView(
+        swizzle_presenter_view_, sample_texture, sample_texture->pixelFormat(),
+        sample_texture->textureType(), level_range, slice_range, swizzle);
     if (swizzle_view) {
       sample_texture = swizzle_view;
       swap_rb_in_shader = false;
+      swizzle_view_used = true;
     }
   }
-
-  auto release_views = [&]() {
-    if (swizzle_view) {
-      swizzle_view->release();
-      swizzle_view = nullptr;
-    }
-    if (present_view) {
-      present_view->release();
-      present_view = nullptr;
-    }
-    if (linear_view) {
-      linear_view->release();
-      linear_view = nullptr;
-    }
-  };
 
   if (is_srgb_format(dst_format) && !is_srgb_format(src_format)) {
     encode_srgb = true;
@@ -1444,7 +1515,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
           XELOGE("MetalPresenter::CopyTextureToGuestOutput: Failed to create "
                  "gamma output texture {}x{}",
                  copy_width, copy_height);
-          release_views();
           return false;
         }
         gamma_output_width_ = copy_width;
@@ -1458,7 +1528,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
     if (!compute_encoder) {
       XELOGE("MetalPresenter::CopyTextureToGuestOutput: Failed to create "
              "compute encoder for gamma");
-      release_views();
       return false;
     }
     if (cvars::metal_presenter_debug_markers) {
@@ -1471,7 +1540,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
         use_pwl_gamma_ramp ? gamma_ramp_pwl_texture_ : gamma_ramp_table_texture_;
     if (!pipeline || !ramp_texture) {
       XELOGE("MetalPresenter::CopyTextureToGuestOutput: missing gamma pipeline");
-      release_views();
       return false;
     }
 
@@ -1505,17 +1573,15 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
       last_used_shader = true;
     }
 
-    bool swap_rb_after_gamma = force_swap_rb && (swizzle_view == nullptr);
+    bool swap_rb_after_gamma = force_swap_rb && !swizzle_view_used;
     if (needs_gamma_convert || swap_rb_after_gamma) {
       if (!EnsureCopyTextureConvertPipelines()) {
-        release_views();
         return false;
       }
       id<MTLComputeCommandEncoder> convert_encoder = [copy_command_buffer computeCommandEncoder];
       if (!convert_encoder) {
         XELOGE("MetalPresenter::CopyTextureToGuestOutput: Failed to create "
                "compute encoder for gamma conversion");
-        release_views();
         return false;
       }
       if (cvars::metal_presenter_debug_markers) {
@@ -1549,8 +1615,7 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
       [convert_encoder endEncoding];
     }
 
-    [copy_command_buffer commit];
-    release_views();
+    commit_copy_command_buffer();
     return true;
   }
 
@@ -1565,7 +1630,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
            int(dst_format));
 
     if (!EnsureCopyTextureConvertPipelines()) {
-      release_views();
       return false;
     }
 
@@ -1575,7 +1639,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
       XELOGE("MetalPresenter::CopyTextureToGuestOutput: Unsupported source "
              "texture type {} for conversion",
              int(src_type));
-      release_views();
       return false;
     }
 
@@ -1583,7 +1646,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
     if (!compute_encoder) {
       XELOGE("MetalPresenter::CopyTextureToGuestOutput: Failed to create "
              "compute encoder");
-      release_views();
       return false;
     }
     if (cvars::metal_presenter_debug_markers) {
@@ -1633,9 +1695,8 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
                threadsPerThreadgroup:threads_per_threadgroup];
     [compute_encoder endEncoding];
 
-    [copy_command_buffer commit];
+    commit_copy_command_buffer();
     XELOGD("MetalPresenter::CopyTextureToGuestOutput: Shader copy completed successfully");
-    release_views();
     return true;
   }
 
@@ -1653,7 +1714,6 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
   id<MTLBlitCommandEncoder> blit_encoder = [copy_command_buffer blitCommandEncoder];
   if (!blit_encoder) {
     XELOGE("MetalPresenter::CopyTextureToGuestOutput: Failed to create blit encoder");
-    release_views();
     return false;
   }
 
@@ -1674,10 +1734,9 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
 
   [blit_encoder endEncoding];
 
-  [copy_command_buffer commit];
+  commit_copy_command_buffer();
 
   XELOGD("MetalPresenter::CopyTextureToGuestOutput: Copy completed successfully");
-  release_views();
   return true;
 }
 

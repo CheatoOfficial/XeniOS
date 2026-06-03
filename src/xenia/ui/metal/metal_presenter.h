@@ -116,6 +116,30 @@ class MetalPresenter : public Presenter {
   bool EnsureApplyGammaPipelines();
   bool EnsureGuestOutputPaintResources(uint32_t pixel_format);
 
+  struct PresenterTextureViewCacheEntry {
+    MTL::Texture* parent = nullptr;
+    MTL::Texture* view = nullptr;
+    bool full_descriptor = false;
+    MTL::PixelFormat pixel_format = MTL::PixelFormatInvalid;
+    MTL::TextureType texture_type = MTL::TextureType2D;
+    uint64_t level_location = 0;
+    uint64_t level_length = 0;
+    uint64_t slice_location = 0;
+    uint64_t slice_length = 0;
+    MTL::TextureSwizzleChannels swizzle = {};
+  };
+
+  MTL::Texture* GetCachedPresenterPixelFormatView(
+      PresenterTextureViewCacheEntry& entry, MTL::Texture* parent,
+      MTL::PixelFormat pixel_format);
+  MTL::Texture* GetCachedPresenterTextureView(
+      PresenterTextureViewCacheEntry& entry, MTL::Texture* parent,
+      MTL::PixelFormat pixel_format, MTL::TextureType texture_type,
+      NS::Range level_range, NS::Range slice_range,
+      MTL::TextureSwizzleChannels swizzle);
+  void ReleaseCachedPresenterTextureView(PresenterTextureViewCacheEntry& entry);
+  void ReleaseCachedPresenterTextureViews();
+
   MetalProvider* provider_;
   MTL::Device* device_ = nullptr;
 
@@ -140,6 +164,9 @@ class MetalPresenter : public Presenter {
   uint32_t gamma_ramp_buffer_size_ = 0;
   bool gamma_ramp_table_valid_ = false;
   bool gamma_ramp_pwl_valid_ = false;
+  PresenterTextureViewCacheEntry linear_presenter_view_;
+  PresenterTextureViewCacheEntry array_presenter_view_;
+  PresenterTextureViewCacheEntry swizzle_presenter_view_;
   id guest_output_pipeline_bilinear_ = nullptr;  // id<MTLRenderPipelineState>
   id guest_output_pipeline_bilinear_dither_ =
       nullptr;                         // id<MTLRenderPipelineState>

@@ -18,12 +18,13 @@
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "third_party/stb/stb_image_write.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/autorelease_pool_mac.h"
 #include "xenia/base/bit_stream.h"
@@ -91,6 +92,7 @@
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_snorm_float_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_unorm_float_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_unorm_float_scaled_cs.h"
+#include "xenia/gpu/shaders/bytecode/metal/texture_upload_repack.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/texture_util.h"
 #include "xenia/gpu/xenos.h"
@@ -105,7 +107,6 @@ DEFINE_bool(metal_texture_upload_via_blit, true,
             "Upload textures via staging buffers and GPU blit copies instead "
             "of CPU replaceRegion.",
             "Metal");
-
 DECLARE_bool(metal_use_heaps);
 DECLARE_int32(metal_heap_min_bytes);
 
@@ -121,6 +122,7 @@ constexpr uint64_t kScaledResolveRetiredMaxBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kUploadBufferPoolMaxBytes = 512ull * 1024ull * 1024ull;
 constexpr uint64_t kScaledResolveRetiredMaxBytes = 256ull * 1024ull * 1024ull;
 #endif
+constexpr uint32_t kViewBindlessHeapPressureThreshold = 65536;
 
 struct MetalLoadConstants {
   uint32_t is_tiled_3d_endian_scale;
@@ -135,6 +137,20 @@ struct MetalLoadConstants {
   uint32_t padding1[5];  // Pad to 64 bytes to match HLSL CB size.
 };
 static_assert(sizeof(MetalLoadConstants) == 64);
+
+struct MetalTextureUploadRepackConstants {
+  uint32_t source_offset;
+  uint32_t dest_offset;
+  uint32_t source_row_pitch;
+  uint32_t dest_row_pitch;
+  uint32_t source_image_pitch;
+  uint32_t dest_image_pitch;
+  uint32_t row_bytes;
+  uint32_t row_count;
+  uint32_t depth;
+  uint32_t padding[3];
+};
+static_assert(sizeof(MetalTextureUploadRepackConstants) == 48);
 
 class ScopedAutoreleasePool {
  public:
@@ -151,6 +167,13 @@ class ScopedAutoreleasePool {
  private:
   NS::AutoreleasePool* pool_;
 };
+
+void SetEncoderLabel(MTL::CommandEncoder* encoder, const char* label) {
+  if (!encoder || !label) {
+    return;
+  }
+  encoder->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
+}
 
 bool SupportsPixelFormat(MTL::Device* device, MTL::PixelFormat format) {
   if (!device || format == MTL::PixelFormatInvalid) {
@@ -296,22 +319,18 @@ class MetalTextureCache::UploadBufferPool
     {
       std::lock_guard<std::mutex> lock(mutex_);
       ++usage_tick_;
-      size_t best_index = entries_.size();
-      size_t best_size = std::numeric_limits<size_t>::max();
-      for (size_t i = 0; i < entries_.size(); ++i) {
-        Entry& entry = entries_[i];
-        if (entry.in_use || entry.size < size) {
-          continue;
+      auto available_it = available_entries_by_size_.lower_bound(size);
+      while (available_it != available_entries_by_size_.end()) {
+        const size_t entry_index = available_it->second;
+        Entry& entry = entries_[entry_index];
+        if (entry.buffer && !entry.in_use && entry.size >= size) {
+          available_entries_by_size_.erase(available_it);
+          entry.in_use = true;
+          entry.last_used_tick = usage_tick_;
+          return entry.buffer;
         }
-        if (entry.size < best_size) {
-          best_index = i;
-          best_size = entry.size;
-        }
-      }
-      if (best_index < entries_.size()) {
-        entries_[best_index].in_use = true;
-        entries_[best_index].last_used_tick = usage_tick_;
-        return entries_[best_index].buffer;
+        // Defensive cleanup if an old entry was left in the size index.
+        available_it = available_entries_by_size_.erase(available_it);
       }
       can_pool = pooled_bytes_ + size <= max_pooled_bytes_;
     }
@@ -325,7 +344,9 @@ class MetalTextureCache::UploadBufferPool
       ++usage_tick_;
       if (can_pool && pooled_bytes_ + size <= max_pooled_bytes_) {
         pooled_bytes_ += size;
+        const size_t entry_index = entries_.size();
         entries_.push_back({buffer, size, true, true, usage_tick_});
+        entry_indices_by_buffer_[buffer] = entry_index;
         return buffer;
       }
       ++transient_allocations_;
@@ -337,20 +358,60 @@ class MetalTextureCache::UploadBufferPool
     if (!buffer) {
       return;
     }
-    bool release_transient = true;
+    MTL::Buffer* buffers[] = {buffer};
+    ReleaseImmediateBatch(buffers, 1);
+  }
+
+  void ReleaseImmediateBatch(MTL::Buffer* const* buffers, size_t count) {
+    if (!buffers || !count) {
+      return;
+    }
+    std::vector<MTL::Buffer*> transient_buffers;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       ++usage_tick_;
-      for (Entry& entry : entries_) {
-        if (entry.buffer == buffer) {
-          entry.in_use = false;
-          entry.last_used_tick = usage_tick_;
-          release_transient = false;
-          break;
+      const uint64_t release_tick = usage_tick_;
+      for (size_t buffer_index = 0; buffer_index < count; ++buffer_index) {
+        MTL::Buffer* buffer = buffers[buffer_index];
+        if (!buffer) {
+          continue;
+        }
+        bool release_transient = true;
+        auto entry_it = entry_indices_by_buffer_.find(buffer);
+        if (entry_it != entry_indices_by_buffer_.end()) {
+          Entry& entry = entries_[entry_it->second];
+          if (entry.buffer == buffer) {
+            if (entry.in_use) {
+              entry.in_use = false;
+              entry.last_used_tick = release_tick;
+              available_entries_by_size_.emplace(entry.size, entry_it->second);
+            }
+            release_transient = false;
+          }
+        }
+        // Compatibility with any pool state created before the index existed.
+        if (release_transient) {
+          for (size_t i = 0; i < entries_.size(); ++i) {
+            Entry& entry = entries_[i];
+            if (entry.buffer != buffer) {
+              continue;
+            }
+            entry_indices_by_buffer_[buffer] = i;
+            if (entry.in_use) {
+              entry.in_use = false;
+              entry.last_used_tick = release_tick;
+              available_entries_by_size_.emplace(entry.size, i);
+            }
+            release_transient = false;
+            break;
+          }
+        }
+        if (release_transient) {
+          transient_buffers.push_back(buffer);
         }
       }
     }
-    if (release_transient) {
+    for (MTL::Buffer* buffer : transient_buffers) {
       buffer->release();
     }
   }
@@ -387,6 +448,8 @@ class MetalTextureCache::UploadBufferPool
     }
     pooled_bytes_ = 0;
     entries_.clear();
+    available_entries_by_size_.clear();
+    entry_indices_by_buffer_.clear();
   }
 
   size_t GetEntryCount() const {
@@ -434,6 +497,8 @@ class MetalTextureCache::UploadBufferPool
 
   mutable std::mutex mutex_;
   std::vector<Entry> entries_;
+  std::multimap<size_t, size_t> available_entries_by_size_;
+  std::unordered_map<MTL::Buffer*, size_t> entry_indices_by_buffer_;
   MTL::Device* device_ = nullptr;
   uint64_t max_pooled_bytes_ = 0;
   uint64_t pooled_bytes_ = 0;
@@ -454,8 +519,25 @@ void MetalTextureCache::UploadBufferPool::HandleCommandBufferCompleted(
     releases = std::move(it->second);
     pending_releases.erase(it);
   }
-  for (auto& release : releases) {
-    release.pool->ReleaseImmediate(release.buffer);
+  std::sort(releases.begin(), releases.end(),
+            [](const PendingRelease& a, const PendingRelease& b) {
+              return a.pool.get() < b.pool.get();
+            });
+  std::vector<MTL::Buffer*> buffers;
+  buffers.reserve(releases.size());
+  for (size_t i = 0; i < releases.size();) {
+    std::shared_ptr<UploadBufferPool> pool = releases[i].pool;
+    buffers.clear();
+    size_t j = i;
+    for (; j < releases.size() && releases[j].pool.get() == pool.get(); ++j) {
+      if (releases[j].buffer) {
+        buffers.push_back(releases[j].buffer);
+      }
+    }
+    if (pool && !buffers.empty()) {
+      pool->ReleaseImmediateBatch(buffers.data(), buffers.size());
+    }
+    i = j;
   }
 }
 
@@ -482,16 +564,6 @@ bool MetalTextureCache::ShouldUploadViaBlit() const {
   return ::cvars::metal_texture_upload_via_blit;
 }
 
-bool MetalTextureCache::CanUseCurrentCommandBufferForTextureUploads() const {
-  if (!ShouldUploadViaBlit() || !command_processor_) {
-    return false;
-  }
-  if (!command_processor_->GetCurrentCommandBuffer()) {
-    return false;
-  }
-  return !command_processor_->HasActiveRenderEncoder();
-}
-
 void MetalTextureCache::BeginUploadCommandBufferBatch() {
   ++upload_batch_depth_;
   if (upload_batch_depth_ != 1) {
@@ -504,22 +576,18 @@ void MetalTextureCache::BeginUploadCommandBufferBatch() {
   // buffer is already active in the command processor. Keeping upload work on
   // a separate command buffer in that state can reorder with in-flight render
   // setup and lead to startup rendering regressions.
-  if (command_processor_->GetCurrentCommandBuffer()) {
+  if (command_processor_->HasActiveSubmission()) {
     return;
   }
-  MTL::CommandQueue* queue = command_processor_->GetMetalCommandQueue();
-  if (!queue) {
-    return;
-  }
-  MTL::CommandBuffer* cmd = queue->commandBuffer();
+  MTL::CommandBuffer* cmd =
+      command_processor_->CreateStandaloneTransferCommandBuffer(
+          "XeniaCB reason=texture-upload-batch");
   if (!cmd) {
     return;
   }
-  cmd->retain();
-  cmd->setLabel(
-      NS::String::string("XeniaTextureUploadBatch", NS::UTF8StringEncoding));
   upload_batch_command_buffer_ = cmd;
   upload_batch_command_buffer_has_work_ = false;
+  upload_batch_command_buffer_shared_memory_ranges_.clear();
 }
 
 void MetalTextureCache::EndUploadCommandBufferBatch() {
@@ -533,7 +601,10 @@ void MetalTextureCache::EndUploadCommandBufferBatch() {
   MTL::CommandBuffer* cmd = upload_batch_command_buffer_;
   upload_batch_command_buffer_ = nullptr;
   bool has_work = upload_batch_command_buffer_has_work_;
+  auto shared_memory_ranges =
+      std::move(upload_batch_command_buffer_shared_memory_ranges_);
   upload_batch_command_buffer_has_work_ = false;
+  upload_batch_command_buffer_shared_memory_ranges_.clear();
   if (!cmd) {
     return;
   }
@@ -541,17 +612,27 @@ void MetalTextureCache::EndUploadCommandBufferBatch() {
     cmd->release();
     return;
   }
-  cmd->addCompletedHandler(^(MTL::CommandBuffer* completed_cmd) {
-    completed_cmd->release();
-  });
-  cmd->commit();
+  if (command_processor_) {
+    if (!shared_memory_ranges.empty()) {
+      static_cast<MetalSharedMemory&>(shared_memory())
+          .TrackStandaloneGpuAccess(
+              cmd, shared_memory_ranges.data(),
+              static_cast<uint32_t>(shared_memory_ranges.size()));
+    }
+    command_processor_->CommitStandaloneAsync(cmd);
+  } else {
+    cmd->release();
+  }
 }
 
 void MetalTextureCache::AbortUploadCommandBufferBatch(bool commit_if_has_work) {
   MTL::CommandBuffer* cmd = upload_batch_command_buffer_;
   upload_batch_command_buffer_ = nullptr;
   bool has_work = upload_batch_command_buffer_has_work_;
+  auto shared_memory_ranges =
+      std::move(upload_batch_command_buffer_shared_memory_ranges_);
   upload_batch_command_buffer_has_work_ = false;
+  upload_batch_command_buffer_shared_memory_ranges_.clear();
   if (!cmd) {
     return;
   }
@@ -559,10 +640,450 @@ void MetalTextureCache::AbortUploadCommandBufferBatch(bool commit_if_has_work) {
     cmd->release();
     return;
   }
-  cmd->addCompletedHandler(^(MTL::CommandBuffer* completed_cmd) {
-    completed_cmd->release();
-  });
-  cmd->commit();
+  if (command_processor_) {
+    if (!shared_memory_ranges.empty()) {
+      static_cast<MetalSharedMemory&>(shared_memory())
+          .TrackStandaloneGpuAccess(
+              cmd, shared_memory_ranges.data(),
+              static_cast<uint32_t>(shared_memory_ranges.size()));
+    }
+    command_processor_->CommitStandaloneAsync(cmd);
+  } else {
+    cmd->release();
+  }
+}
+
+void MetalTextureCache::BeginDeferredUploadEncoderBatch() {
+  ++deferred_upload_batch_depth_;
+}
+
+bool MetalTextureCache::EndDeferredUploadEncoderBatch() {
+  if (!deferred_upload_batch_depth_) {
+    return true;
+  }
+  --deferred_upload_batch_depth_;
+  if (deferred_upload_batch_depth_ != 0) {
+    return true;
+  }
+  if (!deferred_upload_compute_encoder_ && deferred_upload_copies_.empty()) {
+    deferred_upload_command_buffer_ = nullptr;
+    return true;
+  }
+  return FlushDeferredUploadEncoderBatch();
+}
+
+bool MetalTextureCache::FlushDeferredUploadEncoderBatch() {
+  MTL::CommandBuffer* cmd = deferred_upload_command_buffer_;
+  if (!deferred_upload_compute_encoder_ && deferred_upload_copies_.empty()) {
+    deferred_upload_command_buffer_ = nullptr;
+    return true;
+  }
+  if (deferred_upload_compute_encoder_) {
+    MTL::ComputeCommandEncoder* compute_encoder =
+        deferred_upload_compute_encoder_;
+    deferred_upload_compute_encoder_ = nullptr;
+    compute_encoder->endEncoding();
+    compute_encoder->release();
+  }
+  bool success = true;
+  if (cmd && !deferred_upload_copies_.empty()) {
+    if (command_processor_ &&
+        cmd == command_processor_->GetCurrentCommandBuffer()) {
+      command_processor_->EndSharedMemoryUploadBlitEncoder(
+          MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
+              kTextureDeferredBlit);
+    }
+    MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+    if (!blit) {
+      XELOGE("Metal texture upload: failed to create deferred blit encoder");
+      success = false;
+    } else {
+      for (const DeferredUploadCopy& copy : deferred_upload_copies_) {
+        blit->copyFromBuffer(
+            copy.source_buffer, copy.source_offset_bytes, copy.source_row_pitch,
+            copy.source_bytes_per_image,
+            MTL::Size::Make(copy.width, copy.height, copy.depth),
+            copy.destination_texture, copy.destination_slice,
+            copy.destination_level, MTL::Origin::Make(0, 0, 0));
+      }
+      blit->endEncoding();
+    }
+  }
+  deferred_upload_copies_.clear();
+  deferred_upload_command_buffer_ = nullptr;
+  return success;
+}
+
+bool MetalTextureCache::FlushPendingUploadEncodersForCommandEncoderBoundary() {
+  if (!deferred_upload_compute_encoder_ && deferred_upload_copies_.empty()) {
+    return true;
+  }
+  return FlushDeferredUploadEncoderBatch();
+}
+
+void MetalTextureCache::BeginTextureUploadBatch() {
+  BeginUploadCommandBufferBatch();
+  BeginDeferredUploadEncoderBatch();
+}
+
+bool MetalTextureCache::EndTextureUploadBatch() {
+  bool success = EndDeferredUploadEncoderBatch();
+  if (!success) {
+    XELOGE("Metal texture upload: failed to flush deferred upload batch");
+    ResetTextureBindings();
+  }
+  EndUploadCommandBufferBatch();
+  return success;
+}
+
+bool MetalTextureCache::PrepareTextureDataLoadRanges(
+    Texture** textures, uint32_t texture_count, uint64_t base_outdated_mask,
+    uint64_t mips_outdated_mask) {
+  assert_true(texture_count <= 64);
+  if (!textures || !texture_count ||
+      (!base_outdated_mask && !mips_outdated_mask)) {
+    return true;
+  }
+
+  std::vector<SharedMemory::Range> ranges;
+  ranges.reserve(texture_count * 2);
+  auto add_range_if_needed = [&](uint32_t start, uint32_t length) {
+    if (!shared_memory().IsRangeValid(start, length)) {
+      ranges.push_back({start, length});
+    }
+  };
+  for (uint32_t i = 0; i < texture_count; ++i) {
+    Texture* texture = textures[i];
+    if (!texture) {
+      continue;
+    }
+    TextureKey texture_key = texture->key();
+    if (base_outdated_mask & (UINT64_C(1) << i)) {
+      add_range_if_needed(static_cast<uint32_t>(texture_key.base_page << 12),
+                          xe::align(texture->GetGuestBaseSize(), UINT32_C(16)));
+    }
+    if (mips_outdated_mask & (UINT64_C(1) << i)) {
+      add_range_if_needed(static_cast<uint32_t>(texture_key.mip_page << 12),
+                          xe::align(texture->GetGuestMipsSize(), UINT32_C(16)));
+    }
+  }
+  if (ranges.empty()) {
+    return true;
+  }
+
+  // Shared-memory uploads use a Metal blit encoder. Make sure no deferred
+  // texture upload encoder is still open before requesting residency.
+  if ((deferred_upload_compute_encoder_ || !deferred_upload_copies_.empty()) &&
+      !FlushDeferredUploadEncoderBatch()) {
+    if (command_processor_) {
+      command_processor_->RecordSharedMemoryRequestOutcome(
+          MetalCommandProcessor::SharedMemoryRequestOutcome::
+              kTextureDeferredUploadFlush);
+    }
+    return false;
+  }
+
+  // Request the guest memory needed by this texture upload before loading the
+  // texture data for the current draw.
+  const MetalCommandProcessor::SharedMemoryRequestReason reason =
+      base_outdated_mask && mips_outdated_mask
+          ? MetalCommandProcessor::SharedMemoryRequestReason::
+                kTextureBaseAndMips
+      : base_outdated_mask
+          ? MetalCommandProcessor::SharedMemoryRequestReason::kTextureBase
+          : MetalCommandProcessor::SharedMemoryRequestReason::kTextureMips;
+  if (!command_processor_) {
+    XELOGE("Metal texture data residency requires a command processor");
+    return false;
+  }
+  return command_processor_->RequestSharedMemoryRanges(
+      reason, ranges.data(), static_cast<uint32_t>(ranges.size()));
+}
+
+bool MetalTextureCache::RequestTextureDataRange(Texture&,
+                                                TextureDataRangeSource source,
+                                                uint32_t start,
+                                                uint32_t length) {
+  if (shared_memory().IsRangeValid(start, length)) {
+    return true;
+  }
+  static bool range_not_resident_logged = false;
+  if (!range_not_resident_logged) {
+    range_not_resident_logged = true;
+    XELOGE(
+        "Metal texture load range was not resident after residency request "
+        "(source={} start=0x{:08X} length={}); skipping texture load",
+        source == TextureDataRangeSource::kBase ? "base" : "mips", start,
+        length);
+  }
+  return false;
+}
+
+MTL::ComputeCommandEncoder* MetalTextureCache::GetDeferredUploadComputeEncoder(
+    MTL::CommandBuffer* command_buffer) {
+  if (!deferred_upload_batch_depth_ || !command_buffer) {
+    return nullptr;
+  }
+  if (deferred_upload_command_buffer_ &&
+      deferred_upload_command_buffer_ != command_buffer &&
+      !FlushDeferredUploadEncoderBatch()) {
+    return nullptr;
+  }
+  deferred_upload_command_buffer_ = command_buffer;
+  if (!deferred_upload_compute_encoder_) {
+    if (command_processor_ &&
+        command_buffer == command_processor_->GetCurrentCommandBuffer()) {
+      command_processor_->EndSharedMemoryUploadBlitEncoder(
+          MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
+              kTextureCompute);
+    }
+    deferred_upload_compute_encoder_ = command_buffer->computeCommandEncoder();
+    if (deferred_upload_compute_encoder_) {
+      SetEncoderLabel(deferred_upload_compute_encoder_,
+                      "XeniaTextureUploadDeferredComputeEncoder");
+      deferred_upload_compute_encoder_->retain();
+    }
+  }
+  return deferred_upload_compute_encoder_;
+}
+
+void MetalTextureCache::QueueDeferredUploadCopy(
+    MTL::Buffer* source_buffer, size_t source_offset_bytes,
+    size_t source_row_pitch, size_t source_bytes_per_image,
+    MTL::Texture* destination_texture, uint32_t destination_slice,
+    uint32_t destination_level, uint32_t width, uint32_t height,
+    uint32_t depth) {
+  assert_not_zero(deferred_upload_batch_depth_);
+  assert_not_null(deferred_upload_command_buffer_);
+  assert_not_null(source_buffer);
+  assert_not_null(destination_texture);
+  assert_not_zero(width);
+  assert_not_zero(height);
+  assert_not_zero(depth);
+  DeferredUploadCopy copy = {};
+  copy.source_buffer = source_buffer;
+  copy.source_offset_bytes = source_offset_bytes;
+  copy.source_row_pitch = source_row_pitch;
+  copy.source_bytes_per_image = source_bytes_per_image;
+  copy.destination_texture = destination_texture;
+  copy.destination_slice = destination_slice;
+  copy.destination_level = destination_level;
+  copy.width = width;
+  copy.height = height;
+  copy.depth = depth;
+  deferred_upload_copies_.push_back(copy);
+}
+
+class MetalTextureCache::UploadBatchScope {
+ public:
+  explicit UploadBatchScope(MetalTextureCache& texture_cache)
+      : texture_cache_(texture_cache) {
+    texture_cache_.BeginTextureUploadBatch();
+  }
+
+  UploadBatchScope(const UploadBatchScope&) = delete;
+  UploadBatchScope& operator=(const UploadBatchScope&) = delete;
+
+  ~UploadBatchScope() { End(); }
+
+  bool End() {
+    if (ended_) {
+      return success_;
+    }
+    success_ = texture_cache_.EndTextureUploadBatch();
+    ended_ = true;
+    return success_;
+  }
+
+ private:
+  MetalTextureCache& texture_cache_;
+  bool ended_ = false;
+  bool success_ = true;
+};
+
+bool MetalTextureCache::PrepareTextureMaterialization(
+    const RegisterFile& regs, uint32_t used_texture_mask,
+    TextureMaterializationPlan& plan) {
+  SCOPE_profile_cpu_f("gpu");
+  plan.Reset();
+  if (!used_texture_mask) {
+    return true;
+  }
+
+  auto append_texture = [&](TextureKey key) {
+    ++plan.request_count;
+    Texture* texture = FindOrCreateTexture(key);
+    bool base_outdated = texture ? texture->base_outdated_lockless() : false;
+    bool mips_outdated = texture ? texture->mips_outdated_lockless() : false;
+    if (!texture || (!base_outdated && !mips_outdated)) {
+      return;
+    }
+    for (const TextureMaterializationPlan::TextureLoad& planned_load :
+         plan.texture_loads_) {
+      if (planned_load.texture == texture) {
+        return;
+      }
+    }
+    const TextureKey& texture_key = texture->key();
+    const uint32_t base_start = texture_key.base_page << 12;
+    const uint32_t mips_start = texture_key.mip_page << 12;
+    const uint32_t base_length =
+        xe::align(texture->GetGuestBaseSize(), UINT32_C(16));
+    const uint32_t mips_length =
+        xe::align(texture->GetGuestMipsSize(), UINT32_C(16));
+
+    enum class SourceRangeState {
+      kNone,
+      kInvalid,
+      kValid,
+      kMixed,
+    };
+    auto source_range_state = [&](bool needed, uint32_t start,
+                                  uint32_t length) {
+      if (!needed || !length) {
+        return SourceRangeState::kNone;
+      }
+      if (shared_memory().IsRangeInvalid(start, length)) {
+        return SourceRangeState::kInvalid;
+      }
+      if (shared_memory().IsRangeValid(start, length)) {
+        return SourceRangeState::kValid;
+      }
+      return SourceRangeState::kMixed;
+    };
+    const SourceRangeState base_state =
+        source_range_state(base_outdated, base_start, base_length);
+    const SourceRangeState mips_state =
+        source_range_state(mips_outdated, mips_start, mips_length);
+    const bool base_needs_upload = base_state == SourceRangeState::kInvalid ||
+                                   base_state == SourceRangeState::kMixed;
+    const bool mips_needs_upload = mips_state == SourceRangeState::kInvalid ||
+                                   mips_state == SourceRangeState::kMixed;
+    const bool base_cpu_source = base_state == SourceRangeState::kInvalid;
+    const bool mips_cpu_source = mips_state == SourceRangeState::kInvalid;
+
+    bool use_cpu_source = !texture_key.scaled_resolve;
+    bool has_cpu_source_range = false;
+    if (base_outdated && base_length) {
+      use_cpu_source &= base_cpu_source;
+      has_cpu_source_range |= base_cpu_source;
+    }
+    if (mips_outdated && mips_length) {
+      use_cpu_source &= mips_cpu_source;
+      has_cpu_source_range |= mips_cpu_source;
+    }
+    use_cpu_source &= has_cpu_source_range;
+    if (!use_cpu_source) {
+      if (command_processor_) {
+        MetalCommandProcessor::TextureUploadSourceFallbackReason
+            fallback_reason = MetalCommandProcessor::
+                TextureUploadSourceFallbackReason::kUnknown;
+        if (texture_key.scaled_resolve) {
+          fallback_reason = MetalCommandProcessor::
+              TextureUploadSourceFallbackReason::kScaledResolve;
+        } else if (base_state == SourceRangeState::kMixed ||
+                   mips_state == SourceRangeState::kMixed) {
+          fallback_reason = MetalCommandProcessor::
+              TextureUploadSourceFallbackReason::kMixedValidity;
+        } else if (base_state == SourceRangeState::kValid ||
+                   mips_state == SourceRangeState::kValid) {
+          fallback_reason = MetalCommandProcessor::
+              TextureUploadSourceFallbackReason::kSourceAlreadyResident;
+        }
+        command_processor_->RecordTextureUploadSourceFallback(fallback_reason);
+      }
+      if (base_needs_upload) {
+        plan.source_ranges.push_back({base_start, base_length});
+      }
+      if (mips_needs_upload) {
+        plan.source_ranges.push_back({mips_start, mips_length});
+      }
+    }
+
+    plan.texture_loads_.push_back({
+        texture,
+        base_outdated,
+        mips_outdated,
+        use_cpu_source,
+    });
+    ++plan.planned_load_count;
+  };
+
+  uint32_t remaining_bits = used_texture_mask;
+  uint32_t index = 0;
+  while (xe::bit_scan_forward(remaining_bits, &index)) {
+    remaining_bits = xe::clear_lowest_bit(remaining_bits);
+
+    TextureKey key;
+    uint8_t swizzled_signs = kSwizzledSignsUnsigned;
+    BindingInfoFromFetchConstant(regs.GetTextureFetch(index), key,
+                                 &swizzled_signs);
+    if (!key.is_valid) {
+      continue;
+    }
+
+    if (IsSignedVersionSeparateForFormat(key)) {
+      if (texture_util::IsAnySignNotSigned(swizzled_signs)) {
+        append_texture(key);
+      }
+      if (texture_util::IsAnySignSigned(swizzled_signs)) {
+        TextureKey signed_key = key;
+        signed_key.signed_separate = 1;
+        append_texture(signed_key);
+      }
+    } else {
+      append_texture(key);
+    }
+  }
+
+  return true;
+}
+
+bool MetalTextureCache::ExecuteTextureMaterialization(
+    TextureMaterializationPlan& plan) {
+  if (plan.texture_loads_.empty()) {
+    return true;
+  }
+  uint64_t load_calls_before = loaded_texture_data_count_;
+  bool success = true;
+
+  std::vector<Texture*> fallback_textures;
+  fallback_textures.reserve(plan.texture_loads_.size());
+  {
+    UploadBatchScope upload_batch(*this);
+    for (const TextureMaterializationPlan::TextureLoad& load :
+         plan.texture_loads_) {
+      if (!load.texture) {
+        continue;
+      }
+      if (!load.use_cpu_source) {
+        fallback_textures.push_back(load.texture);
+        continue;
+      }
+      if (!LoadTextureDataFromCpuGuestMemory(*load.texture, load.load_base,
+                                             load.load_mips)) {
+        if (command_processor_) {
+          command_processor_->RecordTextureUploadSourceFallback(
+              MetalCommandProcessor::TextureUploadSourceFallbackReason::
+                  kCpuSourceLoadFailed);
+        }
+        fallback_textures.push_back(load.texture);
+      }
+    }
+
+    if (!fallback_textures.empty()) {
+      LoadTexturesData(fallback_textures.data(),
+                       static_cast<uint32_t>(fallback_textures.size()));
+    }
+    success = upload_batch.End();
+  }
+  plan.executed_load_count =
+      static_cast<uint32_t>(loaded_texture_data_count_ - load_calls_before);
+  plan.texture_loads_.clear();
+  if (!success) {
+    ResetTextureBindings();
+  }
+  return success;
 }
 
 bool MetalTextureCache::IsDecompressionNeededForKey(TextureKey key) const {
@@ -574,8 +1095,8 @@ bool MetalTextureCache::IsDecompressionNeededForKey(TextureKey key) const {
       if (::cvars::metal_force_bc_decompress) {
         return true;
       }
-      // BC support is GPU-family dependent on iOS. Creating BC textures on a
-      // device that doesn't support them may trip Metal validation and abort.
+      // BC support is GPU-family dependent on Apple GPUs. Creating BC textures
+      // on a device that doesn't support them may trip Metal validation.
       if (!supports_bc_texture_compression_) {
         return true;
       }
@@ -617,7 +1138,7 @@ TextureCache::LoadShaderIndex MetalTextureCache::GetLoadShaderIndexForKey(
     case xenos::TextureFormat::k_2_10_10_10:
       return kLoadShaderIndex32bpb;
     case xenos::TextureFormat::k_4_4_4_4:
-      return kLoadShaderIndexRGBA4ToBGRA4;
+      return kLoadShaderIndexRGBA4ToARGB4;
     case xenos::TextureFormat::k_10_11_11:
       return key.signed_separate ? kLoadShaderIndexR11G11B10ToRGBA16SNorm
                                  : kLoadShaderIndexR11G11B10ToRGBA16;
@@ -638,7 +1159,7 @@ TextureCache::LoadShaderIndex MetalTextureCache::GetLoadShaderIndexForKey(
     case xenos::TextureFormat::k_DXT5A:
       return kLoadShaderIndexDXT5AToR8;
     case xenos::TextureFormat::k_DXT3A_AS_1_1_1_1:
-      return kLoadShaderIndexDXT3AAs1111ToBGRA4;
+      return kLoadShaderIndexDXT3AAs1111ToARGB4;
     case xenos::TextureFormat::k_CTX1:
       return kLoadShaderIndexCTX1;
 
@@ -693,6 +1214,12 @@ TextureCache::LoadShaderIndex MetalTextureCache::GetLoadShaderIndexForKey(
     case xenos::TextureFormat::k_32_32_32_32:
     case xenos::TextureFormat::k_32_32_32_32_FLOAT:
       return kLoadShaderIndex128bpb;
+
+    case xenos::TextureFormat::k_Cr_Y1_Cb_Y0_REP:
+      // Metal has no native packed YUV format; always decompress to RGB8.
+      return kLoadShaderIndexGBGR8ToRGB8;
+    case xenos::TextureFormat::k_Y1_Cr_Y0_Cb_REP:
+      return kLoadShaderIndexBGRG8ToRGB8;
 
     case xenos::TextureFormat::k_8_B:
       return kLoadShaderIndex8bpb;
@@ -783,6 +1310,11 @@ MTL::PixelFormat MetalTextureCache::GetPixelFormatForKey(TextureKey key) const {
     case xenos::TextureFormat::k_24_8_FLOAT:
       return MTL::PixelFormatR32Float;
 
+    case xenos::TextureFormat::k_Cr_Y1_Cb_Y0_REP:
+    case xenos::TextureFormat::k_Y1_Cr_Y0_Cb_REP:
+      // Decompressed from packed YUV to RGBA8 by the load shader.
+      return MTL::PixelFormatRGBA8Unorm;
+
     case xenos::TextureFormat::k_8_B:
       return MTL::PixelFormatR8Unorm;
     case xenos::TextureFormat::k_8_8_8_8_A:
@@ -801,12 +1333,12 @@ MTL::PixelFormat MetalTextureCache::GetPixelFormatForKey(TextureKey key) const {
 }
 
 bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
-                                          bool load_mips) {
+                                          bool load_mips,
+                                          TextureLoadSourceMode source_mode) {
   MetalTexture* metal_texture = static_cast<MetalTexture*>(&texture);
   if (!metal_texture || !metal_texture->metal_texture()) {
     return false;
   }
-
   const TextureKey& key = texture.key();
   bool texture_resolution_scaled =
       key.scaled_resolve && IsDrawResolutionScaled();
@@ -816,6 +1348,11 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
       texture_resolution_scaled ? draw_resolution_scale_y() : 1;
   uint32_t texture_resolution_scale_area =
       texture_resolution_scale_x * texture_resolution_scale_y;
+  const bool use_cpu_guest_source =
+      source_mode == TextureLoadSourceMode::kCpuGuestMemory;
+  if (use_cpu_guest_source && texture_resolution_scaled) {
+    return false;
+  }
 
   const texture_util::TextureGuestLayout& guest_layout = texture.guest_layout();
   xenos::DataDimension dimension = key.dimension;
@@ -858,12 +1395,6 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
 
   const TextureCache::LoadShaderInfo& load_shader_info =
       GetLoadShaderInfo(load_shader);
-  if (texture_resolution_scaled) {
-    static uint32_t scaled_load_log_count = 0;
-    if (scaled_load_log_count < 8) {
-      ++scaled_load_log_count;
-    }
-  }
 
   bool is_block_compressed_format =
       key.format == xenos::TextureFormat::k_DXT1 ||
@@ -971,16 +1502,18 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   if (!device) {
     return false;
   }
-  MTL::CommandQueue* queue = command_processor_->GetMetalCommandQueue();
-  if (!queue) {
+  if (!command_processor_->GetMetalCommandQueue()) {
     return false;
   }
 
-  MetalSharedMemory& metal_shared_memory =
-      static_cast<MetalSharedMemory&>(shared_memory());
-  MTL::Buffer* shared_buffer = metal_shared_memory.GetBuffer();
-  if (!shared_buffer) {
-    return false;
+  MTL::Buffer* shared_buffer = nullptr;
+  if (!use_cpu_guest_source) {
+    MetalSharedMemory& metal_shared_memory =
+        static_cast<MetalSharedMemory&>(shared_memory());
+    shared_buffer = metal_shared_memory.GetBuffer();
+    if (!shared_buffer) {
+      return false;
+    }
   }
 
   std::shared_ptr<UploadBufferPool> buffer_pool;
@@ -1040,6 +1573,32 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   }
 
   const bool use_blit_upload = ShouldUploadViaBlit();
+  MetalCommandProcessor::SharedMemoryReadDependency shared_memory_dependency;
+  MetalCommandProcessor::SharedMemoryRange shared_memory_ranges[2] = {};
+  uint32_t shared_memory_range_count = 0;
+  if (!use_cpu_guest_source && !texture_resolution_scaled &&
+      command_processor_) {
+    if (load_base) {
+      shared_memory_ranges[shared_memory_range_count++] = {
+          base_guest_address,
+          xe::align(texture.GetGuestBaseSize(), UINT32_C(16)),
+      };
+    }
+    if (load_mips) {
+      shared_memory_ranges[shared_memory_range_count++] = {
+          mips_guest_address,
+          xe::align(texture.GetGuestMipsSize(), UINT32_C(16)),
+      };
+    }
+    if (shared_memory_range_count &&
+        !command_processor_->PrepareSharedMemoryComputeReadDependency(
+            shared_memory_ranges, shared_memory_range_count, use_blit_upload,
+            &shared_memory_dependency)) {
+      release_buffer_immediate(constants_buffer, constants_buffer_size);
+      release_buffer_immediate(dest_buffer, size_t(dest_buffer_size));
+      return false;
+    }
+  }
 
   auto find_stored_level =
       [&](bool is_base_storage,
@@ -1052,16 +1611,15 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     return nullptr;
   };
 
-  MTL::CommandBuffer* current_command_buffer =
-      command_processor_ ? command_processor_->GetCurrentCommandBuffer()
-                         : nullptr;
-  bool use_upload_batch = use_blit_upload && upload_batch_command_buffer_ &&
-                          command_processor_ && !current_command_buffer;
-  // Reuse the current command buffer whenever no render pass encoder is active.
-  // This keeps copy/resolve and texture-upload ordering within one submission.
+  bool has_active_submission =
+      command_processor_ && command_processor_->HasActiveSubmission();
+  bool can_join_active_submission =
+      command_processor_ &&
+      command_processor_->CanJoinActiveSubmissionForTransfer();
   bool use_current_command_buffer =
-      use_blit_upload && command_processor_ && current_command_buffer &&
-      !command_processor_->HasActiveRenderEncoder();
+      use_blit_upload && can_join_active_submission;
+  bool use_upload_batch = use_blit_upload && upload_batch_command_buffer_ &&
+                          command_processor_ && !has_active_submission;
   if (use_upload_batch && texture_resolution_scaled) {
     bool needs_base_scaled_range = false;
     bool needs_mips_scaled_range = false;
@@ -1084,14 +1642,25 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     }
   }
 
+  enum class UploadCommandBufferMode {
+    kStandalone,
+    kUploadBatch,
+    kCurrentSubmission,
+  };
+
   ScopedAutoreleasePool autorelease_pool;
   MTL::CommandBuffer* cmd = nullptr;
+  UploadCommandBufferMode upload_command_buffer_mode =
+      UploadCommandBufferMode::kStandalone;
   if (use_upload_batch) {
     cmd = upload_batch_command_buffer_;
+    upload_command_buffer_mode = UploadCommandBufferMode::kUploadBatch;
   } else if (use_current_command_buffer) {
-    cmd = current_command_buffer;
+    cmd = command_processor_->GetCurrentCommandBuffer();
+    upload_command_buffer_mode = UploadCommandBufferMode::kCurrentSubmission;
   } else {
-    cmd = queue->commandBuffer();
+    cmd = command_processor_->CreateStandaloneTransferCommandBuffer(
+        "XeniaCB reason=texture-upload");
   }
   if (!cmd) {
     release_buffer_immediate(constants_buffer, constants_buffer_size);
@@ -1099,160 +1668,220 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     return false;
   }
   bool command_buffer_has_work = false;
+  auto is_current_submission = [&]() {
+    return upload_command_buffer_mode ==
+           UploadCommandBufferMode::kCurrentSubmission;
+  };
+  auto is_upload_batch = [&]() {
+    return upload_command_buffer_mode == UploadCommandBufferMode::kUploadBatch;
+  };
+  auto is_standalone = [&]() {
+    return upload_command_buffer_mode == UploadCommandBufferMode::kStandalone;
+  };
+  if (!use_cpu_guest_source && shared_memory_range_count &&
+      is_current_submission()) {
+    uint64_t submission = command_processor_->GetCurrentSubmission();
+    MetalSharedMemory& metal_shared_memory =
+        static_cast<MetalSharedMemory&>(shared_memory());
+    for (uint32_t i = 0; i < shared_memory_range_count; ++i) {
+      metal_shared_memory.MarkGpuAccess(shared_memory_ranges[i].start,
+                                        shared_memory_ranges[i].length,
+                                        submission);
+    }
+  }
+  struct TransientTextureSourceRange {
+    bool valid = false;
+    uint32_t guest_start = 0;
+    uint32_t guest_length = 0;
+    uint32_t copy_start = 0;
+    uint32_t copy_length = 0;
+    size_t buffer_length = 0;
+    size_t guest_buffer_offset = 0;
+    size_t buffer_offset = 0;
+  };
+  MTL::Buffer* transient_source_buffer = nullptr;
+  size_t transient_source_size = 0;
+  TransientTextureSourceRange transient_base_source;
+  TransientTextureSourceRange transient_mips_source;
+  bool using_deferred_upload_encoder = false;
   auto handle_upload_failure = [&](bool abort_batch) {
-    if ((use_upload_batch || use_current_command_buffer) &&
+    if ((is_upload_batch() || is_current_submission()) &&
         command_buffer_has_work) {
+      release_buffer_after(cmd, transient_source_buffer, transient_source_size);
+      transient_source_buffer = nullptr;
       release_buffer_after(cmd, constants_buffer, constants_buffer_size);
       release_buffer_after(cmd, dest_buffer, size_t(dest_buffer_size));
-      if (use_upload_batch) {
+      if (is_upload_batch()) {
         upload_batch_command_buffer_has_work_ = true;
-        AbortUploadCommandBufferBatch();
+        if (!deferred_upload_batch_depth_) {
+          AbortUploadCommandBufferBatch();
+        }
       }
       return;
     }
+    release_buffer_immediate(transient_source_buffer, transient_source_size);
+    transient_source_buffer = nullptr;
     release_buffer_immediate(constants_buffer, constants_buffer_size);
     release_buffer_immediate(dest_buffer, size_t(dest_buffer_size));
-    if (use_upload_batch && abort_batch) {
+    if (is_upload_batch() && abort_batch && !deferred_upload_batch_depth_) {
       AbortUploadCommandBufferBatch();
+    }
+    if (is_standalone()) {
+      cmd->release();
     }
   };
 
-  MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
-  if (!encoder) {
-    handle_upload_failure(true);
-    return false;
-  }
-  encoder->setComputePipelineState(pipeline);
-  if (!texture_resolution_scaled) {
-    encoder->setBuffer(shared_buffer, 0, 2);
-  }
-
-  uint32_t guest_x_blocks_per_group_log2 =
-      load_shader_info.GetGuestXBlocksPerGroupLog2();
-  MTL::Size threads_per_group =
-      MTL::Size::Make(UINT32_C(1) << kLoadGuestXThreadsPerGroupLog2,
-                      UINT32_C(1) << kLoadGuestYBlocksPerGroupLog2, 1);
-
-  bool scaled_mips_source_set_up = false;
-  MTL::Buffer* source_buffer = shared_buffer;
-  size_t source_buffer_offset = 0;
-  size_t source_buffer_length = 0;
-
-  size_t dispatch_index = 0;
-  for (const StoredLevelHostLayout& stored_level : stored_levels) {
-    bool is_base_storage = stored_level.is_base;
-    const texture_util::TextureGuestLayout::Level& level_guest_layout =
-        is_base_storage ? guest_layout.base
-                        : guest_layout.mips[stored_level.level];
-
-    if (texture_resolution_scaled &&
-        (is_base_storage || !scaled_mips_source_set_up)) {
-      uint32_t guest_address =
-          is_base_storage ? base_guest_address : mips_guest_address;
-      uint32_t guest_size_unscaled = is_base_storage
-                                         ? texture.GetGuestBaseSize()
-                                         : texture.GetGuestMipsSize();
-      if (!MakeScaledResolveRangeCurrent(guest_address, guest_size_unscaled,
-                                         4) ||
-          !GetCurrentScaledResolveBuffer(source_buffer, source_buffer_offset,
-                                         source_buffer_length)) {
-        handle_upload_failure(false);
+  if (use_cpu_guest_source) {
+    auto append_transient_source = [&](bool needed, uint32_t guest_start,
+                                       uint32_t guest_length,
+                                       TransientTextureSourceRange& range) {
+      if (!needed || !guest_length) {
+        return true;
+      }
+      if (!shared_memory().IsRangeInvalid(guest_start, guest_length)) {
         return false;
       }
-      encoder->setBuffer(source_buffer, source_buffer_offset, 2);
-      if (!is_base_storage) {
-        scaled_mips_source_set_up = true;
+      constexpr uint32_t kSharedMemoryPageSize = UINT32_C(4096);
+      constexpr uint32_t kSharedMemoryPageMask = kSharedMemoryPageSize - 1;
+      static_assert((kSharedMemoryPageSize & kSharedMemoryPageMask) == 0);
+      if (guest_start >= SharedMemory::kBufferSize) {
+        return false;
       }
-    }
-
-    uint32_t level_guest_offset = 0;
-    if (!texture_resolution_scaled) {
-      level_guest_offset =
-          is_base_storage ? base_guest_address : mips_guest_address;
-    }
-    if (!is_base_storage) {
-      uint32_t mip_offset = guest_layout.mip_offsets_bytes[stored_level.level];
-      if (texture_resolution_scaled) {
-        mip_offset *= texture_resolution_scale_area;
+      uint64_t guest_end = uint64_t(guest_start) + guest_length;
+      if (guest_end > SharedMemory::kBufferSize) {
+        return false;
       }
-      level_guest_offset += mip_offset;
-    }
-    // Use guest layout pitch (blocks) - new XeSL expects blocks for both tiled
-    // and linear
-    uint32_t guest_pitch_aligned =
-        level_guest_layout.row_pitch_bytes / bytes_per_block;
-
-    uint32_t size_blocks_x =
-        (stored_level.width_texels + (block_width - 1)) / block_width;
-    uint32_t size_blocks_y =
-        (stored_level.height_texels + (block_height - 1)) / block_height;
-    size_blocks_x *= texture_resolution_scale_x;
-    size_blocks_y *= texture_resolution_scale_y;
-
-    uint32_t group_count_x =
-        (size_blocks_x +
-         ((UINT32_C(1) << guest_x_blocks_per_group_log2) - 1)) >>
-        guest_x_blocks_per_group_log2;
-    uint32_t group_count_y =
-        (size_blocks_y +
-         ((UINT32_C(1) << kLoadGuestYBlocksPerGroupLog2) - 1)) >>
-        kLoadGuestYBlocksPerGroupLog2;
-    MTL::Size threadgroups = MTL::Size::Make(group_count_x, group_count_y,
-                                             stored_level.depth_slices);
-
-    for (uint32_t slice = 0; slice < array_size; ++slice) {
-      MetalLoadConstants constants = {};
-      constants.is_tiled_3d_endian_scale =
-          uint32_t(key.tiled) | (uint32_t(is_3d_tiling) << 1) |
-          (uint32_t(key.endianness) << 2) | (texture_resolution_scale_x << 4) |
-          (texture_resolution_scale_y << 7);
-      constants.guest_offset = level_guest_offset;
-      if (!is_3d) {
-        uint32_t slice_stride = level_guest_layout.array_slice_stride_bytes;
-        if (texture_resolution_scaled) {
-          slice_stride *= texture_resolution_scale_area;
-        }
-        constants.guest_offset += slice * slice_stride;
+      uint32_t copy_start = guest_start & ~kSharedMemoryPageMask;
+      uint32_t copy_end = static_cast<uint32_t>(
+          xe::align(guest_end, uint64_t(kSharedMemoryPageSize)));
+      copy_end = std::min(copy_end, SharedMemory::kBufferSize);
+      if (copy_end <= copy_start) {
+        return false;
       }
-      constants.guest_pitch_aligned = guest_pitch_aligned;
-      constants.guest_z_stride_block_rows_aligned =
-          level_guest_layout.z_slice_stride_block_rows;
-      constants.size_blocks[0] = size_blocks_x;
-      constants.size_blocks[1] = size_blocks_y;
-      constants.size_blocks[2] = stored_level.depth_slices;
-      constants.padding0 = 0;
-      constants.host_offset = 0;
-      constants.host_pitch = stored_level.row_pitch_bytes;
-      constants.height_texels = stored_level.height_texels;
-
-      uint8_t* constants_ptr =
-          static_cast<uint8_t*>(constants_buffer->contents()) +
-          dispatch_index * constants_size;
-      std::memcpy(constants_ptr, &constants, sizeof(constants));
-
-      encoder->setBuffer(constants_buffer, dispatch_index * constants_size, 0);
-      encoder->setBuffer(dest_buffer,
-                         stored_level.dest_offset_bytes +
-                             slice * stored_level.slice_size_bytes,
-                         1);
-      encoder->dispatchThreadgroups(threadgroups, threads_per_group);
-      command_buffer_has_work = true;
-      ++dispatch_index;
-    }
-  }
-
-  encoder->endEncoding();
-
-  MTL::Texture* mtl_texture = metal_texture->metal_texture();
-  if (use_blit_upload) {
-    MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-    if (!blit) {
+      size_t buffer_offset = xe::align(transient_source_size, size_t(16));
+      // The texture load shaders intentionally vectorize/local-X over the
+      // nominal source extent. The resident path reads from the full shared
+      // memory buffer; give the transient source a clean guard so those reads
+      // don't observe recycled upload-buffer contents or run past the buffer.
+      constexpr size_t kTextureLoadSourceGuardBytes = kSharedMemoryPageSize;
+      size_t copy_length = size_t(copy_end - copy_start);
+      size_t buffer_length = copy_length + kTextureLoadSourceGuardBytes;
+      if (buffer_offset > SIZE_MAX - buffer_length) {
+        return false;
+      }
+      range.valid = true;
+      range.guest_start = guest_start;
+      range.guest_length = guest_length;
+      range.copy_start = copy_start;
+      range.copy_length = static_cast<uint32_t>(copy_length);
+      range.buffer_length = buffer_length;
+      range.buffer_offset = buffer_offset;
+      range.guest_buffer_offset =
+          buffer_offset + size_t(guest_start - copy_start);
+      transient_source_size = buffer_offset + buffer_length;
+      return true;
+    };
+    if (!append_transient_source(
+            load_base, base_guest_address,
+            xe::align(texture.GetGuestBaseSize(), UINT32_C(16)),
+            transient_base_source) ||
+        !append_transient_source(
+            load_mips, mips_guest_address,
+            xe::align(texture.GetGuestMipsSize(), UINT32_C(16)),
+            transient_mips_source) ||
+        !transient_source_size) {
       handle_upload_failure(true);
       return false;
     }
 
+    transient_source_buffer = acquire_buffer(transient_source_size);
+    if (!transient_source_buffer || !transient_source_buffer->contents()) {
+      handle_upload_failure(true);
+      return false;
+    }
+    const uint8_t* xbox_ram =
+        static_cast<MetalSharedMemory&>(shared_memory()).GetXboxRamBase();
+    if (!xbox_ram) {
+      handle_upload_failure(true);
+      return false;
+    }
+    uint8_t* source_data =
+        static_cast<uint8_t*>(transient_source_buffer->contents());
+    auto copy_transient_source = [&](const TransientTextureSourceRange& range) {
+      if (!range.valid) {
+        return;
+      }
+      std::memcpy(source_data + range.buffer_offset,
+                  xbox_ram + range.copy_start, range.copy_length);
+      std::memset(source_data + range.buffer_offset + range.copy_length, 0,
+                  range.buffer_length - range.copy_length);
+    };
+    copy_transient_source(transient_base_source);
+    copy_transient_source(transient_mips_source);
+  }
+
+  struct PendingDirectUpload {
+    size_t source_offset_bytes = 0;
+    size_t source_row_pitch = 0;
+    size_t source_bytes_per_image = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
+    uint32_t destination_slice = 0;
+    uint32_t destination_level = 0;
+  };
+  struct PendingRepackUpload {
+    MTL::Buffer* staging_buffer = nullptr;
+    size_t staging_size = 0;
+    MetalTextureUploadRepackConstants constants = {};
+    uint32_t blit_row_pitch = 0;
+    size_t blit_bytes_per_image = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t depth = 0;
+    uint32_t destination_slice = 0;
+    uint32_t destination_level = 0;
+  };
+  std::vector<PendingDirectUpload> direct_uploads;
+  std::vector<PendingRepackUpload> repack_uploads;
+
+  auto release_repack_staging_immediate = [&]() {
+    for (PendingRepackUpload& upload : repack_uploads) {
+      if (!upload.staging_buffer) {
+        continue;
+      }
+      release_buffer_immediate(upload.staging_buffer, upload.staging_size);
+      upload.staging_buffer = nullptr;
+    }
+  };
+  auto release_repack_staging_after = [&]() {
+    for (PendingRepackUpload& upload : repack_uploads) {
+      if (!upload.staging_buffer) {
+        continue;
+      }
+      release_buffer_after(cmd, upload.staging_buffer, upload.staging_size);
+      upload.staging_buffer = nullptr;
+    }
+  };
+  auto release_repack_staging_for_encoded_failure = [&]() {
+    if ((is_upload_batch() || is_current_submission()) &&
+        command_buffer_has_work) {
+      release_repack_staging_after();
+    } else {
+      release_repack_staging_immediate();
+    }
+  };
+
+  if (use_blit_upload) {
     uint32_t bytes_per_host_block = load_shader_info.bytes_per_host_block;
     const uint32_t blit_alignment = 256;
+
+    direct_uploads.reserve((level_last - level_first + 1) * array_size);
+    repack_uploads.reserve((level_last - level_first + 1) * array_size);
+
+    auto fits_u32 = [](size_t value) {
+      return value <= size_t(std::numeric_limits<uint32_t>::max());
+    };
 
     for (uint32_t level = level_first; level <= level_last; ++level) {
       uint32_t stored_level = std::min(level, level_packed);
@@ -1328,62 +1957,365 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
 
         bool requires_staging = (source_offset_bytes % blit_alignment) != 0;
         if (requires_staging) {
+          if (!texture_upload_repack_pipeline_ ||
+              (level_depth != 0 &&
+               blit_bytes_per_image >
+                   std::numeric_limits<size_t>::max() / level_depth)) {
+            release_repack_staging_immediate();
+            handle_upload_failure(true);
+            return false;
+          }
           size_t staging_size = blit_bytes_per_image * level_depth;
+          if (!fits_u32(source_offset_bytes) || !fits_u32(bytes_per_image) ||
+              !fits_u32(blit_bytes_per_image) || !fits_u32(staging_size)) {
+            release_repack_staging_immediate();
+            handle_upload_failure(true);
+            return false;
+          }
           MTL::Buffer* staging_buffer = acquire_buffer(staging_size);
           if (!staging_buffer) {
-            blit->endEncoding();
+            release_repack_staging_immediate();
             handle_upload_failure(true);
             return false;
           }
 
-          for (uint32_t z = 0; z < level_depth; ++z) {
-            size_t src_z_offset =
-                source_offset_bytes + size_t(z) * bytes_per_image;
-            size_t dst_z_offset = size_t(z) * blit_bytes_per_image;
-            for (uint32_t y = 0; y < upload_row_count; ++y) {
-              size_t src_row_offset =
-                  src_z_offset + size_t(y) * stored_layout->row_pitch_bytes;
-              size_t dst_row_offset = dst_z_offset + size_t(y) * blit_row_pitch;
-              blit->copyFromBuffer(dest_buffer, src_row_offset, staging_buffer,
-                                   dst_row_offset, upload_row_bytes);
-            }
-          }
-
-          blit->copyFromBuffer(
-              staging_buffer, 0, blit_row_pitch, blit_bytes_per_image,
-              MTL::Size::Make(upload_width_texels, upload_height_texels,
-                              level_depth),
-              mtl_texture, is_3d ? 0 : slice, level,
-              MTL::Origin::Make(0, 0, 0));
-
-          release_buffer_after(cmd, staging_buffer, staging_size);
+          PendingRepackUpload upload = {};
+          upload.staging_buffer = staging_buffer;
+          upload.staging_size = staging_size;
+          upload.constants.source_offset = uint32_t(source_offset_bytes);
+          upload.constants.dest_offset = 0;
+          upload.constants.source_row_pitch = stored_layout->row_pitch_bytes;
+          upload.constants.dest_row_pitch = blit_row_pitch;
+          upload.constants.source_image_pitch = uint32_t(bytes_per_image);
+          upload.constants.dest_image_pitch = uint32_t(blit_bytes_per_image);
+          upload.constants.row_bytes = upload_row_bytes;
+          upload.constants.row_count = upload_row_count;
+          upload.constants.depth = level_depth;
+          upload.blit_row_pitch = blit_row_pitch;
+          upload.blit_bytes_per_image = blit_bytes_per_image;
+          upload.width = upload_width_texels;
+          upload.height = upload_height_texels;
+          upload.depth = level_depth;
+          upload.destination_slice = is_3d ? 0 : slice;
+          upload.destination_level = level;
+          repack_uploads.push_back(upload);
         } else {
-          blit->copyFromBuffer(
-              dest_buffer, source_offset_bytes, stored_layout->row_pitch_bytes,
-              bytes_per_image,
-              MTL::Size::Make(upload_width_texels, upload_height_texels,
-                              level_depth),
-              mtl_texture, is_3d ? 0 : slice, level,
-              MTL::Origin::Make(0, 0, 0));
+          PendingDirectUpload upload = {};
+          upload.source_offset_bytes = source_offset_bytes;
+          upload.source_row_pitch = stored_layout->row_pitch_bytes;
+          upload.source_bytes_per_image = bytes_per_image;
+          upload.width = upload_width_texels;
+          upload.height = upload_height_texels;
+          upload.depth = level_depth;
+          upload.destination_slice = is_3d ? 0 : slice;
+          upload.destination_level = level;
+          direct_uploads.push_back(upload);
         }
       }
     }
+  }
 
-    blit->endEncoding();
+  const bool can_defer_upload_blits =
+      use_blit_upload && (is_upload_batch() || is_current_submission()) &&
+      deferred_upload_batch_depth_ != 0;
+  MTL::ComputeCommandEncoder* encoder = nullptr;
+  if (can_defer_upload_blits) {
+    encoder = GetDeferredUploadComputeEncoder(cmd);
+    using_deferred_upload_encoder = encoder != nullptr;
+  }
+  if (!encoder) {
+    if (command_processor_ &&
+        cmd == command_processor_->GetCurrentCommandBuffer()) {
+      command_processor_->EndSharedMemoryUploadBlitEncoder(
+          MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
+              kTextureCompute);
+    }
+    encoder = cmd->computeCommandEncoder();
+  }
+  if (!encoder) {
+    release_repack_staging_immediate();
+    handle_upload_failure(true);
+    return false;
+  }
+  if (!using_deferred_upload_encoder) {
+    SetEncoderLabel(encoder, repack_uploads.empty()
+                                 ? "XeniaTextureLoadEncoder"
+                                 : "XeniaTextureLoadRepackEncoder");
+  }
+  bool compute_encoder_open = true;
+  auto end_local_compute_encoder = [&]() {
+    if (!compute_encoder_open || using_deferred_upload_encoder) {
+      return;
+    }
+    encoder->endEncoding();
+    compute_encoder_open = false;
+  };
+  if (command_processor_ &&
+      !command_processor_->EncodeSharedMemoryComputeReadDependency(
+          encoder, shared_memory_dependency, shared_memory_ranges,
+          shared_memory_range_count)) {
+    end_local_compute_encoder();
+    release_repack_staging_immediate();
+    handle_upload_failure(true);
+    return false;
+  }
+  encoder->setComputePipelineState(pipeline);
+  MTL::Buffer* shader_source_buffer =
+      use_cpu_guest_source ? transient_source_buffer : shared_buffer;
+  if (!texture_resolution_scaled) {
+    encoder->setBuffer(shader_source_buffer, 0, 2);
+  }
+
+  uint32_t guest_x_blocks_per_group_log2 =
+      load_shader_info.GetGuestXBlocksPerGroupLog2();
+  MTL::Size threads_per_group =
+      MTL::Size::Make(UINT32_C(1) << kLoadGuestXThreadsPerGroupLog2,
+                      UINT32_C(1) << kLoadGuestYBlocksPerGroupLog2, 1);
+
+  bool scaled_mips_source_set_up = false;
+  MTL::Buffer* source_buffer = shader_source_buffer;
+  size_t source_buffer_offset = 0;
+  size_t source_buffer_length = 0;
+
+  size_t dispatch_index = 0;
+  for (const StoredLevelHostLayout& stored_level : stored_levels) {
+    bool is_base_storage = stored_level.is_base;
+    const texture_util::TextureGuestLayout::Level& level_guest_layout =
+        is_base_storage ? guest_layout.base
+                        : guest_layout.mips[stored_level.level];
+
+    if (texture_resolution_scaled &&
+        (is_base_storage || !scaled_mips_source_set_up)) {
+      uint32_t guest_address =
+          is_base_storage ? base_guest_address : mips_guest_address;
+      uint32_t guest_size_unscaled = is_base_storage
+                                         ? texture.GetGuestBaseSize()
+                                         : texture.GetGuestMipsSize();
+      if (!MakeScaledResolveRangeCurrent(guest_address, guest_size_unscaled,
+                                         4) ||
+          !GetCurrentScaledResolveBuffer(source_buffer, source_buffer_offset,
+                                         source_buffer_length)) {
+        end_local_compute_encoder();
+        release_repack_staging_for_encoded_failure();
+        handle_upload_failure(false);
+        return false;
+      }
+      encoder->setBuffer(source_buffer, source_buffer_offset, 2);
+      if (!is_base_storage) {
+        scaled_mips_source_set_up = true;
+      }
+    }
+
+    uint32_t level_guest_offset = 0;
+    if (!texture_resolution_scaled) {
+      if (use_cpu_guest_source) {
+        const TransientTextureSourceRange& source_range =
+            is_base_storage ? transient_base_source : transient_mips_source;
+        if (!source_range.valid ||
+            source_range.guest_buffer_offset >
+                size_t(std::numeric_limits<uint32_t>::max())) {
+          end_local_compute_encoder();
+          release_repack_staging_for_encoded_failure();
+          handle_upload_failure(false);
+          return false;
+        }
+        level_guest_offset = uint32_t(source_range.guest_buffer_offset);
+      } else {
+        level_guest_offset =
+            is_base_storage ? base_guest_address : mips_guest_address;
+      }
+    }
+    if (!is_base_storage) {
+      uint32_t mip_offset = guest_layout.mip_offsets_bytes[stored_level.level];
+      if (texture_resolution_scaled) {
+        mip_offset *= texture_resolution_scale_area;
+      }
+      if (mip_offset >
+          std::numeric_limits<uint32_t>::max() - level_guest_offset) {
+        end_local_compute_encoder();
+        release_repack_staging_for_encoded_failure();
+        handle_upload_failure(false);
+        return false;
+      }
+      level_guest_offset += mip_offset;
+    }
+    // Use guest layout pitch (blocks) - new XeSL expects blocks for both tiled
+    // and linear
+    uint32_t guest_pitch_aligned =
+        level_guest_layout.row_pitch_bytes / bytes_per_block;
+
+    uint32_t size_blocks_x =
+        (stored_level.width_texels + (block_width - 1)) / block_width;
+    uint32_t size_blocks_y =
+        (stored_level.height_texels + (block_height - 1)) / block_height;
+    size_blocks_x *= texture_resolution_scale_x;
+    size_blocks_y *= texture_resolution_scale_y;
+
+    uint32_t group_count_x =
+        (size_blocks_x +
+         ((UINT32_C(1) << guest_x_blocks_per_group_log2) - 1)) >>
+        guest_x_blocks_per_group_log2;
+    uint32_t group_count_y =
+        (size_blocks_y +
+         ((UINT32_C(1) << kLoadGuestYBlocksPerGroupLog2) - 1)) >>
+        kLoadGuestYBlocksPerGroupLog2;
+    MTL::Size threadgroups = MTL::Size::Make(group_count_x, group_count_y,
+                                             stored_level.depth_slices);
+
+    for (uint32_t slice = 0; slice < array_size; ++slice) {
+      MetalLoadConstants constants = {};
+      constants.is_tiled_3d_endian_scale =
+          uint32_t(key.tiled) | (uint32_t(is_3d_tiling) << 1) |
+          (uint32_t(key.endianness) << 2) | (texture_resolution_scale_x << 4) |
+          (texture_resolution_scale_y << 7);
+      constants.guest_offset = level_guest_offset;
+      if (!is_3d) {
+        uint32_t slice_stride = level_guest_layout.array_slice_stride_bytes;
+        if (texture_resolution_scaled) {
+          slice_stride *= texture_resolution_scale_area;
+        }
+        constants.guest_offset += slice * slice_stride;
+      }
+      constants.guest_pitch_aligned = guest_pitch_aligned;
+      constants.guest_z_stride_block_rows_aligned =
+          level_guest_layout.z_slice_stride_block_rows;
+      constants.size_blocks[0] = size_blocks_x;
+      constants.size_blocks[1] = size_blocks_y;
+      constants.size_blocks[2] = stored_level.depth_slices;
+      constants.padding0 = 0;
+      constants.host_offset = 0;
+      constants.host_pitch = stored_level.row_pitch_bytes;
+      constants.height_texels = stored_level.height_texels;
+
+      uint8_t* constants_ptr =
+          static_cast<uint8_t*>(constants_buffer->contents()) +
+          dispatch_index * constants_size;
+      std::memcpy(constants_ptr, &constants, sizeof(constants));
+
+      encoder->setBuffer(constants_buffer, dispatch_index * constants_size, 0);
+      encoder->setBuffer(dest_buffer,
+                         stored_level.dest_offset_bytes +
+                             slice * stored_level.slice_size_bytes,
+                         1);
+      encoder->dispatchThreadgroups(threadgroups, threads_per_group);
+      command_buffer_has_work = true;
+      ++dispatch_index;
+    }
+  }
+
+  if (!repack_uploads.empty()) {
+    encoder->memoryBarrier(MTL::BarrierScopeBuffers);
+    encoder->pushDebugGroup(
+        NS::String::string("XeniaTextureUploadRepack", NS::UTF8StringEncoding));
+    encoder->setComputePipelineState(texture_upload_repack_pipeline_);
+    encoder->setBuffer(dest_buffer, 0, 1);
+    MTL::Size repack_threads_per_group = MTL::Size::Make(128, 1, 1);
+    for (const PendingRepackUpload& upload : repack_uploads) {
+      uint32_t dword_count = (upload.constants.row_bytes + 3) >> 2;
+      uint32_t group_count_x = (dword_count + 127) >> 7;
+      encoder->setBytes(&upload.constants, sizeof(upload.constants), 0);
+      encoder->setBuffer(upload.staging_buffer, 0, 2);
+      encoder->dispatchThreadgroups(
+          MTL::Size::Make(group_count_x, upload.constants.row_count,
+                          upload.constants.depth),
+          repack_threads_per_group);
+      command_buffer_has_work = true;
+    }
+    encoder->popDebugGroup();
+  }
+
+  end_local_compute_encoder();
+
+  MTL::Texture* mtl_texture = metal_texture->metal_texture();
+  if (use_blit_upload) {
+    if (!direct_uploads.empty() || !repack_uploads.empty()) {
+      if (using_deferred_upload_encoder) {
+        for (const PendingDirectUpload& upload : direct_uploads) {
+          QueueDeferredUploadCopy(
+              dest_buffer, upload.source_offset_bytes, upload.source_row_pitch,
+              upload.source_bytes_per_image, mtl_texture,
+              upload.destination_slice, upload.destination_level, upload.width,
+              upload.height, upload.depth);
+          command_buffer_has_work = true;
+        }
+        for (const PendingRepackUpload& upload : repack_uploads) {
+          QueueDeferredUploadCopy(
+              upload.staging_buffer, 0, upload.blit_row_pitch,
+              upload.blit_bytes_per_image, mtl_texture,
+              upload.destination_slice, upload.destination_level, upload.width,
+              upload.height, upload.depth);
+          command_buffer_has_work = true;
+        }
+      } else {
+        if (command_processor_ &&
+            cmd == command_processor_->GetCurrentCommandBuffer()) {
+          command_processor_->EndSharedMemoryUploadBlitEncoder(
+              MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
+                  kTextureBlit);
+        }
+        MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
+        if (!blit) {
+          release_repack_staging_for_encoded_failure();
+          handle_upload_failure(true);
+          return false;
+        }
+
+        for (const PendingDirectUpload& upload : direct_uploads) {
+          blit->copyFromBuffer(
+              dest_buffer, upload.source_offset_bytes, upload.source_row_pitch,
+              upload.source_bytes_per_image,
+              MTL::Size::Make(upload.width, upload.height, upload.depth),
+              mtl_texture, upload.destination_slice, upload.destination_level,
+              MTL::Origin::Make(0, 0, 0));
+          command_buffer_has_work = true;
+        }
+        for (const PendingRepackUpload& upload : repack_uploads) {
+          blit->copyFromBuffer(
+              upload.staging_buffer, 0, upload.blit_row_pitch,
+              upload.blit_bytes_per_image,
+              MTL::Size::Make(upload.width, upload.height, upload.depth),
+              mtl_texture, upload.destination_slice, upload.destination_level,
+              MTL::Origin::Make(0, 0, 0));
+          command_buffer_has_work = true;
+        }
+
+        blit->endEncoding();
+      }
+    }
+
+    release_repack_staging_after();
+    release_buffer_after(cmd, transient_source_buffer, transient_source_size);
+    transient_source_buffer = nullptr;
     release_buffer_after(cmd, constants_buffer, constants_buffer_size);
     release_buffer_after(cmd, dest_buffer, size_t(dest_buffer_size));
-    if (use_upload_batch) {
+    if (is_upload_batch()) {
+      if (!use_cpu_guest_source && shared_memory_range_count) {
+        for (uint32_t i = 0; i < shared_memory_range_count; ++i) {
+          upload_batch_command_buffer_shared_memory_ranges_.push_back(
+              {shared_memory_ranges[i].start, shared_memory_ranges[i].length});
+        }
+      }
       upload_batch_command_buffer_has_work_ = true;
-    } else if (!use_current_command_buffer) {
-      cmd->retain();
-      cmd->addCompletedHandler(^(MTL::CommandBuffer* cb) {
-        cb->release();
-      });
-      cmd->commit();
+    } else if (is_standalone()) {
+      if (!use_cpu_guest_source && shared_memory_range_count) {
+        std::pair<uint32_t, uint32_t> standalone_ranges[2] = {};
+        for (uint32_t i = 0; i < shared_memory_range_count; ++i) {
+          standalone_ranges[i] = {shared_memory_ranges[i].start,
+                                  shared_memory_ranges[i].length};
+        }
+        static_cast<MetalSharedMemory&>(shared_memory())
+            .TrackStandaloneGpuAccess(cmd, standalone_ranges,
+                                      shared_memory_range_count);
+      }
+      command_processor_->CommitStandaloneAsync(cmd);
     }
   } else {
-    cmd->commit();
-    cmd->waitUntilCompleted();
+    if (is_standalone()) {
+      command_processor_->CommitStandaloneAndWait(cmd);
+    } else {
+      cmd->commit();
+      cmd->waitUntilCompleted();
+    }
 
     uint8_t* dest_data = static_cast<uint8_t*>(dest_buffer->contents());
     if (!dest_data) {
@@ -1488,90 +2420,13 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   }
 
   if (!use_blit_upload) {
+    release_buffer_immediate(transient_source_buffer, transient_source_size);
+    transient_source_buffer = nullptr;
     release_buffer_immediate(constants_buffer, constants_buffer_size);
     release_buffer_immediate(dest_buffer, size_t(dest_buffer_size));
   }
 
   return true;
-}
-
-void MetalTextureCache::DumpTextureToFile(MTL::Texture* texture,
-                                          const std::string& filename,
-                                          uint32_t width, uint32_t height) {
-  if (!texture) {
-    XELOGE("DumpTextureToFile: null texture");
-    return;
-  }
-
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  MTL::CommandQueue* queue = command_processor_->GetMetalCommandQueue();
-  if (!device || !queue) {
-    XELOGE("DumpTextureToFile: missing Metal device or command queue");
-    return;
-  }
-
-  // Calculate bytes per row (align for blit requirements).
-  size_t bytes_per_pixel = 4;  // Assuming RGBA8
-  size_t bytes_per_row_unaligned = width * bytes_per_pixel;
-  size_t bytes_per_row = xe::align(bytes_per_row_unaligned, size_t(256));
-  size_t buffer_size = bytes_per_row * height;
-
-  MTL::Buffer* readback =
-      device->newBuffer(buffer_size, MTL::ResourceStorageModeShared);
-  if (!readback) {
-    XELOGE("DumpTextureToFile: failed to allocate readback buffer");
-    return;
-  }
-
-  ScopedAutoreleasePool autorelease_pool;
-  MTL::CommandBuffer* cmd = queue->commandBuffer();
-  if (!cmd) {
-    readback->release();
-    XELOGE("DumpTextureToFile: failed to create command buffer");
-    return;
-  }
-  MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
-  if (!blit) {
-    readback->release();
-    XELOGE("DumpTextureToFile: failed to create blit encoder");
-    return;
-  }
-
-  blit->copyFromTexture(texture, 0, 0, MTL::Origin::Make(0, 0, 0),
-                        MTL::Size::Make(width, height, 1), readback, 0,
-                        bytes_per_row, 0);
-  blit->endEncoding();
-  cmd->commit();
-  cmd->waitUntilCompleted();
-
-  // Allocate buffer for packed texture data (tightly packed rows).
-  std::vector<uint8_t> data(bytes_per_row_unaligned * height);
-  const uint8_t* src = static_cast<const uint8_t*>(readback->contents());
-  if (!src) {
-    readback->release();
-    XELOGE("DumpTextureToFile: failed to map readback buffer");
-    return;
-  }
-  for (uint32_t y = 0; y < height; ++y) {
-    std::memcpy(data.data() + y * bytes_per_row_unaligned,
-                src + y * bytes_per_row, bytes_per_row_unaligned);
-  }
-
-  readback->release();
-
-  if (texture->pixelFormat() == MTL::PixelFormatBGRA8Unorm) {
-    // Convert BGRA to RGBA for stb_image_write
-    for (size_t i = 0; i < data.size(); i += 4) {
-      std::swap(data[i], data[i + 2]);
-    }
-  }
-
-  // Write PNG file
-  if (stbi_write_png(filename.c_str(), width, height, 4, data.data(),
-                     bytes_per_row)) {
-  } else {
-    XELOGE("Failed to write texture to: {}", filename);
-  }
 }
 
 bool MetalTextureCache::Initialize() {
@@ -1607,6 +2462,11 @@ bool MetalTextureCache::Initialize() {
     size_t min_heap_bytes = std::max<int32_t>(0, ::cvars::metal_heap_min_bytes);
     texture_heap_pool_ = std::make_unique<MetalHeapPool>(
         device, GetCacheTextureStorageMode(), min_heap_bytes, "XeniaTex");
+    texture_heap_pool_->SetHeapCreatedCallback([this](MTL::Heap* heap) {
+      if (command_processor_) {
+        command_processor_->AddResidencySetHeap(heap);
+      }
+    });
   }
 
   InitializeNorm16Selection(device);
@@ -1619,6 +2479,71 @@ bool MetalTextureCache::Initialize() {
   if (!null_texture_2d_ || !null_texture_3d_ || !null_texture_cube_) {
     XELOGE("Failed to create null textures");
     return false;
+  }
+
+  // Allocate persistent bindless heap slots for null textures so that
+  // bindless draws can fall back to a valid descriptor index.
+  null_texture_2d_bindless_index_ =
+      command_processor_->AllocateViewBindlessIndex();
+  if (null_texture_2d_bindless_index_ == UINT32_MAX) {
+    XELOGE("Failed to allocate bindless SRV slot for null 2D texture");
+    return false;
+  }
+  if (auto* e = command_processor_->GetViewBindlessHeapEntry(
+          null_texture_2d_bindless_index_)) {
+    IRDescriptorTableSetTexture(e, null_texture_2d_, 0.0f, 0);
+  }
+  null_texture_3d_bindless_index_ =
+      command_processor_->AllocateViewBindlessIndex();
+  if (null_texture_3d_bindless_index_ == UINT32_MAX) {
+    XELOGE("Failed to allocate bindless SRV slot for null 3D texture");
+    return false;
+  }
+  if (auto* e = command_processor_->GetViewBindlessHeapEntry(
+          null_texture_3d_bindless_index_)) {
+    IRDescriptorTableSetTexture(e, null_texture_3d_, 0.0f, 0);
+  }
+  null_texture_cube_bindless_index_ =
+      command_processor_->AllocateViewBindlessIndex();
+  if (null_texture_cube_bindless_index_ == UINT32_MAX) {
+    XELOGE("Failed to allocate bindless SRV slot for null cube texture");
+    return false;
+  }
+  if (auto* e = command_processor_->GetViewBindlessHeapEntry(
+          null_texture_cube_bindless_index_)) {
+    IRDescriptorTableSetTexture(e, null_texture_cube_, 0.0f, 0);
+  }
+
+  // Allocate a persistent bindless slot for the null sampler.
+  {
+    MTL::SamplerDescriptor* desc = MTL::SamplerDescriptor::alloc()->init();
+    desc->setMinFilter(MTL::SamplerMinMagFilterLinear);
+    desc->setMagFilter(MTL::SamplerMinMagFilterLinear);
+    desc->setMipFilter(MTL::SamplerMipFilterLinear);
+    desc->setSAddressMode(MTL::SamplerAddressModeClampToEdge);
+    desc->setTAddressMode(MTL::SamplerAddressModeClampToEdge);
+    desc->setRAddressMode(MTL::SamplerAddressModeClampToEdge);
+    desc->setSupportArgumentBuffers(true);
+    null_sampler_bindless_ =
+        command_processor_->GetMetalDevice()->newSamplerState(desc);
+    desc->release();
+    if (null_sampler_bindless_) {
+      null_sampler_bindless_index_ =
+          command_processor_->AllocateSamplerBindlessIndex();
+      if (null_sampler_bindless_index_ == UINT32_MAX) {
+        XELOGE("Failed to allocate bindless sampler slot for null sampler");
+        null_sampler_bindless_->release();
+        null_sampler_bindless_ = nullptr;
+        return false;
+      }
+      if (auto* e = command_processor_->GetSamplerBindlessHeapEntry(
+              null_sampler_bindless_index_)) {
+        IRDescriptorTableSetSampler(e, null_sampler_bindless_, 0.0f);
+      }
+    } else {
+      XELOGE("Failed to create bindless null sampler");
+      return false;
+    }
   }
 
   if (!InitializeLoadPipelines()) {
@@ -1685,6 +2610,8 @@ bool MetalTextureCache::InitializeLoadPipelines() {
                                   const uint8_t* data, size_t size) -> void {
     load_pipelines_scaled_[index] = create_pipeline_from_metallib(data, size);
   };
+  texture_upload_repack_pipeline_ = create_pipeline_from_metallib(
+      texture_upload_repack_metallib, sizeof(texture_upload_repack_metallib));
 
   init_pipeline(TextureCache::kLoadShaderIndex8bpb,
                 texture_load_8bpb_cs_metallib,
@@ -1880,7 +2807,8 @@ bool MetalTextureCache::InitializeLoadPipelines() {
   // Require at least the common loaders.
   return load_pipelines_[TextureCache::kLoadShaderIndex32bpb] != nullptr &&
          load_pipelines_[TextureCache::kLoadShaderIndex16bpb] != nullptr &&
-         load_pipelines_[TextureCache::kLoadShaderIndex8bpb] != nullptr;
+         load_pipelines_[TextureCache::kLoadShaderIndex8bpb] != nullptr &&
+         texture_upload_repack_pipeline_ != nullptr;
 }
 
 void MetalTextureCache::InitializeNorm16Selection(MTL::Device* device) {
@@ -1903,9 +2831,16 @@ void MetalTextureCache::InitializeNorm16Selection(MTL::Device* device) {
 void MetalTextureCache::Shutdown() {
   SCOPE_profile_cpu_f("gpu");
 
+  deferred_upload_batch_depth_ = 0;
+  FlushDeferredUploadEncoderBatch();
   AbortUploadCommandBufferBatch(false);
 
   ClearCache();
+
+  if (texture_upload_repack_pipeline_) {
+    texture_upload_repack_pipeline_->release();
+    texture_upload_repack_pipeline_ = nullptr;
+  }
 
   for (size_t i = 0; i < kLoadShaderCount; ++i) {
     if (load_pipelines_[i]) {
@@ -1917,6 +2852,38 @@ void MetalTextureCache::Shutdown() {
       load_pipelines_scaled_[i] = nullptr;
     }
   }
+
+  // Release persistent bindless heap slots for null textures/samplers.
+  if (null_texture_2d_bindless_index_ != UINT32_MAX) {
+    command_processor_->ReleaseViewBindlessIndex(
+        null_texture_2d_bindless_index_);
+    null_texture_2d_bindless_index_ = UINT32_MAX;
+  }
+  if (null_texture_3d_bindless_index_ != UINT32_MAX) {
+    command_processor_->ReleaseViewBindlessIndex(
+        null_texture_3d_bindless_index_);
+    null_texture_3d_bindless_index_ = UINT32_MAX;
+  }
+  if (null_texture_cube_bindless_index_ != UINT32_MAX) {
+    command_processor_->ReleaseViewBindlessIndex(
+        null_texture_cube_bindless_index_);
+    null_texture_cube_bindless_index_ = UINT32_MAX;
+  }
+  if (null_sampler_bindless_index_ != UINT32_MAX) {
+    command_processor_->ReleaseSamplerBindlessIndex(
+        null_sampler_bindless_index_);
+    null_sampler_bindless_index_ = UINT32_MAX;
+  }
+  if (null_sampler_bindless_) {
+    null_sampler_bindless_->release();
+    null_sampler_bindless_ = nullptr;
+  }
+  for (auto& retired_sampler : retired_sampler_states_) {
+    if (retired_sampler.sampler) {
+      retired_sampler.sampler->release();
+    }
+  }
+  retired_sampler_states_.clear();
 
   // Follow existing shutdown pattern - explicit null checks and release
   if (null_texture_2d_) {
@@ -1974,33 +2941,65 @@ void MetalTextureCache::ClearScaledResolveBuffers() {
 void MetalTextureCache::CompletedSubmissionUpdated(
     uint64_t completed_submission_index) {
   TextureCache::CompletedSubmissionUpdated(completed_submission_index);
-  if (scaled_resolve_retired_buffers_.empty()) {
-    return;
-  }
-  for (auto it = scaled_resolve_retired_buffers_.begin();
-       it != scaled_resolve_retired_buffers_.end();) {
-    if (it->submission_id <= completed_submission_index) {
-      if (it->buffer) {
-        it->buffer->release();
+  if (!scaled_resolve_retired_buffers_.empty()) {
+    for (auto it = scaled_resolve_retired_buffers_.begin();
+         it != scaled_resolve_retired_buffers_.end();) {
+      if (it->submission_id <= completed_submission_index) {
+        if (it->buffer) {
+          it->buffer->release();
+        }
+        scaled_resolve_retired_bytes_ =
+            scaled_resolve_retired_bytes_ > it->length_scaled
+                ? (scaled_resolve_retired_bytes_ - it->length_scaled)
+                : 0;
+        it = scaled_resolve_retired_buffers_.erase(it);
+      } else {
+        ++it;
       }
-      scaled_resolve_retired_bytes_ =
-          scaled_resolve_retired_bytes_ > it->length_scaled
-              ? (scaled_resolve_retired_bytes_ - it->length_scaled)
-              : 0;
-      it = scaled_resolve_retired_buffers_.erase(it);
+    }
+  }
+  for (auto it = retired_sampler_states_.begin();
+       it != retired_sampler_states_.end();) {
+    if (it->submission_id <= completed_submission_index) {
+      if (it->sampler) {
+        it->sampler->release();
+      }
+      it = retired_sampler_states_.erase(it);
     } else {
       ++it;
     }
   }
 }
 
+bool MetalTextureCache::TrimViewBindlessPressure(uint32_t needed_slot_count) {
+  if (!command_processor_) {
+    return false;
+  }
+  bool destroyed_any = false;
+  uint64_t completed_submission = command_processor_->GetCompletedSubmission();
+  while (command_processor_->GetViewBindlessHeapAvailableCount() <
+         needed_slot_count) {
+    if (!DestroyOldestTextureIfUnused(completed_submission)) {
+      break;
+    }
+    destroyed_any = true;
+  }
+  return destroyed_any;
+}
+
 void MetalTextureCache::ClearCache() {
   SCOPE_profile_cpu_f("gpu");
 
+  TextureCache::ClearCache();
+
+  // Release persistent bindless sampler slots before destroying samplers.
+  for (auto& [param_key, sampler_index] : sampler_bindless_indices_) {
+    command_processor_->ReleaseSamplerBindlessIndex(sampler_index);
+  }
+  sampler_bindless_indices_.clear();
+
   for (auto& sampler_pair : sampler_cache_) {
-    if (sampler_pair.second) {
-      sampler_pair.second->release();
-    }
+    ReleaseOrRetireSamplerState(sampler_pair.second);
   }
   sampler_cache_.clear();
   ClearScaledResolveBuffers();
@@ -2008,83 +3007,49 @@ void MetalTextureCache::ClearCache() {
   XELOGD("Metal texture cache: Cache cleared");
 }
 
-// Legacy method - kept for compatibility but now uses base class texture
-// management
-bool MetalTextureCache::UploadTexture2D(const TextureInfo& texture_info) {
-  XELOGD("UploadTexture2D: Legacy method called - delegating to base class");
-  // The base class RequestTextures will handle texture creation and loading
-  return true;
-}
-
-// Legacy method - kept for compatibility but now uses base class texture
-// management
-bool MetalTextureCache::UploadTextureCube(const TextureInfo& texture_info) {
-  XELOGD("UploadTextureCube: Legacy method called - delegating to base class");
-  // The base class RequestTextures will handle texture creation and loading
-  return true;
-}
-
-MTL::PixelFormat MetalTextureCache::ConvertXenosFormat(
-    xenos::TextureFormat format, xenos::Endian endian) {
-  // Convert Xbox 360 texture formats to Metal pixel formats
-  // This is a simplified mapping - the full implementation would handle all
-  // Xbox 360 formats
-  switch (format) {
-    case xenos::TextureFormat::k_8_8_8_8:
-      // Xbox 360 k_8_8_8_8 is stored as ARGB in big-endian. After k_8in32
-      // endian swap on little-endian, the byte order is BGRA, and we swizzle
-      // to RGBA for Metal.
-      return MTL::PixelFormatRGBA8Unorm;
-    case xenos::TextureFormat::k_1_5_5_5:
-      return MTL::PixelFormatA1BGR5Unorm;
-    case xenos::TextureFormat::k_5_6_5:
-      return MTL::PixelFormatB5G6R5Unorm;
-    case xenos::TextureFormat::k_8:
-      return MTL::PixelFormatR8Unorm;
-    case xenos::TextureFormat::k_8_8:
-      return MTL::PixelFormatRG8Unorm;
-    case xenos::TextureFormat::k_DXT1:
-      return MTL::PixelFormatBC1_RGBA;
-    case xenos::TextureFormat::k_DXT2_3:
-      return MTL::PixelFormatBC2_RGBA;
-    case xenos::TextureFormat::k_DXT4_5:
-      return MTL::PixelFormatBC3_RGBA;
-    case xenos::TextureFormat::k_16_16_16_16:
-      return MTL::PixelFormatRGBA16Unorm;
-    case xenos::TextureFormat::k_2_10_10_10:
-      return MTL::PixelFormatRGB10A2Unorm;
-    case xenos::TextureFormat::k_16_FLOAT:
-      return MTL::PixelFormatR16Float;
-    case xenos::TextureFormat::k_16_16_FLOAT:
-      return MTL::PixelFormatRG16Float;
-    case xenos::TextureFormat::k_16_16_16_16_FLOAT:
-      return MTL::PixelFormatRGBA16Float;
-    case xenos::TextureFormat::k_32_FLOAT:
-      return MTL::PixelFormatR32Float;
-    case xenos::TextureFormat::k_32_32_FLOAT:
-      return MTL::PixelFormatRG32Float;
-    case xenos::TextureFormat::k_32_32_32_32_FLOAT:
-      return MTL::PixelFormatRGBA32Float;
-    case xenos::TextureFormat::k_DXN:  // BC5
-      return MTL::PixelFormatBC5_RGUnorm;
-    default:
-      // Don't log here - caller will log the error with more context
-      return MTL::PixelFormatInvalid;
+void MetalTextureCache::ReleaseOrRetireSamplerState(
+    MTL::SamplerState* sampler) {
+  if (!sampler) {
+    return;
   }
+  uint64_t current_submission =
+      command_processor_ ? command_processor_->GetLatestSubmissionStarted() : 0;
+  uint64_t completed_submission =
+      command_processor_ ? command_processor_->GetCompletedSubmission() : 0;
+  if (!current_submission || completed_submission >= current_submission) {
+    sampler->release();
+    return;
+  }
+  retired_sampler_states_.push_back({sampler, current_submission});
+}
+
+MTL::Texture* MetalTextureCache::CreateTexture(
+    MTL::TextureDescriptor* descriptor) {
+  MTL::Device* device = command_processor_->GetMetalDevice();
+  if (!device) {
+    XELOGE(
+        "Metal texture cache: Failed to get Metal device from command "
+        "processor");
+    descriptor->release();
+    return nullptr;
+  }
+
+  MTL::Texture* texture = nullptr;
+  if (texture_heap_pool_ &&
+      descriptor->storageMode() == MTL::StorageModePrivate) {
+    texture = texture_heap_pool_->CreateTexture(descriptor);
+  }
+  if (!texture) {
+    texture = device->newTexture(descriptor);
+  }
+  descriptor->release();
+  return texture;
 }
 
 MTL::Texture* MetalTextureCache::CreateTexture2D(
     uint32_t width, uint32_t height, uint32_t array_length,
     MTL::PixelFormat format, MTL::TextureSwizzleChannels swizzle,
     uint32_t mip_levels) {
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE(
-        "Metal texture cache: Failed to get Metal device from command "
-        "processor");
-    return nullptr;
-  }
-
   // Always create 2D array textures (even with a single layer) so that the
   // Metal texture type matches the shader expectation of texture2d_array,
   // mirroring the D3D12 backend which uses TEXTURE2DARRAY SRVs for 1D/2D
@@ -2104,17 +3069,7 @@ MTL::Texture* MetalTextureCache::CreateTexture2D(
   descriptor->setStorageMode(GetCacheTextureStorageMode());
   descriptor->setSwizzle(swizzle);
 
-  MTL::Texture* texture = nullptr;
-  if (texture_heap_pool_ &&
-      descriptor->storageMode() == MTL::StorageModePrivate) {
-    texture = texture_heap_pool_->CreateTexture(descriptor);
-  }
-  if (!texture) {
-    texture = device->newTexture(descriptor);
-  }
-
-  descriptor->release();
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (!texture) {
     XELOGE(
         "Metal texture cache: Failed to create 2D array texture {}x{} (layers "
@@ -2129,14 +3084,6 @@ MTL::Texture* MetalTextureCache::CreateTexture2D(
 MTL::Texture* MetalTextureCache::CreateTexture3D(
     uint32_t width, uint32_t height, uint32_t depth, MTL::PixelFormat format,
     MTL::TextureSwizzleChannels swizzle, uint32_t mip_levels) {
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE(
-        "Metal texture cache: Failed to get Metal device from command "
-        "processor");
-    return nullptr;
-  }
-
   depth = std::max(depth, 1u);
 
   MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::alloc()->init();
@@ -2152,17 +3099,7 @@ MTL::Texture* MetalTextureCache::CreateTexture3D(
   descriptor->setStorageMode(GetCacheTextureStorageMode());
   descriptor->setSwizzle(swizzle);
 
-  MTL::Texture* texture = nullptr;
-  if (texture_heap_pool_ &&
-      descriptor->storageMode() == MTL::StorageModePrivate) {
-    texture = texture_heap_pool_->CreateTexture(descriptor);
-  }
-  if (!texture) {
-    texture = device->newTexture(descriptor);
-  }
-
-  descriptor->release();
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (!texture) {
     XELOGE("Metal texture cache: Failed to create 3D texture {}x{}x{}", width,
            height, depth);
@@ -2176,14 +3113,6 @@ MTL::Texture* MetalTextureCache::CreateTextureCube(
     uint32_t width, MTL::PixelFormat format,
     MTL::TextureSwizzleChannels swizzle, uint32_t mip_levels,
     uint32_t cube_count) {
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE(
-        "Metal texture cache: Failed to get Metal device from command "
-        "processor");
-    return nullptr;
-  }
-
   MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::alloc()->init();
   // Use cube for single-cube textures to match non-array cube bindings in the
   // translated MSL, and cube-array only when multiple cubes are present.
@@ -2200,17 +3129,7 @@ MTL::Texture* MetalTextureCache::CreateTextureCube(
   descriptor->setStorageMode(GetCacheTextureStorageMode());
   descriptor->setSwizzle(swizzle);
 
-  MTL::Texture* texture = nullptr;
-  if (texture_heap_pool_ &&
-      descriptor->storageMode() == MTL::StorageModePrivate) {
-    texture = texture_heap_pool_->CreateTexture(descriptor);
-  }
-  if (!texture) {
-    texture = device->newTexture(descriptor);
-  }
-
-  descriptor->release();
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (!texture) {
     XELOGE("Metal texture cache: Failed to create Cube texture {}x{}", width,
            width);
@@ -2222,12 +3141,6 @@ MTL::Texture* MetalTextureCache::CreateTextureCube(
 
 MTL::Texture* MetalTextureCache::CreateNullTexture2D() {
   SCOPE_profile_cpu_f("gpu");
-
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE("Metal texture cache: Failed to get Metal device for null texture");
-    return nullptr;
-  }
 
   MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::alloc()->init();
   // Null 2D textures are created as 2D arrays with a single layer so they can
@@ -2241,12 +3154,10 @@ MTL::Texture* MetalTextureCache::CreateNullTexture2D() {
                        MTL::TextureUsagePixelFormatView);
   descriptor->setStorageMode(MTL::StorageModeShared);
 
-  MTL::Texture* texture = device->newTexture(descriptor);
-  descriptor->release();  // Immediate release following pattern
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (texture) {
-    // Initialize with black color (0xFF000000 for RGBA8)
-    uint32_t default_color = 0xFF000000;
+    // Match D3D12 null-SRV semantics: missing textures should sample zero.
+    uint32_t default_color = 0x00000000;
     MTL::Region region = MTL::Region::Make2D(0, 0, 1, 1);
     texture->replaceRegion(region, 0, &default_color, 4);
   } else {
@@ -2259,13 +3170,6 @@ MTL::Texture* MetalTextureCache::CreateNullTexture2D() {
 MTL::Texture* MetalTextureCache::CreateNullTexture3D() {
   SCOPE_profile_cpu_f("gpu");
 
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE(
-        "Metal texture cache: Failed to get Metal device for null 3D texture");
-    return nullptr;
-  }
-
   MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::alloc()->init();
   descriptor->setTextureType(MTL::TextureType3D);
   descriptor->setPixelFormat(MTL::PixelFormatRGBA8Unorm);
@@ -2276,12 +3180,10 @@ MTL::Texture* MetalTextureCache::CreateNullTexture3D() {
                        MTL::TextureUsagePixelFormatView);
   descriptor->setStorageMode(MTL::StorageModeShared);
 
-  MTL::Texture* texture = device->newTexture(descriptor);
-  descriptor->release();  // Immediate release following pattern
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (texture) {
-    // Initialize with black color (0xFF000000 for RGBA8)
-    uint32_t default_color = 0xFF000000;
+    // Match D3D12 null-SRV semantics: missing textures should sample zero.
+    uint32_t default_color = 0x00000000;
     MTL::Region region = MTL::Region::Make3D(0, 0, 0, 1, 1, 1);
     texture->replaceRegion(region, 0, 0, &default_color, 4, 4);
   } else {
@@ -2293,14 +3195,6 @@ MTL::Texture* MetalTextureCache::CreateNullTexture3D() {
 
 MTL::Texture* MetalTextureCache::CreateNullTextureCube() {
   SCOPE_profile_cpu_f("gpu");
-
-  MTL::Device* device = command_processor_->GetMetalDevice();
-  if (!device) {
-    XELOGE(
-        "Metal texture cache: Failed to get Metal device for null cube "
-        "texture");
-    return nullptr;
-  }
 
   MTL::TextureDescriptor* descriptor = MTL::TextureDescriptor::alloc()->init();
   // Null cube texture must match non-array cube bindings in translated MSL.
@@ -2314,12 +3208,10 @@ MTL::Texture* MetalTextureCache::CreateNullTextureCube() {
                        MTL::TextureUsagePixelFormatView);
   descriptor->setStorageMode(MTL::StorageModeShared);
 
-  MTL::Texture* texture = device->newTexture(descriptor);
-  descriptor->release();  // Immediate release following pattern
-
+  MTL::Texture* texture = CreateTexture(descriptor);
   if (texture) {
-    // Initialize all 6 faces with black color (0xFF000000 for RGBA8)
-    uint32_t default_color = 0xFF000000;
+    // Match D3D12 null-SRV semantics: missing textures should sample zero.
+    uint32_t default_color = 0x00000000;
     MTL::Region region = MTL::Region::Make2D(0, 0, 1, 1);
     for (uint32_t face = 0; face < 6; ++face) {
       texture->replaceRegion(region, 0, face, &default_color, 4, 0);
@@ -2334,24 +3226,78 @@ MTL::Texture* MetalTextureCache::CreateNullTextureCube() {
 // RequestTextures override - integrates with standard texture binding pipeline
 void MetalTextureCache::RequestTextures(uint32_t used_texture_mask) {
   SCOPE_profile_cpu_f("gpu");
+  const bool may_load_data = MayRequestTexturesLoadData(used_texture_mask);
+  uint64_t load_calls_before = loaded_texture_data_count_;
 
-  BeginUploadCommandBufferBatch();
-
-  // Call base class implementation first
-  TextureCache::RequestTextures(used_texture_mask);
-
-  EndUploadCommandBufferBatch();
+  if (may_load_data) {
+    UploadBatchScope upload_batch(*this);
+    TextureCache::RequestTextures(used_texture_mask);
+    upload_batch.End();
+  } else {
+    TextureCache::RequestTextures(used_texture_mask);
+  }
+  uint64_t load_calls_delta = loaded_texture_data_count_ - load_calls_before;
+  if (!may_load_data) {
+    assert_zero(load_calls_delta);
+  }
 
   // Intentionally no Metal-specific per-fetch logging here - invalid fetch
   // constants are already reported by the shared TextureCache logic.
 }
 
-MTL::Texture* MetalTextureCache::GetTextureForBinding(
-    uint32_t fetch_constant, xenos::FetchOpDimension dimension,
-    bool is_signed) {
-  static std::array<bool, 32> logged_missing_binding{};
-  static std::array<bool, 32> logged_missing_texture{};
+void MetalTextureCache::RequestTexturesWithoutLoading(
+    uint32_t used_texture_mask) {
+  SCOPE_profile_cpu_f("gpu");
+  uint64_t load_calls_before = loaded_texture_data_count_;
+  TextureCache::RequestTextures(used_texture_mask, false);
+  assert_true(loaded_texture_data_count_ == load_calls_before);
+}
 
+bool MetalTextureCache::AreActiveTextureSRVKeysUpToDate(
+    const TextureSRVKey* keys,
+    const DxbcShader::TextureBinding* host_shader_bindings,
+    size_t host_shader_binding_count) const {
+  for (size_t i = 0; i < host_shader_binding_count; ++i) {
+    const TextureSRVKey& key = keys[i];
+    const TextureBinding* binding =
+        GetValidTextureBinding(host_shader_bindings[i].fetch_constant);
+    if (!binding) {
+      if (key.key.is_valid) {
+        return false;
+      }
+      continue;
+    }
+    if ((key.key != binding->key) ||
+        (key.host_swizzle != binding->host_swizzle) ||
+        (key.swizzled_signs != binding->swizzled_signs)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void MetalTextureCache::WriteActiveTextureSRVKeys(
+    TextureSRVKey* keys, const DxbcShader::TextureBinding* host_shader_bindings,
+    size_t host_shader_binding_count) const {
+  for (size_t i = 0; i < host_shader_binding_count; ++i) {
+    TextureSRVKey& key = keys[i];
+    const TextureBinding* binding =
+        GetValidTextureBinding(host_shader_bindings[i].fetch_constant);
+    if (!binding) {
+      key.key.MakeInvalid();
+      key.host_swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_0000;
+      key.swizzled_signs = kSwizzledSignsUnsigned;
+      continue;
+    }
+    key.key = binding->key;
+    key.host_swizzle = binding->host_swizzle;
+    key.swizzled_signs = binding->swizzled_signs;
+  }
+}
+
+uint32_t MetalTextureCache::GetBindlessSRVIndexForBinding(
+    uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
+    MTL::Texture** texture_for_encoder_out) {
   auto get_null_texture_for_dimension = [&]() -> MTL::Texture* {
     switch (dimension) {
       case xenos::FetchOpDimension::k1D:
@@ -2365,104 +3311,88 @@ MTL::Texture* MetalTextureCache::GetTextureForBinding(
         return null_texture_2d_;
     }
   };
+  auto get_null_index_for_dimension = [&]() -> uint32_t {
+    switch (dimension) {
+      case xenos::FetchOpDimension::k1D:
+      case xenos::FetchOpDimension::k2D:
+        return null_texture_2d_bindless_index_;
+      case xenos::FetchOpDimension::k3DOrStacked:
+        return null_texture_3d_bindless_index_;
+      case xenos::FetchOpDimension::kCube:
+        return null_texture_cube_bindless_index_;
+      default:
+        return null_texture_2d_bindless_index_;
+    }
+  };
+  auto return_null_index_for_dimension = [&]() -> uint32_t {
+    if (texture_for_encoder_out) {
+      *texture_for_encoder_out = get_null_texture_for_dimension();
+    }
+    return get_null_index_for_dimension();
+  };
 
   const TextureBinding* binding = GetValidTextureBinding(fetch_constant);
   if (!binding) {
-    if (fetch_constant < logged_missing_binding.size() &&
-        !logged_missing_binding[fetch_constant]) {
-      xenos::xe_gpu_texture_fetch_t fetch =
-          register_file().GetTextureFetch(fetch_constant);
-      TextureKey decoded_key;
-      uint8_t swizzled_signs = 0;
-      BindingInfoFromFetchConstant(fetch, decoded_key, &swizzled_signs);
-      XELOGW(
-          "GetTextureForBinding: No valid binding for fetch {} (type={}, "
-          "format={}, swizzle=0x{:08X}, dwords={:08X} {:08X} {:08X} {:08X} "
-          "{:08X} {:08X})",
-          fetch_constant, uint32_t(fetch.type), uint32_t(fetch.format),
-          fetch.swizzle, fetch.dword_0, fetch.dword_1, fetch.dword_2,
-          fetch.dword_3, fetch.dword_4, fetch.dword_5);
-      if (decoded_key.is_valid) {
-        const char* format_name = FormatInfo::GetName(decoded_key.format);
-        XELOGW(
-            "GetTextureForBinding: Decoded fetch {} -> format={} ({}), "
-            "size={}x{}x{}, pitch={}, mips={}, tiled={}, packed_mips={}, "
-            "endian={}, swizzled_signs=0x{:02X}",
-            fetch_constant, uint32_t(decoded_key.format), format_name,
-            decoded_key.GetWidth(), decoded_key.GetHeight(),
-            decoded_key.GetDepthOrArraySize(), decoded_key.pitch,
-            decoded_key.mip_max_level + 1, decoded_key.tiled ? 1 : 0,
-            decoded_key.packed_mips ? 1 : 0, uint32_t(decoded_key.endianness),
-            swizzled_signs);
-      }
-      logged_missing_binding[fetch_constant] = true;
-    }
-    return get_null_texture_for_dimension();
+    return return_null_index_for_dimension();
   }
-
   if (!AreDimensionsCompatible(dimension, binding->key.dimension)) {
-    return get_null_texture_for_dimension();
+    return return_null_index_for_dimension();
   }
 
   Texture* texture = nullptr;
   if (is_signed) {
-    bool needs_signed_components =
-        texture_util::IsAnySignSigned(binding->swizzled_signs);
-    if (needs_signed_components &&
-        IsSignedVersionSeparateForFormat(binding->key)) {
-      texture =
-          binding->texture_signed ? binding->texture_signed : binding->texture;
-    } else {
-      texture = binding->texture;
+    if (texture_util::IsAnySignSigned(binding->swizzled_signs)) {
+      texture = IsSignedVersionSeparateForFormat(binding->key)
+                    ? binding->texture_signed
+                    : binding->texture;
     }
-  } else {
-    bool has_unsigned_components =
-        texture_util::IsAnySignNotSigned(binding->swizzled_signs);
-    if (has_unsigned_components) {
-      texture = binding->texture;
-    } else if (!has_unsigned_components && binding->texture_signed != nullptr) {
-      texture = binding->texture_signed;
-    } else {
-      texture = binding->texture;
-    }
+  } else if (texture_util::IsAnySignNotSigned(binding->swizzled_signs)) {
+    texture = binding->texture;
   }
 
   if (!texture) {
-    if (fetch_constant < logged_missing_texture.size() &&
-        !logged_missing_texture[fetch_constant]) {
-      XELOGW("GetTextureForBinding: No texture object for fetch {}",
-             fetch_constant);
-      logged_missing_texture[fetch_constant] = true;
-    }
-    return get_null_texture_for_dimension();
+    return return_null_index_for_dimension();
   }
 
   texture->MarkAsUsed();
   auto* metal_texture = static_cast<MetalTexture*>(texture);
-  MTL::Texture* result = nullptr;
-  const bool use_3d_as_2d =
-      binding->key.dimension == xenos::DataDimension::k3D &&
-      (dimension == xenos::FetchOpDimension::k1D ||
-       dimension == xenos::FetchOpDimension::k2D);
-  if (metal_texture) {
-    if (use_3d_as_2d) {
-      result = metal_texture->GetOrCreate3DAs2DView(binding->host_swizzle,
-                                                    dimension, is_signed);
-      if (!result) {
-        return get_null_texture_for_dimension();
-      }
-    } else {
-      result = metal_texture->GetOrCreateView(binding->host_swizzle, dimension,
-                                              is_signed);
-    }
+  if (!metal_texture) {
+    return return_null_index_for_dimension();
   }
-  return result ? result : get_null_texture_for_dimension();
+  MTL::Texture* texture_for_encoder = nullptr;
+  uint32_t srv_index = metal_texture->GetOrCreateBindlessSRVIndexAndView(
+      binding->host_swizzle, dimension, is_signed,
+      texture_for_encoder_out ? &texture_for_encoder : nullptr);
+  if (srv_index == UINT32_MAX) {
+    return return_null_index_for_dimension();
+  }
+  if (texture_for_encoder_out) {
+    *texture_for_encoder_out = texture_for_encoder
+                                   ? texture_for_encoder
+                                   : get_null_texture_for_dimension();
+  }
+  return srv_index;
+}
+
+uint32_t MetalTextureCache::GetBindlessSamplerIndexForBinding(
+    const DxbcShader::SamplerBinding& binding) {
+  SamplerParameters parameters = GetSamplerParameters(binding);
+  // GetOrCreateSampler will create the sampler and allocate a persistent
+  // bindless slot if it doesn't exist yet.
+  MTL::SamplerState* sampler_state = GetOrCreateSampler(parameters);
+  if (!sampler_state) {
+    return null_sampler_bindless_index_;
+  }
+  auto it = sampler_bindless_indices_.find(parameters.value);
+  if (it != sampler_bindless_indices_.end()) {
+    return it->second;
+  }
+  return null_sampler_bindless_index_;
 }
 
 MTL::Texture* MetalTextureCache::RequestSwapTexture(
     uint32_t& width_scaled_out, uint32_t& height_scaled_out,
     xenos::TextureFormat& format_out) {
-  static bool logged_valid = false;
   static bool logged_invalid = false;
   enum class SwapFailure : uint8_t {
     kCreateTexture = 0,
@@ -2580,9 +3510,6 @@ MTL::Texture* MetalTextureCache::RequestSwapTexture(
   height_scaled_out =
       key.GetHeight() * (key.scaled_resolve ? draw_resolution_scale_y() : 1);
   format_out = key.format;
-  if (!logged_valid) {
-    logged_valid = true;
-  }
   return view;
 }
 
@@ -2623,51 +3550,60 @@ static MetalTextureCache::SamplerParameters BuildSamplerParametersFromFetch(
     parameters.border_color = xenos::BorderColor::k_ABGR_Black;
   }
 
-  uint32_t mip_min_level;
-  texture_util::GetSubresourcesFromFetchConstant(fetch, nullptr, nullptr,
-                                                 nullptr, nullptr, nullptr,
-                                                 &mip_min_level, nullptr);
+  uint32_t mip_min_level, mip_max_level;
+  texture_util::GetSubresourcesFromFetchConstant(
+      fetch, nullptr, nullptr, nullptr, nullptr, nullptr, &mip_min_level,
+      &mip_max_level);
   parameters.mip_min_level = mip_min_level;
+  bool has_mips = mip_max_level > mip_min_level;
+
+  xenos::TextureFilter mag_filter =
+      req_mag_filter == xenos::TextureFilter::kUseFetchConst ? fetch.mag_filter
+                                                             : req_mag_filter;
+  xenos::TextureFilter min_filter =
+      req_min_filter == xenos::TextureFilter::kUseFetchConst ? fetch.min_filter
+                                                             : req_min_filter;
+  xenos::TextureFilter mip_filter =
+      req_mip_filter == xenos::TextureFilter::kUseFetchConst ? fetch.mip_filter
+                                                             : req_mip_filter;
+  bool min_mag_linear = (mag_filter == xenos::TextureFilter::kLinear) &&
+                        (min_filter == xenos::TextureFilter::kLinear);
+  bool mip_filter_bilinear_or_trilinear =
+      mip_filter == xenos::TextureFilter::kPoint ||
+      mip_filter == xenos::TextureFilter::kLinear;
+  bool mip_base_map = mip_filter == xenos::TextureFilter::kBaseMap;
 
   xenos::AnisoFilter aniso_filter =
       req_aniso_filter == xenos::AnisoFilter::kUseFetchConst
           ? fetch.aniso_filter
           : req_aniso_filter;
+  // Apply anisotropic override, but only for mipmapped textures
+  // that are already using bilinear/trilinear filtering.
+  if (cvars::anisotropic_override > -1 && cvars::anisotropic_override < 6 &&
+      has_mips && !mip_base_map && min_mag_linear &&
+      mip_filter_bilinear_or_trilinear) {
+    aniso_filter = xenos::AnisoFilter(cvars::anisotropic_override);
+  }
   aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
   parameters.aniso_filter = aniso_filter;
-
-  xenos::TextureFilter mip_filter =
-      req_mip_filter == xenos::TextureFilter::kUseFetchConst ? fetch.mip_filter
-                                                             : req_mip_filter;
 
   if (aniso_filter != xenos::AnisoFilter::kDisabled) {
     parameters.mag_linear = 1;
     parameters.min_linear = 1;
     parameters.mip_linear = 1;
   } else {
-    xenos::TextureFilter mag_filter =
-        req_mag_filter == xenos::TextureFilter::kUseFetchConst
-            ? fetch.mag_filter
-            : req_mag_filter;
     parameters.mag_linear = mag_filter == xenos::TextureFilter::kLinear;
-
-    xenos::TextureFilter min_filter =
-        req_min_filter == xenos::TextureFilter::kUseFetchConst
-            ? fetch.min_filter
-            : req_min_filter;
     parameters.min_linear = min_filter == xenos::TextureFilter::kLinear;
-
     parameters.mip_linear = mip_filter == xenos::TextureFilter::kLinear;
   }
 
-  parameters.mip_base_map =
-      mip_filter == xenos::TextureFilter::kBaseMap ? 1 : 0;
+  parameters.mip_base_map = mip_base_map ? 1 : 0;
 
   return parameters;
 }
 
 MetalTextureCache::SamplerParameters MetalTextureCache::GetSamplerParameters(
-    const SpirvShader::SamplerBinding& binding) const {
+    const DxbcShader::SamplerBinding& binding) const {
   return BuildSamplerParametersFromFetch(
       register_file(), binding.fetch_constant, binding.mag_filter,
       binding.min_filter, binding.mip_filter, binding.aniso_filter);
@@ -2727,6 +3663,10 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
       desc->setBorderColor(MTL::SamplerBorderColorOpaqueWhite);
       break;
     case xenos::BorderColor::k_ABGR_Black:
+    case xenos::BorderColor::k_ACBYCR_Black:
+    case xenos::BorderColor::k_ACBCRY_Black:
+      // Metal doesn't support custom border colors. The YUV black variants
+      // still need alpha 0 to stay closer to D3D12's null/border semantics.
       desc->setBorderColor(MTL::SamplerBorderColorTransparentBlack);
       break;
     default:
@@ -2757,6 +3697,26 @@ MTL::SamplerState* MetalTextureCache::GetOrCreateSampler(
   }
 
   sampler_cache_.emplace(parameters.value, sampler_state);
+
+  // Allocate a persistent bindless sampler slot and write the descriptor.
+  uint32_t sampler_index = command_processor_->AllocateSamplerBindlessIndex();
+  if (sampler_index == UINT32_MAX) {
+    XELOGE("Failed to allocate persistent bindless sampler slot");
+    sampler_state->release();
+    sampler_cache_.erase(parameters.value);
+    return nullptr;
+  }
+  if (auto* e =
+          command_processor_->GetSamplerBindlessHeapEntry(sampler_index)) {
+    IRDescriptorTableSetSampler(e, sampler_state, 0.0f);
+  } else {
+    command_processor_->ReleaseSamplerBindlessIndex(sampler_index);
+    sampler_state->release();
+    sampler_cache_.erase(parameters.value);
+    return nullptr;
+  }
+  sampler_bindless_indices_.emplace(parameters.value, sampler_index);
+
   return sampler_state;
 }
 
@@ -2792,7 +3752,13 @@ uint32_t MetalTextureCache::GetHostFormatSwizzle(TextureKey key) const {
     case xenos::TextureFormat::k_5_6_5:
     case xenos::TextureFormat::k_10_11_11:
     case xenos::TextureFormat::k_11_11_10:
+    case xenos::TextureFormat::k_Cr_Y1_Cb_Y0_REP:
+    case xenos::TextureFormat::k_Y1_Cr_Y0_Cb_REP:
       return xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB;
+
+    case xenos::TextureFormat::k_6_5_5:
+      // On the host, green bits in blue, blue bits in green.
+      return XE_GPU_MAKE_TEXTURE_SWIZZLE(R, B, G, G);
 
     case xenos::TextureFormat::k_8_8_8_8:
     case xenos::TextureFormat::k_8_8_8_8_A:
@@ -3034,9 +4000,7 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
   for (size_t overlap_index : overlap_indices) {
     overlap_total_bytes += scaled_resolve_buffers_[overlap_index].length_scaled;
   }
-  MTL::CommandBuffer* current_cmd =
-      command_processor_->GetCurrentCommandBuffer();
-  bool retain_overlaps = current_cmd != nullptr;
+  bool retain_overlaps = command_processor_->HasActiveSubmission();
   if (retain_overlaps) {
     bool exceeds_retired_budget =
         overlap_total_bytes > kScaledResolveRetiredMaxBytes ||
@@ -3048,22 +4012,31 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
   }
 
   if (!overlap_indices.empty()) {
-    MTL::CommandBuffer* cmd = retain_overlaps ? current_cmd : nullptr;
+    bool standalone = false;
+    MTL::CommandBuffer* cmd =
+        retain_overlaps ? command_processor_->GetCurrentCommandBuffer()
+                        : nullptr;
     if (!cmd) {
-      MTL::CommandQueue* queue = command_processor_->GetMetalCommandQueue();
-      if (!queue) {
-        new_buffer->release();
-        return false;
-      }
-      cmd = queue->commandBuffer();
+      cmd = command_processor_->CreateStandaloneTransferCommandBuffer(
+          "XeniaCB reason=scaled-resolve-blit");
       if (!cmd) {
         new_buffer->release();
         return false;
       }
+      standalone = true;
     }
 
+    if (!standalone && command_processor_ &&
+        cmd == command_processor_->GetCurrentCommandBuffer()) {
+      command_processor_->EndSharedMemoryUploadBlitEncoder(
+          MetalCommandProcessor::SharedMemoryUploadEncoderEndReason::
+              kScaledResolveBlit);
+    }
     MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
     if (!blit) {
+      if (standalone) {
+        cmd->release();
+      }
       new_buffer->release();
       return false;
     }
@@ -3079,9 +4052,8 @@ bool MetalTextureCache::EnsureScaledResolveBufferRange(uint64_t start_scaled,
     }
 
     blit->endEncoding();
-    if (cmd != current_cmd) {
-      cmd->commit();
-      cmd->waitUntilCompleted();
+    if (standalone) {
+      command_processor_->CommitStandaloneAndWait(cmd);
     }
   }
 
@@ -3235,7 +4207,11 @@ std::unique_ptr<TextureCache::Texture> MetalTextureCache::CreateTexture(
     return nullptr;
   }
 
-  // Create MetalTexture wrapper
+  EnsureViewBindlessHeadroom(kViewBindlessHeapPressureThreshold);
+
+  // Create the MetalTexture wrapper. The canonical bindless descriptor is
+  // allocated lazily on first bind so unused cached textures don't pin a view
+  // slot permanently.
   return std::make_unique<MetalTexture>(*this, key, metal_texture);
 }
 
@@ -3244,6 +4220,7 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
                                                               bool load_base,
                                                               bool load_mips) {
   SCOPE_profile_cpu_f("gpu");
+  ++loaded_texture_data_count_;
 
   MetalTexture* metal_texture = static_cast<MetalTexture*>(&texture);
   if (!metal_texture || !metal_texture->metal_texture()) {
@@ -3251,25 +4228,148 @@ bool MetalTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
     return false;
   }
 
+  // Upload work references the destination texture before normal binding does,
+  // so keep it protected from LRU eviction like the D3D12 and Vulkan paths do.
+  texture.MarkAsUsed();
+
   // GPU-based loading path for Metal texture_load_* shaders only (parity with
   // D3D12/Vulkan; no CPU untile fallback).
-  return TryGpuLoadTexture(texture, load_base, load_mips);
+  if (!TryGpuLoadTexture(texture, load_base, load_mips)) {
+    return false;
+  }
+  if (command_processor_) {
+    const TextureKey& texture_key = texture.key();
+    const uint64_t upload_bytes =
+        (load_base
+             ? uint64_t(xe::align(texture.GetGuestBaseSize(), UINT32_C(16)))
+             : 0) +
+        (load_mips
+             ? uint64_t(xe::align(texture.GetGuestMipsSize(), UINT32_C(16)))
+             : 0);
+    command_processor_->RecordTextureUploadSourceRoute(
+        texture_key.scaled_resolve
+            ? MetalCommandProcessor::TextureUploadSourceRoute::kScaledResolve
+            : MetalCommandProcessor::TextureUploadSourceRoute::
+                  kResidentSharedMemory,
+        upload_bytes);
+  }
+  return true;
+}
+
+bool MetalTextureCache::LoadTextureDataFromCpuGuestMemory(Texture& texture,
+                                                          bool load_base,
+                                                          bool load_mips) {
+  SCOPE_profile_cpu_f("gpu");
+  if (!load_base && !load_mips) {
+    return true;
+  }
+  const TextureKey& texture_key = texture.key();
+  if (texture_key.scaled_resolve) {
+    return false;
+  }
+
+  bool base_outdated = false;
+  bool mips_outdated = false;
+  {
+    auto global_lock = AcquireGlobalLock();
+    base_outdated = load_base && texture.base_outdated(global_lock);
+    mips_outdated = load_mips && texture.mips_outdated(global_lock);
+  }
+  if (!base_outdated && !mips_outdated) {
+    return true;
+  }
+
+  const uint32_t base_length =
+      xe::align(texture.GetGuestBaseSize(), UINT32_C(16));
+  const uint32_t mips_length =
+      xe::align(texture.GetGuestMipsSize(), UINT32_C(16));
+  auto has_cpu_source = [&](bool needed, uint32_t start, uint32_t length) {
+    if (!needed || !length) {
+      return true;
+    }
+    return shared_memory().IsRangeInvalid(start, length);
+  };
+  if (!has_cpu_source(base_outdated, texture_key.base_page << 12,
+                      base_length) ||
+      !has_cpu_source(mips_outdated, texture_key.mip_page << 12, mips_length)) {
+    return false;
+  }
+  MetalTexture* metal_texture = static_cast<MetalTexture*>(&texture);
+  if (!metal_texture || !metal_texture->metal_texture()) {
+    XELOGE("LoadTextureDataFromCpuGuestMemory: Invalid Metal texture");
+    return false;
+  }
+
+  // Upload work references the destination texture before normal binding does,
+  // so keep it protected from LRU eviction like the resident-memory path.
+  texture.MarkAsUsed();
+  ++loaded_texture_data_count_;
+
+  if (!TryGpuLoadTexture(texture, base_outdated, mips_outdated,
+                         TextureLoadSourceMode::kCpuGuestMemory)) {
+    return false;
+  }
+
+  {
+    auto global_lock = AcquireGlobalLock();
+    texture.MakeLoadedDataUpToDateAndWatch(global_lock, base_outdated,
+                                           mips_outdated);
+  }
+  if (command_processor_) {
+    command_processor_->RecordTextureUploadSourceRoute(
+        MetalCommandProcessor::TextureUploadSourceRoute::kCpuGuestMemory,
+        (base_outdated ? uint64_t(base_length) : 0) +
+            (mips_outdated ? uint64_t(mips_length) : 0));
+  }
+  texture.LogAction("Loaded");
+  return true;
+}
+
+bool MetalTextureCache::EnsureViewBindlessHeadroom(
+    uint32_t target_free_slots) const {
+  if (!command_processor_) {
+    return false;
+  }
+  if (command_processor_->GetViewBindlessHeapAvailableCount() >=
+      target_free_slots) {
+    return true;
+  }
+  const_cast<MetalTextureCache*>(this)->TrimViewBindlessPressure(
+      target_free_slots);
+  return command_processor_->GetViewBindlessHeapAvailableCount() >=
+         target_free_slots;
 }
 
 // MetalTexture implementation
 MetalTextureCache::MetalTexture::MetalTexture(MetalTextureCache& texture_cache,
                                               const TextureKey& key,
                                               MTL::Texture* metal_texture,
-                                              bool track_usage)
+                                              bool track_usage,
+                                              bool is_3d_as_2d_wrapper)
     : Texture(texture_cache, key, track_usage),
       texture_cache_(texture_cache),
-      metal_texture_(metal_texture) {
+      metal_texture_(metal_texture),
+      is_3d_as_2d_wrapper_(is_3d_as_2d_wrapper) {
   if (metal_texture_) {
     SetHostMemoryUsage(EstimateTextureBytes(metal_texture_));
   }
 }
 
 MetalTextureCache::MetalTexture::~MetalTexture() {
+  // Release persistent bindless SRV slots before destroying the texture.
+  if (bindless_srv_index_ != UINT32_MAX) {
+    texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+        bindless_srv_index_);
+    bindless_srv_index_ = UINT32_MAX;
+  }
+  for (auto& [key, bindless_srv_index] : swizzled_view_bindless_srv_indices_) {
+    if (bindless_srv_index != UINT32_MAX) {
+      texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+          bindless_srv_index);
+    }
+  }
+  swizzled_view_bindless_srv_indices_.clear();
+
   uint64_t views_released = 0;
   for (auto& entry : swizzled_view_cache_) {
     if (entry.second) {
@@ -3283,68 +4383,105 @@ MetalTextureCache::MetalTexture::~MetalTexture() {
   }
 }
 
+uint64_t MetalTextureCache::MetalTexture::GetViewKey(
+    uint32_t host_swizzle, xenos::FetchOpDimension dimension, bool is_signed,
+    MTL::PixelFormat view_format) const {
+  return uint64_t(host_swizzle) | (uint64_t(dimension) << 32) |
+         (uint64_t(is_signed) << 40) | (uint64_t(view_format) << 48);
+}
+
+MTL::PixelFormat MetalTextureCache::MetalTexture::GetViewPixelFormat(
+    bool is_signed) const {
+  if (!metal_texture_ || !is_signed) {
+    return metal_texture_ ? metal_texture_->pixelFormat()
+                          : MTL::PixelFormatInvalid;
+  }
+  switch (key().format) {
+    case xenos::TextureFormat::k_8:
+    case xenos::TextureFormat::k_8_A:
+    case xenos::TextureFormat::k_8_B:
+      return MTL::PixelFormatR8Snorm;
+    case xenos::TextureFormat::k_8_8:
+      return MTL::PixelFormatRG8Snorm;
+    case xenos::TextureFormat::k_8_8_8_8:
+    case xenos::TextureFormat::k_8_8_8_8_A:
+      return MTL::PixelFormatRGBA8Snorm;
+    case xenos::TextureFormat::k_16:
+      return MTL::PixelFormatR16Snorm;
+    case xenos::TextureFormat::k_16_16:
+      return MTL::PixelFormatRG16Snorm;
+    case xenos::TextureFormat::k_16_16_16_16:
+      return MTL::PixelFormatRGBA16Snorm;
+    default:
+      return metal_texture_->pixelFormat();
+  }
+}
+
+MTL::TextureType MetalTextureCache::MetalTexture::GetViewType(
+    xenos::FetchOpDimension dimension) const {
+  if (!metal_texture_) {
+    return MTL::TextureType2D;
+  }
+  switch (dimension) {
+    case xenos::FetchOpDimension::kCube:
+      return MTL::TextureTypeCube;
+    case xenos::FetchOpDimension::k3DOrStacked:
+      return key().dimension == xenos::DataDimension::k3D
+                 ? MTL::TextureType3D
+                 : MTL::TextureType2DArray;
+    default:
+      return MTL::TextureType2DArray;
+  }
+}
+
+uint32_t
+MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndexForResolvedView(
+    uint64_t view_key, MTL::Texture* view) {
+  if (!view) {
+    return UINT32_MAX;
+  }
+
+  texture_cache_.EnsureViewBindlessHeadroom(kViewBindlessHeapPressureThreshold);
+
+  auto existing = swizzled_view_bindless_srv_indices_.find(view_key);
+  if (existing != swizzled_view_bindless_srv_indices_.end()) {
+    return existing->second;
+  }
+
+  uint32_t bindless_srv_index =
+      texture_cache_.command_processor_->AllocateViewBindlessIndex();
+  if (bindless_srv_index == UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  auto* entry = texture_cache_.command_processor_->GetViewBindlessHeapEntry(
+      bindless_srv_index);
+  if (!entry) {
+    texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+        bindless_srv_index);
+    return UINT32_MAX;
+  }
+  IRDescriptorTableSetTexture(entry, view, 0.0f, 0);
+  swizzled_view_bindless_srv_indices_.emplace(view_key, bindless_srv_index);
+  return bindless_srv_index;
+}
+
 MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateView(
     uint32_t host_swizzle, xenos::FetchOpDimension dimension, bool is_signed) {
   if (!metal_texture_) {
     return nullptr;
   }
 
-  auto get_view_pixel_format =
-      [&](const TextureKey& key, bool view_signed,
-          MTL::PixelFormat base_format) -> MTL::PixelFormat {
-    if (!view_signed) {
-      return base_format;
-    }
-    switch (key.format) {
-      case xenos::TextureFormat::k_8:
-      case xenos::TextureFormat::k_8_A:
-      case xenos::TextureFormat::k_8_B:
-        return MTL::PixelFormatR8Snorm;
-      case xenos::TextureFormat::k_8_8:
-        return MTL::PixelFormatRG8Snorm;
-      case xenos::TextureFormat::k_8_8_8_8:
-      case xenos::TextureFormat::k_8_8_8_8_A:
-        return MTL::PixelFormatRGBA8Snorm;
-      case xenos::TextureFormat::k_16:
-        return MTL::PixelFormatR16Snorm;
-      case xenos::TextureFormat::k_16_16:
-        return MTL::PixelFormatRG16Snorm;
-      case xenos::TextureFormat::k_16_16_16_16:
-        return MTL::PixelFormatRGBA16Snorm;
-      default:
-        return base_format;
-    }
-  };
+  MTL::PixelFormat view_format = GetViewPixelFormat(is_signed);
+  MTL::TextureType view_type = GetViewType(dimension);
 
-  MTL::PixelFormat view_format =
-      get_view_pixel_format(key(), is_signed, metal_texture_->pixelFormat());
-
-  MTL::TextureType view_type = metal_texture_->textureType();
-  switch (dimension) {
-    case xenos::FetchOpDimension::kCube:
-      // SPIRV-Cross translates cube fetches to non-array cube textures.
-      view_type = MTL::TextureTypeCube;
-      break;
-    case xenos::FetchOpDimension::k3DOrStacked:
-      view_type = key().dimension == xenos::DataDimension::k3D
-                      ? MTL::TextureType3D
-                      : MTL::TextureType2DArray;
-      break;
-    default:
-      view_type = MTL::TextureType2DArray;
-      break;
+  if (host_swizzle == xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA &&
+      view_format == metal_texture_->pixelFormat() &&
+      metal_texture_->textureType() == view_type) {
+    return metal_texture_;
   }
 
-  if (host_swizzle == xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA) {
-    if ((!is_signed || view_format == metal_texture_->pixelFormat()) &&
-        metal_texture_->textureType() == view_type) {
-      return metal_texture_;
-    }
-  }
-
-  uint64_t view_key = uint64_t(host_swizzle) | (uint64_t(dimension) << 32) |
-                      (uint64_t(is_signed) << 40) |
-                      (uint64_t(view_format) << 48);
+  uint64_t view_key =
+      GetViewKey(host_swizzle, dimension, is_signed, view_format);
   auto found = swizzled_view_cache_.find(view_key);
   if (found != swizzled_view_cache_.end()) {
     return found->second;
@@ -3377,13 +4514,88 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateView(
   MTL::Texture* view = metal_texture_->newTextureView(
       view_format, view_type, level_range, slice_range, swizzle);
   if (!view) {
-    // Returning a mismatched base type can trigger Metal validation asserts.
-    return metal_texture_->textureType() == view_type ? metal_texture_
-                                                      : nullptr;
+    return nullptr;
   }
 
   swizzled_view_cache_.emplace(view_key, view);
   return view;
+}
+
+uint32_t MetalTextureCache::MetalTexture::GetOrCreateBindlessSRVIndexAndView(
+    uint32_t host_swizzle, xenos::FetchOpDimension dimension, bool is_signed,
+    MTL::Texture** view_out) {
+  if (view_out) {
+    *view_out = nullptr;
+  }
+  if (!metal_texture_) {
+    return UINT32_MAX;
+  }
+
+  MetalTexture* resolved_texture = this;
+  MTL::Texture* view = nullptr;
+  if (!is_3d_as_2d_wrapper_ && key().dimension == xenos::DataDimension::k3D &&
+      dimension == xenos::FetchOpDimension::k2D) {
+    view = GetOrCreate3DAs2DView(host_swizzle, dimension, is_signed);
+    if (!view || !texture_3d_as_2d_) {
+      return UINT32_MAX;
+    }
+    resolved_texture = texture_3d_as_2d_.get();
+  } else {
+    view = GetOrCreateView(host_swizzle, dimension, is_signed);
+    if (!view) {
+      return UINT32_MAX;
+    }
+  }
+
+  MTL::PixelFormat view_format =
+      resolved_texture->GetViewPixelFormat(is_signed);
+  MTL::TextureType view_type = resolved_texture->GetViewType(dimension);
+  uint32_t srv_index = UINT32_MAX;
+  if (host_swizzle == xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA &&
+      view_format == resolved_texture->metal_texture_->pixelFormat() &&
+      resolved_texture->metal_texture_->textureType() == view_type) {
+    if (resolved_texture->bindless_srv_index_ == UINT32_MAX) {
+      texture_cache_.EnsureViewBindlessHeadroom(
+          kViewBindlessHeapPressureThreshold);
+      resolved_texture->bindless_srv_index_ =
+          texture_cache_.command_processor_->AllocateViewBindlessIndex();
+      if (resolved_texture->bindless_srv_index_ == UINT32_MAX) {
+        XELOGE("MetalTexture: failed to allocate default bindless SRV index");
+        return UINT32_MAX;
+      }
+      auto* entry = texture_cache_.command_processor_->GetViewBindlessHeapEntry(
+          resolved_texture->bindless_srv_index_);
+      if (!entry) {
+        texture_cache_.command_processor_->ReleaseViewBindlessIndex(
+            resolved_texture->bindless_srv_index_);
+        resolved_texture->bindless_srv_index_ = UINT32_MAX;
+        return UINT32_MAX;
+      }
+      IRDescriptorTableSetTexture(entry, resolved_texture->metal_texture_, 0.0f,
+                                  0);
+    }
+    srv_index = resolved_texture->bindless_srv_index_;
+  } else {
+    uint64_t view_key = resolved_texture->GetViewKey(host_swizzle, dimension,
+                                                     is_signed, view_format);
+    auto existing =
+        resolved_texture->swizzled_view_bindless_srv_indices_.find(view_key);
+    if (existing !=
+        resolved_texture->swizzled_view_bindless_srv_indices_.end()) {
+      srv_index = existing->second;
+    } else {
+      srv_index = resolved_texture->GetOrCreateBindlessSRVIndexForResolvedView(
+          view_key, view);
+    }
+  }
+
+  if (srv_index == UINT32_MAX) {
+    return UINT32_MAX;
+  }
+  if (view_out) {
+    *view_out = view;
+  }
+  return srv_index;
 }
 
 MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreate3DAs2DView(
@@ -3417,7 +4629,7 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreate3DAs2DView(
     }
 
     texture_3d_as_2d_ = std::make_unique<MetalTexture>(texture_cache_, key_2d,
-                                                       texture_2d, false);
+                                                       texture_2d, false, true);
     texture_3d_as_2d_->SetForceLoad3DTiling(true);
     if (!texture_cache_.LoadTextureData(*texture_3d_as_2d_)) {
       XELOGE("MetalTexture: Failed to load 3D-as-2D texture data");

@@ -11,6 +11,7 @@
 #define XENIA_GPU_METAL_METAL_HEAP_POOL_H_
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,9 @@ class MetalHeapPool {
   MetalHeapPool(MTL::Device* device, MTL::StorageMode storage_mode,
                 size_t min_heap_size, const char* label_prefix);
   ~MetalHeapPool();
+
+  using HeapCreatedCallback = std::function<void(MTL::Heap*)>;
+  void SetHeapCreatedCallback(HeapCreatedCallback callback);
 
   MTL::Texture* CreateTexture(MTL::TextureDescriptor* descriptor);
   void Shutdown();
@@ -44,6 +48,7 @@ class MetalHeapPool {
   size_t total_heap_bytes_ = 0;
   std::string label_prefix_;
   std::vector<HeapEntry> heaps_;
+  HeapCreatedCallback heap_created_callback_;
 };
 
 }  // namespace metal
