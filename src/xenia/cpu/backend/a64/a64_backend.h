@@ -183,6 +183,7 @@ class A64Backend : public Backend {
   BitMap guest_trampoline_address_bitmap_;
   uint8_t* guest_trampoline_memory_ = nullptr;
   bool guest_trampolines_sub4gb_ = false;
+  bool guest_trampolines_need_write_protect_ = false;
 };
 
 }  // namespace a64

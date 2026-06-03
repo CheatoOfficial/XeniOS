@@ -23,6 +23,7 @@
 #include "xenia/apu/audio_media_player.h"
 #include "xenia/base/delegate.h"
 #include "xenia/base/exception_handler.h"
+#include "xenia/base/platform.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/game_info_database.h"
 #include "xenia/kernel/util/xlast.h"
@@ -195,6 +196,12 @@ class Emulator {
 
   // Tears down all subsystems. Called by the destructor and by RelaunchTitle.
   void Shutdown();
+#if XE_PLATFORM_IOS
+  // Title-exit teardown for the persistent iOS app shell. Keeps input_system_
+  // alive like relaunch paths do because SDL is tied to the app/window
+  // lifetime.
+  void ShutdownForTitleExitIOS();
+#endif  // XE_PLATFORM_IOS
 
   // Mounts scratch, cache, and devkit drives based on cvars.
   void MountStandardDrives();

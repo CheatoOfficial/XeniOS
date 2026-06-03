@@ -21,11 +21,13 @@
 #include "xenia/base/platform.h"
 #include "xenia/ui/vulkan/vulkan_presenter.h"
 
-#if XE_PLATFORM_LINUX
+#if XE_PLATFORM_LINUX || XE_PLATFORM_APPLE
 #include <dlfcn.h>
 #elif XE_PLATFORM_WIN32
 #include "xenia/base/platform_win.h"
-#elif XE_PLATFORM_MAC
+#endif
+
+#if XE_PLATFORM_MAC
 // MoltenVK is statically linked; declare the two entry points we resolve at
 // load time (vulkan_api.h sets VK_NO_PROTOTYPES, so the prototypes from
 // vulkan.h aren't visible).
@@ -615,7 +617,7 @@ VulkanInstance::~VulkanInstance() {
     functions_.vkDestroyInstance(instance_, nullptr);
   }
 
-#if XE_PLATFORM_LINUX
+#if XE_PLATFORM_LINUX || XE_PLATFORM_APPLE
   if (loader_) {
     dlclose(loader_);
   }

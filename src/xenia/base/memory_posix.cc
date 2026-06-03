@@ -24,11 +24,13 @@
 #include <sstream>
 #include <string>
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <mach/mach.h>
+#if XE_PLATFORM_MAC
 #include <mach/mach_vm.h>
+#endif
 #include <mach/vm_region.h>
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -112,8 +114,13 @@ PageAccess ToXeniaProtectFlags(const char* protection) {
   return PageAccess::kNoAccess;
 }
 
-#if XE_PLATFORM_MAC
 bool IsWritableExecutableMemorySupported() {
+#if XE_PLATFORM_APPLE
+#if XE_PLATFORM_IOS
+  // iOS app builds don't have MAP_JIT entitlement in this project setup.
+  // Use the split execute/write mapping path instead.
+  return false;
+#else
   // macOS allows RWX only on anonymous MAP_JIT regions. Callers that see
   // true must allocate via AllocFixed (which sets MAP_JIT) and toggle
   // pthread_jit_write_protect_np around writes. MAP_JIT requires the
@@ -136,10 +143,11 @@ bool IsWritableExecutableMemorySupported() {
     return true;
   }();
   return supported;
-}
+#endif  // XE_PLATFORM_IOS
 #else
-bool IsWritableExecutableMemorySupported() { return true; }
-#endif  // XE_PLATFORM_MAC
+  return true;
+#endif  // XE_PLATFORM_APPLE
+}
 
 struct MappedFileRange {
   uintptr_t region_begin;
@@ -178,32 +186,40 @@ void* AllocFixed(void* base_address, size_t length,
   uint32_t prot = ToPosixProtectFlags(access);
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   if (access == PageAccess::kExecuteReadWrite ||
       access == PageAccess::kExecuteReadOnly) {
+#if !XE_PLATFORM_IOS
+#ifdef MAP_JIT
     flags |= MAP_JIT;
+#endif
+#endif
   }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
   if (base_address != nullptr) {
     if (allocation_type == AllocationType::kCommit) {
-#if XE_PLATFORM_MAC
-      size_t host_page = page_size();
-      uintptr_t aligned_addr =
-          reinterpret_cast<uintptr_t>(base_address) & ~(host_page - 1);
-      uintptr_t end_addr = reinterpret_cast<uintptr_t>(base_address) + length;
-      end_addr = (end_addr + host_page - 1) & ~(host_page - 1);
-      if (mprotect(reinterpret_cast<void*>(aligned_addr),
-                   end_addr - aligned_addr, prot) == 0) {
+#if XE_PLATFORM_APPLE
+      size_t host_page_size = page_size();
+      uintptr_t aligned_start =
+          reinterpret_cast<uintptr_t>(base_address) & ~(host_page_size - 1);
+      uintptr_t aligned_end = xe::align(
+          reinterpret_cast<uintptr_t>(base_address) + length, host_page_size);
+      size_t aligned_length =
+          aligned_end > aligned_start ? aligned_end - aligned_start : 0;
+      if (!aligned_length) {
         return base_address;
       }
-      return nullptr;
+      return mprotect(reinterpret_cast<void*>(aligned_start), aligned_length,
+                      prot) == 0
+                 ? base_address
+                 : nullptr;
 #else
       if (Protect(base_address, length, access)) {
         return base_address;
       }
       return nullptr;
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
     }
 #ifdef MAP_FIXED_NOREPLACE
     flags |= MAP_FIXED_NOREPLACE;
@@ -272,39 +288,57 @@ bool Protect(void* base_address, size_t length, PageAccess access,
 }
 
 bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+#if XE_PLATFORM_APPLE
+  access_out = PageAccess::kNoAccess;
 #if XE_PLATFORM_MAC
-  mach_vm_address_t address = reinterpret_cast<mach_vm_address_t>(base_address);
+  mach_vm_address_t address =
+      static_cast<mach_vm_address_t>(reinterpret_cast<uintptr_t>(base_address));
   mach_vm_size_t region_size = 0;
+#else
+  vm_address_t address =
+      static_cast<vm_address_t>(reinterpret_cast<uintptr_t>(base_address));
+  vm_size_t region_size = 0;
+#endif
   vm_region_basic_info_data_64_t info;
   mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
-  mach_port_t object_name;
+  mach_port_t object_name = MACH_PORT_NULL;
 
+#if XE_PLATFORM_MAC
   kern_return_t kr = mach_vm_region(
       mach_task_self(), &address, &region_size, VM_REGION_BASIC_INFO_64,
       reinterpret_cast<vm_region_info_t>(&info), &info_count, &object_name);
+#else
+  kern_return_t kr = vm_region_64(
+      mach_task_self(), &address, &region_size, VM_REGION_BASIC_INFO_64,
+      reinterpret_cast<vm_region_info_t>(&info), &info_count, &object_name);
+#endif
+
+  if (object_name != MACH_PORT_NULL) {
+    mach_port_deallocate(mach_task_self(), object_name);
+  }
 
   if (kr != KERN_SUCCESS) {
     return false;
   }
 
-  if (address > reinterpret_cast<mach_vm_address_t>(base_address)) {
+  auto base = reinterpret_cast<uintptr_t>(base_address);
+  if (address > base) {
     return false;
   }
 
-  length =
-      static_cast<size_t>((address + region_size) -
-                          reinterpret_cast<mach_vm_address_t>(base_address));
+  length = static_cast<size_t>((address + region_size) - base);
 
-  if ((info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
-      (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+  const vm_prot_t prot = info.protection;
+  const bool can_read = (prot & VM_PROT_READ) != 0;
+  const bool can_write = (prot & VM_PROT_WRITE) != 0;
+  const bool can_execute = (prot & VM_PROT_EXECUTE) != 0;
+  if (can_read && can_write && can_execute) {
     access_out = PageAccess::kExecuteReadWrite;
-  } else if ((info.protection & (VM_PROT_READ | VM_PROT_EXECUTE)) ==
-             (VM_PROT_READ | VM_PROT_EXECUTE)) {
+  } else if (can_read && can_execute) {
     access_out = PageAccess::kExecuteReadOnly;
-  } else if ((info.protection & (VM_PROT_READ | VM_PROT_WRITE)) ==
-             (VM_PROT_READ | VM_PROT_WRITE)) {
+  } else if (can_read && can_write) {
     access_out = PageAccess::kReadWrite;
-  } else if (info.protection & VM_PROT_READ) {
+  } else if (can_read) {
     access_out = PageAccess::kReadOnly;
   } else {
     access_out = PageAccess::kNoAccess;
@@ -357,7 +391,7 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
 
   memory_maps.close();
   return false;
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 }
 
 FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
@@ -405,7 +439,41 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
   }
   oflag |= O_CREAT;
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_IOS
+  // iOS app sandboxing may reject POSIX shared memory namespaces, so use an
+  // unlinked temporary file-backed mapping instead.
+  const char* tmpdir_env = std::getenv("TMPDIR");
+  if (!tmpdir_env || !tmpdir_env[0]) {
+    XELOGE("TMPDIR is unavailable for iOS file mapping fallback.");
+    return kFileMappingHandleInvalid;
+  }
+  std::string backing_path(tmpdir_env);
+  if (backing_path.back() != '/') {
+    backing_path.push_back('/');
+  }
+  backing_path += path.filename().string();
+  int open_flags = oflag;
+  if (open_flags & O_RDWR) {
+    open_flags |= O_TRUNC;
+  }
+  int ret = open(backing_path.c_str(), open_flags, 0600);
+  if (ret < 0) {
+    XELOGE("open({}) failed: {} ({})", backing_path, strerror(errno), errno);
+    return kFileMappingHandleInvalid;
+  }
+  if (ftruncate(ret, length) < 0) {
+    XELOGE("ftruncate({}, 0x{:X}) failed: {} ({})", backing_path, length,
+           strerror(errno), errno);
+    close(ret);
+    unlink(backing_path.c_str());
+    return kFileMappingHandleInvalid;
+  }
+  if (unlink(backing_path.c_str()) != 0) {
+    XELOGW("unlink({}) failed: {} ({})", backing_path, strerror(errno), errno);
+  }
+  return ret;
+#else
+#if XE_PLATFORM_APPLE
   std::string shm_name = "/" + path.filename().string();
   if (shm_name.size() > 30) {
     std::size_t h = std::hash<std::string>{}(shm_name);
@@ -454,7 +522,8 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
   }
   InstallCleanupHandlers();
   return ret;
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
+#endif  // XE_PLATFORM_IOS
 #endif
 }
 
@@ -462,7 +531,11 @@ void CloseFileMappingHandle(FileMappingHandle handle,
                             const std::filesystem::path& path) {
   close(handle);
 #if !XE_PLATFORM_ANDROID
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_IOS
+  // iOS uses already-unlinked temporary file-backed mappings.
+  return;
+#endif
+#if XE_PLATFORM_APPLE
   std::string shm_name = "/" + path.filename().string();
   if (shm_name.size() > 30) {
     std::size_t h = std::hash<std::string>{}(shm_name);
@@ -492,7 +565,7 @@ void CloseFileMappingHandle(FileMappingHandle handle,
       g_shm_file_names.erase(it);
     }
   }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #endif
 }
 
@@ -531,7 +604,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
                    size_t length) {
   std::lock_guard guard(g_mapped_file_ranges_mutex);
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   uintptr_t unmap_begin = reinterpret_cast<uintptr_t>(base_address);
   uintptr_t unmap_end = unmap_begin + length;
 
@@ -570,7 +643,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
   // TODO: Implement partial file unmapping.
   assert_always("Error: Partial unmapping of files not yet supported.");
   return munmap(base_address, length) == 0;
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 }
 
 }  // namespace memory

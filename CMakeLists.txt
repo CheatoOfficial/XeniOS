@@ -1,15 +1,30 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_TRY_COMPILE_CONFIGURATION Release)
 
-# Must be set before project() so the toolchain bakes -mmacosx-version-min
-# into every compile/link; setting it later only updates the variable.
-if(APPLE)
+# Keep Apple platform selection explicit. CMake sets APPLE for both macOS and
+# iOS, but the two targets need different bundles, frameworks and dependencies.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  set(XE_PLATFORM_IOS TRUE)
+  set(XE_PLATFORM_MACOS FALSE)
+elseif(APPLE)
+  set(XE_PLATFORM_IOS FALSE)
+  set(XE_PLATFORM_MACOS TRUE)
+else()
+  set(XE_PLATFORM_IOS FALSE)
+  set(XE_PLATFORM_MACOS FALSE)
+endif()
+
+# Must be set before project() so the toolchain bakes the deployment target into
+# every compile/link; setting it later only updates the variable.
+if(XE_PLATFORM_IOS)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "18.0" CACHE STRING "Minimum iOS version")
+elseif(XE_PLATFORM_MACOS)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum macOS version")
 endif()
 
 # Suppress macOS ranlib warnings for empty object files. wxWidgets's vendored
 # libpng compiles Intel/MIPS/PowerPC sources that are empty on ARM64.
-if(APPLE)
+if(APPLE OR XE_PLATFORM_IOS)
   set(CMAKE_C_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
   set(CMAKE_CXX_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
   set(CMAKE_OBJC_ARCHIVE_FINISH "<CMAKE_RANLIB> -no_warning_for_no_symbols <TARGET>")
@@ -35,8 +50,8 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Detect target architecture.
 # - VS generator: CMAKE_GENERATOR_PLATFORM (from -A flag) takes priority.
-# - macOS: CMAKE_OSX_ARCHITECTURES — single-arch only (universal builds
-#   would need both backends compiled, which we don't support).
+# - Apple: CMAKE_OSX_ARCHITECTURES — single-arch only (universal builds would
+#   need both backends compiled, which we don't support).
 # - Ninja/Makefiles: CMAKE_SYSTEM_PROCESSOR (set via -DCMAKE_SYSTEM_NAME
 #   + -DCMAKE_SYSTEM_PROCESSOR for cross-compile, or auto-detected natively).
 if(CMAKE_GENERATOR_PLATFORM)
@@ -82,6 +97,7 @@ option(XENIA_ENABLE_PROFILER "Enable profiler (UI is Debug-only)" OFF)
 option(XENIA_ENABLE_ITRACE "Enable JIT per-instruction tracing to the log (slow)" OFF)
 option(XENIA_ENABLE_DTRACE "Enable JIT per-operation data tracing to the log (very slow)" OFF)
 option(XENIA_ENABLE_FTRACE "Enable JIT per-function-call tracing to the log" OFF)
+option(XENIA_ENABLE_IOS_MOLTENVK "Enable the optional MoltenVK backend in iOS builds" OFF)
 
 if(XENIA_ENABLE_PROFILER)
   # UI is Debug-only — shutdown dump spams the log otherwise.
@@ -113,7 +129,9 @@ set(CMAKE_STATIC_LINKER_FLAGS_CHECKED "${CMAKE_STATIC_LINKER_FLAGS_DEBUG}" CACHE
 
 if(WIN32)
   set(XE_PLATFORM_NAME "Windows")
-elseif(APPLE)
+elseif(XE_PLATFORM_IOS)
+  set(XE_PLATFORM_NAME "iOS")
+elseif(XE_PLATFORM_MACOS)
   set(XE_PLATFORM_NAME "macOS")
 else()
   set(XE_PLATFORM_NAME "Linux")
@@ -327,7 +345,7 @@ else()
   )
 
   if(APPLE)
-    # macOS-specific settings
+    # Apple-specific settings.
     add_compile_options(
       -Wno-unknown-warning-option
       $<$<COMPILE_LANGUAGE:CXX>:-Wno-shorten-64-to-32>
@@ -336,20 +354,27 @@ else()
       -fno-common
     )
     add_link_options(-Wl,-no_warn_duplicate_libraries)
-    if(XE_TARGET_X86_64)
+    if(XE_PLATFORM_MACOS AND XE_TARGET_X86_64)
       # macOS 64-bit binaries default to a 4GB __PAGEZERO, which makes every
       # address below 4GB unmapped. The x64 backend places its constant
       # table (PlaceConstData) sub-2GB and its guest trampolines sub-4GB,
       # so we shrink __PAGEZERO to one page to free up that range.
       add_link_options(-Wl,-pagezero_size,0x1000)
     endif()
-    link_libraries(
-      "-framework CoreFoundation"
-      "-framework Foundation"
-      "-framework IOKit"
-      dl
-      pthread
-    )
+    if(XE_PLATFORM_MACOS)
+      link_libraries(
+        "-framework CoreFoundation"
+        "-framework Foundation"
+        "-framework IOKit"
+        dl
+        pthread
+      )
+    elseif(XE_PLATFORM_IOS)
+      link_libraries(
+        "-framework CoreFoundation"
+        "-framework Foundation"
+      )
+    endif()
   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)

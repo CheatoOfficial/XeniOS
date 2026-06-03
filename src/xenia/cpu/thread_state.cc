@@ -9,6 +9,7 @@
 
 #include "xenia/cpu/thread_state.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -22,9 +23,11 @@ namespace xe {
 namespace cpu {
 
 thread_local ThreadState* thread_state_ = nullptr;
+std::atomic<bool> g_logged_context_fallback{false};
 
 static void* AllocateContext() {
   size_t granularity = xe::memory::allocation_granularity();
+  size_t allocation_size = granularity + sizeof(ppc::PPCContext);
   for (unsigned pos32 = 0x40; pos32 < 8192; ++pos32) {
     /*
         we want our register which points to the context to have 0xE0000000 in
@@ -41,14 +44,31 @@ static void* AllocateContext() {
     uintptr_t context_pre =
         ((static_cast<uint64_t>(pos32) << 32) | 0xE0000000) - granularity;
 
-    void* p = memory::AllocFixed(
-        (void*)context_pre, granularity + sizeof(ppc::PPCContext),
-        memory::AllocationType::kReserveCommit, memory::PageAccess::kReadWrite);
+    void* p = memory::AllocFixed((void*)context_pre, allocation_size,
+                                 memory::AllocationType::kReserveCommit,
+                                 memory::PageAccess::kReadWrite);
     if (p) {
       return reinterpret_cast<char*>(p) +
              granularity;  // now we have a ctx ptr with the e0 constant in low,
                            // and one page allocated before it
     }
+  }
+
+  void* p = memory::AllocFixed(nullptr, allocation_size,
+                               memory::AllocationType::kReserveCommit,
+                               memory::PageAccess::kReadWrite);
+  if (p) {
+    auto* fallback_ctx = reinterpret_cast<char*>(p) + granularity;
+    bool expected = false;
+    if (g_logged_context_fallback.compare_exchange_strong(
+            expected, true, std::memory_order_relaxed)) {
+      XELOGW(
+          "AllocateContext: using fallback PPC context mapping at {:p} "
+          "(low32=0x{:08X})",
+          fallback_ctx,
+          static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fallback_ctx)));
+    }
+    return fallback_ctx;
   }
 
   assert_always("giving up on allocating context, likely leaking contexts");

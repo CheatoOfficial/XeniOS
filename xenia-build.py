@@ -557,17 +557,27 @@ def normalize_target_arch(value):
     raise ArgumentTypeError(
         f"unknown architecture '{value}' (expected: arm64, aarch64, a64, x64, amd64, x86_64, x86)")
 
+def normalize_target_os(value):
+    """Normalizes --target-os values to canonical names."""
+    v = value.lower()
+    if v in ("ios", "iphoneos"):
+        return "ios"
+    raise ArgumentTypeError(
+        f"unknown target OS '{value}' (expected: ios or iphoneos)")
+
 def is_amd64():
     return normalize_target_arch(platform.machine()) in ("x64", "x86_64", "amd64", "x86")
 
 def is_arm():
     return normalize_target_arch(platform.machine()) in ("x64", "x86_64", "amd64", "x86")
 
-def get_build_dir(target_arch=None):
+def get_build_dir(target_arch=None, target_os=None):
     """Returns the Ninja build directory for the given target architecture.
 
     Uses a separate directory when cross-compiling to avoid cache conflicts.
     """
+    if target_os == "ios":
+        return "build-ios"
     is_native_arm64 = platform.machine() in ("ARM64", "aarch64", "arm64")
     if target_arch == "arm64" and not is_native_arm64:
         return "build-arm64"
@@ -580,7 +590,9 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
                         disable_lto=False, enable_profiler=False,
                         enable_itrace=False, enable_dtrace=False,
                         enable_ftrace=False,
-                        target_arch=None, config=None):
+                        target_arch=None, target_os=None, config=None,
+                        build_dir=None, configuration_types=None,
+                        xcode_generate_schemes=False):
     """Runs `cmake` to (re)configure build/ from the source root.
 
     Uses Ninja Multi-Config by default on all platforms. On Linux the
@@ -595,6 +607,15 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     (arm64↔x86_64 via clang's -arch and CMAKE_OSX_ARCHITECTURES) into a
     separate build-<arch>/ tree; Linux rejects non-native target_arch.
     """
+    if target_os == "ios":
+        if sys.platform != "darwin":
+            print_error("--target-os=ios is only supported from macOS.")
+            return 1
+        if target_arch not in (None, "arm64"):
+            print_error("--target-os=ios only supports arm64 device builds.")
+            return 1
+        target_arch = "arm64"
+
     # Cross-compilation via --target-arch is only supported on Windows
     # (MSVC cross toolchain) and macOS (universal clang). On Linux it would
     # silently produce a native build in a differently-named directory.
@@ -610,7 +631,8 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
 
     if not generator:
         generator = "Ninja Multi-Config"
-    build_dir = get_build_dir(target_arch)
+    if not build_dir:
+        build_dir = get_build_dir(target_arch, target_os)
     args = [
         "cmake",
         "-S", ".",
@@ -623,7 +645,15 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
             f"-DCMAKE_C_COMPILER={c_compiler}",
             f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
         ]
-    if sys.platform == "darwin" and target_arch is not None:
+    if target_os == "ios":
+        args += [
+            "-DCMAKE_SYSTEM_NAME=iOS",
+            "-DCMAKE_SYSTEM_PROCESSOR=arm64",
+            "-DCMAKE_OSX_SYSROOT=iphoneos",
+            "-DCMAKE_OSX_ARCHITECTURES=arm64",
+            "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+        ]
+    elif sys.platform == "darwin" and target_arch is not None:
         # Apple clang is universal; CMAKE_OSX_ARCHITECTURES drives -arch.
         # We don't set CMAKE_SYSTEM_PROCESSOR here — without
         # CMAKE_SYSTEM_NAME, CMake re-derives it from the host. Our
@@ -686,6 +716,10 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     args += [f"-DXENIA_ENABLE_FTRACE={'ON' if enable_ftrace else 'OFF'}"]
     if config:
         args += [f"-DCMAKE_BUILD_TYPE={config.title()}"]
+    if configuration_types:
+        args += [f"-DCMAKE_CONFIGURATION_TYPES={configuration_types}"]
+    if xcode_generate_schemes:
+        args += ["-DCMAKE_XCODE_GENERATE_SCHEME=ON"]
     ret = subprocess.call(args)
     if ret == 0:
         generate_version_h(build_dir)
@@ -703,13 +737,13 @@ def get_build_bin_path(args):
       A full path for the bin folder.
     """
     if sys.platform == "darwin":
-        platform_name = "macosx"
+        platform_name = "iOS" if args.get("target_os") == "ios" else "macOS"
     elif sys.platform == "win32":
-        platform_name = "windows"
+        platform_name = "Windows"
     else:
-        platform_name = "linux"
-    build_dir = get_build_dir(args.get("target_arch"))
-    return os.path.join(self_path, build_dir, "bin", platform_name.capitalize(), args["config"].capitalize())
+        platform_name = "Linux"
+    build_dir = get_build_dir(args.get("target_arch"), args.get("target_os"))
+    return os.path.join(self_path, build_dir, "bin", platform_name, args["config"].capitalize())
 
 
 def create_clion_workspace():
@@ -826,6 +860,10 @@ class SetupCommand(Command):
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
                  "On Windows and macOS, non-native values enable cross-compilation "
                  "into a separate build-<arch>/ tree.")
+        self.parser.add_argument(
+            "--target-os", type=normalize_target_os, default=None,
+            help="Target OS override. Currently supports device-only iOS "
+                 "(ios/iphoneos) from macOS.")
 
     def execute(self, args, pass_args, cwd):
         print("Setting up the build environment...\n")
@@ -838,7 +876,8 @@ class SetupCommand(Command):
             print_warning("Git not available or not a repository. Dependencies may be missing.")
 
         print("\n- running cmake configure...")
-        ret = run_cmake_configure(target_arch=args.get("target_arch"))
+        ret = run_cmake_configure(target_arch=args.get("target_arch"),
+                                  target_os=args.get("target_os"))
         print_status(ResultStatus.SUCCESS if not ret else ResultStatus.FAILURE)
         return ret
 
@@ -926,9 +965,14 @@ class BaseBuildCommand(Command):
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
                  "On Windows and macOS, non-native values enable cross-compilation "
                  "into a separate build-<arch>/ tree.")
+        self.parser.add_argument(
+            "--target-os", type=normalize_target_os, default=None,
+            help="Target OS override. Currently supports device-only iOS "
+                 "(ios/iphoneos) from macOS.")
 
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
+        target_os = args.get("target_os")
         if not args["no_configure"]:
             print("- running cmake configure...")
             ret = run_cmake_configure(
@@ -940,13 +984,14 @@ class BaseBuildCommand(Command):
                 enable_dtrace=args["enable_dtrace"],
                 enable_ftrace=args["enable_ftrace"],
                 target_arch=target_arch,
+                target_os=target_os,
                 config=args["config"],
             )
             if ret:
                 return ret
             print("")
 
-        build_dir = get_build_dir(target_arch)
+        build_dir = get_build_dir(target_arch, target_os)
         print("- building (%s):%s..." % (
             "all" if not len(args["target"]) else ", ".join(args["target"]),
             args["config"]))
@@ -1532,6 +1577,10 @@ class DevenvCommand(Command):
                  "On Windows, non-native values enable cross-compilation into a "
                  "separate build-vs-<arch>/ tree.")
         self.parser.add_argument(
+            "--target-os", type=normalize_target_os, default=None,
+            help="Target OS override. Currently supports device-only iOS "
+                 "(ios/iphoneos) from macOS.")
+        self.parser.add_argument(
             "--config", choices=["checked", "debug", "release"],
             default="debug", type=str.lower,
             help="Build configuration the IDE solution is pinned to. The VS "
@@ -1540,6 +1589,9 @@ class DevenvCommand(Command):
 
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
+        target_os = args.get("target_os")
+        if sys.platform == "darwin" and target_os == "ios":
+            return self._launch_xcode_ios(args["config"])
         if sys.platform == "win32":
             return self._launch_visual_studio(target_arch, args["config"])
         # Non-Windows: CLion is the only IDE we know how to launch
@@ -1594,6 +1646,37 @@ class DevenvCommand(Command):
             return 1
         print(f"\n- launching devenv on {sln_path}...")
         shell_call(["devenv", sln_path])
+        return 0
+
+    def _launch_xcode_ios(self, config="debug"):
+        """Configures a separate Xcode iOS build tree, then opens it."""
+        if not has_bin("xcodebuild"):
+            print_error("Xcode command line tools are not available.")
+            return 1
+
+        build_dir = "build-ios-xcode"
+        config_title = config.title()
+        print(f"Configuring Xcode iOS build tree ({config_title}) in {build_dir}...")
+        ret = run_cmake_configure(
+            generator="Xcode",
+            target_arch="arm64",
+            target_os="ios",
+            build_dir=build_dir,
+            configuration_types="Checked;Debug;Release",
+            xcode_generate_schemes=True,
+        )
+        if ret != 0:
+            print_error("cmake configure failed for the Xcode iOS build tree")
+            return ret
+
+        project_path = os.path.join(build_dir, "xenia.xcodeproj")
+        if not os.path.exists(project_path):
+            print_error("cmake configured successfully but no xenia.xcodeproj was produced")
+            return 1
+
+        print(f"\n- launching Xcode on {project_path}...")
+        print("  Select the xenia-app scheme and a physical iOS device.")
+        shell_call(["open", project_path])
         return 0
 
 

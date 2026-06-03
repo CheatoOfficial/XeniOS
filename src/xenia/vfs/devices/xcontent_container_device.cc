@@ -49,7 +49,7 @@ XContentContainerDevice::CreateContentDevice(
     return nullptr;
   }
 
-  switch (header->content_metadata.volume_type) {
+  switch (header->content_metadata.volume_type_value()) {
     case XContentVolumeType::kStfs:
       return std::make_unique<StfsContainerDevice>(mount_path, host_path);
       break;
@@ -162,7 +162,8 @@ kernel::xam::XCONTENT_AGGREGATE_DATA XContentContainerDevice::content_header()
 
   data.device_id = 1;
   data.title_id = header_->content_metadata.execution_info.title_id;
-  data.content_type = header_->content_metadata.content_type;
+  data.content_type =
+      static_cast<XContentType>(header_->content_metadata.content_type_value());
 
   auto name = header_->content_metadata.display_name(XLanguage::kEnglish);
   if (name.empty()) {

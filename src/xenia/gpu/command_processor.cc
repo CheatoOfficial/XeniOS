@@ -14,6 +14,7 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 #include "xenia/config.h"
@@ -186,6 +187,12 @@ CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
 }
 
 CommandProcessor::~CommandProcessor() = default;
+
+#if XE_PLATFORM_IOS
+bool CommandProcessor::IsTitleStopRequestedIOS() const {
+  return kernel_state_ && kernel_state_->IsTitleStopRequestedIOS();
+}
+#endif  // XE_PLATFORM_IOS
 
 bool CommandProcessor::Initialize() {
   // Initialize the gamma ramps to their default (linear) values - taken from
@@ -508,9 +515,10 @@ void CommandProcessor::WorkerThreadMain() {
       // event is too high.
       PrepareForWait();
       uint32_t loop_count = 0;
+      constexpr uint32_t idle_spin_yields = 500;
       do {
         // If we spin around too much, revert to a "low-power" state.
-        if (loop_count > 500) {
+        if (loop_count >= idle_spin_yields) {
           constexpr int wait_time_ms = 2;
           xe::threading::Wait(write_ptr_index_event_.get(), true,
                               std::chrono::milliseconds(wait_time_ms));

@@ -27,8 +27,16 @@
 #include <TargetConditionals.h>
 #endif
 
-#if defined(TARGET_OS_MAC) && TARGET_OS_MAC
+#if defined(__APPLE__)
+#define XE_PLATFORM_APPLE 1
+#if (defined(TARGET_OS_IOS) && TARGET_OS_IOS) || \
+    (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+#define XE_PLATFORM_IOS 1
+#elif defined(TARGET_OS_MAC) && TARGET_OS_MAC
 #define XE_PLATFORM_MAC 1
+#else
+#error Unsupported Apple target OS.
+#endif
 #elif defined(WIN32) || defined(_WIN32)
 #define XE_PLATFORM_WIN32 1
 #elif defined(__ANDROID__)
@@ -95,9 +103,9 @@
 #include <x86intrin.h>
 #endif  // XE_PLATFORM_WIN32
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <libkern/OSByteOrder.h>
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
 #if XE_COMPILER_MSVC
 #define _XEPACKEDSCOPE(body) __pragma(pack(push, 1)) body __pragma(pack(pop));

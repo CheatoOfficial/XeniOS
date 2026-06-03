@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "xenia/base/math.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/ring_buffer.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/trace_writer.h"
@@ -472,6 +473,10 @@ class CommandProcessor {
     zpd_pending_retire_start_ms_ = 0;
     zpd_force_fake_fallback_ = false;
   }
+
+#if XE_PLATFORM_IOS
+  bool IsTitleStopRequestedIOS() const;
+#endif  // XE_PLATFORM_IOS
 
 #include "pm4_command_processor_declare.h"
 

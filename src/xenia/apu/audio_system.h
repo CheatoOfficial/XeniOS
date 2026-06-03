@@ -68,7 +68,7 @@ class AudioSystem {
   bool Save(ByteStream* stream);
   bool Restore(ByteStream* stream);
 
-  bool is_paused() const { return paused_; }
+  bool is_paused() const { return paused_.load(std::memory_order_acquire); }
   void Pause();
   void Resume();
 
@@ -116,7 +116,7 @@ class AudioSystem {
   std::unique_ptr<xe::threading::Event> shutdown_event_;
   xe::threading::WaitHandle* wait_handles_[kMaximumClientCount + 1];
 
-  bool paused_ = false;
+  std::atomic<bool> paused_ = false;
   threading::Fence pause_fence_;
   std::unique_ptr<threading::Event> resume_event_;
 };

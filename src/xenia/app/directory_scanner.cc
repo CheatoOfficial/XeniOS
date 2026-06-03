@@ -19,6 +19,7 @@
 #include "third_party/stb/stb_image.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/threading.h"
 #include "xenia/vfs/iso_metadata.h"
 #include "xenia/vfs/stfs_metadata.h"
 #include "xenia/vfs/xex_metadata.h"
@@ -173,6 +174,10 @@ size_t DirectoryScanner::CountResultsWithTitleId(
 }
 
 void DirectoryScanner::Run(std::filesystem::path root) {
+#if XE_PLATFORM_IOS
+  xe::threading::set_name("Directory Scanner");
+  xe::threading::set_current_thread_qos(xe::threading::ThreadQoS::kUtility);
+#endif
   XELOGI("DirectoryScanner: scan start, root='{}'", xe::path_to_utf8(root));
   std::error_code ec;
   if (!std::filesystem::is_directory(root, ec) || ec) {
@@ -219,6 +224,10 @@ void DirectoryScanner::Run(std::filesystem::path root) {
 }
 
 void DirectoryScanner::WorkerLoop() {
+#if XE_PLATFORM_IOS
+  xe::threading::set_name("Directory Scanner Worker");
+  xe::threading::set_current_thread_qos(xe::threading::ThreadQoS::kUtility);
+#endif
   while (true) {
     std::filesystem::path dir;
     {

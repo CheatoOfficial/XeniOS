@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <string>
 
+#include "xenia/base/platform.h"
 #include "xenia/base/threading.h"
 #include "xenia/kernel/kernel.h"
 #include "xenia/memory.h"
@@ -184,7 +185,13 @@ class XObject {
   Type type() const;
 
   // Returns the primary handle of this object.
-  X_HANDLE handle() const { return handles_[0]; }
+  X_HANDLE handle() const {
+#if XE_PLATFORM_IOS
+    return handles_.empty() ? 0 : handles_[0];
+#else
+    return handles_[0];
+#endif  // XE_PLATFORM_IOS
+  }
 
   // Returns all associated handles with this object.
   std::vector<X_HANDLE> handles() const { return handles_; }

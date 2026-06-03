@@ -33,9 +33,13 @@
 
 #include "xenia/base/logging.h"
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#endif
+
+#if XE_PLATFORM_IOS
+#include <pthread/qos.h>
 #endif
 
 #if XE_PLATFORM_LINUX
@@ -64,6 +68,26 @@
 
 namespace xe {
 namespace threading {
+
+#if XE_PLATFORM_IOS
+namespace {
+
+qos_class_t ToDarwinQos(ThreadQoS qos) {
+  switch (qos) {
+    case ThreadQoS::kDefault:
+      return QOS_CLASS_DEFAULT;
+    case ThreadQoS::kUtility:
+      return QOS_CLASS_UTILITY;
+    case ThreadQoS::kUserInitiated:
+      return QOS_CLASS_USER_INITIATED;
+    case ThreadQoS::kUserInteractive:
+      return QOS_CLASS_USER_INTERACTIVE;
+  }
+  return QOS_CLASS_DEFAULT;
+}
+
+}  // namespace
+#endif  // XE_PLATFORM_IOS
 
 #if XE_PLATFORM_ANDROID
 // May be null if no dynamically loaded functions are required.
@@ -118,8 +142,8 @@ enum class SignalType {
   k_Count
 };
 
-#if XE_PLATFORM_MAC
-// macOS lacks real-time signals (SIGRTMIN/SIGRTMAX). Use SIGUSR1/SIGUSR2.
+#if XE_PLATFORM_APPLE
+// Darwin lacks real-time signals (SIGRTMIN/SIGRTMAX). Use SIGUSR1/SIGUSR2.
 int GetSystemSignal(SignalType num) {
   switch (num) {
     case SignalType::kThreadSuspend:
@@ -181,7 +205,7 @@ void EnableAffinityConfiguration() {}
 // uint64_t ticks() { return mach_absolute_time(); }
 
 uint32_t current_thread_system_id() {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   return static_cast<uint32_t>(pthread_mach_thread_np(pthread_self()));
 #else
   return static_cast<uint32_t>(syscall(SYS_gettid));
@@ -212,7 +236,7 @@ void Sleep(std::chrono::microseconds duration) {
 void NanoSleep(int64_t duration) { Sleep(std::chrono::nanoseconds(duration)); }
 
 void NanoSleepPrecise(int64_t ns) {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   // Darwin's nanosleep can oversleep by 100-500us under load. Land precisely
   // on the deadline by using mach_wait_until for the bulk of the wait and
   // busy-waiting the last ~200us.
@@ -271,7 +295,7 @@ bool SetTlsValue(TlsHandle handle, uintptr_t value) {
 class PosixConditionBase {
  public:
   PosixConditionBase() {
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
     // Initialize as robust mutex to handle thread termination gracefully.
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -291,8 +315,8 @@ class PosixConditionBase {
   WaitResult Wait(std::chrono::milliseconds timeout) {
     bool executed;
     auto predicate = [this] { return this->signaled(); };
-#if XE_PLATFORM_MAC
-    // Standard locking on macOS (no robust mutex support).
+#if XE_PLATFORM_APPLE
+    // Standard locking on Apple platforms (no robust mutex support).
     std::unique_lock<std::mutex> lock(mutex_);
 #else
     // Handle robust mutex locking.
@@ -353,8 +377,8 @@ class PosixConditionBase {
       bool all_locked = true;
 
       for (size_t i = 0; i < handles.size(); ++i) {
-#if XE_PLATFORM_MAC
-        // macOS: no robust mutex support.
+#if XE_PLATFORM_APPLE
+        // Apple platforms: no robust mutex support.
         std::unique_lock<std::mutex> lk(handles[i]->mutex_, std::try_to_lock);
         if (!lk.owns_lock()) {
           all_locked = false;
@@ -467,7 +491,13 @@ class PosixCondition<Event> : public PosixConditionBase {
   bool Signal() override {
     auto lock = std::unique_lock(mutex_);
     signal_ = true;
-    cond_.notify_all();
+    // Manual-reset events must release all waiters while signaled. Auto-reset
+    // events consume one signal, so waking one waiter avoids broadcast churn.
+    if (manual_reset_) {
+      cond_.notify_all();
+    } else {
+      cond_.notify_one();
+    }
     return true;
   }
 
@@ -687,9 +717,17 @@ class PosixCondition<Thread> final : public PosixConditionBase {
         }
       }
 
+#if XE_PLATFORM_IOS
+      // Xenia uses raw pthreads, which Xcode reports as QoS Unavailable unless
+      // a Darwin QoS class is attached. Use Default here so ordinary Xenia
+      // threads get normal scheduler treatment and higher-priority iOS paths
+      // can opt in explicitly from their own entrypoints.
+      (void)pthread_attr_set_qos_class_np(&attr, QOS_CLASS_DEFAULT, 0);
+#endif
+
       if (params.initial_priority != 0) {
         sched_param sched{};
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
         // Remap into Darwin's SCHED_FIFO range (see set_priority).
         static const int fifo_min = sched_get_priority_min(SCHED_FIFO);
         static const int fifo_max = sched_get_priority_max(SCHED_FIFO);
@@ -833,8 +871,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     WaitStarted();
     std::unique_lock<std::mutex> lock(state_mutex_);
     if (state_ != State::kUninitialized && state_ != State::kFinished) {
-#if XE_PLATFORM_MAC
-      // macOS can only set the current thread's name.
+#if XE_PLATFORM_APPLE
+      // Darwin can only set the current thread's name.
       if (pthread_self() == thread_) {
         pthread_setname_np(std::string(name).c_str());
       }
@@ -859,7 +897,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 #endif
 
   uint32_t system_id() const {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
     return static_cast<uint32_t>(pthread_mach_thread_np(thread_));
 #else
     return static_cast<uint32_t>(thread_);
@@ -868,8 +906,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
   uint64_t affinity_mask() const {
     WaitStarted();
-#if XE_PLATFORM_MAC
-    // Thread affinity is not supported on macOS.
+#if XE_PLATFORM_APPLE
+    // Thread affinity is not supported on Apple platforms.
     return 0;
 #else
     cpu_set_t cpu_set;
@@ -895,8 +933,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
 
   void set_affinity_mask(uint64_t mask) const {
     WaitStarted();
-#if XE_PLATFORM_MAC
-    // Thread affinity is not supported on macOS.
+#if XE_PLATFORM_APPLE
+    // Thread affinity is not supported on Apple platforms.
     (void)mask;
     return;
 #else
@@ -936,7 +974,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (ret != 0) {
       return -1;
     }
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
     // Reverse the mapping applied in set_priority so callers see xenia-space
     // values 1..32 regardless of Darwin's SCHED_FIFO range (typically 15..47).
     static const int fifo_min = sched_get_priority_min(SCHED_FIFO);
@@ -957,7 +995,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (!fifo_failed_) {
 #endif
       sched_param param{};
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       // Xenia's POSIX ThreadPriority tiers are 1/8/16/24/32. Darwin's
       // SCHED_FIFO range is typically 15..47, so linearly remap xenia 1..32
       // into that range to keep all five tiers distinct and monotonically
@@ -1005,8 +1043,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     WaitStarted();
     std::unique_lock lock(callback_mutex_);
     user_callback_ = std::move(callback);
-#if XE_PLATFORM_MAC
-    // No pthread_sigqueue on macOS, use pthread_kill (no si_value payload).
+#if XE_PLATFORM_APPLE
+    // No pthread_sigqueue on Apple platforms; use pthread_kill without payload.
     pthread_kill(thread_, GetSystemSignal(SignalType::kThreadUserCallback));
 #elif XE_PLATFORM_ANDROID
     sigval value{};
@@ -1120,7 +1158,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
       cond_.notify_all();
     }
     if (is_current_thread) {
-#if XE_PLATFORM_MAC && defined(__aarch64__)
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && defined(__aarch64__)
       pthread_jit_write_protect_np(1);
 #endif
       pthread_exit(reinterpret_cast<void*>(exit_code));
@@ -1508,6 +1546,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 #endif
   threading::set_name("");
+#if XE_PLATFORM_IOS
+  threading::set_current_thread_qos(ThreadQoS::kDefault);
+#endif
 
   auto start_data = static_cast<ThreadStartData*>(parameter);
   assert_not_null(start_data);
@@ -1605,7 +1646,7 @@ void Thread::Exit(int exit_code) {
     current_thread_->Terminate(exit_code);
   } else {
     // Should only happen with the main thread
-#if XE_PLATFORM_MAC && defined(__aarch64__)
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && defined(__aarch64__)
     pthread_jit_write_protect_np(1);
 #endif
     pthread_exit(reinterpret_cast<void*>(exit_code));
@@ -1615,7 +1656,7 @@ void Thread::Exit(int exit_code) {
 }
 
 void set_name(const std::string_view name) {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   pthread_setname_np(std::string(name).c_str());
 #else
   pthread_setname_np(pthread_self(), std::string(name).c_str());
@@ -1626,6 +1667,12 @@ void set_name(const std::string_view name) {
 #endif
 #endif
 }
+
+#if XE_PLATFORM_IOS
+bool set_current_thread_qos(ThreadQoS qos) {
+  return pthread_set_qos_class_self_np(ToDarwinQos(qos), 0) == 0;
+}
+#endif  // XE_PLATFORM_IOS
 
 static void signal_handler(int signal, siginfo_t* info, void* /*context*/) {
   switch (GetSystemSignalType(signal)) {
@@ -1638,8 +1685,8 @@ static void signal_handler(int signal, siginfo_t* info, void* /*context*/) {
       current_thread_->WaitSuspended();
     } break;
     case SignalType::kThreadUserCallback: {
-#if XE_PLATFORM_MAC
-      // macOS: no si_value payload when using pthread_kill.
+#if XE_PLATFORM_APPLE
+      // Apple platforms: no si_value payload when using pthread_kill.
       if (alertable_state_ && current_thread_) {
         auto& condition =
             static_cast<PosixCondition<Thread>&>(current_thread_->condition());

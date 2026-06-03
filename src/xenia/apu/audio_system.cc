@@ -9,6 +9,8 @@
 
 #include "xenia/apu/audio_system.h"
 
+#include <cstring>
+
 #include "xenia/apu/apu_flags.h"
 #include "xenia/apu/audio_driver.h"
 #include "xenia/apu/xma_decoder.h"
@@ -35,7 +37,21 @@
 // and let the normal AudioSystem handling take it, to prevent duplicate
 // implementations. They can be found in xboxkrnl_audio_xma.cc
 
-DEFINE_uint32(apu_max_queued_frames, 8,
+namespace {
+#if XE_PLATFORM_IOS
+constexpr uint32_t kApuQueuedFramesDefault = 32;
+constexpr uint32_t kApuQueuedFramesMinimum = 32;
+
+bool IsTitleStopRequested(xe::cpu::Processor* processor) {
+  return processor && processor->title_stop_requested_ios();
+}
+#else
+constexpr uint32_t kApuQueuedFramesDefault = 8;
+constexpr uint32_t kApuQueuedFramesMinimum = 4;
+#endif  // XE_PLATFORM_IOS
+}  // namespace
+
+DEFINE_uint32(apu_max_queued_frames, kApuQueuedFramesDefault,
               "Allows changing max buffered audio frames to reduce audio "
               "delay. Lowering this value might cause performance issues. "
               "Value range: [4-64]",
@@ -97,11 +113,26 @@ X_STATUS AudioSystem::Setup(kernel::KernelState* kernel_state) {
 }
 
 void AudioSystem::WorkerThreadMain() {
+#if XE_PLATFORM_IOS
+  if (xe::threading::set_current_thread_qos(
+          xe::threading::ThreadQoS::kUserInteractive)) {
+    XELOGI("iOS: Audio Worker QoS set to user-interactive");
+  } else {
+    XELOGW("iOS: Audio Worker QoS request failed");
+  }
+#endif  // XE_PLATFORM_IOS
+
   // Initialize driver and ringbuffer.
   Initialize();
 
   // Main run loop.
   while (worker_running_) {
+#if XE_PLATFORM_IOS
+    if (IsTitleStopRequested(processor_)) {
+      break;
+    }
+#endif  // XE_PLATFORM_IOS
+
     // These handles signify the number of submitted samples. Once we reach
     // 64 samples, we wait until our audio backend releases a semaphore
     // (signaling a sample has finished playing)
@@ -112,10 +143,14 @@ void AudioSystem::WorkerThreadMain() {
       continue;
     }
 
+    if (!worker_running_) {
+      break;
+    }
+
     if (result.first == threading::WaitResult::kSuccess &&
         result.second == kMaximumClientCount) {
       // Shutdown event signaled.
-      if (paused_) {
+      if (paused_.load(std::memory_order_acquire)) {
         pause_fence_.Signal();
         threading::Wait(resume_event_.get(), false);
       }
@@ -141,12 +176,24 @@ void AudioSystem::WorkerThreadMain() {
         }
       }
 
+#if XE_PLATFORM_IOS
+      if (IsTitleStopRequested(processor_)) {
+        break;
+      }
+#endif  // XE_PLATFORM_IOS
+
       if (client_callback) {
         SCOPE_profile_cpu_i("apu", "xe::apu::AudioSystem->client_callback");
         uint64_t args[] = {client_callback_arg};
         processor_->Execute(worker_thread_->thread_state(), client_callback,
                             args, xe::countof(args));
       }
+
+#if XE_PLATFORM_IOS
+      if (IsTitleStopRequested(processor_)) {
+        break;
+      }
+#endif  // XE_PLATFORM_IOS
 
       pumped = true;
     }
@@ -181,6 +228,12 @@ void AudioSystem::Initialize() {}
 void AudioSystem::Shutdown() {
   worker_running_ = false;
   shutdown_event_->Set();
+#if XE_PLATFORM_IOS
+  resume_event_->Set();
+  for (size_t i = 0; i < kMaximumClientCount; ++i) {
+    client_semaphores_[i]->Release(1, nullptr);
+  }
+#endif  // XE_PLATFORM_IOS
   if (worker_thread_) {
     worker_thread_->Wait(0, 0, 0, nullptr);
     worker_thread_.reset();
@@ -411,10 +464,9 @@ bool AudioSystem::Restore(ByteStream* stream) {
 }
 
 void AudioSystem::Pause() {
-  if (paused_) {
+  if (paused_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
-  paused_ = true;
 
   // Kind of a hack, but it works.
   shutdown_event_->Set();
@@ -424,10 +476,9 @@ void AudioSystem::Pause() {
 }
 
 void AudioSystem::Resume() {
-  if (!paused_) {
+  if (!paused_.exchange(false, std::memory_order_acq_rel)) {
     return;
   }
-  paused_ = false;
 
   resume_event_->Set();
 

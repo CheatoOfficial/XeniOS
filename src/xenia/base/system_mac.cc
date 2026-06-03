@@ -9,23 +9,36 @@
 
 #include <cstdlib>
 
+#include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/system.h"
 
 namespace xe {
 
 void LaunchWebBrowser(const std::string_view url) {
+#if XE_PLATFORM_IOS
+  XELOGW("LaunchWebBrowser is not supported on iOS: {}", url);
+#else
   auto cmd = std::string("open ");
   cmd.append(url);
   system(cmd.c_str());
+#endif
 }
 
 void LaunchFileExplorer(const std::filesystem::path& path) {
+#if XE_PLATFORM_IOS
+  XELOGW("LaunchFileExplorer is not supported on iOS: {}", path.string());
+#else
   auto cmd = std::string("open ");
   cmd.append(path.string());
   system(cmd.c_str());
+#endif
 }
 
 void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
+#if XE_PLATFORM_IOS
+  XELOGW("ShowSimpleMessageBox is not supported on iOS: {}", message);
+#else
   const char* icon;
   switch (type) {
     case SimpleMessageBoxType::Help:
@@ -55,6 +68,7 @@ void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
   cmd += icon;
   cmd += " buttons {\"OK\"} default button \"OK\" with title \"Xenia\"'";
   system(cmd.c_str());
+#endif
 }
 
 bool SetProcessPriorityClass(const uint32_t priority_class) { return true; }

@@ -13,7 +13,7 @@
 #include <cstring>
 #include <random>
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <sys/mman.h>
 #endif
 
@@ -107,8 +107,8 @@ void CrashDump() {
 }
 
 static inline bool ShouldSkipHostCommit(const BaseHeap& heap) {
-#if XE_PLATFORM_MAC
-  // On macOS ARM64 the host page size is 16 KB, and mprotect-based "commit"
+#if XE_PLATFORM_APPLE
+  // On Apple ARM64 the host page size is 16 KB, and mprotect-based "commit"
   // creates fragmentation in the 0..512 MB parent physical heap.
   if (heap.heap_type() == HeapType::kGuestPhysical && heap.heap_base() == 0x0 &&
       xe::memory::page_size() > 0x1000) {
@@ -215,9 +215,9 @@ bool Memory::Initialize() {
     return false;
   }
 
-#if XE_PLATFORM_MAC
-  // On macOS, reserve a contiguous region chosen by the OS, then map views
-  // into it at fixed offsets.
+#if XE_PLATFORM_APPLE
+  // On Apple platforms, reserve a contiguous region chosen by the OS, then map
+  // views into it at fixed offsets.
   if (MapViewsMac()) {
     XELOGE("Unable to find a continuous block in the 64bit address space.");
     assert_always();
@@ -386,7 +386,7 @@ static const struct {
         0x0000000100000000ull,
     },
 };
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 int Memory::MapViewsMac() {
   assert_true(xe::countof(map_info) == xe::countof(views_.all_views));
 
@@ -432,7 +432,7 @@ int Memory::MapViewsMac() {
 
   return 0;
 }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
 int Memory::MapViews(uint8_t* mapping_base) {
   assert_true(xe::countof(map_info) == xe::countof(views_.all_views));
@@ -1650,7 +1650,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
       if (old_protect) {
         *old_protect = page_table_[start_page_number].current_protect;
       }
-#if !XE_PLATFORM_MAC
+#if !XE_PLATFORM_APPLE
       return false;
 #endif
     }

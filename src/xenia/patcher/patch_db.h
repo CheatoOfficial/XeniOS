@@ -145,6 +145,7 @@ struct BundledPatchFile {
   PatchFileEntry entry;
 };
 
+std::vector<BundledPatchFile> EnumerateBundledPatches();
 std::vector<BundledPatchFile> EnumerateBundledPatchesForTitle(
     uint32_t title_id);
 

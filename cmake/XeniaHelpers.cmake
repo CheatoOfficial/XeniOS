@@ -3,7 +3,7 @@
 include(CMakeParseArguments)
 
 set(XE_PLATFORM_SUFFIXES
-  _win _linux _posix _gnulinux _x11 _gtk _android _mac _amd64 _x64 _arm64
+  _win _linux _posix _gnulinux _x11 _gtk _android _mac _ios _amd64 _x64 _arm64
 )
 
 # xe_platform_sources(target base_path [RECURSIVE])
@@ -55,7 +55,14 @@ function(xe_platform_sources target base_path)
       "${base_path}/*_win.h"
       "${base_path}/*_win.cc"
     )
-  elseif(APPLE)
+  elseif(XE_PLATFORM_IOS)
+    file(${glob_mode} _plat_sources
+      "${base_path}/*_posix.h"
+      "${base_path}/*_posix.cc"
+      "${base_path}/*_ios.h"
+      "${base_path}/*_ios.cc"
+    )
+  elseif(XE_PLATFORM_MACOS)
     file(${glob_mode} _plat_sources
       "${base_path}/*_posix.h"
       "${base_path}/*_posix.cc"
@@ -106,6 +113,8 @@ function(xe_target_defaults target)
   )
   if(MSVC)
     target_compile_options(${target} PRIVATE /WX)
+  elseif(XCODE AND XE_PLATFORM_IOS)
+    target_compile_options(${target} PRIVATE -w)
   elseif(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${target} PRIVATE -Werror)
   endif()
@@ -327,6 +336,13 @@ function(xe_shader_rules_metal target shader_dir)
   set(_generated_root "${PROJECT_BINARY_DIR}/generated")
   set(_bytecode_dir "${_generated_root}/${_rel_dir}/bytecode/metal")
   set(_valid_stages vs ps cs)
+  set(_metal_args --msl)
+  if(XE_PLATFORM_IOS)
+    list(APPEND _metal_args
+      --metal-sdk iphoneos
+      --metal-std ios-metal2.3
+      --metal-min-version-flag "-miphoneos-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
   set(_outputs)
   file(MAKE_DIRECTORY "${_bytecode_dir}")
   foreach(src ${_sources})
@@ -350,7 +366,7 @@ function(xe_shader_rules_metal target shader_dir)
     list(APPEND _outputs "${_out}")
     add_custom_command(
       OUTPUT "${_out}"
-      COMMAND $<TARGET_FILE:xenia-shader-cc> --msl --depfile "${_dep}"
+      COMMAND $<TARGET_FILE:xenia-shader-cc> ${_metal_args} --depfile "${_dep}"
               "${src}" "${_out}"
       DEPENDS "${src}" xenia-shader-cc
       DEPFILE "${_dep}"

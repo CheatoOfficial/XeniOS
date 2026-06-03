@@ -38,7 +38,7 @@ void StfsContainerDevice::SetupContainer() {
 XContentContainerDevice::Result StfsContainerDevice::LoadHostFiles() {
   const XContentContainerHeader* header = GetContainerHeader();
 
-  if (header->content_metadata.data_file_count > 0) {
+  if (header->content_metadata.data_file_count_value() > 0) {
     XELOGW("STFS container is not a single file. Loading might fail!");
   }
 
