@@ -14,6 +14,67 @@
 
 #include "xenia/base/logging.h"
 
+namespace {
+
+NSMutableArray<NSURL*>* XeniaActiveFilePickerSecurityScopedURLs() {
+  static NSMutableArray<NSURL*>* urls = [[NSMutableArray alloc] init];
+  return urls;
+}
+
+void XeniaClearActiveFilePickerSecurityScopes() {
+  NSMutableArray<NSURL*>* urls = XeniaActiveFilePickerSecurityScopedURLs();
+  for (NSURL* url in urls) {
+    [url stopAccessingSecurityScopedResource];
+  }
+  [urls removeAllObjects];
+}
+
+UIViewController* XeniaFilePickerTopPresenter() {
+  UIApplication* application = [UIApplication sharedApplication];
+  UIWindow* key_window = nil;
+  for (UIScene* scene in application.connectedScenes) {
+    if (![scene isKindOfClass:[UIWindowScene class]] ||
+        scene.activationState != UISceneActivationStateForegroundActive) {
+      continue;
+    }
+    UIWindowScene* window_scene = (UIWindowScene*)scene;
+    for (UIWindow* window in window_scene.windows) {
+      if (window.isKeyWindow) {
+        key_window = window;
+        break;
+      }
+    }
+    if (key_window) {
+      break;
+    }
+  }
+  if (!key_window) {
+    for (UIScene* scene in application.connectedScenes) {
+      if (![scene isKindOfClass:[UIWindowScene class]]) {
+        continue;
+      }
+      UIWindowScene* window_scene = (UIWindowScene*)scene;
+      key_window = window_scene.windows.firstObject;
+      if (key_window) {
+        break;
+      }
+    }
+  }
+
+  UIViewController* presenter = key_window.rootViewController;
+  while (presenter.presentedViewController) {
+    presenter = presenter.presentedViewController;
+  }
+  if ([presenter isKindOfClass:[UINavigationController class]]) {
+    presenter = ((UINavigationController*)presenter).visibleViewController;
+  } else if ([presenter isKindOfClass:[UITabBarController class]]) {
+    presenter = ((UITabBarController*)presenter).selectedViewController;
+  }
+  return presenter;
+}
+
+}  // namespace
+
 // Delegate for handling document picker results.
 @interface XeniaDocumentPickerDelegate : NSObject <UIDocumentPickerDelegate>
 @property(nonatomic, assign) bool completed;
@@ -95,15 +156,11 @@ bool IOSFilePicker::Show(Window* parent_window) {
     delegate.cancelled = false;
     picker.delegate = delegate;
 
-    // Present the picker from the root view controller.
-    UIViewController* presenting_vc = nil;
-    UIWindowScene* scene =
-        (UIWindowScene*)[[UIApplication sharedApplication].connectedScenes anyObject];
-    if (scene) {
-      presenting_vc = scene.keyWindow.rootViewController;
-    }
+    UIViewController* presenting_vc = XeniaFilePickerTopPresenter();
     if (!presenting_vc) {
       XELOGE("IOSFilePicker: No presenting view controller available");
+      [picker release];
+      [delegate release];
       return false;
     }
 
@@ -118,18 +175,28 @@ bool IOSFilePicker::Show(Window* parent_window) {
     }
 
     if (delegate.cancelled || !delegate.selectedURLs || delegate.selectedURLs.count == 0) {
+      [picker release];
+      [delegate release];
       return false;
     }
 
+    XeniaClearActiveFilePickerSecurityScopes();
     selected_files_.clear();
     for (NSURL* url in delegate.selectedURLs) {
-      // Start security-scoped access for files outside the app sandbox.
-      [url startAccessingSecurityScopedResource];
+      if (!url.fileURL) {
+        continue;
+      }
+      if ([url startAccessingSecurityScopedResource]) {
+        [XeniaActiveFilePickerSecurityScopedURLs() addObject:url];
+      }
       std::string path_str = std::string([url.path UTF8String]);
       selected_files_.push_back(std::filesystem::path(path_str));
     }
 
-    return !selected_files_.empty();
+    const bool has_selection = !selected_files_.empty();
+    [picker release];
+    [delegate release];
+    return has_selection;
   }
 }
 

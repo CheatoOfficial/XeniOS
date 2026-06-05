@@ -35,10 +35,61 @@ NSString* XeniaBundleValue(NSString* key) {
   return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
+static NSString* const kXeniaAppIconLightName = @"AppIconLight";
+static NSString* const kXeniaAppIconDarkName = @"AppIconDark";
+
+NSString* XeniaAppIconNameForRow(NSInteger row) {
+  if (row == 1) {
+    return kXeniaAppIconLightName;
+  }
+  if (row == 2) {
+    return kXeniaAppIconDarkName;
+  }
+  return nil;
+}
+
+NSString* XeniaAppIconTitleForRow(NSInteger row) {
+  if (row == 1) {
+    return @"Light";
+  }
+  if (row == 2) {
+    return @"Dark";
+  }
+  return @"Automatic";
+}
+
+NSString* XeniaAppIconSubtitleForRow(NSInteger row) {
+  if (row == 1) {
+    return @"Use the light icon.";
+  }
+  if (row == 2) {
+    return @"Use the dark icon.";
+  }
+  return @"Use the adaptive primary icon.";
+}
+
+NSString* XeniaAppIconSymbolForRow(NSInteger row) {
+  if (row == 1) {
+    return @"sun.max.fill";
+  }
+  if (row == 2) {
+    return @"moon.fill";
+  }
+  return @"app.fill";
+}
+
+BOOL XeniaAppIconNamesEqual(NSString* lhs, NSString* rhs) {
+  if (!lhs.length && !rhs.length) {
+    return YES;
+  }
+  return [lhs isEqualToString:rhs];
+}
+
 }  // namespace
 
 typedef NS_ENUM(NSInteger, XeniaSettingsHubCategoryKind) {
   XeniaSettingsHubCategoryKindProfile,
+  XeniaSettingsHubCategoryKindAppearance,
   XeniaSettingsHubCategoryKindDisplay,
   XeniaSettingsHubCategoryKindGraphics,
   XeniaSettingsHubCategoryKindAudio,
@@ -50,7 +101,10 @@ typedef NS_ENUM(NSInteger, XeniaSettingsHubCategoryKind) {
   XeniaSettingsHubCategoryKindDiagnostics,
   XeniaSettingsHubCategoryKindAdvancedDebug,
   XeniaSettingsHubCategoryKindAllCvars,
+  XeniaSettingsHubCategoryKindCacheCleanup,
   XeniaSettingsHubCategoryKindLibrary,
+  XeniaSettingsHubCategoryKindGameContent,
+  XeniaSettingsHubCategoryKindPerGameSettings,
   XeniaSettingsHubCategoryKindAutomation,
   XeniaSettingsHubCategoryKindAbout,
 };
@@ -255,6 +309,126 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
   }
 }
 
+@interface XeniaSettingsAppearanceViewController : XESheetTableViewController
+- (instancetype)initWithStatusHandler:(XeniaSettingsStatusHandler)on_status;
+@end
+
+@implementation XeniaSettingsAppearanceViewController {
+  XeniaSettingsStatusHandler on_status_;
+}
+
+- (instancetype)initWithStatusHandler:(XeniaSettingsStatusHandler)on_status {
+  self = [super initWithStyle:UITableViewStyleInsetGrouped];
+  if (self) {
+    self.title = @"Appearance";
+    on_status_ = [on_status copy];
+  }
+  return self;
+}
+
+- (void)dealloc {
+  [on_status_ release];
+  [super dealloc];
+}
+
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  self.view.backgroundColor = [UIColor systemBackgroundColor];
+  self.tableView.rowHeight = UITableViewAutomaticDimension;
+  self.tableView.estimatedRowHeight = 64.0;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
+  return 1;
+}
+
+- (NSInteger)tableView:(UITableView* __unused)tableView
+    numberOfRowsInSection:(NSInteger)__unused section {
+  return 3;
+}
+
+- (NSString*)tableView:(UITableView* __unused)tableView
+    titleForHeaderInSection:(NSInteger)__unused section {
+  return @"App Icon";
+}
+
+- (UITableViewCell*)tableView:(UITableView*)tableView
+        cellForRowAtIndexPath:(NSIndexPath*)indexPath {
+  static NSString* const kCellIdentifier = @"XeniaSettingsAppearanceIconCell";
+  UITableViewCell* cell = [tableView dequeueReusableCellWithIdentifier:kCellIdentifier];
+  if (!cell) {
+    cell = [[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                   reuseIdentifier:kCellIdentifier] autorelease];
+    cell.textLabel.numberOfLines = 1;
+    cell.detailTextLabel.numberOfLines = 2;
+  }
+
+  const NSInteger row = indexPath.row;
+  NSString* icon_name = XeniaAppIconNameForRow(row);
+  NSString* current_name = [[UIApplication sharedApplication] alternateIconName];
+  const BOOL selected = XeniaAppIconNamesEqual(current_name, icon_name);
+  const BOOL supported = [[UIApplication sharedApplication] supportsAlternateIcons];
+
+  cell.textLabel.text = XeniaAppIconTitleForRow(row);
+  cell.textLabel.textColor = supported ? [XeniaTheme textPrimary] : [XeniaTheme textSecondary];
+  cell.detailTextLabel.text = XeniaAppIconSubtitleForRow(row);
+  cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
+  xe_apply_label_font(cell.textLabel, UIFontTextStyleBody, 17.0, UIFontWeightSemibold);
+  xe_apply_label_font(cell.detailTextLabel, UIFontTextStyleSubheadline, 15.0, UIFontWeightRegular);
+  cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+  cell.selectionStyle =
+      supported ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
+
+  UIImageSymbolConfiguration* icon_config =
+      [UIImageSymbolConfiguration configurationWithPointSize:20.0
+                                                      weight:UIImageSymbolWeightSemibold];
+  UIImage* image = [UIImage systemImageNamed:XeniaAppIconSymbolForRow(row)
+                           withConfiguration:icon_config];
+  cell.imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+  cell.imageView.tintColor =
+      row == 2 ? [XeniaTheme sectionIconIndigo] : [XeniaTheme sectionIconOrange];
+  XEApplyAccessibility(cell, cell.textLabel.text, cell.detailTextLabel.text,
+                       supported ? @"Selects this app icon." : nil,
+                       supported ? UIAccessibilityTraitButton : UIAccessibilityTraitStaticText);
+  return cell;
+}
+
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
+  [tableView deselectRowAtIndexPath:indexPath animated:YES];
+  UIApplication* application = [UIApplication sharedApplication];
+  if (!application.supportsAlternateIcons) {
+    if (on_status_) {
+      on_status_(@"This build does not include alternate app icons.");
+    }
+    return;
+  }
+
+  NSString* icon_name = XeniaAppIconNameForRow(indexPath.row);
+  if (XeniaAppIconNamesEqual(application.alternateIconName, icon_name)) {
+    return;
+  }
+
+  NSString* title = XeniaAppIconTitleForRow(indexPath.row);
+  [application setAlternateIconName:icon_name
+                  completionHandler:^(NSError* error) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                      if (error) {
+                        if (on_status_) {
+                          on_status_([NSString
+                              stringWithFormat:@"App icon: %@", error.localizedDescription]);
+                        }
+                        return;
+                      }
+                      [self.tableView reloadData];
+                      if (on_status_) {
+                        on_status_([NSString stringWithFormat:@"App icon set to %@.", title]);
+                      }
+                    });
+                  }];
+}
+
+@end
+
 @interface XeniaSettingsActionListItem : NSObject
 @property(nonatomic, assign) XeniaSettingsHubAction action;
 @property(nonatomic, assign) BOOL selectable;
@@ -410,6 +584,7 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
 @end
 
 @implementation XeniaSettingsControlsViewController {
+  NSArray* setup_items_;
   NSArray* layout_items_;
   XeniaSettingsHubActionHandler action_handler_;
 }
@@ -419,6 +594,16 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
   if (self) {
     self.title = @"Controls";
     UIColor* blue = [XeniaTheme sectionIconBlue];
+    setup_items_ = [@[
+      [XeniaSettingsActionListItem
+          infoItemWithTitle:@"Hardware Controllers"
+                   subtitle:@"Connect a controller before or during gameplay; XeniOS binds it automatically."
+                 symbolName:@"gamecontroller.fill"],
+      [XeniaSettingsActionListItem
+          infoItemWithTitle:@"Touch Controls"
+                   subtitle:@"Pick a game layout before launch, then use Edit Running Touch Layout for final placement."
+                 symbolName:@"hand.tap.fill"],
+    ] retain];
     layout_items_ = [@[
       [XeniaSettingsActionListItem
           itemWithAction:XeniaSettingsHubActionChooseGameTouchLayout
@@ -463,6 +648,7 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
 }
 
 - (void)dealloc {
+  [setup_items_ release];
   [layout_items_ release];
   [action_handler_ release];
   [super dealloc];
@@ -476,17 +662,23 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
-  return 2;
+  return 3;
 }
 
 - (NSInteger)tableView:(UITableView* __unused)tableView
  numberOfRowsInSection:(NSInteger)section {
-  return section == 0 ? static_cast<NSInteger>(layout_items_.count) : 1;
+  if (section == 0) {
+    return static_cast<NSInteger>(setup_items_.count);
+  }
+  return section == 1 ? static_cast<NSInteger>(layout_items_.count) : 1;
 }
 
 - (NSString*)tableView:(UITableView* __unused)tableView
     titleForHeaderInSection:(NSInteger)section {
-  return section == 0 ? @"Touch Layouts" : @"Touch Behavior";
+  if (section == 0) {
+    return @"Setup";
+  }
+  return section == 1 ? @"Touch Layouts" : @"Touch Behavior";
 }
 
 - (UITableViewCell*)tableView:(UITableView*)tableView
@@ -506,6 +698,12 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
   NSString* symbol_name = nil;
   UIColor* tint_color = nil;
   if (indexPath.section == 0) {
+    XeniaSettingsActionListItem* item = [setup_items_ objectAtIndex:indexPath.row];
+    title = item.title;
+    subtitle = item.subtitle;
+    symbol_name = item.symbolName;
+    tint_color = item.tintColor;
+  } else if (indexPath.section == 1) {
     XeniaSettingsActionListItem* item = [layout_items_ objectAtIndex:indexPath.row];
     title = item.title;
     subtitle = item.subtitle;
@@ -534,15 +732,24 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
                            withConfiguration:icon_config];
   cell.imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
   cell.imageView.tintColor = tint_color;
-  cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-  XEApplyAccessibility(cell, title, subtitle, @"Opens this controls option.",
-                       UIAccessibilityTraitButton);
+  const BOOL selectable = indexPath.section != 0;
+  cell.accessoryType = selectable ? UITableViewCellAccessoryDisclosureIndicator
+                                  : UITableViewCellAccessoryNone;
+  cell.selectionStyle = selectable ? UITableViewCellSelectionStyleDefault
+                                   : UITableViewCellSelectionStyleNone;
+  XEApplyAccessibility(cell, title, subtitle,
+                       selectable ? @"Opens this controls option." : nil,
+                       selectable ? UIAccessibilityTraitButton
+                                  : UIAccessibilityTraitStaticText);
   return cell;
 }
 
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
   if (indexPath.section == 0) {
+    return;
+  }
+  if (indexPath.section == 1) {
     XeniaSettingsActionListItem* item = [layout_items_ objectAtIndex:indexPath.row];
     if (action_handler_) {
       action_handler_(item.action);
@@ -708,7 +915,7 @@ titleForHeaderInSection:(NSInteger)section {
   UIColor* gray = [XeniaTheme sectionIconGray];
 
   XeniaSettingsHubSection* account =
-      [XeniaSettingsHubSection sectionWithTitle:@"Account"
+      [XeniaSettingsHubSection sectionWithTitle:@"Profile"
                                           items:@[
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindProfile
@@ -718,8 +925,8 @@ titleForHeaderInSection:(NSInteger)section {
                                                    tintColor:mint],
                                           ]];
 
-  XeniaSettingsHubSection* general =
-      [XeniaSettingsHubSection sectionWithTitle:@"General"
+  XeniaSettingsHubSection* gameplay =
+      [XeniaSettingsHubSection sectionWithTitle:@"Gameplay"
                                           items:@[
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindDisplay
@@ -727,12 +934,6 @@ titleForHeaderInSection:(NSInteger)section {
                                                     subtitle:@"Presenter output, aspect, and frame pacing."
                                                   symbolName:@"display"
                                                    tintColor:indigo],
-                                            [XeniaSettingsHubItem
-                                                itemWithKind:XeniaSettingsHubCategoryKindGraphics
-                                                       title:@"Graphics"
-                                                    subtitle:@"Backend, quality, shader cache, and render target path."
-                                                  symbolName:@"gearshape.2.fill"
-                                                   tintColor:purple],
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindAudio
                                                        title:@"Audio"
@@ -742,20 +943,55 @@ titleForHeaderInSection:(NSInteger)section {
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindControls
                                                        title:@"Controls"
-                                                    subtitle:@"Touch layouts, haptics, overlay visibility, and look tuning."
+                                                    subtitle:@"Controller setup, touch layouts, haptics, and look tuning."
                                                   symbolName:@"gamecontroller.fill"
                                                    tintColor:blue],
                                           ]];
 
-  XeniaSettingsHubSection* performance =
-      [XeniaSettingsHubSection sectionWithTitle:@"Performance"
+  XeniaSettingsHubSection* graphics_performance =
+      [XeniaSettingsHubSection sectionWithTitle:@"Graphics & Performance"
                                           items:@[
                                             [XeniaSettingsHubItem
+                                                itemWithKind:XeniaSettingsHubCategoryKindGraphics
+                                                       title:@"Graphics"
+                                                    subtitle:@"Backend, quality, shader pipeline, and render target path."
+                                                  symbolName:@"gearshape.2.fill"
+                                                   tintColor:purple],
+                                            [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindPerformance
-                                                       title:@"Caching & QoS"
-                                                    subtitle:@"Shader compilation, caches, and experimental thread priority."
+                                                       title:@"Performance"
+                                                    subtitle:@"Shader compilation behavior and experimental iOS thread QoS."
                                                   symbolName:@"bolt.fill"
                                                    tintColor:orange],
+                                            [XeniaSettingsHubItem
+                                                itemWithKind:XeniaSettingsHubCategoryKindCacheCleanup
+                                                       title:@"Cache Cleanup"
+                                                    subtitle:@"Clear current-title or all-title persistent shader caches."
+                                                  symbolName:@"trash"
+                                                   tintColor:orange],
+                                          ]];
+
+  XeniaSettingsHubSection* games =
+      [XeniaSettingsHubSection sectionWithTitle:@"Games"
+                                          items:@[
+                                            [XeniaSettingsHubItem
+                                                itemWithKind:XeniaSettingsHubCategoryKindLibrary
+                                                       title:@"Library & Storage"
+                                                    subtitle:@"Import games, refresh the library, and manage local storage."
+                                                  symbolName:@"externaldrive.fill"
+                                                   tintColor:gray],
+                                            [XeniaSettingsHubItem
+                                                itemWithKind:XeniaSettingsHubCategoryKindGameContent
+                                                       title:@"Game Content & Patches"
+                                                    subtitle:@"Title content, discs, packages, and patches from game tiles."
+                                                  symbolName:@"puzzlepiece.extension.fill"
+                                                   tintColor:gray],
+                                            [XeniaSettingsHubItem
+                                                itemWithKind:XeniaSettingsHubCategoryKindPerGameSettings
+                                                       title:@"Per-Game Settings"
+                                                    subtitle:@"Title-specific overrides, search, reset, and batched saves."
+                                                  symbolName:@"gamecontroller.fill"
+                                                   tintColor:indigo],
                                           ]];
 
   XeniaSettingsHubSection* compatibility =
@@ -763,21 +999,41 @@ titleForHeaderInSection:(NSInteger)section {
                                           items:@[
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindCompatibility
-                                                       title:@"GPU Workarounds"
-                                                    subtitle:@"Per-title GPU, memory, boot, and JIT compatibility tweaks."
+                                                       title:@"Compatibility Workarounds"
+                                                    subtitle:@"GPU, memory, boot, and JIT title workarounds."
                                                   symbolName:@"wrench.and.screwdriver.fill"
                                                    tintColor:red],
                                           ]];
 
-  XeniaSettingsHubSection* diagnostics =
-      [XeniaSettingsHubSection sectionWithTitle:@"Diagnostics & Advanced"
+  XeniaSettingsHubSection* app = [XeniaSettingsHubSection
+      sectionWithTitle:@"App"
+                 items:@[
+                   [XeniaSettingsHubItem
+                       itemWithKind:XeniaSettingsHubCategoryKindAppearance
+                              title:@"Appearance"
+                           subtitle:@"App icon selection and interface presentation."
+                         symbolName:@"paintpalette.fill"
+                          tintColor:mint],
+                   [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindAutomation
+                                                title:@"Automation"
+                                             subtitle:@"Local iOS automation options."
+                                           symbolName:@"wand.and.stars"
+                                            tintColor:mint],
+                   [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindDiagnostics
+                                                title:@"Diagnostics"
+                                             subtitle:@"Log verbosity and live log viewer."
+                                           symbolName:@"waveform.path.ecg"
+                                            tintColor:red],
+                   [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindAbout
+                                                title:@"About"
+                                             subtitle:@"Build information and project links."
+                                           symbolName:@"info.circle.fill"
+                                            tintColor:gray],
+                 ]];
+
+  XeniaSettingsHubSection* advanced =
+      [XeniaSettingsHubSection sectionWithTitle:@"Advanced"
                                           items:@[
-                                            [XeniaSettingsHubItem
-                                                itemWithKind:XeniaSettingsHubCategoryKindDiagnostics
-                                                       title:@"Diagnostics"
-                                                    subtitle:@"Log level and live log viewer."
-                                                  symbolName:@"waveform.path.ecg"
-                                                   tintColor:red],
                                             [XeniaSettingsHubItem
                                                 itemWithKind:XeniaSettingsHubCategoryKindAdvancedDebug
                                                        title:@"Advanced Debug"
@@ -792,30 +1048,9 @@ titleForHeaderInSection:(NSInteger)section {
                                                    tintColor:purple],
                                           ]];
 
-  XeniaSettingsHubSection* system =
-      [XeniaSettingsHubSection sectionWithTitle:@"System"
-                                          items:@[
-                                            [XeniaSettingsHubItem
-                                                itemWithKind:XeniaSettingsHubCategoryKindLibrary
-                                                       title:@"Library & Storage"
-                                                    subtitle:@"Imports, content, caches, and local files."
-                                                  symbolName:@"externaldrive.fill"
-                                                   tintColor:gray],
-                                            [XeniaSettingsHubItem
-                                                itemWithKind:XeniaSettingsHubCategoryKindAutomation
-                                                       title:@"Automation"
-                                                    subtitle:@"Local iOS automation options."
-                                                  symbolName:@"wand.and.stars"
-                                                   tintColor:mint],
-                                            [XeniaSettingsHubItem
-                                                itemWithKind:XeniaSettingsHubCategoryKindAbout
-                                                       title:@"About"
-                                                    subtitle:@"Build information and project links."
-                                                  symbolName:@"info.circle.fill"
-                                                   tintColor:gray],
-                                          ]];
-
-  return @[ account, general, performance, compatibility, diagnostics, system ];
+  return @[
+    account, gameplay, graphics_performance, games, compatibility, app, advanced
+  ];
 }
 
 - (void)viewDidLoad {
@@ -863,6 +1098,16 @@ titleForHeaderInSection:(NSInteger)section {
 - (void)appendTouchLayoutSearchResults:(NSMutableArray*)results query:(NSString*)query {
   UIColor* blue = [XeniaTheme sectionIconBlue];
   NSArray* items = @[
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindControls
+                                 title:@"Hardware Controllers"
+                              subtitle:@"Controls · Auto-bind controllers connected before or during gameplay."
+                            symbolName:@"gamecontroller.fill"
+                             tintColor:blue],
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindControls
+                                 title:@"Touch Controls"
+                              subtitle:@"Controls · Choose a layout before launch or adjust it while a game is running."
+                            symbolName:@"hand.tap.fill"
+                             tintColor:blue],
     [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindTouchLayouts
                                  title:@"Edit Game Touch Layout"
                               subtitle:@"Controls · Choose an installed title and edit its touch controls before launch."
@@ -905,19 +1150,34 @@ titleForHeaderInSection:(NSInteger)section {
   NSArray* items = @[
     [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindLibrary
                                  title:@"Import Game"
-                              subtitle:@"Library & Storage · Open Files and copy a game or content package into XeniOS storage."
+                              subtitle:@"Games · Open Files and copy a game or content package into XeniOS storage."
                             symbolName:@"plus.app.fill"
                              tintColor:[XeniaTheme accent]],
     [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindLibrary
                                  title:@"Refresh Library"
-                              subtitle:@"Library & Storage · Rescan XeniOS storage and update the launcher grid."
+                              subtitle:@"Games · Rescan XeniOS storage and update the launcher grid."
                             symbolName:@"arrow.clockwise"
                              tintColor:[XeniaTheme sectionIconGray]],
-    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindLibrary
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindCacheCleanup
+                                 title:@"Clear Current Game Shader Cache"
+                              subtitle:@"Graphics & Performance · Delete persistent shaders for the running title."
+                            symbolName:@"trash"
+                             tintColor:[XeniaTheme sectionIconOrange]],
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindCacheCleanup
+                                 title:@"Clear All Shader Caches"
+                              subtitle:@"Graphics & Performance · Delete persistent shader storage for every title."
+                            symbolName:@"trash.fill"
+                             tintColor:[XeniaTheme sectionIconRed]],
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindGameContent
                                  title:@"Game Content and Patches"
-                              subtitle:@"Library & Storage · Manage title-specific content from a game tile."
+                              subtitle:@"Games · Manage title-specific content from a game tile."
                             symbolName:@"puzzlepiece.extension.fill"
                              tintColor:[XeniaTheme sectionIconGray]],
+    [XeniaSettingsHubItem itemWithKind:XeniaSettingsHubCategoryKindPerGameSettings
+                                 title:@"Per-Game Settings"
+                              subtitle:@"Games · Title-specific overrides, search, reset, and batched saves."
+                            symbolName:@"gamecontroller.fill"
+                             tintColor:[XeniaTheme sectionIconIndigo]],
   ];
   for (XeniaSettingsHubItem* item in items) {
     if (XeniaSettingsHubItemMatches(item, @"Library & Storage", query)) {
@@ -1097,6 +1357,9 @@ titleForHeaderInSection:(NSInteger)section {
       profile.showsDismissButton = NO;
       return profile;
     }
+    case XeniaSettingsHubCategoryKindAppearance:
+      return [[[XeniaSettingsAppearanceViewController alloc] initWithStatusHandler:on_status_]
+          autorelease];
     case XeniaSettingsHubCategoryKindControls:
       return [[[XeniaSettingsControlsViewController alloc]
           initWithActionHandler:action_handler_] autorelease];
@@ -1186,13 +1449,61 @@ titleForHeaderInSection:(NSInteger)section {
                                           subtitle:@"Rescan XeniOS storage and update the launcher grid."
                                         symbolName:@"arrow.clockwise"
                                          tintColor:gray],
+      ];
+      return [[[XeniaSettingsActionListViewController alloc]
+          initWithTitle:@"Library & Storage"
+                  items:items
+          actionHandler:action_handler_] autorelease];
+    }
+    case XeniaSettingsHubCategoryKindCacheCleanup: {
+      NSArray* items = @[
+        [XeniaSettingsActionListItem
+            itemWithAction:XeniaSettingsHubActionClearCurrentGameShaderCache
+                     title:@"Clear Current Game Shader Cache"
+                  subtitle:@"Delete persistent shaders for the running title. Relaunch the game before testing."
+                symbolName:@"trash"
+                 tintColor:[XeniaTheme sectionIconOrange]],
+        [XeniaSettingsActionListItem
+            itemWithAction:XeniaSettingsHubActionClearAllShaderCaches
+                     title:@"Clear All Shader Caches"
+                  subtitle:@"Delete persistent shader storage for every title. This does not remove games or saves."
+                symbolName:@"trash.fill"
+                 tintColor:[XeniaTheme sectionIconRed]],
+      ];
+      return [[[XeniaSettingsActionListViewController alloc]
+          initWithTitle:@"Cache Cleanup"
+                  items:items
+          actionHandler:action_handler_] autorelease];
+    }
+    case XeniaSettingsHubCategoryKindGameContent: {
+      NSArray* items = @[
         [XeniaSettingsActionListItem
             infoItemWithTitle:@"Game Content and Patches"
                      subtitle:@"Manage title-specific installed content, discs, and patches from a game tile's context menu."
                    symbolName:@"puzzlepiece.extension.fill"],
       ];
       return [[[XeniaSettingsActionListViewController alloc]
-          initWithTitle:@"Library & Storage"
+          initWithTitle:@"Game Content & Patches"
+                  items:items
+          actionHandler:action_handler_] autorelease];
+    }
+    case XeniaSettingsHubCategoryKindPerGameSettings: {
+      NSArray* items = @[
+        [XeniaSettingsActionListItem
+            infoItemWithTitle:@"Title Overrides"
+                     subtitle:@"Open Game Settings from a game tile to edit settings that apply only to that title."
+                   symbolName:@"slider.horizontal.3"],
+        [XeniaSettingsActionListItem
+            infoItemWithTitle:@"Search Overrides"
+                     subtitle:@"Search All Config appears at the top of each title's settings sheet."
+                   symbolName:@"magnifyingglass"],
+        [XeniaSettingsActionListItem
+            infoItemWithTitle:@"Reset Game Settings"
+                     subtitle:@"Reset appears in the same title settings sheet and deletes saved overrides for that title."
+                   symbolName:@"arrow.counterclockwise"],
+      ];
+      return [[[XeniaSettingsActionListViewController alloc]
+          initWithTitle:@"Per-Game Settings"
                   items:items
           actionHandler:action_handler_] autorelease];
     }

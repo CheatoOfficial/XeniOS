@@ -64,6 +64,7 @@ enum class IOSConfigAction {
   kOpenDiagnosticsSettings,
   kOpenAllConfigSettings,
   kViewRecentLog,
+  kResetGameSettings,
 };
 
 struct IOSConfigChoice {

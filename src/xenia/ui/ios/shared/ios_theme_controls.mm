@@ -156,9 +156,36 @@ UIButton* xe_make_ios_sheet_close_button(id target, SEL action) {
   return button;
 }
 
+static UIImage* xe_scaled_settings_footer_image(UIImage* image) {
+  if (!image) {
+    return nil;
+  }
+  CGSize image_size = image.size;
+  if (image_size.width <= 0.0 || image_size.height <= 0.0) {
+    return image;
+  }
+  constexpr CGFloat kMaxIconSide = 24.0;
+  CGFloat scale = MIN(kMaxIconSide / image_size.width, kMaxIconSide / image_size.height);
+  if (scale >= 1.0) {
+    return image;
+  }
+
+  CGSize target_size =
+      CGSizeMake(ceil(image_size.width * scale), ceil(image_size.height * scale));
+  UIGraphicsImageRendererFormat* format = [UIGraphicsImageRendererFormat preferredFormat];
+  format.opaque = NO;
+  UIGraphicsImageRenderer* renderer =
+      [[UIGraphicsImageRenderer alloc] initWithSize:target_size format:format];
+  UIImage* scaled = [renderer imageWithActions:^(UIGraphicsImageRendererContext* __unused ctx) {
+    [image drawInRect:CGRectMake(0.0, 0.0, target_size.width, target_size.height)];
+  }];
+  [renderer release];
+  return scaled;
+}
+
 UIImage* xe_settings_footer_image(NSString* asset_name, NSString* fallback_symbol_name,
                                   BOOL tintable) {
-  UIImage* image = [UIImage imageNamed:asset_name];
+  UIImage* image = asset_name.length ? [UIImage imageNamed:asset_name] : nil;
   BOOL used_fallback = NO;
   if (!image) {
     used_fallback = YES;
@@ -170,6 +197,7 @@ UIImage* xe_settings_footer_image(NSString* asset_name, NSString* fallback_symbo
       image = [UIImage systemImageNamed:@"questionmark.circle" withConfiguration:config];
     }
   }
+  image = xe_scaled_settings_footer_image(image);
   return [image imageWithRenderingMode:(tintable || used_fallback)
                                            ? UIImageRenderingModeAlwaysTemplate
                                            : UIImageRenderingModeAlwaysOriginal];
@@ -179,13 +207,24 @@ UIButton* xe_make_settings_footer_button(NSString* asset_name, NSString* fallbac
                                          NSString* accessibility_label, NSInteger tag,
                                          BOOL tintable, id target, SEL action) {
   UIImage* image = xe_settings_footer_image(asset_name, fallback_symbol_name, tintable);
-  UIButton* button = [UIButton buttonWithType:UIButtonTypeCustom];
+  UIButton* button = [UIButton buttonWithType:UIButtonTypeSystem];
   button.translatesAutoresizingMaskIntoConstraints = NO;
   button.tag = tag;
   button.backgroundColor = [UIColor clearColor];
   button.tintColor = [XeniaTheme textPrimary];
-  [button setImage:image forState:UIControlStateNormal];
-  button.contentEdgeInsets = UIEdgeInsetsMake(6.0, 6.0, 6.0, 6.0);
+  UIButtonConfiguration* configuration = [UIButtonConfiguration plainButtonConfiguration];
+  configuration.image = image;
+  configuration.title = nil;
+  configuration.imagePadding = 0.0;
+  configuration.contentInsets = NSDirectionalEdgeInsetsMake(6.0, 8.0, 6.0, 8.0);
+  configuration.baseForegroundColor = [XeniaTheme textPrimary];
+  configuration.preferredSymbolConfigurationForImage =
+      [UIImageSymbolConfiguration configurationWithPointSize:20.0
+                                                      weight:UIImageSymbolWeightSemibold];
+  button.configuration = configuration;
+  button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2];
+  button.titleLabel.adjustsFontForContentSizeCategory = YES;
+  button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   button.adjustsImageWhenHighlighted = YES;
   button.imageView.contentMode = UIViewContentModeScaleAspectFit;
   button.accessibilityLabel = accessibility_label;
@@ -194,7 +233,7 @@ UIButton* xe_make_settings_footer_button(NSString* asset_name, NSString* fallbac
   button.largeContentTitle = accessibility_label;
   button.showsLargeContentViewer = YES;
   [button addTarget:target action:action forControlEvents:UIControlEventTouchUpInside];
-  [button.widthAnchor constraintEqualToConstant:44.0].active = YES;
+  [button.widthAnchor constraintEqualToConstant:48.0].active = YES;
   [button.heightAnchor constraintEqualToConstant:44.0].active = YES;
   return button;
 }

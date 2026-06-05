@@ -286,7 +286,8 @@ static std::vector<IOSConfigSection> BuildGraphicsSections() {
   AddIntegerSetting(backend.items, "anisotropic_override", "Anisotropic Override",
                     "Override anisotropic filtering level (-1 = auto, 0 = off, 1-5).");
   AddEnumSetting(backend.items, "render_target_path", "Render Target Path",
-                 "Selects the render target implementation path after a relaunch.");
+                 "Selects the render target implementation path after a relaunch. The "
+                 "Accuracy path is currently unavailable on Metal.");
   PushIfNotEmpty(sections, std::move(backend));
 
   IOSConfigSection shader;
@@ -433,7 +434,8 @@ static std::vector<IOSConfigSection> BuildCompatibilitySections() {
   AddEnumSetting(gpu.items, "occlusion_query", "Occlusion Query",
                  "Selects the occlusion query implementation.");
   AddEnumSetting(gpu.items, "render_target_path", "Render Target Path",
-                 "Selects the render target implementation path.");
+                 "Selects the render target implementation path. The Accuracy path is "
+                 "currently unavailable on Metal.");
   PushIfNotEmpty(sections, std::move(gpu));
 
   IOSConfigSection memory;
@@ -499,7 +501,7 @@ static std::vector<IOSConfigSection> BuildDiagnosticsSections() {
                    "Log Verbosity",
                    "Controls how much goes into xenia.log. Higher levels help debug issues "
                    "but increase log size and background overhead.",
-                   2, {{"Errors Only", 0}, {"Warnings", 1}, {"Info", 2}, {"Debug", 3}});
+                   1, {{"Errors Only", 0}, {"Warnings", 1}, {"Info", 2}, {"Debug", 3}});
   AddActionSetting(diagnostics.items, IOSConfigAction::kViewRecentLog, "View Live Log",
                    "Open a live-updating xenia.log viewer so you can capture boot failures "
                    "without Xcode.");
@@ -512,14 +514,17 @@ static std::vector<IOSConfigSection> BuildGraphicsCompatSections() {
   std::vector<IOSConfigSection> sections;
   IOSConfigSection compat;
   compat.title = "Graphics Compatibility";
-  compat.footer = "Live overrides for the current session. These do not save to config.";
+  compat.footer =
+      "Live overrides for the running game. Use Compatibility or Per-Game Settings for saved "
+      "config changes.";
 
   AddEnumSetting(compat.items, "readback_resolve", "Readback Resolve",
                  "Controls CPU readback of render-to-texture resolve results.");
   AddEnumSetting(compat.items, "occlusion_query", "Occlusion Query",
                  "Selects the occlusion query implementation.");
   AddEnumSetting(compat.items, "render_target_path", "Render Target Path",
-                 "Selects the render target implementation path.");
+                 "Selects the render target implementation path. The Accuracy path is "
+                 "currently unavailable on Metal.");
   AddBoolSetting(compat.items, "half_pixel_offset", "Half-Pixel Offset",
                  "D3D9-style sampling behavior used by most Xbox 360 rendering.", true);
   AddBoolSetting(compat.items, "gpu_3d_to_2d_texture", "Treat 3D Textures as 2D",
@@ -911,19 +916,22 @@ std::vector<IOSConfigSection> BuildIOSConfigSectionsForKind(IOSConfigCatalogKind
       return BuildSystemSections();
 
     case IOSConfigCatalogKind::kPerGame:
+      {
+        IOSConfigSection more;
+        more.title = "Search Overrides";
+        AddActionSetting(more.items, IOSConfigAction::kOpenAllConfigSettings,
+                         "Search All Config",
+                         "Find any non-transient cvar and save it as a title-specific override.");
+        AddActionSetting(more.items, IOSConfigAction::kResetGameSettings,
+                         "Reset Game Settings",
+                         "Delete saved overrides for this title and return to defaults.");
+        PushIfNotEmpty(sections, std::move(more));
+      }
       PushFilteredSection(sections, all_sections, "Display",
                           {"present_letterbox", "guest_display_refresh_cap", "use_50Hz_mode"});
       PushWholeSection(sections, all_sections, "GPU Workarounds");
       PushWholeSection(sections, all_sections, "Memory & Boot");
       PushWholeSection(sections, all_sections, "JIT & Codegen");
-      {
-        IOSConfigSection more;
-        more.title = "More Overrides";
-        AddActionSetting(more.items, IOSConfigAction::kOpenAllConfigSettings,
-                         "Search All Config",
-                         "Find any non-transient cvar and save it as a title-specific override.");
-        PushIfNotEmpty(sections, std::move(more));
-      }
       return sections;
 
     case IOSConfigCatalogKind::kGraphicsCompat:

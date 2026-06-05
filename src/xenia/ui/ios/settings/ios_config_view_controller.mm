@@ -17,8 +17,10 @@
 
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/config.h"
 #include "xenia/ui/config_helpers.h"
 
+#import "xenia/ui/ios/app/ios_window_layout.h"
 #import "xenia/ui/ios/settings/ios_choice_list_view_controller.h"
 #import "xenia/ui/ios/launcher/ios_compat_data.h"
 #import "xenia/ui/ios/settings/ios_config_builder.h"
@@ -117,6 +119,11 @@ bool OverrideCvarByName(const std::string& key, const std::filesystem::path& val
   return true;
 }
 
+bool IsLetterboxBlockedByWindowStretch(const IOSConfigItem& item) {
+  return item.key == "present_letterbox" &&
+         XeniaIOSCurrentWindowScalingMode() == XeniaIOSWindowScalingModeStretch;
+}
+
 bool OverrideIntegerCvarByName(const std::string& key, int64_t value) {
   if (!cvar::ConfigVars) return false;
   auto it = cvar::ConfigVars->find(key);
@@ -175,6 +182,10 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
 }
 
 }  // namespace
+
+@interface XeniaConfigViewController ()
+- (void)confirmResetGameSettings;
+@end
 
 @implementation XeniaConfigViewController {
   IOSConfigCatalogKind catalog_kind_;
@@ -252,8 +263,28 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   [super dealloc];
 }
 
+- (CGFloat)estimatedTableAccessoryWidth {
+  CGFloat width = CGRectGetWidth(self.tableView.bounds);
+  if (width <= 0.0) {
+    width = CGRectGetWidth(self.view.bounds);
+  }
+  if (width <= 0.0 && self.navigationController) {
+    width = CGRectGetWidth(self.navigationController.view.bounds);
+  }
+  if (width <= 0.0) {
+    width = CGRectGetWidth(UIScreen.mainScreen.bounds);
+  }
+  return MAX(width, 1.0);
+}
+
+- (CGRect)initialTableAccessoryFrameWithHeight:(CGFloat)height {
+  return CGRectMake(0.0, 0.0, [self estimatedTableAccessoryWidth], height);
+}
+
 - (UIView*)restartNoticeHeaderView {
-  UIView* container = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 136)] autorelease];
+  UIView* container =
+      [[[UIView alloc] initWithFrame:[self initialTableAccessoryFrameWithHeight:136.0]]
+          autorelease];
   container.backgroundColor = [UIColor clearColor];
 
   UIView* card = [[[UIView alloc] init] autorelease];
@@ -271,6 +302,8 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   title.textColor = [XeniaTheme textPrimary];
   title.numberOfLines = 0;
   xe_apply_label_font(title, UIFontTextStyleHeadline, 17.0, UIFontWeightSemibold);
+  [title setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                         forAxis:UILayoutConstraintAxisVertical];
   [card addSubview:title];
 
   UILabel* body = [[[UILabel alloc] init] autorelease];
@@ -291,6 +324,8 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   body.textColor = [XeniaTheme textSecondary];
   body.numberOfLines = 0;
   xe_apply_label_font(body, UIFontTextStyleBody, 17.0, UIFontWeightRegular);
+  [body setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                        forAxis:UILayoutConstraintAxisVertical];
   [card addSubview:body];
 
   [NSLayoutConstraint activateConstraints:@[
@@ -313,13 +348,15 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
 }
 
 - (UIView*)liveOverrideHeaderView {
-  UIView* container = [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, 48)] autorelease];
+  UIView* container =
+      [[[UIView alloc] initWithFrame:[self initialTableAccessoryFrameWithHeight:48.0]]
+          autorelease];
   container.backgroundColor = [UIColor clearColor];
 
   UILabel* label = [[[UILabel alloc] init] autorelease];
   label.translatesAutoresizingMaskIntoConstraints = NO;
   label.backgroundColor = [UIColor clearColor];
-  label.text = @"Changes take effect immediately";
+  label.text = @"Changes apply immediately for this session";
   label.textAlignment = NSTextAlignmentCenter;
   label.textColor = [XeniaTheme textMuted];
   label.numberOfLines = 1;
@@ -340,20 +377,45 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   if (!view) {
     return;
   }
-  CGFloat width = CGRectGetWidth(self.tableView.bounds);
+  [UIView performWithoutAnimation:^{
+  CGRect bounds = self.tableView.bounds;
+  CGRect accessory_frame = bounds;
+  CGFloat left_inset = 0.0;
+  CGFloat right_inset = 0.0;
+  CGRect safe_frame = self.tableView.safeAreaLayoutGuide.layoutFrame;
+  if (!CGRectIsEmpty(safe_frame) && CGRectGetWidth(safe_frame) > 0.0) {
+    left_inset = MAX(left_inset, CGRectGetMinX(safe_frame));
+    right_inset = MAX(right_inset, CGRectGetMaxX(bounds) - CGRectGetMaxX(safe_frame));
+  }
+  UIEdgeInsets adjusted_insets = self.tableView.adjustedContentInset;
+  left_inset = MAX(left_inset, adjusted_insets.left);
+  right_inset = MAX(right_inset, adjusted_insets.right);
+  if (left_inset + right_inset < CGRectGetWidth(bounds)) {
+    accessory_frame.origin.x = left_inset;
+    accessory_frame.size.width = CGRectGetWidth(bounds) - left_inset - right_inset;
+  }
+
+  CGFloat width = CGRectGetWidth(accessory_frame);
   if (width <= 0.0) {
     width = CGRectGetWidth(self.view.bounds);
+    accessory_frame.origin.x = 0.0;
+    accessory_frame.size.width = width;
   }
   if (width <= 0.0 && self.navigationController) {
     width = CGRectGetWidth(self.navigationController.view.bounds);
+    accessory_frame.origin.x = 0.0;
+    accessory_frame.size.width = width;
   }
   if (width <= 0.0) {
     width = CGRectGetWidth(UIScreen.mainScreen.bounds);
+    accessory_frame.origin.x = 0.0;
+    accessory_frame.size.width = width;
   }
   if (width <= 0.0) {
     return;
   }
   CGRect frame = view.frame;
+  frame.origin.x = CGRectGetMinX(accessory_frame);
   frame.size.width = width;
   view.frame = frame;
   [view setNeedsLayout];
@@ -377,6 +439,7 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   } else {
     self.tableView.tableFooterView = view;
   }
+  }];
 }
 
 - (void)updateTableHeaderAndFooterLayout {
@@ -445,7 +508,10 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   NSString* memorial_text = @"XeniOS is one of several apps with dedication keeping the memory of "
                             @"\"Lily\" alive 11/03/2023";
   UIView* footer =
-      [[[UIView alloc] initWithFrame:CGRectMake(0, 0, 1, has_footer_text ? 176 : 78)] autorelease];
+      [[[UIView alloc]
+          initWithFrame:[self initialTableAccessoryFrameWithHeight:(has_footer_text ? 176.0
+                                                                                    : 78.0)]]
+          autorelease];
   footer.backgroundColor = [UIColor clearColor];
 
   UILabel* links_label = [[[UILabel alloc] init] autorelease];
@@ -456,27 +522,29 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   links_label.textColor = [XeniaTheme textMuted];
   links_label.numberOfLines = 1;
   xe_apply_label_font(links_label, UIFontTextStyleCaption1, 12.0, UIFontWeightSemibold);
+  [links_label setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                               forAxis:UILayoutConstraintAxisVertical];
   [footer addSubview:links_label];
 
   UIStackView* links_row = [[[UIStackView alloc] initWithArrangedSubviews:@[
-    xe_make_settings_footer_button(@"SettingsLinkWebsite", @"globe", @"Website",
-                                   kXeniaConfigFooterLinkWebsite, NO, self,
+    xe_make_settings_footer_button(@"", @"globe", @"Website",
+                                   kXeniaConfigFooterLinkWebsite, YES, self,
                                    @selector(footerLinkTapped:)),
     xe_make_settings_footer_button(
         @"SettingsLinkGitHub", @"chevron.left.forwardslash.chevron.right", @"GitHub",
-        kXeniaConfigFooterLinkGitHub, NO, self, @selector(footerLinkTapped:)),
+        kXeniaConfigFooterLinkGitHub, YES, self, @selector(footerLinkTapped:)),
     xe_make_settings_footer_button(@"SettingsLinkDiscord", @"bubble.left.and.bubble.right",
-                                   @"Discord", kXeniaConfigFooterLinkDiscord, NO, self,
+                                   @"Discord", kXeniaConfigFooterLinkDiscord, YES, self,
                                    @selector(footerLinkTapped:)),
     xe_make_settings_footer_button(@"SettingsLinkKoFi", @"cup.and.saucer", @"Ko-fi",
-                                   kXeniaConfigFooterLinkKoFi, NO, self,
+                                   kXeniaConfigFooterLinkKoFi, YES, self,
                                    @selector(footerLinkTapped:)),
   ]] autorelease];
   links_row.translatesAutoresizingMaskIntoConstraints = NO;
   links_row.axis = UILayoutConstraintAxisHorizontal;
   links_row.alignment = UIStackViewAlignmentCenter;
   links_row.distribution = UIStackViewDistributionEqualCentering;
-  links_row.spacing = 22.0;
+  links_row.spacing = 18.0;
   [footer addSubview:links_row];
 
   UIView* build_separator = nil;
@@ -496,6 +564,8 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     build_label.textColor = [XeniaTheme textMuted];
     build_label.numberOfLines = 1;
     xe_apply_label_font(build_label, UIFontTextStyleFootnote, 14.0, UIFontWeightMedium);
+    [build_label setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                 forAxis:UILayoutConstraintAxisVertical];
     [footer addSubview:build_label];
 
     memorial_label = [[[UILabel alloc] init] autorelease];
@@ -506,6 +576,8 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     memorial_label.textColor = [XeniaTheme textSecondary];
     memorial_label.numberOfLines = 0;
     xe_apply_label_font(memorial_label, UIFontTextStyleCaption1, 12.0, UIFontWeightRegular);
+    [memorial_label setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                    forAxis:UILayoutConstraintAxisVertical];
     [footer addSubview:memorial_label];
   }
 
@@ -681,9 +753,18 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   content.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(12.0, 0.0, 12.0, 0.0);
 
   if (item->control_type == IOSConfigControlType::kToggle) {
-    content.secondaryText = ToNSString(item->subtitle);
+    const bool letterbox_blocked = IsLetterboxBlockedByWindowStretch(*item);
+    if (letterbox_blocked) {
+      item->bool_value = false;
+      content.textProperties.color = [XeniaTheme textSecondary];
+      content.secondaryText =
+          ToNSString(item->subtitle + " Stretch screen mode disables this.");
+    } else {
+      content.secondaryText = ToNSString(item->subtitle);
+    }
     UISwitch* toggle = [[[UISwitch alloc] init] autorelease];
     toggle.on = item->bool_value;
+    toggle.enabled = !letterbox_blocked;
     toggle.accessibilityLabel = content.text;
     toggle.accessibilityValue = toggle.on ? @"On" : @"Off";
     toggle.accessibilityHint = content.secondaryText;
@@ -749,15 +830,19 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     cell.isAccessibilityElement = NO;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
   } else if (item->control_type == IOSConfigControlType::kAction) {
-    content.textProperties.color = self.view.tintColor;
+    const bool destructive_action = item->action == IOSConfigAction::kResetGameSettings;
+    content.textProperties.color =
+        destructive_action ? [UIColor systemRedColor] : self.view.tintColor;
     content.secondaryText = ToNSString(item->subtitle);
     cell.contentConfiguration = content;
     cell.accessoryView = nil;
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    cell.accessoryType = destructive_action ? UITableViewCellAccessoryNone
+                                            : UITableViewCellAccessoryDisclosureIndicator;
     cell.isAccessibilityElement = YES;
     cell.accessibilityLabel = content.text;
     cell.accessibilityValue = content.secondaryText;
-    cell.accessibilityHint = @"Opens another settings page.";
+    cell.accessibilityHint = destructive_action ? @"Deletes saved game-specific overrides."
+                                                : @"Opens another settings page.";
     cell.accessibilityTraits = UIAccessibilityTraitButton;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
   } else {
@@ -791,6 +876,17 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   }
   IOSConfigItem* item = [self itemAtIndexPath:indexPath];
   if (!item || item->control_type != IOSConfigControlType::kToggle) {
+    return;
+  }
+  if (IsLetterboxBlockedByWindowStretch(*item)) {
+    item->bool_value = false;
+    [sender setOn:NO animated:YES];
+    sender.accessibilityValue = @"Off";
+    [self markPendingChangesForItem:item];
+    if (live_override_) {
+      [self applyLiveOverrideForItem:item];
+    }
+    [self configItemDidChange:item];
     return;
   }
   item->bool_value = sender.isOn;
@@ -965,6 +1061,9 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
         [self.navigationController pushViewController:log_vc animated:YES];
         [log_vc release];
       } break;
+      case IOSConfigAction::kResetGameSettings:
+        [self confirmResetGameSettings];
+        break;
       case IOSConfigAction::kNone:
       default:
         break;
@@ -1001,6 +1100,64 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
         }];
   [self.navigationController pushViewController:choice_vc animated:YES];
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+- (void)confirmResetGameSettings {
+  if (!game_title_id_) {
+    return;
+  }
+
+  NSString* game_name = game_title_.length ? game_title_ : @"this game";
+  NSString* message = [NSString stringWithFormat:
+                                    @"Delete saved overrides for %@ and discard unsaved changes in "
+                                    @"this sheet?",
+                                    game_name];
+  UIAlertController* confirm =
+      [UIAlertController alertControllerWithTitle:@"Reset Game Settings?"
+                                          message:message
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Reset"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction* action) {
+                                              const bool deleted =
+                                                  config::DeleteGameConfig(game_title_id_);
+                                              if (deleted) {
+                                                dirty_keys_.clear();
+                                                hasPendingChanges_ = NO;
+                                                saveButton_.enabled = NO;
+                                                [self replaceSections:[self buildSections]];
+                                              }
+
+                                              NSString* title =
+                                                  deleted ? @"Game Settings Reset"
+                                                          : @"Game Settings Not Reset";
+                                              NSString* result_message =
+                                                  deleted
+                                                      ? @"Deleted title-specific overrides. "
+                                                        @"Relaunch the game before testing."
+                                                      : @"Failed to delete title-specific "
+                                                        @"overrides. Check xenia.log.";
+                                              UIAlertController* result =
+                                                  [UIAlertController
+                                                      alertControllerWithTitle:title
+                                                                       message:result_message
+                                                                preferredStyle:
+                                                                    UIAlertControllerStyleAlert];
+                                              [result
+                                                  addAction:
+                                                      [UIAlertAction
+                                                          actionWithTitle:@"Done"
+                                                                    style:
+                                                                        UIAlertActionStyleDefault
+                                                                  handler:nil]];
+                                              [self presentViewController:result
+                                                                 animated:YES
+                                                               completion:nil];
+                                            }]];
+  [self presentViewController:confirm animated:YES completion:nil];
 }
 
 - (void)dismissSettingsControllerAnimated:(BOOL)animated {

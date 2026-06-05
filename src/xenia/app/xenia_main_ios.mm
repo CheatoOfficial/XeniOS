@@ -35,6 +35,7 @@
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/gpu_flags.h"
+#include "xenia/ui/ios/app/ios_window_layout.h"
 #include "xenia/ui/ios/app/windowed_app_context_ios.h"
 #include "xenia/ui/ios/game/window_ios.h"
 #include "xenia/ui/ios/shared/ios_system_utils.h"
@@ -168,6 +169,31 @@ std::string ReadTextFile(const std::filesystem::path& path) {
   std::stringstream contents;
   contents << file.rdbuf();
   return contents.str();
+}
+
+void LogIOSProvisioningProfileHints() {
+  @autoreleasepool {
+    NSString* profile_path =
+        [[NSBundle mainBundle] pathForResource:@"embedded"
+                                        ofType:@"mobileprovision"];
+    if (!profile_path.length) {
+      XELOGW("iOS signing: embedded.mobileprovision not present in app bundle");
+      return;
+    }
+
+    const std::filesystem::path profile_fs_path([profile_path UTF8String]);
+    const std::string profile = ReadTextFile(profile_fs_path);
+    auto contains_entitlement = [&profile](const char* entitlement) {
+      return profile.find(entitlement) != std::string::npos;
+    };
+    XELOGI("iOS signing: embedded.mobileprovision bytes={} "
+           "increased_memory_limit={} file_picker_read_write={}",
+           profile.size(),
+           contains_entitlement(
+               "com.apple.developer.kernel.increased-memory-limit"),
+           contains_entitlement(
+               "com.apple.security.files.user-selected.read-write"));
+  }
 }
 
 std::string DisplayNameForPatchFile(const patcher::BundledPatchFile& bundled) {
@@ -568,6 +594,7 @@ std::filesystem::path EmulatorAppIOS::GetStorageRootForCallbacks() const {
 
 bool EmulatorAppIOS::OnInitialize() {
   ConfigureAudioSession();
+  LogIOSProvisioningProfileHints();
 
   // Set up storage paths.
   std::filesystem::path storage_root = cvars::storage_root;
@@ -719,8 +746,15 @@ bool EmulatorAppIOS::OnInitialize() {
     config::SaveGameConfigSetting(emulator_.get(), "GPU", "guest_display_refresh_cap", capped);
   });
 
-  ios_context.set_present_letterbox_getter([]() { return cvars::present_letterbox; });
+  ios_context.set_present_letterbox_getter([]() {
+    return cvars::present_letterbox &&
+           XeniaIOSCurrentWindowScalingMode() != XeniaIOSWindowScalingModeStretch;
+  });
   ios_context.set_present_letterbox_setter([this](bool enabled) {
+    if (enabled &&
+        XeniaIOSCurrentWindowScalingMode() == XeniaIOSWindowScalingModeStretch) {
+      enabled = false;
+    }
     cvars::present_letterbox = enabled;
     std::lock_guard<std::mutex> lock(launch_mutex_);
     config::SaveGameConfigSetting(emulator_.get(), "Display", "present_letterbox", enabled);
@@ -1532,8 +1566,6 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorAppIOS::CreateInputDriver
   } else if (drivers.empty()) {
     XELOGW("iOS: SDL input driver setup failed, falling back to nop input");
     drivers.emplace_back(xe::hid::nop::Create(window, kZOrderHidInput));
-  } else {
-    XELOGW("iOS: SDL input driver setup failed");
   }
   return drivers;
 }

@@ -68,12 +68,20 @@ static cvar::IConfigVar* GetConfigVar(const std::string& key) {
 
 bool IOSConfigHasConfigVar(const std::string& key) { return GetConfigVar(key) != nullptr; }
 
+std::string StripTomlQuotes(std::string value) {
+  value = TrimAscii(std::move(value));
+  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+    value = value.substr(1, value.size() - 2);
+  }
+  return value;
+}
+
 std::string IOSConfigGetConfigVarString(const std::string& key, const std::string& fallback) {
   cvar::IConfigVar* var = GetConfigVar(key);
   if (!var) {
     return fallback;
   }
-  return TrimAscii(var->config_value());
+  return StripTomlQuotes(var->config_value());
 }
 
 bool IOSConfigParseBoolString(const std::string& text, bool* value_out) {
@@ -106,14 +114,6 @@ bool IOSConfigParseInt64String(const std::string& text, int64_t* value_out) {
   }
   *value_out = static_cast<int64_t>(parsed);
   return true;
-}
-
-std::string StripTomlQuotes(std::string value) {
-  value = TrimAscii(std::move(value));
-  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-    value = value.substr(1, value.size() - 2);
-  }
-  return value;
 }
 
 double ParseDoubleFallback(const std::string& text, double fallback) {
@@ -331,7 +331,7 @@ static NSString* GetUserDefaultString(NSString* key) {
   return [GetUserDefaults() stringForKey:key];
 }
 
-static void SetUserDefaultBool(NSString* key, bool value) {
+void SetUserDefaultBool(NSString* key, bool value) {
   if (!key || key.length == 0) {
     return;
   }

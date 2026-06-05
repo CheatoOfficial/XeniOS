@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <system_error>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
@@ -366,6 +367,33 @@ void SaveGameConfig(uint32_t title_id, const toml::table& config_table) {
            xe::path_to_utf8(game_config_path), e.what());
     throw;
   }
+}
+
+bool DeleteGameConfig(uint32_t title_id) {
+  const auto game_config_path =
+      GetGameConfigPath(fmt::format("{:08X}", title_id));
+
+  std::error_code ec;
+  if (!std::filesystem::exists(game_config_path, ec)) {
+    if (ec) {
+      XELOGE("Failed to check game config {}: {}",
+             xe::path_to_utf8(game_config_path), ec.message());
+      return false;
+    }
+    return true;
+  }
+
+  const bool removed = std::filesystem::remove(game_config_path, ec);
+  if (ec) {
+    XELOGE("Failed to delete game config {}: {}",
+           xe::path_to_utf8(game_config_path), ec.message());
+    return false;
+  }
+
+  if (removed) {
+    XELOGI("Deleted game config for title {:08X}", title_id);
+  }
+  return true;
 }
 
 void SaveGameConfigSetting(xe::Emulator* emulator, const char* section,

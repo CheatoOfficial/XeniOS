@@ -12,8 +12,23 @@
 #import "xenia/ui/ios/shared/ios_theme.h"
 #import "xenia/ui/ios/shared/ios_view_helpers.h"
 
+@interface XeniaIOSInGameMenuOverlay ()
+- (UIStackView*)newMenuRowWithButtons:(NSArray<UIButton*>*)buttons;
+- (void)updateButton:(UIButton*)button
+               title:(NSString*)title
+             compact:(BOOL)compact
+              resume:(BOOL)resume;
+- (void)applyMenuLayoutForCompactLandscape:(BOOL)compact;
+@end
+
 @implementation XeniaIOSInGameMenuOverlay {
   UIView* _panel;
+  UILabel* _titleLabel;
+  UILabel* _subtitleLabel;
+  UIStackView* _contentStack;
+  UIStackView* _rowOneStack;
+  UIStackView* _rowTwoStack;
+  UIStackView* _rowThreeStack;
   UIButton* _resumeButton;
   UIButton* _editControlsButton;
   UIButton* _achievementsButton;
@@ -24,6 +39,11 @@
   UIButton* _exitButton;
   UIMenu* _displayMenu;
   NSLayoutConstraint* _panelWidthConstraint;
+  NSLayoutConstraint* _resumeHeightConstraint;
+  NSLayoutConstraint* _rowOneHeightConstraint;
+  NSLayoutConstraint* _rowTwoHeightConstraint;
+  NSLayoutConstraint* _rowThreeHeightConstraint;
+  NSLayoutConstraint* _liveLogHeightConstraint;
   BOOL _controllerNavigationEnabled;
   XeniaIOSInGameMenuAction _focusedAction;
   void (^_graphicsHandler)(void);
@@ -46,43 +66,40 @@
   xe_apply_floating_window_chrome(_panel);
   [self addSubview:_panel];
 
-  UILabel* title = [[UILabel alloc] init];
-  title.translatesAutoresizingMaskIntoConstraints = NO;
-  title.text = @"In-Game Menu";
-  title.textColor = [XeniaTheme textPrimary];
-  xe_apply_label_font(title, UIFontTextStyleTitle2, 22.0, UIFontWeightSemibold);
-  title.textAlignment = NSTextAlignmentCenter;
-  title.accessibilityTraits = UIAccessibilityTraitHeader;
-  [_panel addSubview:title];
+  _titleLabel = [[UILabel alloc] init];
+  _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  _titleLabel.text = @"In-Game Menu";
+  _titleLabel.textColor = [XeniaTheme textPrimary];
+  xe_apply_label_font(_titleLabel, UIFontTextStyleTitle2, 22.0,
+                      UIFontWeightSemibold);
+  _titleLabel.textAlignment = NSTextAlignmentCenter;
+  _titleLabel.accessibilityTraits = UIAccessibilityTraitHeader;
 
-  UILabel* subtitle = [[UILabel alloc] init];
-  subtitle.translatesAutoresizingMaskIntoConstraints = NO;
-  subtitle.text = @"Tap anywhere to close";
-  subtitle.textColor = [XeniaTheme textMuted];
-  xe_apply_label_font(subtitle, UIFontTextStyleSubheadline, 15.0, UIFontWeightRegular);
-  subtitle.textAlignment = NSTextAlignmentCenter;
-  [_panel addSubview:subtitle];
+  _subtitleLabel = [[UILabel alloc] init];
+  _subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  _subtitleLabel.text = @"Tap anywhere to close";
+  _subtitleLabel.textColor = [XeniaTheme textMuted];
+  xe_apply_label_font(_subtitleLabel, UIFontTextStyleSubheadline, 15.0,
+                      UIFontWeightRegular);
+  _subtitleLabel.textAlignment = NSTextAlignmentCenter;
 
   _resumeButton = [self newButtonWithTitle:@"Resume"
                                   imageName:nil
                            backgroundColor:[XeniaTheme accent]
                             foregroundColor:[XeniaTheme accentFg]
                                      action:@selector(resumePressed:)];
-  [_panel addSubview:_resumeButton];
 
   _editControlsButton = [self newButtonWithTitle:@"Edit Controls"
                                        imageName:@"hand.tap"
                                 backgroundColor:[XeniaTheme bgSurface2]
                                  foregroundColor:[XeniaTheme textPrimary]
                                           action:@selector(editControlsPressed:)];
-  [_panel addSubview:_editControlsButton];
 
   _achievementsButton = [self newButtonWithTitle:@"Achievements"
                                         imageName:@"trophy"
                                  backgroundColor:[XeniaTheme bgSurface2]
                                   foregroundColor:[XeniaTheme textPrimary]
                                            action:@selector(achievementsPressed:)];
-  [_panel addSubview:_achievementsButton];
 
   _displayButton = [self newButtonWithTitle:@"Display"
                                  imageName:@"rectangle.expand.vertical"
@@ -90,97 +107,107 @@
                            foregroundColor:[XeniaTheme textPrimary]
                                     action:nil];
   _displayButton.showsMenuAsPrimaryAction = YES;
-  [_panel addSubview:_displayButton];
 
   _settingsButton = [self newButtonWithTitle:@"Settings"
                                    imageName:@"slider.horizontal.3"
                             backgroundColor:[XeniaTheme bgSurface2]
                              foregroundColor:[XeniaTheme textPrimary]
                                       action:@selector(settingsPressed:)];
-  [_panel addSubview:_settingsButton];
 
   _graphicsButton = [self newButtonWithTitle:@"Graphics"
                                    imageName:@"gearshape.2.fill"
                             backgroundColor:[XeniaTheme bgSurface2]
                              foregroundColor:[XeniaTheme textPrimary]
                                       action:@selector(graphicsPressed:)];
-  [_panel addSubview:_graphicsButton];
 
   _liveLogButton = [self newButtonWithTitle:@"Live Log"
                                   imageName:@"doc.text"
                            backgroundColor:[XeniaTheme bgSurface2]
                             foregroundColor:[XeniaTheme textPrimary]
                                      action:@selector(liveLogPressed:)];
-  [_panel addSubview:_liveLogButton];
 
   _exitButton = [self newButtonWithTitle:@"Exit To Library"
                                imageName:@"rectangle.portrait.and.arrow.right"
                         backgroundColor:[[XeniaTheme statusError] colorWithAlphaComponent:0.25]
                          foregroundColor:[XeniaTheme textPrimary]
                                   action:@selector(exitPressed:)];
-  [_panel addSubview:_exitButton];
+
+  _rowOneStack = [self newMenuRowWithButtons:@[
+    _editControlsButton,
+    _graphicsButton,
+  ]];
+  _rowTwoStack = [self newMenuRowWithButtons:@[
+    _displayButton,
+    _settingsButton,
+  ]];
+  _rowThreeStack = [self newMenuRowWithButtons:@[
+    _achievementsButton,
+    _exitButton,
+  ]];
+
+  _contentStack = [[UIStackView alloc] initWithArrangedSubviews:@[
+    _titleLabel,
+    _subtitleLabel,
+    _resumeButton,
+    _rowOneStack,
+    _rowTwoStack,
+    _rowThreeStack,
+    _liveLogButton,
+  ]];
+  _contentStack.translatesAutoresizingMaskIntoConstraints = NO;
+  _contentStack.axis = UILayoutConstraintAxisVertical;
+  _contentStack.alignment = UIStackViewAlignmentFill;
+  _contentStack.distribution = UIStackViewDistributionFill;
+  _contentStack.spacing = 10.0;
+  [_panel addSubview:_contentStack];
 
   [NSLayoutConstraint activateConstraints:@[
     [_panel.centerXAnchor constraintEqualToAnchor:self.centerXAnchor],
-    [_panel.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
+    [_panel.centerYAnchor constraintEqualToAnchor:self.safeAreaLayoutGuide.centerYAnchor],
     [_panel.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.safeAreaLayoutGuide.leadingAnchor
-                                                      constant:24],
+                                                      constant:12],
     [_panel.trailingAnchor constraintLessThanOrEqualToAnchor:self.safeAreaLayoutGuide.trailingAnchor
-                                                    constant:-24],
-
-    [title.topAnchor constraintEqualToAnchor:_panel.topAnchor constant:18],
-    [title.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor constant:20],
-    [title.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor constant:-20],
-
-    [subtitle.topAnchor constraintEqualToAnchor:title.bottomAnchor constant:4],
-    [subtitle.leadingAnchor constraintEqualToAnchor:title.leadingAnchor],
-    [subtitle.trailingAnchor constraintEqualToAnchor:title.trailingAnchor],
+                                                    constant:-12],
+    [_panel.topAnchor constraintGreaterThanOrEqualToAnchor:self.safeAreaLayoutGuide.topAnchor
+                                                  constant:8],
+    [_panel.bottomAnchor constraintLessThanOrEqualToAnchor:self.safeAreaLayoutGuide.bottomAnchor
+                                                  constant:-8],
   ]];
 
-  _panelWidthConstraint = [_panel.widthAnchor constraintLessThanOrEqualToConstant:420];
+  _panelWidthConstraint =
+      [[_panel.widthAnchor constraintEqualToConstant:420] retain];
+  _panelWidthConstraint.priority = UILayoutPriorityDefaultHigh;
+  _resumeHeightConstraint =
+      [[_resumeButton.heightAnchor constraintEqualToConstant:52] retain];
+  _rowOneHeightConstraint =
+      [[_rowOneStack.heightAnchor constraintEqualToConstant:50] retain];
+  _rowTwoHeightConstraint =
+      [[_rowTwoStack.heightAnchor constraintEqualToConstant:50] retain];
+  _rowThreeHeightConstraint =
+      [[_rowThreeStack.heightAnchor constraintEqualToConstant:50] retain];
+  _liveLogHeightConstraint =
+      [[_liveLogButton.heightAnchor constraintEqualToConstant:46] retain];
+  _resumeHeightConstraint.priority = UILayoutPriorityDefaultHigh;
+  _rowOneHeightConstraint.priority = UILayoutPriorityDefaultHigh;
+  _rowTwoHeightConstraint.priority = UILayoutPriorityDefaultHigh;
+  _rowThreeHeightConstraint.priority = UILayoutPriorityDefaultHigh;
+  _liveLogHeightConstraint.priority = UILayoutPriorityDefaultHigh;
   [NSLayoutConstraint activateConstraints:@[
     _panelWidthConstraint,
+    _resumeHeightConstraint,
+    _rowOneHeightConstraint,
+    _rowTwoHeightConstraint,
+    _rowThreeHeightConstraint,
+    _liveLogHeightConstraint,
 
-    // Resume — full width.
-    [_resumeButton.topAnchor constraintEqualToAnchor:subtitle.bottomAnchor constant:16],
-    [_resumeButton.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor constant:14],
-    [_resumeButton.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor constant:-14],
-
-    // Row 1: Edit Controls | Graphics
-    [_editControlsButton.topAnchor constraintEqualToAnchor:_resumeButton.bottomAnchor constant:10],
-    [_editControlsButton.leadingAnchor constraintEqualToAnchor:_resumeButton.leadingAnchor],
-    [_graphicsButton.topAnchor constraintEqualToAnchor:_editControlsButton.topAnchor],
-    [_graphicsButton.leadingAnchor constraintEqualToAnchor:_editControlsButton.trailingAnchor
-                                                  constant:10],
-    [_graphicsButton.trailingAnchor constraintEqualToAnchor:_resumeButton.trailingAnchor],
-    [_graphicsButton.widthAnchor constraintEqualToAnchor:_editControlsButton.widthAnchor],
-
-    // Row 2: Display | Settings
-    [_displayButton.topAnchor constraintEqualToAnchor:_editControlsButton.bottomAnchor constant:10],
-    [_displayButton.leadingAnchor constraintEqualToAnchor:_resumeButton.leadingAnchor],
-    [_settingsButton.topAnchor constraintEqualToAnchor:_displayButton.topAnchor],
-    [_settingsButton.leadingAnchor constraintEqualToAnchor:_displayButton.trailingAnchor
-                                                  constant:10],
-    [_settingsButton.trailingAnchor constraintEqualToAnchor:_resumeButton.trailingAnchor],
-    [_settingsButton.widthAnchor constraintEqualToAnchor:_displayButton.widthAnchor],
-
-    // Row 3: Achievements | Exit
-    [_achievementsButton.topAnchor constraintEqualToAnchor:_displayButton.bottomAnchor
-                                                  constant:10],
-    [_achievementsButton.leadingAnchor constraintEqualToAnchor:_resumeButton.leadingAnchor],
-    [_exitButton.topAnchor constraintEqualToAnchor:_achievementsButton.topAnchor],
-    [_exitButton.leadingAnchor constraintEqualToAnchor:_achievementsButton.trailingAnchor
-                                              constant:10],
-    [_exitButton.trailingAnchor constraintEqualToAnchor:_resumeButton.trailingAnchor],
-    [_exitButton.widthAnchor constraintEqualToAnchor:_achievementsButton.widthAnchor],
-
-    // Footer: Live Log
-    [_liveLogButton.topAnchor constraintEqualToAnchor:_achievementsButton.bottomAnchor constant:10],
-    [_liveLogButton.centerXAnchor constraintEqualToAnchor:_panel.centerXAnchor],
-    [_liveLogButton.bottomAnchor constraintEqualToAnchor:_panel.bottomAnchor constant:-14],
+    [_contentStack.topAnchor constraintEqualToAnchor:_panel.topAnchor constant:14],
+    [_contentStack.leadingAnchor constraintEqualToAnchor:_panel.leadingAnchor
+                                                constant:14],
+    [_contentStack.trailingAnchor constraintEqualToAnchor:_panel.trailingAnchor
+                                                 constant:-14],
+    [_contentStack.bottomAnchor constraintEqualToAnchor:_panel.bottomAnchor
+                                               constant:-14],
   ]];
-  [title release];
-  [subtitle release];
   return self;
 }
 
@@ -194,6 +221,17 @@
   [_graphicsHandler release];
   [_displayMenu release];
   [_panelWidthConstraint release];
+  [_resumeHeightConstraint release];
+  [_rowOneHeightConstraint release];
+  [_rowTwoHeightConstraint release];
+  [_rowThreeHeightConstraint release];
+  [_liveLogHeightConstraint release];
+  [_contentStack release];
+  [_rowOneStack release];
+  [_rowTwoStack release];
+  [_rowThreeStack release];
+  [_titleLabel release];
+  [_subtitleLabel release];
   [_panel release];
   [_resumeButton release];
   [_editControlsButton release];
@@ -232,6 +270,10 @@
   UIButton* button = [[UIButton buttonWithConfiguration:config primaryAction:nil] retain];
   button.translatesAutoresizingMaskIntoConstraints = NO;
   xe_apply_button_title_font(button, UIFontTextStyleBody, 16.0, UIFontWeightSemibold);
+  button.titleLabel.numberOfLines = 1;
+  button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  button.titleLabel.adjustsFontSizeToFitWidth = YES;
+  button.titleLabel.minimumScaleFactor = 0.72;
   button.accessibilityLabel = title;
   if ([title isEqualToString:@"Resume"]) {
     button.accessibilityHint = @"Returns to the game.";
@@ -254,6 +296,88 @@
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
   }
   return button;
+}
+
+- (UIStackView*)newMenuRowWithButtons:(NSArray<UIButton*>*)buttons {
+  UIStackView* row = [[UIStackView alloc] initWithArrangedSubviews:buttons];
+  row.translatesAutoresizingMaskIntoConstraints = NO;
+  row.axis = UILayoutConstraintAxisHorizontal;
+  row.alignment = UIStackViewAlignmentFill;
+  row.distribution = UIStackViewDistributionFillEqually;
+  row.spacing = 10.0;
+  return row;
+}
+
+- (void)updateButton:(UIButton*)button
+               title:(NSString*)title
+             compact:(BOOL)compact
+              resume:(BOOL)resume {
+  UIButtonConfiguration* config = button.configuration;
+  config.title = title;
+  config.imagePadding = compact ? 4.0 : 6.0;
+  if (resume) {
+    config.contentInsets =
+        compact ? NSDirectionalEdgeInsetsMake(8, 14, 8, 14)
+                : NSDirectionalEdgeInsetsMake(12, 18, 12, 18);
+  } else {
+    config.contentInsets =
+        compact ? NSDirectionalEdgeInsetsMake(7, 10, 7, 10)
+                : NSDirectionalEdgeInsetsMake(10, 16, 10, 16);
+  }
+  button.configuration = config;
+
+  xe_apply_button_title_font(button,
+                             compact ? UIFontTextStyleSubheadline
+                                     : UIFontTextStyleBody,
+                             compact ? (resume ? 16.0 : 14.0) : 16.0,
+                             UIFontWeightSemibold);
+  button.titleLabel.numberOfLines = 1;
+  button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+  button.titleLabel.adjustsFontSizeToFitWidth = YES;
+  button.titleLabel.minimumScaleFactor = 0.72;
+}
+
+- (void)applyMenuLayoutForCompactLandscape:(BOOL)compact {
+  _subtitleLabel.hidden = compact;
+  _contentStack.spacing = compact ? 6.0 : 10.0;
+  _rowOneStack.spacing = compact ? 8.0 : 10.0;
+  _rowTwoStack.spacing = compact ? 8.0 : 10.0;
+  _rowThreeStack.spacing = compact ? 8.0 : 10.0;
+  _resumeHeightConstraint.constant = compact ? 42.0 : 52.0;
+  _rowOneHeightConstraint.constant = compact ? 42.0 : 50.0;
+  _rowTwoHeightConstraint.constant = compact ? 42.0 : 50.0;
+  _rowThreeHeightConstraint.constant = compact ? 42.0 : 50.0;
+  _liveLogHeightConstraint.constant = compact ? 40.0 : 46.0;
+
+  xe_apply_label_font(_titleLabel,
+                      compact ? UIFontTextStyleHeadline : UIFontTextStyleTitle2,
+                      compact ? 18.0 : 22.0, UIFontWeightSemibold);
+  xe_apply_label_font(_subtitleLabel, UIFontTextStyleSubheadline,
+                      compact ? 13.0 : 15.0, UIFontWeightRegular);
+
+  [self updateButton:_resumeButton title:@"Resume" compact:compact resume:YES];
+  [self updateButton:_editControlsButton
+               title:(compact ? @"Controls" : @"Edit Controls")
+             compact:compact
+              resume:NO];
+  [self updateButton:_graphicsButton
+               title:@"Graphics"
+             compact:compact
+              resume:NO];
+  [self updateButton:_displayButton title:@"Display" compact:compact resume:NO];
+  [self updateButton:_settingsButton title:@"Settings" compact:compact resume:NO];
+  [self updateButton:_achievementsButton
+               title:@"Achievements"
+             compact:compact
+              resume:NO];
+  [self updateButton:_exitButton
+               title:(compact ? @"Exit" : @"Exit To Library")
+             compact:compact
+              resume:NO];
+  [self updateButton:_liveLogButton
+               title:(compact ? @"Log" : @"Live Log")
+             compact:compact
+              resume:NO];
 }
 
 - (void)setDisplayMenu:(UIMenu*)displayMenu {
@@ -419,7 +543,17 @@
 - (void)layoutSubviews {
   [super layoutSubviews];
   const BOOL isLandscape = self.bounds.size.width > self.bounds.size.height;
-  _panelWidthConstraint.constant = isLandscape ? 540.0 : 420.0;
+  CGRect safeFrame = self.safeAreaLayoutGuide.layoutFrame;
+  if (CGRectIsEmpty(safeFrame)) {
+    safeFrame = self.bounds;
+  }
+  const BOOL compactLandscape = isLandscape && safeFrame.size.height < 460.0;
+  if (compactLandscape) {
+    _panelWidthConstraint.constant = MIN(560.0, MAX(320.0, safeFrame.size.width - 24.0));
+  } else {
+    _panelWidthConstraint.constant = isLandscape ? 540.0 : 420.0;
+  }
+  [self applyMenuLayoutForCompactLandscape:compactLandscape];
 }
 
 - (void)resumePressed:(UIButton*)__unused sender {

@@ -21,6 +21,7 @@
 typedef NS_ENUM(NSInteger, XeniaIOSGameAction) {
   XeniaIOSGameActionPlay = 0,
   XeniaIOSGameActionGameSettings,
+  XeniaIOSGameActionResetGameSettings,
   XeniaIOSGameActionTouchLayout,
   XeniaIOSGameActionCompatibility,
   XeniaIOSGameActionManageContent,
