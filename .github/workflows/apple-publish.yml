@@ -240,6 +240,10 @@ jobs:
 
           ./xenia-build.py fetchdata
 
+      - name: Select Xcode 26.3
+        if: "${{ matrix.label == 'iOS arm64' }}"
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
       - name: Build trusted artifact
         shell: bash
         env:
