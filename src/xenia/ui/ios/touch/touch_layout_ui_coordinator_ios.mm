@@ -26,23 +26,70 @@
 #import "xenia/ui/ios/touch/touch_layout_store_ios.h"
 
 using xe::ui::IOSTouchLocalLayoutInfo;
+using xe::ui::DefaultOfficialTouchLayoutLocalID;
+using xe::ui::IsFavoriteTouchLayoutLocalID;
 using xe::ui::IsOfficialTouchLayoutLocalID;
 using xe::ui::MakeOfficialIOSTouchLayoutModel;
 using xe::ui::MakeOfficialIOSTouchLayoutModelForLocalID;
 using xe::ui::MakeTouchLayoutSeedModelForTable;
 using xe::ui::MakeTouchLayoutSlug;
 using xe::ui::NormalizeOfficialTouchLayoutBaseTemplate;
+using xe::ui::ReadGlobalTouchLayoutAssignment;
 using xe::ui::ReadTitleTouchLayoutAssignment;
 using xe::ui::RenderTouchLayoutThumbnail;
+using xe::ui::SetFavoriteTouchLayoutLocalID;
 using xe::ui::TouchLayoutContentMatches;
 using xe::ui::TryNormalizeConfiguredTouchLayoutLocalID;
-using xe::ui::kOfficialTouchLayoutLocalID;
+using xe::ui::WriteGlobalTouchLayoutAssignment;
+using xe::ui::kOfficialTouchLayoutFPSCompactLocalID;
+using xe::ui::kOfficialTouchLayoutFPSFullLocalID;
 using xe::ui::kTouchLayoutAssignmentSection;
 
 namespace {
 
 constexpr NSUInteger kXeniaIOSTouchLayoutMaxBytes = 64 * 1024;
 constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
+
+bool TouchLayoutControlsMatch(
+    const xe::hid::touch::IOSTouchLayoutModel& layout,
+    const xe::hid::touch::IOSTouchLayoutModel& reference_layout) {
+  xe::hid::touch::IOSTouchLayoutModel comparable_layout = layout;
+  comparable_layout.layout_id = reference_layout.layout_id;
+  comparable_layout.display_name = reference_layout.display_name;
+  comparable_layout.author = reference_layout.author;
+  comparable_layout.base_template = reference_layout.base_template;
+  return TouchLayoutContentMatches(comparable_layout, reference_layout);
+}
+
+std::string DeviceDefaultAssignmentForStaleInlineLayout(
+    const xe::hid::touch::IOSTouchLayoutModel& layout) {
+  const std::string default_layout_id = DefaultOfficialTouchLayoutLocalID();
+  if (default_layout_id != kOfficialTouchLayoutFPSFullLocalID) {
+    return std::string();
+  }
+
+  if (TouchLayoutControlsMatch(
+          layout,
+          MakeOfficialIOSTouchLayoutModelForLocalID(
+              kOfficialTouchLayoutFPSCompactLocalID)) ||
+      TouchLayoutControlsMatch(
+          layout, MakeOfficialIOSTouchLayoutModelForLocalID(default_layout_id))) {
+    return default_layout_id;
+  }
+  return std::string();
+}
+
+std::string OfficialResetLayoutIDForRuntimeLayout(
+    const xe::hid::touch::IOSTouchLayoutModel* layout) {
+  const std::string default_layout_id = DefaultOfficialTouchLayoutLocalID();
+  const std::string base_template = NormalizeOfficialTouchLayoutBaseTemplate(
+      layout ? layout->base_template : std::string());
+  if (default_layout_id == kOfficialTouchLayoutFPSFullLocalID &&
+      base_template == kOfficialTouchLayoutFPSCompactLocalID) {
+    return default_layout_id;
+  }
+  return base_template;
+}
 
 }  // namespace
 
@@ -103,6 +150,22 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   return xe::ui::UniqueIOSTouchLayoutLocalIDForBaseName(base_name, existing_local_id);
 }
 
+- (BOOL)findTouchLayoutInfoWithLocalID:(NSString*)localID
+                                  info:(IOSTouchLocalLayoutInfo*)info_out {
+  if (!localID.length || !info_out) {
+    return NO;
+  }
+  std::string selected_local_id([localID UTF8String]);
+  std::vector<IOSTouchLocalLayoutInfo> layouts = [self availableLocalTouchLayouts];
+  for (const IOSTouchLocalLayoutInfo& info : layouts) {
+    if (info.local_id == selected_local_id) {
+      *info_out = info;
+      return YES;
+    }
+  }
+  return NO;
+}
+
 - (std::string)currentTouchLayoutLibrarySelectionLocalID {
   xe::hid::touch::IOSTouchRuntimeModel* runtime_model = [self runtimeModel];
   return runtime_model ? runtime_model->layout().layout_id : std::string();
@@ -112,6 +175,7 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   std::vector<IOSTouchLocalLayoutInfo> layouts = [self availableLocalTouchLayouts];
   const uint32_t active_title_id = [_host touchLayoutCoordinatorActiveTitleID];
   const std::string title_default_local_id = ReadTitleTouchLayoutAssignment(active_title_id);
+  const std::string global_default_local_id = ReadGlobalTouchLayoutAssignment();
   NSMutableArray<XeniaTouchLayoutLibraryItem*>* items =
       [NSMutableArray arrayWithCapacity:layouts.size()];
   for (const IOSTouchLocalLayoutInfo& info : layouts) {
@@ -123,6 +187,9 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
     item.thumbnail = RenderTouchLayoutThumbnail(info.layout, CGSizeMake(120.0, 68.0));
     item.isDefaultForCurrentTitle =
         !title_default_local_id.empty() && title_default_local_id == info.local_id;
+    item.isDefaultForAllGames =
+        !global_default_local_id.empty() && global_default_local_id == info.local_id;
+    item.isFavorite = IsFavoriteTouchLayoutLocalID(info.local_id);
     [items addObject:item];
   }
   return items;
@@ -143,8 +210,32 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
     return;
   }
 
-  [_host touchLayoutCoordinatorSetActiveLocalID:kOfficialTouchLayoutLocalID];
-  runtime_model->SetLayout(MakeOfficialIOSTouchLayoutModel());
+  const std::string global_default_id = ReadGlobalTouchLayoutAssignment();
+  if (!global_default_id.empty()) {
+    if (IsOfficialTouchLayoutLocalID(global_default_id)) {
+      [_host touchLayoutCoordinatorSetActiveLocalID:global_default_id];
+      runtime_model->SetLayout(MakeOfficialIOSTouchLayoutModelForLocalID(global_default_id));
+      [_host touchLayoutCoordinatorRefreshTouchOverlayLayoutModel];
+      return;
+    }
+
+    xe::hid::touch::IOSTouchLayoutModel global_default_layout;
+    NSString* error_message = nil;
+    if ([self loadTouchLayoutModelAtPath:[self touchLayoutPathForLocalID:global_default_id]
+                                   model:&global_default_layout
+                                   error:&error_message]) {
+      [_host touchLayoutCoordinatorSetActiveLocalID:global_default_id];
+      runtime_model->SetLayout(std::move(global_default_layout));
+      [_host touchLayoutCoordinatorRefreshTouchOverlayLayoutModel];
+      return;
+    }
+    WriteGlobalTouchLayoutAssignment(std::string());
+  }
+
+  const std::string default_layout_id = DefaultOfficialTouchLayoutLocalID();
+  [_host touchLayoutCoordinatorSetActiveLocalID:default_layout_id];
+  runtime_model->SetLayout(
+      MakeOfficialIOSTouchLayoutModelForLocalID(default_layout_id));
   [_host touchLayoutCoordinatorRefreshTouchOverlayLayoutModel];
 }
 
@@ -196,6 +287,16 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
     return;
   }
 
+  const std::string migrated_assignment_id =
+      DeviceDefaultAssignmentForStaleInlineLayout(layout);
+  if (!migrated_assignment_id.empty()) {
+    [_host touchLayoutCoordinatorSetActiveLocalID:migrated_assignment_id];
+    runtime_model->SetLayout(MakeOfficialIOSTouchLayoutModelForLocalID(migrated_assignment_id));
+    [_host touchLayoutCoordinatorRefreshTouchOverlayLayoutModel];
+    [self saveCurrentLayoutForTitleID:title_id];
+    return;
+  }
+
   [_host touchLayoutCoordinatorSetActiveLocalID:std::string()];
   runtime_model->SetLayout(std::move(layout));
   [_host touchLayoutCoordinatorRefreshTouchOverlayLayoutModel];
@@ -243,6 +344,38 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
     config::SaveGameConfig(title_id, config_table);
   } catch (const std::exception& e) {
     XELOGE("iOS: failed to save touch layout for title {:08X}: {}", title_id, e.what());
+  }
+}
+
+- (void)writeTouchLayoutAssignmentLocalID:(const std::string&)local_id
+                               forTitleID:(uint32_t)title_id {
+  if (!title_id || local_id.empty()) {
+    return;
+  }
+  toml::table config_table = config::LoadGameConfig(title_id);
+  toml::table assignment_table;
+  assignment_table.insert_or_assign("local_layout_id", local_id);
+  config_table.insert_or_assign(kTouchLayoutAssignmentSection, std::move(assignment_table));
+  config_table.erase("TouchLayout");
+  try {
+    config::SaveGameConfig(title_id, config_table);
+  } catch (const std::exception& e) {
+    XELOGE("iOS: failed to update touch layout assignment for title {:08X}: {}", title_id,
+           e.what());
+  }
+}
+
+- (void)clearTouchLayoutAssignmentForTitleID:(uint32_t)title_id {
+  if (!title_id) {
+    return;
+  }
+  toml::table config_table = config::LoadGameConfig(title_id);
+  config_table.erase(kTouchLayoutAssignmentSection);
+  try {
+    config::SaveGameConfig(title_id, config_table);
+  } catch (const std::exception& e) {
+    XELOGE("iOS: failed to clear touch layout assignment for title {:08X}: {}", title_id,
+           e.what());
   }
 }
 
@@ -327,6 +460,19 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   [self presentActionSheet:sheet];
 }
 
+- (void)renameLayoutWithLocalID:(NSString*)localID {
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  if (selected_info.official) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Official presets cannot be renamed."];
+    return;
+  }
+  [self renameLayout:selected_info currentName:ToNSString(selected_info.display_name)];
+}
+
 - (void)renameLayout:(const IOSTouchLocalLayoutInfo&)selected_info
          currentName:(NSString*)current_name {
   __unsafe_unretained XeniaIOSTouchLayoutUICoordinator* unsafe_self = self;
@@ -388,6 +534,17 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   if ([_host touchLayoutCoordinatorActiveLocalID] == selected_info.local_id) {
     [_host touchLayoutCoordinatorSetActiveLocalID:std::string()];
   }
+  if (ReadGlobalTouchLayoutAssignment() == selected_info.local_id) {
+    WriteGlobalTouchLayoutAssignment(next_local_id);
+  }
+  if (IsFavoriteTouchLayoutLocalID(selected_info.local_id)) {
+    SetFavoriteTouchLayoutLocalID(selected_info.local_id, false);
+    SetFavoriteTouchLayoutLocalID(next_local_id, true);
+  }
+  const uint32_t active_title_id = [_host touchLayoutCoordinatorActiveTitleID];
+  if (ReadTitleTouchLayoutAssignment(active_title_id) == selected_info.local_id) {
+    [self writeTouchLayoutAssignmentLocalID:next_local_id forTitleID:active_title_id];
+  }
 
   [self refreshTouchLayoutLibraryOverlayIfVisible];
   [_host touchLayoutCoordinatorSetStatusText:[NSString stringWithFormat:@"Renamed %@.", trimmed]];
@@ -428,6 +585,19 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   [self presentActionSheet:sheet];
 }
 
+- (void)deleteLayoutWithLocalID:(NSString*)localID {
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  if (selected_info.official) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Official presets cannot be deleted."];
+    return;
+  }
+  [self confirmDeleteLayout:selected_info currentName:ToNSString(selected_info.display_name)];
+}
+
 - (void)confirmDeleteLayout:(const IOSTouchLocalLayoutInfo&)selected_info
                 currentName:(NSString*)current_name {
   UIAlertController* confirm =
@@ -461,6 +631,14 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
 
   if ([_host touchLayoutCoordinatorActiveLocalID] == selected_info.local_id) {
     [_host touchLayoutCoordinatorSetActiveLocalID:std::string()];
+  }
+  if (ReadGlobalTouchLayoutAssignment() == selected_info.local_id) {
+    WriteGlobalTouchLayoutAssignment(std::string());
+  }
+  SetFavoriteTouchLayoutLocalID(selected_info.local_id, false);
+  const uint32_t active_title_id = [_host touchLayoutCoordinatorActiveTitleID];
+  if (ReadTitleTouchLayoutAssignment(active_title_id) == selected_info.local_id) {
+    [self clearTouchLayoutAssignmentForTitleID:active_title_id];
   }
 
   [self refreshTouchLayoutLibraryOverlayIfVisible];
@@ -577,19 +755,18 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   [_host touchLayoutCoordinatorUpdateTouchOverlayVisibilityAnimated:YES];
 }
 
-- (void)exportCurrentLayout {
-  xe::hid::touch::IOSTouchRuntimeModel* runtime_model = [self runtimeModel];
-  if (!runtime_model) {
-    return;
+- (void)exportTouchLayoutModel:(const xe::hid::touch::IOSTouchLayoutModel&)layout
+                  fallbackName:(NSString*)fallback_name {
+  std::string display_name = layout.display_name;
+  if (display_name.empty() && fallback_name.length) {
+    display_name = std::string([fallback_name UTF8String]);
   }
-
-  std::string base_name = runtime_model->layout().display_name.empty()
-                              ? "touch_layout"
-                              : MakeTouchLayoutSlug(runtime_model->layout().display_name);
+  std::string base_name =
+      display_name.empty() ? "touch_layout" : MakeTouchLayoutSlug(display_name);
   std::filesystem::path export_path = std::filesystem::path([NSTemporaryDirectory() UTF8String]) /
                                       (base_name + ".touchlayout.toml");
   NSString* error_message = nil;
-  if (![self writeTouchLayoutModel:runtime_model->layout() path:export_path error:&error_message]) {
+  if (![self writeTouchLayoutModel:layout path:export_path error:&error_message]) {
     [_host touchLayoutCoordinatorSetStatusText:error_message ?: @"Failed to export touch layout."];
     return;
   }
@@ -613,11 +790,72 @@ constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   [activity_controller release];
 }
 
+- (void)exportCurrentLayout {
+  xe::hid::touch::IOSTouchRuntimeModel* runtime_model = [self runtimeModel];
+  if (!runtime_model) {
+    return;
+  }
+  [self exportTouchLayoutModel:runtime_model->layout() fallbackName:nil];
+}
+
+- (void)exportLayoutWithLocalID:(NSString*)localID {
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  [self exportTouchLayoutModel:selected_info.layout
+                  fallbackName:ToNSString(selected_info.display_name)];
+}
+
+- (void)setLayoutDefaultForCurrentTitleWithLocalID:(NSString*)localID {
+  if (![_host touchLayoutCoordinatorActiveTitleID]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"No active game title for this layout default."];
+    return;
+  }
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  [self applyTouchLayoutInfo:selected_info];
+  [_host touchLayoutCoordinatorSetStatusText:
+             [NSString stringWithFormat:@"Default for this game is %@.",
+                                        ToNSString(selected_info.display_name)]];
+}
+
+- (void)setLayoutDefaultForAllGamesWithLocalID:(NSString*)localID {
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  WriteGlobalTouchLayoutAssignment(selected_info.local_id);
+  [self refreshTouchLayoutLibraryOverlayIfVisible];
+  [_host touchLayoutCoordinatorSetStatusText:
+             [NSString stringWithFormat:@"Default for all games is %@.",
+                                        ToNSString(selected_info.display_name)]];
+}
+
+- (void)setLayoutFavoriteWithLocalID:(NSString*)localID favorite:(BOOL)favorite {
+  IOSTouchLocalLayoutInfo selected_info;
+  if (![self findTouchLayoutInfoWithLocalID:localID info:&selected_info]) {
+    [_host touchLayoutCoordinatorSetStatusText:@"Selected layout is no longer available."];
+    return;
+  }
+  SetFavoriteTouchLayoutLocalID(selected_info.local_id, favorite);
+  [self refreshTouchLayoutLibraryOverlayIfVisible];
+  [_host touchLayoutCoordinatorSetStatusText:
+             [NSString stringWithFormat:@"%@ %@.",
+                                        favorite ? @"Favorited" : @"Unfavorited",
+                                        ToNSString(selected_info.display_name)]];
+}
+
 - (void)resetToOfficialPreset {
   xe::ui::EnsureOfficialIOSTouchLayoutPresets();
   xe::hid::touch::IOSTouchRuntimeModel* runtime_model = [self runtimeModel];
-  const std::string base_template = NormalizeOfficialTouchLayoutBaseTemplate(
-      runtime_model ? runtime_model->layout().base_template : std::string());
+  const std::string base_template = OfficialResetLayoutIDForRuntimeLayout(
+      runtime_model ? &runtime_model->layout() : nullptr);
   const xe::hid::touch::IOSTouchLayoutModel preset_layout =
       MakeOfficialIOSTouchLayoutModelForLocalID(base_template);
   [_host touchLayoutCoordinatorSetActiveLocalID:base_template];

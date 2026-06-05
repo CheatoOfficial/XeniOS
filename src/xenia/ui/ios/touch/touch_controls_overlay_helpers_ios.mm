@@ -101,8 +101,15 @@ NSString* TouchInteractionBehaviorOutputText(
     [outputs addObject:[NSString stringWithUTF8String:xe::hid::touch::IOSTouchActionDisplayName(
                                                           behavior.action)]];
   }
-  if (behavior.enables_relative_look) {
-    [outputs addObject:@"Look"];
+  xe::hid::touch::IOSTouchAnalogOutput analog_output = behavior.analog_output;
+  if (analog_output == xe::hid::touch::IOSTouchAnalogOutput::kNone &&
+      behavior.enables_relative_look) {
+    analog_output = xe::hid::touch::IOSTouchAnalogOutput::kLook;
+  }
+  if (analog_output != xe::hid::touch::IOSTouchAnalogOutput::kNone) {
+    [outputs addObject:[NSString stringWithUTF8String:
+                                     xe::hid::touch::IOSTouchAnalogOutputDisplayName(
+                                         analog_output)]];
   }
   return outputs.count ? [outputs componentsJoinedByString:@" + "] : @"Unused";
 }
@@ -174,6 +181,34 @@ const float kRelativeLookScaleChoices[8] = {
     0.50f, 0.66f, 0.80f, 0.92f, 1.05f, 1.25f, 1.50f, 2.00f,
 };
 
+const float kTouchAnalogScaleChoices[9] = {
+    0.25f, 0.50f, 0.75f, 1.00f, 1.25f, 1.50f, 2.00f, 3.00f, 4.00f,
+};
+
+const float kTouchAnalogPercentChoices[8] = {
+    0.00f, 0.05f, 0.10f, 0.14f, 0.18f, 0.24f, 0.32f, 0.48f,
+};
+
+const float kTouchAnalogRadiusChoices[7] = {
+    0.24f, 0.33f, 0.40f, 0.48f, 0.56f, 0.70f, 1.00f,
+};
+
+const float kTouchAnalogCurveChoices[7] = {
+    0.50f, 0.75f, 1.00f, 1.25f, 1.50f, 2.00f, 3.00f,
+};
+
+const float kTouchAnalogAccelerationChoices[6] = {
+    0.00f, 0.25f, 0.50f, 0.75f, 1.00f, 2.00f,
+};
+
+const float kTouchAnalogSmoothingChoices[6] = {
+    0.00f, 0.10f, 0.20f, 0.35f, 0.55f, 0.80f,
+};
+
+const float kTouchAnalogMaxOutputChoices[5] = {
+    0.25f, 0.50f, 0.75f, 0.90f, 1.00f,
+};
+
 const xe::hid::touch::IOSTouchControlShape kEditShapeChoices[2] = {
     xe::hid::touch::IOSTouchControlShape::kCircle,
     xe::hid::touch::IOSTouchControlShape::kRoundedRect,
@@ -202,6 +237,18 @@ CGPoint ClampLookVector(CGPoint value) {
 CGPoint SwipeLookVectorForDelta(CGPoint delta, float look_scale) {
   return ToCGPoint(xe::hid::touch::TouchSwipeLookVectorForDelta(
       ToInputPoint(delta), look_scale, TouchLookPointsPerFullScale(), TouchLookVerticalScale()));
+}
+
+CGPoint ApplyTouchAnalogTuning(CGPoint value,
+                               const xe::hid::touch::IOSTouchAnalogTuning& tuning) {
+  return ToCGPoint(xe::hid::touch::ApplyTouchAnalogTuning(ToInputPoint(value), tuning));
+}
+
+CGPoint ApplyTouchAnalogTuningWithVelocity(
+    CGPoint value, const xe::hid::touch::IOSTouchAnalogTuning& tuning,
+    float velocity_full_scales_per_second) {
+  return ToCGPoint(xe::hid::touch::ApplyTouchAnalogTuningWithVelocity(
+      ToInputPoint(value), tuning, velocity_full_scales_per_second));
 }
 
 std::array<CGRect, kEditChromeDockCount> EditChromeDockCandidateFrames(
@@ -283,9 +330,9 @@ NSString* TouchButtonMaskPreviewText(uint16_t buttons) {
 NSString* TouchControlShapeDisplayText(xe::hid::touch::IOSTouchControlShape shape) {
   switch (shape) {
     case xe::hid::touch::IOSTouchControlShape::kCircle:
-      return @"Round";
+      return @"Circle";
     case xe::hid::touch::IOSTouchControlShape::kRoundedRect:
-      return @"Rounded";
+      return @"Rounded Rectangle";
   }
   return @"Round";
 }

@@ -10,7 +10,10 @@
 #include "xenia/hid/touch/touch_layout_editor.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <utility>
+#include <vector>
 
 namespace xe {
 namespace hid {
@@ -19,6 +22,64 @@ namespace {
 
 float MaxNormalizedEditorControlSize(IOSTouchControlType control_type) {
   return control_type == IOSTouchControlType::kLookSwipeZone ? 1.0f : 0.98f;
+}
+
+bool ControlParticipatesInPlacementAvoidance(
+    const IOSTouchControlDefinition& control) {
+  return control.type != IOSTouchControlType::kLookSwipeZone;
+}
+
+float TouchRectArea(const IOSTouchRect& rect) {
+  return std::max(rect.width, 0.0f) * std::max(rect.height, 0.0f);
+}
+
+float TouchRectIntersectionArea(const IOSTouchRect& a, const IOSTouchRect& b) {
+  const float min_x = std::max(a.x, b.x);
+  const float min_y = std::max(a.y, b.y);
+  const float max_x = std::min(a.x + a.width, b.x + b.width);
+  const float max_y = std::min(a.y + a.height, b.y + b.height);
+  return std::max(max_x - min_x, 0.0f) * std::max(max_y - min_y, 0.0f);
+}
+
+float PlacementOverlapRatioSum(const IOSTouchLayoutModel& layout,
+                               const IOSTouchRect& candidate,
+                               bool is_portrait) {
+  const float candidate_area = TouchRectArea(candidate);
+  if (candidate_area <= 0.0f) {
+    return std::numeric_limits<float>::max();
+  }
+
+  float overlap_ratio_sum = 0.0f;
+  for (const auto& control : layout.controls) {
+    if (!ControlParticipatesInPlacementAvoidance(control)) {
+      continue;
+    }
+    const IOSTouchRect& active_frame =
+        ActiveControlFrameForOrientation(control, is_portrait);
+    overlap_ratio_sum +=
+        TouchRectIntersectionArea(candidate, active_frame) / candidate_area;
+  }
+  return overlap_ratio_sum;
+}
+
+void AppendCandidateFrame(std::vector<IOSTouchRect>* candidates,
+                          const IOSTouchRect& frame,
+                          IOSTouchControlType control_type) {
+  if (!candidates) {
+    return;
+  }
+  IOSTouchRect clamped = ClampIOSTouchEditorControlFrame(frame, control_type);
+  const bool exists =
+      std::any_of(candidates->begin(), candidates->end(),
+                  [&clamped](const IOSTouchRect& existing) {
+                    return std::abs(existing.x - clamped.x) < 0.001f &&
+                           std::abs(existing.y - clamped.y) < 0.001f &&
+                           std::abs(existing.width - clamped.width) < 0.001f &&
+                           std::abs(existing.height - clamped.height) < 0.001f;
+                  });
+  if (!exists) {
+    candidates->push_back(clamped);
+  }
 }
 
 }  // namespace
@@ -126,6 +187,71 @@ IOSTouchRect ClampIOSTouchEditorControlFrame(const IOSTouchRect& rect,
   return result;
 }
 
+IOSTouchRect FindAvailableIOSTouchEditorControlFrame(
+    const IOSTouchLayoutModel& layout, const IOSTouchRect& preferred_frame,
+    IOSTouchControlType control_type, bool is_portrait) {
+  IOSTouchRect preferred =
+      ClampIOSTouchEditorControlFrame(preferred_frame, control_type);
+  if (control_type == IOSTouchControlType::kLookSwipeZone) {
+    return preferred;
+  }
+
+  constexpr float kPlacementGap = 0.018f;
+  std::vector<IOSTouchRect> candidates;
+  candidates.reserve(160);
+  AppendCandidateFrame(&candidates, preferred, control_type);
+
+  const float step_x = std::max(preferred.width + kPlacementGap, 0.075f);
+  const float step_y = std::max(preferred.height + kPlacementGap, 0.075f);
+  for (int radius = 1; radius <= 8; ++radius) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dx = -radius; dx <= radius; ++dx) {
+        if (std::max(std::abs(dx), std::abs(dy)) != radius) {
+          continue;
+        }
+        AppendCandidateFrame(
+            &candidates,
+            IOSTouchRect{preferred.x + dx * step_x, preferred.y + dy * step_y,
+                         preferred.width, preferred.height},
+            control_type);
+      }
+    }
+  }
+
+  auto append_grid = [&](float min_x, float max_x, float min_y, float max_y) {
+    for (float y = min_y; y <= max_y - preferred.height + 0.001f; y += step_y) {
+      for (float x = min_x; x <= max_x - preferred.width + 0.001f;
+           x += step_x) {
+        AppendCandidateFrame(
+            &candidates, IOSTouchRect{x, y, preferred.width, preferred.height},
+            control_type);
+      }
+    }
+  };
+  append_grid(0.52f, 0.98f, 0.18f, 0.92f);
+  append_grid(0.06f, 0.98f, 0.06f, 0.92f);
+
+  const float preferred_center_x = preferred.x + preferred.width * 0.5f;
+  const float preferred_center_y = preferred.y + preferred.height * 0.5f;
+  IOSTouchRect best = preferred;
+  float best_score = std::numeric_limits<float>::max();
+  for (const IOSTouchRect& candidate : candidates) {
+    const float candidate_center_x = candidate.x + candidate.width * 0.5f;
+    const float candidate_center_y = candidate.y + candidate.height * 0.5f;
+    const float distance = std::hypot(candidate_center_x - preferred_center_x,
+                                      candidate_center_y - preferred_center_y);
+    const float overlap_ratio =
+        PlacementOverlapRatioSum(layout, candidate, is_portrait);
+    const float left_side_penalty = candidate.x < 0.45f ? 0.04f : 0.0f;
+    const float score = overlap_ratio * 1000.0f + distance + left_side_penalty;
+    if (score < best_score) {
+      best_score = score;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
 bool AddSuggestedActionButtonToIOSTouchLayout(
     IOSTouchLayoutModel* layout, bool is_portrait,
     std::string* selected_identifier_out) {
@@ -139,8 +265,9 @@ bool AddSuggestedActionButtonToIOSTouchLayout(
   control.identifier = MakeUniqueIOSTouchActionButtonIdentifier(*layout);
   control.type = IOSTouchControlType::kActionButton;
   control.shape = IOSTouchControlShape::kCircle;
-  control.normalized_frame = ClampIOSTouchEditorControlFrame(
-      SuggestedNewIOSTouchActionButtonFrame(action), control.type);
+  control.normalized_frame = FindAvailableIOSTouchEditorControlFrame(
+      *layout, SuggestedNewIOSTouchActionButtonFrame(action), control.type,
+      is_portrait);
   if (is_portrait) {
     control.has_portrait_frame = true;
     control.portrait_normalized_frame = control.normalized_frame;
@@ -210,10 +337,11 @@ bool DuplicateIOSTouchLayoutActionButton(IOSTouchLayoutModel* layout,
   duplicate.identifier = MakeUniqueIOSTouchActionButtonIdentifier(*layout);
   IOSTouchRect& active_frame =
       MutableActiveControlFrameForOrientation(duplicate, is_portrait);
-  active_frame = ClampIOSTouchEditorControlFrame(
+  active_frame = FindAvailableIOSTouchEditorControlFrame(
+      *layout,
       IOSTouchRect{active_frame.x + 0.03f, active_frame.y + 0.03f,
                    active_frame.width, active_frame.height},
-      duplicate.type);
+      duplicate.type, is_portrait);
   const std::string selected_identifier = duplicate.identifier;
   layout->controls.push_back(std::move(duplicate));
   if (selected_identifier_out) {

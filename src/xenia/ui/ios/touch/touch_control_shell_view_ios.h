@@ -18,6 +18,7 @@
 
 - (instancetype)initWithControl:(const xe::hid::touch::IOSTouchControlDefinition&)control;
 - (void)applyControlDefinition:(const xe::hid::touch::IOSTouchControlDefinition&)control;
+- (void)setBehaviorAnnotationsVisible:(BOOL)visible;
 - (void)setTouchActive:(BOOL)active;
 - (void)setConflictHighlighted:(BOOL)highlighted;
 // When YES, the shell suppresses all visible chrome (fill, border, label).

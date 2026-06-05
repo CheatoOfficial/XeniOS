@@ -28,6 +28,9 @@ IOSTouchAction SuggestedNewIOSTouchActionButtonBinding(
 IOSTouchRect SuggestedNewIOSTouchActionButtonFrame(IOSTouchAction action);
 IOSTouchRect ClampIOSTouchEditorControlFrame(const IOSTouchRect& rect,
                                              IOSTouchControlType control_type);
+IOSTouchRect FindAvailableIOSTouchEditorControlFrame(
+    const IOSTouchLayoutModel& layout, const IOSTouchRect& preferred_frame,
+    IOSTouchControlType control_type, bool is_portrait);
 bool AddSuggestedActionButtonToIOSTouchLayout(
     IOSTouchLayoutModel* layout, bool is_portrait,
     std::string* selected_identifier_out);

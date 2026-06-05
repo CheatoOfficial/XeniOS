@@ -10,17 +10,170 @@
 #import "xenia/ui/ios/touch/touch_control_shell_view_ios.h"
 
 #include <algorithm>
+#include <cmath>
 
 #import "xenia/ui/ios/shared/ios_theme.h"
 #import "xenia/ui/ios/shared/ios_theme_controls.h"
 #include "xenia/ui/ios/touch/touch_overlay_style_ios.h"
 
+namespace {
+
+xe::hid::touch::IOSTouchAnalogOutput EffectiveShellDragOutput(
+    const xe::hid::touch::IOSTouchControlDefinition& control) {
+  if (control.drag_output != xe::hid::touch::IOSTouchAnalogOutput::kNone) {
+    return control.drag_output;
+  }
+  if (control.enables_relative_look) {
+    return xe::hid::touch::IOSTouchAnalogOutput::kLook;
+  }
+  if (control.type == xe::hid::touch::IOSTouchControlType::kLookSwipeZone) {
+    return control.action == xe::hid::touch::IOSTouchAction::kMove
+               ? xe::hid::touch::IOSTouchAnalogOutput::kMove
+               : xe::hid::touch::IOSTouchAnalogOutput::kLook;
+  }
+  return xe::hid::touch::IOSTouchAnalogOutput::kNone;
+}
+
+xe::hid::touch::IOSTouchAnalogOutput EffectiveShellBehaviorAnalogOutput(
+    const xe::hid::touch::IOSTouchInteractionBehavior& behavior) {
+  if (behavior.analog_output != xe::hid::touch::IOSTouchAnalogOutput::kNone) {
+    return behavior.analog_output;
+  }
+  return behavior.enables_relative_look ? xe::hid::touch::IOSTouchAnalogOutput::kLook
+                                        : xe::hid::touch::IOSTouchAnalogOutput::kNone;
+}
+
+NSString* XeniaTouchShortActionName(xe::hid::touch::IOSTouchAction action) {
+  using xe::hid::touch::IOSTouchAction;
+  switch (action) {
+    case IOSTouchAction::kNone:
+      return @"Off";
+    case IOSTouchAction::kMove:
+      return @"Mv";
+    case IOSTouchAction::kLook:
+      return @"Lk";
+    case IOSTouchAction::kPauseMenu:
+      return @"P";
+    case IOSTouchAction::kButtonA:
+      return @"A";
+    case IOSTouchAction::kButtonB:
+      return @"B";
+    case IOSTouchAction::kButtonX:
+      return @"X";
+    case IOSTouchAction::kButtonY:
+      return @"Y";
+    case IOSTouchAction::kLeftBumper:
+      return @"LB";
+    case IOSTouchAction::kRightBumper:
+      return @"RB";
+    case IOSTouchAction::kLeftTrigger:
+      return @"LT";
+    case IOSTouchAction::kRightTrigger:
+      return @"RT";
+    case IOSTouchAction::kBack:
+      return @"Bk";
+    case IOSTouchAction::kStart:
+      return @"St";
+    case IOSTouchAction::kLeftThumb:
+      return @"LS";
+    case IOSTouchAction::kRightThumb:
+      return @"RS";
+    case IOSTouchAction::kDpadUp:
+      return @"DU";
+    case IOSTouchAction::kDpadDown:
+      return @"DD";
+    case IOSTouchAction::kDpadLeft:
+      return @"DL";
+    case IOSTouchAction::kDpadRight:
+      return @"DR";
+  }
+  return @"Ctrl";
+}
+
+NSString* XeniaTouchShortAnalogOutputName(
+    xe::hid::touch::IOSTouchAnalogOutput output) {
+  using xe::hid::touch::IOSTouchAnalogOutput;
+  switch (output) {
+    case IOSTouchAnalogOutput::kNone:
+      return @"Off";
+    case IOSTouchAnalogOutput::kLook:
+      return @"Lk";
+    case IOSTouchAnalogOutput::kMove:
+      return @"Mv";
+  }
+  return @"Off";
+}
+
+NSString* XeniaTouchBehaviorBadgeText(
+    const xe::hid::touch::IOSTouchControlDefinition& control) {
+  NSMutableArray<NSString*>* chips = [NSMutableArray arrayWithCapacity:3];
+  const xe::hid::touch::IOSTouchAnalogOutput primary_output =
+      EffectiveShellDragOutput(control);
+  if (primary_output != xe::hid::touch::IOSTouchAnalogOutput::kNone &&
+      control.type != xe::hid::touch::IOSTouchControlType::kMoveStick) {
+    [chips addObject:[NSString stringWithFormat:@"D:%@",
+                                                XeniaTouchShortAnalogOutputName(primary_output)]];
+  }
+  // The D-pad ring is visible on the stick itself; show hidden sprint-style
+  // behavior first so the badge explains what users cannot otherwise see.
+  const auto& behavior = control.secondary_behavior;
+  if (behavior.trigger != xe::hid::touch::IOSTouchInteractionTrigger::kNone) {
+    NSString* trigger = @"G";
+    switch (behavior.trigger) {
+      case xe::hid::touch::IOSTouchInteractionTrigger::kHold:
+        trigger = @"H";
+        break;
+      case xe::hid::touch::IOSTouchInteractionTrigger::kHoldDrag:
+        trigger = @"HD";
+        break;
+      case xe::hid::touch::IOSTouchInteractionTrigger::kDoubleTap:
+        trigger = @"2x";
+        break;
+      case xe::hid::touch::IOSTouchInteractionTrigger::kDoubleTapForward:
+        trigger = @"2xF";
+        break;
+      case xe::hid::touch::IOSTouchInteractionTrigger::kNone:
+        trigger = @"";
+        break;
+    }
+    if (behavior.action != xe::hid::touch::IOSTouchAction::kNone) {
+      [chips addObject:[NSString stringWithFormat:@"%@:%@", trigger,
+                                                  XeniaTouchShortActionName(behavior.action)]];
+    }
+    const xe::hid::touch::IOSTouchAnalogOutput secondary_output =
+        EffectiveShellBehaviorAnalogOutput(behavior);
+    if (secondary_output != xe::hid::touch::IOSTouchAnalogOutput::kNone) {
+      [chips addObject:[NSString stringWithFormat:@"%@:%@", trigger,
+                                                  XeniaTouchShortAnalogOutputName(
+                                                      secondary_output)]];
+    }
+  }
+
+  if (control.type == xe::hid::touch::IOSTouchControlType::kMoveStick &&
+      control.move_with_dpad_ring) {
+    [chips addObject:@"DPad"];
+  }
+
+  if (!chips.count) {
+    return @"";
+  }
+  if (chips.count > 1) {
+    return [NSString stringWithFormat:@"%@+%lu", [chips objectAtIndex:0],
+                                      static_cast<unsigned long>(chips.count - 1)];
+  }
+  return [chips firstObject];
+}
+
+}  // namespace
+
 @implementation XeniaTouchControlShellView {
   UILabel* label_;
+  UILabel* behavior_badge_;
   xe::hid::touch::IOSTouchControlDefinition control_;
   BOOL touch_active_;
   BOOL conflict_highlighted_;
   BOOL chrome_suppressed_;
+  BOOL behavior_annotations_visible_;
   UIImageView* dpad_arrow_up_;
   UIImageView* dpad_arrow_down_;
   UIImageView* dpad_arrow_left_;
@@ -47,6 +200,24 @@
   label_.minimumScaleFactor = 0.6f;
   [self addSubview:label_];
 
+  behavior_badge_ = [[UILabel alloc] initWithFrame:CGRectZero];
+  behavior_badge_.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78f];
+  behavior_badge_.textColor = [UIColor whiteColor];
+  behavior_badge_.textAlignment = NSTextAlignmentCenter;
+  behavior_badge_.numberOfLines = 1;
+  behavior_badge_.adjustsFontSizeToFitWidth = YES;
+  behavior_badge_.minimumScaleFactor = 0.45f;
+  behavior_badge_.hidden = YES;
+  behavior_badge_.userInteractionEnabled = NO;
+  behavior_badge_.layer.cornerRadius = 5.0f;
+  behavior_badge_.layer.borderWidth = 0.8f;
+  behavior_badge_.layer.borderColor =
+      [[XeniaTheme touchTintAmber] colorWithAlphaComponent:0.82f].CGColor;
+  behavior_badge_.clipsToBounds = YES;
+  xe_apply_label_font(behavior_badge_, UIFontTextStyleCaption2, 6.5,
+                      UIFontWeightSemibold);
+  [self addSubview:behavior_badge_];
+
   [self applyControlDefinition:control];
   return self;
 }
@@ -56,6 +227,7 @@
   [dpad_arrow_left_ release];
   [dpad_arrow_down_ release];
   [dpad_arrow_up_ release];
+  [behavior_badge_ release];
   [label_ release];
   [super dealloc];
 }
@@ -101,7 +273,9 @@
 
   NSString* label_text = xe::ui::XeniaTouchVisibleControlLabelText(control_, NO);
   label_.text = label_text;
-  label_.hidden = label_text.length == 0;
+  label_.hidden = chrome_suppressed_ || label_text.length == 0;
+  behavior_badge_.text = XeniaTouchBehaviorBadgeText(control_);
+  [self updateBehaviorBadgeVisibility];
 
   if ([self isMoveDpadComboControl]) {
     [self ensureDpadArrowViews];
@@ -122,6 +296,19 @@
   touch_active_ = NO;
   [self refreshVisualState];
   [self setNeedsLayout];
+}
+
+- (void)updateBehaviorBadgeVisibility {
+  behavior_badge_.hidden = chrome_suppressed_ || !behavior_annotations_visible_ ||
+                           behavior_badge_.text.length == 0;
+}
+
+- (void)setBehaviorAnnotationsVisible:(BOOL)visible {
+  if (behavior_annotations_visible_ == visible) {
+    return;
+  }
+  behavior_annotations_visible_ = visible;
+  [self updateBehaviorBadgeVisibility];
 }
 
 - (CGFloat)baseVisualAlpha {
@@ -228,6 +415,7 @@
   }
   chrome_suppressed_ = suppressed;
   label_.hidden = suppressed || (label_.text.length == 0);
+  [self updateBehaviorBadgeVisibility];
   [self refreshVisualState];
 }
 
@@ -280,6 +468,18 @@
         CGRectMake(centre_x + arrow_radius - arrow_size * 0.5f,
                    centre_y - arrow_size * 0.5f, arrow_size, arrow_size);
   }
+
+  const CGFloat badge_max_width =
+      MIN(MAX(CGRectGetWidth(self.bounds) * 0.46f, 18.0f), 38.0f);
+  CGSize badge_size =
+      [behavior_badge_ sizeThatFits:CGSizeMake(badge_max_width, 14.0f)];
+  badge_size.width = MIN(std::ceil(badge_size.width) + 6.0f, badge_max_width);
+  badge_size.height = 12.0f;
+  const CGFloat badge_x =
+      MAX(2.0f, CGRectGetWidth(self.bounds) - badge_size.width - 3.0f);
+  const CGFloat badge_y = 3.0f;
+  behavior_badge_.frame =
+      CGRectIntegral(CGRectMake(badge_x, badge_y, badge_size.width, badge_size.height));
 }
 
 @end

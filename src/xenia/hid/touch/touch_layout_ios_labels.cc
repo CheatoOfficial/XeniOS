@@ -145,6 +145,18 @@ const char* IOSTouchInteractionTriggerDisplayName(
   return "Off";
 }
 
+const char* IOSTouchAnalogOutputDisplayName(IOSTouchAnalogOutput output) {
+  switch (output) {
+    case IOSTouchAnalogOutput::kNone:
+      return "Off";
+    case IOSTouchAnalogOutput::kLook:
+      return "Look";
+    case IOSTouchAnalogOutput::kMove:
+      return "Move";
+  }
+  return "Off";
+}
+
 float DefaultIOSTouchHoldSecondsForInteractionTrigger(
     IOSTouchInteractionTrigger trigger) {
   return DefaultHoldSecondsForInteractionTriggerImpl(trigger);
@@ -212,7 +224,12 @@ bool ConfigureIOSTouchControlAction(IOSTouchAction action,
   updated.mapped_right_trigger = 0;
   updated.hold_while_captured = false;
   updated.enables_relative_look = false;
+  updated.drag_output = IOSTouchAnalogOutput::kNone;
+  updated.analog_tuning.horizontal_scale = 1.0f;
+  updated.analog_tuning.vertical_scale = 1.0f;
   updated.relative_look_scale = 1.0f;
+  updated.held_look_scale = 1.0f;
+  updated.held_move_scale = 1.0f;
 
   switch (action) {
     case IOSTouchAction::kMove:
@@ -242,13 +259,19 @@ bool ConfigureIOSTouchControlAction(IOSTouchAction action,
       updated.mapped_left_trigger = 255;
       updated.hold_while_captured = true;
       updated.enables_relative_look = true;
+      updated.drag_output = IOSTouchAnalogOutput::kLook;
       updated.relative_look_scale = 0.80f;
+      updated.analog_tuning.horizontal_scale = updated.relative_look_scale;
+      updated.analog_tuning.vertical_scale = updated.relative_look_scale;
       break;
     case IOSTouchAction::kRightTrigger:
       updated.mapped_right_trigger = 255;
       updated.hold_while_captured = true;
       updated.enables_relative_look = true;
+      updated.drag_output = IOSTouchAnalogOutput::kLook;
       updated.relative_look_scale = 0.92f;
+      updated.analog_tuning.horizontal_scale = updated.relative_look_scale;
+      updated.analog_tuning.vertical_scale = updated.relative_look_scale;
       break;
     case IOSTouchAction::kBack:
       updated.mapped_buttons = hid::X_INPUT_GAMEPAD_BACK;

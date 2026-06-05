@@ -14,19 +14,26 @@
 
 #import "xenia/ui/ios/touch/touch_layout_library_view_ios.h"
 
+typedef NS_ENUM(NSInteger, XeniaTouchLayoutLibraryFilter) {
+  XeniaTouchLayoutLibraryFilterOfficial = 0,
+  XeniaTouchLayoutLibraryFilterSaved,
+  XeniaTouchLayoutLibraryFilterFavorites,
+};
+
 @interface XeniaTouchLayoutLibraryTableController
     : NSObject <UITableViewDataSource, UITableViewDelegate>
 
 @property(nonatomic, copy) void (^loadHandler)(NSString* localID);
-@property(nonatomic, copy) void (^saveCopyHandler)(void);
-@property(nonatomic, copy) void (^renameHandler)(void);
-@property(nonatomic, copy) void (^deleteHandler)(void);
-@property(nonatomic, copy) void (^importHandler)(void);
-@property(nonatomic, copy) void (^exportHandler)(void);
-@property(nonatomic, copy) void (^resetHandler)(void);
+@property(nonatomic, copy) void (^renameLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^deleteLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^exportLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^setTitleDefaultHandler)(NSString* localID);
+@property(nonatomic, copy) void (^setGlobalDefaultHandler)(NSString* localID);
+@property(nonatomic, copy) void (^favoriteLayoutHandler)(NSString* localID, BOOL favorite);
 
 - (void)setItems:(NSArray<XeniaTouchLayoutLibraryItem*>*)items
     currentLayoutLocalID:(NSString*)currentLayoutLocalID;
+- (void)setFilter:(XeniaTouchLayoutLibraryFilter)filter;
 
 @end
 

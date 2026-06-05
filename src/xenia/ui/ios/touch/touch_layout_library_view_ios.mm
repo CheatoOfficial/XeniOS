@@ -20,6 +20,8 @@
 @synthesize official = _official;
 @synthesize thumbnail = _thumbnail;
 @synthesize isDefaultForCurrentTitle = _isDefaultForCurrentTitle;
+@synthesize isDefaultForAllGames = _isDefaultForAllGames;
+@synthesize isFavorite = _isFavorite;
 
 - (void)dealloc {
   [_localID release];

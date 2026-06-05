@@ -14,8 +14,6 @@
 
 #import <UIKit/UIKit.h>
 
-#include <cstddef>
-
 #include "xenia/hid/touch/touch_layout_ios.h"
 
 @class XeniaTouchLayoutLibraryItem;
@@ -26,17 +24,8 @@ namespace xe::ui::ios::touch_overlay {
 struct TouchOverlayEditChromeState {
   bool editing_enabled = false;
   bool showing_layout_library = false;
-  bool minimized = false;
-  bool grid_enabled = false;
-  bool can_undo = false;
-  bool can_redo = false;
-  bool editing_portrait = false;
   bool has_selected_control = false;
-  bool can_match_selected_size = false;
-  bool layout_contains_move_stick = false;
-  bool layout_contains_look_zone = false;
-  bool layout_contains_pause_button = false;
-  size_t control_count = 0;
+  bool can_duplicate_selected_control = false;
   xe::hid::touch::IOSTouchControlDefinition selected_control;
 };
 
@@ -44,36 +33,39 @@ struct TouchOverlayEditChromeState {
 
 @protocol XeniaTouchOverlayEditChromeIOSDelegate <NSObject>
 
-- (void)touchOverlayEditChromeDidRequestDoneEditing:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestSmallerControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestMatchNearestSize:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestLargerControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestDimmerControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestBolderControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestCycleAction:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestRenameLabel:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestCycleTint:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestCycleShape:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestDuplicateControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestUndo:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestRedo:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestCollapse:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestToggleGrid:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestAddDefaultControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestDeleteControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestLayoutLibrary:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestHideLayoutLibrary:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestLayoutLibrarySaveCopy:
     (XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestLayoutLibraryRename:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestLayoutLibraryDelete:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestLayoutLibraryImport:(XeniaTouchOverlayEditChromeIOS*)chrome;
-- (void)touchOverlayEditChromeDidRequestLayoutLibraryExport:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestLayoutLibraryReset:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
     didRequestLayoutLibraryLoad:(NSString*)localID;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibraryRenameLocalID:(NSString*)localID;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibraryDeleteLocalID:(NSString*)localID;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibraryExportLocalID:(NSString*)localID;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibrarySetTitleDefaultLocalID:(NSString*)localID;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibrarySetGlobalDefaultLocalID:(NSString*)localID;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestLayoutLibraryFavoriteLocalID:(NSString*)localID
+                                  favorite:(BOOL)favorite;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
               didRequestAction:(xe::hid::touch::IOSTouchAction)action;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+             didRequestOpacity:(float)opacity;
+- (void)touchOverlayEditChromeDidBeginOpacityChange:(XeniaTouchOverlayEditChromeIOS*)chrome;
+- (void)touchOverlayEditChromeDidEndOpacityChange:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
          didRequestLabelHidden:(BOOL)hidden;
 - (void)touchOverlayEditChromeDidRequestResetLabel:(XeniaTouchOverlayEditChromeIOS*)chrome;
@@ -82,17 +74,26 @@ struct TouchOverlayEditChromeState {
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
       didRequestBehaviorAction:(xe::hid::touch::IOSTouchAction)action;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
-           didRequestTintStyle:(xe::hid::touch::IOSTouchTintStyle)tintStyle;
+          didRequestDragOutput:(xe::hid::touch::IOSTouchAnalogOutput)output;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
-           didRequestLookScale:(float)lookScale;
+    didRequestBehaviorAnalogOutput:(xe::hid::touch::IOSTouchAnalogOutput)output;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+     didRequestBehaviorTrigger:(xe::hid::touch::IOSTouchInteractionTrigger)trigger
+                        action:(xe::hid::touch::IOSTouchAction)action
+                  analogOutput:(xe::hid::touch::IOSTouchAnalogOutput)output;
+- (void)touchOverlayEditChromeDidRequestClearSelectedControlExtras:
+    (XeniaTouchOverlayEditChromeIOS*)chrome;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+           didRequestTintStyle:(xe::hid::touch::IOSTouchTintStyle)tintStyle;
+- (void)touchOverlayEditChromeDidRequestAnalogTuningPanel:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
                didRequestShape:(xe::hid::touch::IOSTouchControlShape)shape;
-- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
-    didRequestCopyLayoutFromLandscape:(BOOL)fromLandscape;
 - (void)touchOverlayEditChromeDidRequestMirrorControl:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChromeDidRequestToggleMoveDpadRing:(XeniaTouchOverlayEditChromeIOS*)chrome;
 - (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
     didRequestAddControlOfType:(xe::hid::touch::IOSTouchControlType)type;
+- (void)touchOverlayEditChrome:(XeniaTouchOverlayEditChromeIOS*)chrome
+    didRequestAddJoystickWithAction:(xe::hid::touch::IOSTouchAction)action;
 
 @end
 
@@ -104,6 +105,7 @@ struct TouchOverlayEditChromeState {
 - (CGFloat)preferredHeightForWidth:(CGFloat)width
                    availableHeight:(CGFloat)availableHeight
                             margin:(CGFloat)margin;
+- (BOOL)isInspectorExpanded;
 - (UIView*)interactiveHitTestForOverlayPoint:(CGPoint)point
                                        event:(UIEvent*)event
                                       inView:(UIView*)overlayView;

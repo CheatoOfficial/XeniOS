@@ -16,11 +16,6 @@ namespace xe {
 namespace ui {
 namespace {
 
-constexpr CGFloat kIPadTouchDeckMaxLandscapeWidth = 980.0f;
-constexpr CGFloat kIPadTouchDeckMaxLandscapeHeight = 560.0f;
-constexpr CGFloat kIPadTouchDeckMaxPortraitWidth = 620.0f;
-constexpr CGFloat kIPadTouchDeckMaxPortraitHeight = 760.0f;
-
 float MaxNormalizedControlSizeForType(xe::hid::touch::IOSTouchControlType control_type) {
   return control_type == xe::hid::touch::IOSTouchControlType::kLookSwipeZone ? 1.0f : 0.98f;
 }
@@ -67,7 +62,25 @@ bool TouchOverlayIsPortraitForView(UIView* view) {
   return size.height >= size.width;
 }
 
+xe::hid::touch::IOSTouchLayoutSpace TouchLayoutSpaceForView(UIView* view) {
+  if (!view) {
+    return {};
+  }
+
+  CGRect bounds = view.bounds;
+  return xe::hid::touch::IOSTouchLayoutSpace{
+      0.0f,
+      0.0f,
+      static_cast<float>(MAX(bounds.size.width, 0.0)),
+      static_cast<float>(MAX(bounds.size.height, 0.0)),
+  };
+}
+
 xe::hid::touch::IOSTouchLayoutSpace TouchSafeAreaSpaceForView(UIView* view) {
+  if (!view) {
+    return {};
+  }
+
   UIEdgeInsets insets = view.safeAreaInsets;
   CGRect bounds = view.bounds;
   return xe::hid::touch::IOSTouchLayoutSpace{
@@ -78,38 +91,16 @@ xe::hid::touch::IOSTouchLayoutSpace TouchSafeAreaSpaceForView(UIView* view) {
   };
 }
 
-xe::hid::touch::IOSTouchLayoutSpace TouchControlDeckSpaceForView(UIView* view) {
-  xe::hid::touch::IOSTouchLayoutSpace safe_area = TouchSafeAreaSpaceForView(view);
-  if (safe_area.IsEmpty() || UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad) {
-    return safe_area;
-  }
-
-  const bool is_portrait = TouchOverlayIsPortraitForView(view);
-  const CGFloat max_width =
-      is_portrait ? kIPadTouchDeckMaxPortraitWidth : kIPadTouchDeckMaxLandscapeWidth;
-  const CGFloat max_height =
-      is_portrait ? kIPadTouchDeckMaxPortraitHeight : kIPadTouchDeckMaxLandscapeHeight;
-  const CGFloat deck_width = MIN(static_cast<CGFloat>(safe_area.width), max_width);
-  const CGFloat deck_height = MIN(static_cast<CGFloat>(safe_area.height), max_height);
-  return xe::hid::touch::IOSTouchLayoutSpace{
-      static_cast<float>(safe_area.origin_x + (safe_area.width - deck_width) * 0.5f),
-      static_cast<float>(safe_area.origin_y + safe_area.height - deck_height),
-      static_cast<float>(deck_width),
-      static_cast<float>(deck_height),
-  };
+xe::hid::touch::IOSTouchLayoutSpace TouchControlPositionSpaceForControlType(
+    UIView* view, xe::hid::touch::IOSTouchControlType control_type) {
+  static_cast<void>(control_type);
+  return TouchLayoutSpaceForView(view);
 }
 
 xe::hid::touch::IOSTouchLayoutSpace TouchControlSizeSpaceForControlType(
     UIView* view, xe::hid::touch::IOSTouchControlType control_type) {
-  switch (control_type) {
-    case xe::hid::touch::IOSTouchControlType::kMoveStick:
-    case xe::hid::touch::IOSTouchControlType::kActionButton:
-      return TouchControlDeckSpaceForView(view);
-    case xe::hid::touch::IOSTouchControlType::kLookSwipeZone:
-    case xe::hid::touch::IOSTouchControlType::kPauseButton:
-    default:
-      return TouchSafeAreaSpaceForView(view);
-  }
+  static_cast<void>(control_type);
+  return TouchLayoutSpaceForView(view);
 }
 
 xe::hid::touch::IOSTouchRect ClampNormalizedControlFrame(
@@ -408,6 +399,10 @@ TouchEditSnapResult SnapTouchEditResolvedFrame(
       ResolveNormalizedControlFrame(NormalizedControlFrameFromResolvedFrame(
                                         candidate_frame, position_space, size_space, control.type),
                                     position_space, size_space, control.type);
+  if (!options.grid_enabled) {
+    result.frame = frame;
+    return result;
+  }
 
   if (gesture_mode == TouchEditGestureMode::kMove) {
     const CGFloat move_threshold = options.move_snap_threshold;

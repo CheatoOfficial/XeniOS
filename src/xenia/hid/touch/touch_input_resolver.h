@@ -35,11 +35,18 @@ struct IOSTouchInputCapture {
 
 struct IOSTouchInteractionBehaviorState {
   bool active = false;
+  IOSTouchAnalogOutput analog_output = IOSTouchAnalogOutput::kNone;
+  IOSTouchAnalogTuning analog_tuning;
   bool enables_relative_look = false;
   float relative_look_scale = 1.0f;
 };
 
 IOSTouchPoint ClampTouchLookVector(IOSTouchPoint value);
+IOSTouchPoint ApplyTouchAnalogTuning(IOSTouchPoint value,
+                                     const IOSTouchAnalogTuning& tuning);
+IOSTouchPoint ApplyTouchAnalogTuningWithVelocity(
+    IOSTouchPoint value, const IOSTouchAnalogTuning& tuning,
+    float velocity_full_scales_per_second);
 IOSTouchPoint TouchSwipeLookVectorForDelta(IOSTouchPoint delta,
                                            float look_scale,
                                            float points_per_full_scale,

@@ -56,12 +56,16 @@ TEST_CASE("Touch action mapping updates XInput output fields") {
   REQUIRE(control.mapped_buttons == 0);
   REQUIRE(control.mapped_left_trigger == 0xFF);
   REQUIRE(control.mapped_right_trigger == 0);
+  REQUIRE(control.drag_output == IOSTouchAnalogOutput::kLook);
+  REQUIRE(control.analog_tuning.horizontal_scale == Approx(0.80f));
 
   REQUIRE(
       ConfigureIOSTouchControlAction(IOSTouchAction::kRightTrigger, &control));
   REQUIRE(control.mapped_buttons == 0);
   REQUIRE(control.mapped_left_trigger == 0);
   REQUIRE(control.mapped_right_trigger == 0xFF);
+  REQUIRE(control.drag_output == IOSTouchAnalogOutput::kLook);
+  REQUIRE(control.analog_tuning.horizontal_scale == Approx(0.92f));
 }
 
 TEST_CASE("Touch input resolver hit-tests rounded and circular controls") {
@@ -148,6 +152,21 @@ TEST_CASE("Touch input resolver clamps swipe-look vectors") {
   REQUIRE(scaled.y == Approx(-0.25f));
 }
 
+TEST_CASE("Touch analog tuning acceleration boosts high velocity swipes") {
+  IOSTouchAnalogTuning tuning;
+  tuning.acceleration_scale = 1.0f;
+  tuning.max_output = 1.0f;
+
+  IOSTouchPoint normal = ApplyTouchAnalogTuningWithVelocity(
+      IOSTouchPoint{0.20f, 0.0f}, tuning, 0.0f);
+  IOSTouchPoint fast = ApplyTouchAnalogTuningWithVelocity(
+      IOSTouchPoint{0.20f, 0.0f}, tuning, 80.0f);
+
+  REQUIRE(normal.x == Approx(0.20f));
+  REQUIRE(fast.x == Approx(0.40f));
+  REQUIRE(fast.y == Approx(0.0f));
+}
+
 TEST_CASE("Touch input resolver resolves deferred and hold-drag behavior") {
   IOSTouchControlDefinition control;
   control.type = IOSTouchControlType::kActionButton;
@@ -175,7 +194,9 @@ TEST_CASE("Touch input resolver resolves deferred and hold-drag behavior") {
       ResolveTouchInteractionBehaviorState(behavior, capture, 1.20);
   REQUIRE(state.active);
   REQUIRE(state.enables_relative_look);
+  REQUIRE(state.analog_output == IOSTouchAnalogOutput::kLook);
   REQUIRE(state.relative_look_scale == Approx(2.0f));
+  REQUIRE(state.analog_tuning.horizontal_scale == Approx(2.0f));
 
   capture.current_point = IOSTouchPoint{12.0f, 10.0f};
   state = ResolveTouchInteractionBehaviorState(behavior, capture, 1.20);
@@ -227,6 +248,11 @@ TEST_CASE("Touch layout TOML round trip preserves editable model state") {
   control.has_portrait_frame = true;
   control.portrait_normalized_frame = IOSTouchRect{0.2f, 0.3f, 0.4f, 0.5f};
   control.tint_style = IOSTouchTintStyle::kMint;
+  control.analog_tuning.horizontal_scale = 1.50f;
+  control.analog_tuning.vertical_scale = 0.75f;
+  control.analog_tuning.acceleration_scale = 0.50f;
+  control.analog_tuning.smoothing = 0.35f;
+  control.held_move_scale = 0.50f;
 
   toml::table encoded = EncodeIOSTouchLayoutModel(layout);
   IOSTouchLayoutModel decoded;
@@ -244,6 +270,11 @@ TEST_CASE("Touch layout TOML round trip preserves editable model state") {
   REQUIRE(decoded_control.portrait_normalized_frame.width == Approx(0.4f));
   REQUIRE(decoded_control.portrait_normalized_frame.height == Approx(0.5f));
   REQUIRE(decoded_control.tint_style == IOSTouchTintStyle::kMint);
+  REQUIRE(decoded_control.analog_tuning.horizontal_scale == Approx(1.50f));
+  REQUIRE(decoded_control.analog_tuning.vertical_scale == Approx(0.75f));
+  REQUIRE(decoded_control.analog_tuning.acceleration_scale == Approx(0.50f));
+  REQUIRE(decoded_control.analog_tuning.smoothing == Approx(0.35f));
+  REQUIRE(decoded_control.held_move_scale == Approx(0.50f));
 }
 
 TEST_CASE("Touch runtime model publishes resolved state snapshots") {
