@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 
 #include "xenia/base/logging.h"
 #include "xenia/hid/touch/touch_layout_ios.h"
@@ -152,30 +153,64 @@ void ApplyActionCapabilities(IOSTouchAction action,
   ApplyMappedCapabilities(mapped_control, out_caps);
 }
 
+void ApplyAnalogOutputCapabilities(IOSTouchAnalogOutput output,
+                                   X_INPUT_CAPABILITIES* out_caps) {
+  switch (output) {
+    case IOSTouchAnalogOutput::kLook:
+      ApplyLookCapabilities(out_caps);
+      break;
+    case IOSTouchAnalogOutput::kMove:
+      ApplyMoveCapabilities(out_caps);
+      break;
+    case IOSTouchAnalogOutput::kNone:
+    default:
+      break;
+  }
+}
+
+IOSTouchAnalogOutput EffectiveAnalogOutput(IOSTouchAnalogOutput output,
+                                           bool legacy_look_enabled) {
+  if (output != IOSTouchAnalogOutput::kNone) {
+    return output;
+  }
+  return legacy_look_enabled ? IOSTouchAnalogOutput::kLook
+                             : IOSTouchAnalogOutput::kNone;
+}
+
 void ApplyControlCapabilities(const IOSTouchControlDefinition& control,
                               X_INPUT_CAPABILITIES* out_caps) {
   switch (control.type) {
     case IOSTouchControlType::kMoveStick:
-      ApplyMoveCapabilities(out_caps);
+      if (control.action == IOSTouchAction::kLook) {
+        ApplyLookCapabilities(out_caps);
+      } else {
+        ApplyMoveCapabilities(out_caps);
+      }
       break;
     case IOSTouchControlType::kLookSwipeZone:
-      ApplyLookCapabilities(out_caps);
+      if (control.action == IOSTouchAction::kMove) {
+        ApplyMoveCapabilities(out_caps);
+      } else {
+        ApplyLookCapabilities(out_caps);
+      }
       break;
     case IOSTouchControlType::kPauseButton:
       break;
     case IOSTouchControlType::kActionButton:
       ApplyMappedCapabilities(control, out_caps);
-      if (control.enables_relative_look) {
-        ApplyLookCapabilities(out_caps);
-      }
+      ApplyAnalogOutputCapabilities(
+          EffectiveAnalogOutput(control.drag_output,
+                                control.enables_relative_look),
+          out_caps);
       break;
   }
 
   if (control.secondary_behavior.trigger != IOSTouchInteractionTrigger::kNone) {
     ApplyActionCapabilities(control.secondary_behavior.action, out_caps);
-    if (control.secondary_behavior.enables_relative_look) {
-      ApplyLookCapabilities(out_caps);
-    }
+    ApplyAnalogOutputCapabilities(
+        EffectiveAnalogOutput(control.secondary_behavior.analog_output,
+                              control.secondary_behavior.enables_relative_look),
+        out_caps);
   }
 }
 
@@ -335,6 +370,22 @@ X_RESULT TouchInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
 
 InputType TouchInputDriver::GetInputType() const {
   return InputType::Controller;
+}
+
+std::vector<InputDeviceInfo> TouchInputDriver::EnumerateDevices() {
+  if (!RefreshRuntimeModel()) {
+    return {};
+  }
+
+  InputDeviceInfo info = {};
+  info.driver_slot = 0;
+  info.stable_id = "ios-touch-overlay";
+  info.display_name = "Touch Controls";
+  info.subtype = XINPUT_DEVSUBTYPE_GAMEPAD;
+  info.preferred_slot = 0;
+  info.auto_bind = true;
+  info.fallback_auto_bind = true;
+  return {std::move(info)};
 }
 
 bool TouchInputDriver::IsUserSupported(uint32_t user_index) const {

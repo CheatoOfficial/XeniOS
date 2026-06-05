@@ -49,11 +49,14 @@ enum class IOSDocumentImportMode : uint8_t {
     return;
   }
 
-  NSArray<UTType*>* content_types = @[
-    [UTType typeWithFilenameExtension:@"iso"],
-    [UTType typeWithFilenameExtension:@"xex"],
-    UTTypeData,
-  ];
+  NSMutableArray<UTType*>* content_types = [NSMutableArray array];
+  for (NSString* extension in @[ @"iso", @"xex", @"zar" ]) {
+    UTType* type = [UTType typeWithFilenameExtension:extension];
+    if (type) {
+      [content_types addObject:type];
+    }
+  }
+  [content_types addObject:UTTypeData];
 
   UIDocumentPickerViewController* picker =
       [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:content_types];

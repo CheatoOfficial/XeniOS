@@ -721,11 +721,11 @@ BOOL TriggerBarButtonItem(UIBarButtonItem* item) {
     handled = YES;
   }
   if (actions.navigate_left) {
-    move_focus(xe::ui::apple::NavigationDirection::kUp);
+    move_focus(xe::ui::apple::NavigationDirection::kLeft);
     handled = YES;
   }
   if (actions.navigate_right) {
-    move_focus(xe::ui::apple::NavigationDirection::kDown);
+    move_focus(xe::ui::apple::NavigationDirection::kRight);
     handled = YES;
   }
 

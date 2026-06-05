@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
 #include "xenia/config.h"
+#include "xenia/gpu/shader_storage.h"
 #include "xenia/hid/input.h"
 #include "xenia/vfs/stfs_metadata.h"
 #include "xenia/xbox.h"
@@ -82,6 +84,7 @@
 
 DECLARE_bool(ios_touch_overlay);
 DECLARE_bool(present_letterbox);
+DECLARE_path(cache_root);
 
 using xe::ui::ApplyIOSCompatibilityDataToDiscoveredGames;
 using xe::ui::BuildDiscoveredGameFromPath;
@@ -103,6 +106,8 @@ using xe::ui::xe_stikdebug_enable_jit_url_for_bundle_identifier;
 namespace {
 
 constexpr NSTimeInterval kXeniaAutoStikDebugCooldownSeconds = 10.0;
+NSString* const kXeniaPendingStikDebugAutomationPromptPreferenceKey =
+    @"ios_pending_stikdebug_automation_prompt";
 
 NSTimeInterval GetUnixTimeSeconds() { return [[NSDate date] timeIntervalSince1970]; }
 
@@ -128,6 +133,122 @@ static BOOL xe_game_system_supports_manage_content(xe::ui::IOSGameSystem system)
 
 static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   return system == xe::ui::IOSGameSystem::kXbox360;
+}
+
+static std::filesystem::path xe_ios_settings_cache_root() {
+  std::filesystem::path root = cvars::cache_root;
+  if (root.empty()) {
+    @autoreleasepool {
+      NSArray* cache_paths =
+          NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
+      if (cache_paths.count > 0) {
+        root = std::filesystem::path([cache_paths[0] UTF8String]) / "xenia";
+      } else {
+        root = xe_get_ios_documents_path() / "cache_host";
+      }
+    }
+  } else if (!root.is_absolute()) {
+    root = xe_get_ios_documents_path() / root;
+  }
+  return std::filesystem::absolute(root);
+}
+
+static std::string xe_title_id_cache_prefix(uint32_t title_id) {
+  char buffer[9] = {};
+  std::snprintf(buffer, sizeof(buffer), "%08X", title_id);
+  return std::string(buffer);
+}
+
+static bool xe_cache_entry_matches_title(const std::filesystem::path& path,
+                                         const std::string& title_prefix) {
+  const std::string name = path.filename().string();
+  return name == title_prefix || name.rfind(title_prefix + ".", 0) == 0;
+}
+
+static uintmax_t xe_remove_path_if_present(const std::filesystem::path& path,
+                                           std::error_code* error_out) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) {
+    if (error_out) {
+      *error_out = {};
+    }
+    return 0;
+  }
+  uintmax_t removed = std::filesystem::remove_all(path, ec);
+  if (error_out) {
+    *error_out = ec;
+  }
+  return ec ? 0 : removed;
+}
+
+static bool xe_clear_shader_cache_for_title(uint32_t title_id, uintmax_t* removed_out,
+                                            std::error_code* error_out) {
+  const std::filesystem::path cache_root = xe_ios_settings_cache_root();
+  const std::string title_prefix = xe_title_id_cache_prefix(title_id);
+  std::vector<std::filesystem::path> candidates;
+
+  const std::filesystem::path shareable_root =
+      xe::gpu::GetShaderStorageShareableRoot(cache_root);
+  std::error_code ec;
+  if (std::filesystem::exists(shareable_root, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(shareable_root, ec)) {
+      if (ec) {
+        break;
+      }
+      if (xe_cache_entry_matches_title(entry.path(), title_prefix)) {
+        candidates.push_back(entry.path());
+      }
+    }
+  }
+
+  const std::filesystem::path local_root = xe::gpu::GetShaderStorageLocalRoot(cache_root);
+  ec = {};
+  if (std::filesystem::exists(local_root, ec)) {
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(local_root, ec)) {
+      if (ec) {
+        break;
+      }
+      if (xe_cache_entry_matches_title(entry.path(), title_prefix)) {
+        candidates.push_back(entry.path());
+      }
+    }
+  }
+
+  uintmax_t removed_total = 0;
+  for (const std::filesystem::path& candidate : candidates) {
+    ec = {};
+    removed_total += xe_remove_path_if_present(candidate, &ec);
+    if (ec) {
+      if (removed_out) {
+        *removed_out = removed_total;
+      }
+      if (error_out) {
+        *error_out = ec;
+      }
+      return false;
+    }
+  }
+  if (removed_out) {
+    *removed_out = removed_total;
+  }
+  if (error_out) {
+    *error_out = {};
+  }
+  return true;
+}
+
+static bool xe_clear_all_shader_caches(uintmax_t* removed_out,
+                                       std::error_code* error_out) {
+  std::error_code ec;
+  uintmax_t removed = xe_remove_path_if_present(
+      xe::gpu::GetShaderStorageRoot(xe_ios_settings_cache_root()), &ec);
+  if (removed_out) {
+    *removed_out = removed;
+  }
+  if (error_out) {
+    *error_out = ec;
+  }
+  return !ec;
 }
 
 }  // namespace
@@ -164,6 +285,17 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
 - (void)refreshLauncherGameSnapshots;
 - (void)refreshImportedGamesAsync;
 - (void)finishImportedGamesRefresh;
+- (void)presentJITRequiredAlertForLaunchPath:(const std::filesystem::path&)gamePath
+                                 displayName:(NSString*)displayName;
+- (BOOL)requestStikDebugJITHandoffForPendingLaunchPath:
+            (const std::filesystem::path*)launchPath
+                                      requirePreference:(BOOL)requirePreference
+                         promptForAutomationOnSuccess:(BOOL)promptForAutomation;
+- (void)finishJITAcquiredPendingLaunchWithQueuedPath:
+            (const std::filesystem::path&)queuedPath
+                                      persistedPath:(const std::filesystem::path&)persistedPath;
+- (BOOL)consumePendingStikDebugAutomationPrompt;
+- (void)presentStikDebugAutomationPromptWithCompletion:(void (^)(void))completion;
 - (void)setTouchLayoutEditModeActive:(BOOL)active animated:(BOOL)animated;
 - (void)finishTouchLayoutEditMode;
 - (void)updateTouchControlsOverlayVisibilityAnimated:(BOOL)animated;
@@ -173,6 +305,7 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
 - (void)presentTouchLayoutGamePicker;
 - (void)performGameAction:(XeniaIOSGameAction)action forIndex:(size_t)game_index;
 - (void)presentGameSettingsSheetForIndex:(size_t)game_index;
+- (void)confirmResetGameSettingsForIndex:(size_t)game_index;
 - (void)presentGameTouchLayoutSheetForIndex:(size_t)game_index;
 - (void)presentCompatibilitySheetForIndex:(size_t)game_index;
 - (void)presentManageContentSheetForIndex:(size_t)game_index;
@@ -187,6 +320,14 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
 - (void)inGameLiveLogTapped:(UIButton*)sender;
 - (void)exitGameTapped:(UIButton*)sender;
 - (void)handleSettingsHubAction:(XeniaSettingsHubAction)action;
+- (void)confirmClearCurrentGameShaderCache;
+- (void)confirmClearAllShaderCaches;
+- (void)clearCurrentGameShaderCache;
+- (void)clearAllShaderCaches;
+- (void)presentShaderCacheResultWithTitle:(NSString*)title
+                                  success:(BOOL)success
+                                  removed:(uintmax_t)removed
+                                    error:(const std::error_code&)error;
 - (void)refreshInGameDisplayMenu;
 - (void)applyDefaultTouchLayoutModel;
 - (void)applyTouchLayoutModelForTitleID:(uint32_t)title_id;
@@ -230,9 +371,12 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   uint64_t library_refresh_generation_;
   BOOL compat_fetch_started_;
   std::filesystem::path pending_external_launch_path_;
+  std::filesystem::path deferred_jit_prompt_queued_launch_path_;
+  std::filesystem::path deferred_jit_prompt_persisted_launch_path_;
   std::unique_ptr<xe::hid::touch::IOSTouchRuntimeModel> touch_runtime_model_;
   BOOL touch_layout_edit_mode_active_;
   BOOL gameplay_modal_presentation_pending_;
+  BOOL presenting_stikdebug_automation_prompt_;
   uint32_t active_game_title_id_;
   std::string active_touch_layout_local_id_;
   UITapGestureRecognizer* in_game_menu_tap_recognizer_;  // owned by self.view
@@ -248,6 +392,7 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   compat_fetch_started_ = NO;
   touch_layout_edit_mode_active_ = NO;
   gameplay_modal_presentation_pending_ = NO;
+  presenting_stikdebug_automation_prompt_ = NO;
   active_game_title_id_ = 0;
   active_touch_layout_local_id_.clear();
   XeniaIOSControllerNavigationCoordinator* controller_navigation =
@@ -320,6 +465,24 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   };
   self.touchControlsOverlay.layoutLibraryResetHandler = ^{
     [block_self resetToOfficialTouchLayoutPreset];
+  };
+  self.touchControlsOverlay.layoutLibraryRenameLayoutHandler = ^(NSString* local_id) {
+    [block_self.touchLayoutCoordinator renameLayoutWithLocalID:local_id];
+  };
+  self.touchControlsOverlay.layoutLibraryDeleteLayoutHandler = ^(NSString* local_id) {
+    [block_self.touchLayoutCoordinator deleteLayoutWithLocalID:local_id];
+  };
+  self.touchControlsOverlay.layoutLibraryExportLayoutHandler = ^(NSString* local_id) {
+    [block_self.touchLayoutCoordinator exportLayoutWithLocalID:local_id];
+  };
+  self.touchControlsOverlay.layoutLibrarySetTitleDefaultHandler = ^(NSString* local_id) {
+    [block_self.touchLayoutCoordinator setLayoutDefaultForCurrentTitleWithLocalID:local_id];
+  };
+  self.touchControlsOverlay.layoutLibrarySetGlobalDefaultHandler = ^(NSString* local_id) {
+    [block_self.touchLayoutCoordinator setLayoutDefaultForAllGamesWithLocalID:local_id];
+  };
+  self.touchControlsOverlay.layoutLibraryFavoriteHandler = ^(NSString* local_id, BOOL favorite) {
+    [block_self.touchLayoutCoordinator setLayoutFavoriteWithLocalID:local_id favorite:favorite];
   };
   [self.view addSubview:self.touchControlsOverlay];
   [touch_overlay release];
@@ -644,15 +807,85 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   std::filesystem::path persisted_path = TakePendingExternalLaunchPathPreference();
   pending_external_launch_path_.clear();
 
-  if (!queued_path.empty() || !persisted_path.empty()) {
-    std::filesystem::path path_to_launch = !queued_path.empty() ? queued_path : persisted_path;
-    NSString* display_name = [self displayNameForGamePath:path_to_launch];
-    if (!display_name || display_name.length == 0) {
-      display_name = ToNSString(path_to_launch.filename().string());
-    }
-    XELOGI("iOS: Launching queued external request: {}", path_to_launch.string());
-    [self launchGameAtPath:path_to_launch displayName:display_name];
+  if ([self consumePendingStikDebugAutomationPrompt]) {
+    deferred_jit_prompt_queued_launch_path_ = queued_path;
+    deferred_jit_prompt_persisted_launch_path_ = persisted_path;
+    [self presentStikDebugAutomationPromptWithCompletion:^{
+      std::filesystem::path deferred_queued = self->deferred_jit_prompt_queued_launch_path_;
+      std::filesystem::path deferred_persisted = self->deferred_jit_prompt_persisted_launch_path_;
+      self->deferred_jit_prompt_queued_launch_path_.clear();
+      self->deferred_jit_prompt_persisted_launch_path_.clear();
+      [self finishJITAcquiredPendingLaunchWithQueuedPath:deferred_queued
+                                           persistedPath:deferred_persisted];
+    }];
+    return;
   }
+
+  [self finishJITAcquiredPendingLaunchWithQueuedPath:queued_path persistedPath:persisted_path];
+}
+
+- (void)finishJITAcquiredPendingLaunchWithQueuedPath:
+            (const std::filesystem::path&)queuedPath
+                                      persistedPath:(const std::filesystem::path&)persistedPath {
+  if (queuedPath.empty() && persistedPath.empty()) {
+    return;
+  }
+
+  std::filesystem::path path_to_launch = !queuedPath.empty() ? queuedPath : persistedPath;
+  NSString* display_name = [self displayNameForGamePath:path_to_launch];
+  if (!display_name || display_name.length == 0) {
+    display_name = ToNSString(path_to_launch.filename().string());
+  }
+  XELOGI("iOS: Launching queued external request: {}", path_to_launch.string());
+  [self launchGameAtPath:path_to_launch displayName:display_name];
+}
+
+- (BOOL)consumePendingStikDebugAutomationPrompt {
+  if (!GetUserDefaultBool(kXeniaPendingStikDebugAutomationPromptPreferenceKey, false)) {
+    return NO;
+  }
+  SetUserDefaultBool(kXeniaPendingStikDebugAutomationPromptPreferenceKey, false);
+  return !GetUserDefaultBool(kXeniaAutoOpenStikDebugOnLaunchPreferenceKey, false);
+}
+
+- (void)presentStikDebugAutomationPromptWithCompletion:(void (^)(void))completion {
+  if (presenting_stikdebug_automation_prompt_) {
+    if (completion) {
+      completion();
+    }
+    return;
+  }
+
+  presenting_stikdebug_automation_prompt_ = YES;
+  UIAlertController* alert = [UIAlertController
+      alertControllerWithTitle:@"Always Auto-Enable JIT?"
+                       message:@"StikDebug enabled JIT successfully. XeniOS can use the same "
+                               @"StikDebug handoff automatically next time JIT is missing."
+                preferredStyle:UIAlertControllerStyleAlert];
+
+  void (^finish)(void) = ^{
+    self->presenting_stikdebug_automation_prompt_ = NO;
+    if (completion) {
+      completion();
+    }
+  };
+
+  [alert addAction:[UIAlertAction actionWithTitle:@"Always Enable"
+                                            style:UIAlertActionStyleDefault
+                                          handler:^(__unused UIAlertAction* action) {
+                                            SetUserDefaultBool(
+                                                kXeniaAutoOpenStikDebugOnLaunchPreferenceKey,
+                                                true);
+                                            [self showStatusToast:@"Auto-enable JIT is on."
+                                                            style:XeniaIOSStatusToastStyleSuccess];
+                                            finish();
+                                          }]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+                                            style:UIAlertActionStyleCancel
+                                          handler:^(__unused UIAlertAction* action) {
+                                            finish();
+                                          }]];
+  [self presentViewController:alert animated:YES completion:nil];
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,10 +1435,99 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
     case XeniaSettingsHubActionRefreshLibrary:
       [self refreshImportedGames];
       break;
+    case XeniaSettingsHubActionClearCurrentGameShaderCache:
+      [self confirmClearCurrentGameShaderCache];
+      break;
+    case XeniaSettingsHubActionClearAllShaderCaches:
+      [self confirmClearAllShaderCaches];
+      break;
     case XeniaSettingsHubActionNone:
     default:
       break;
   }
+}
+
+- (void)confirmClearCurrentGameShaderCache {
+  if (!active_game_title_id_) {
+    XEPresentOKAlert([self topPresentedControllerForModalPresentation] ?: self,
+                     @"No Running Game",
+                     @"Launch a game before clearing the current game's shader cache.");
+    return;
+  }
+
+  UIAlertController* confirm =
+      [UIAlertController alertControllerWithTitle:@"Clear Shader Cache?"
+                                          message:@"Delete persistent shaders for the running title. Relaunch the game before testing."
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+  __unsafe_unretained XeniaViewController* unsafe_self = self;
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Clear"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction* action) {
+                                              [unsafe_self clearCurrentGameShaderCache];
+                                            }]];
+  UIViewController* presenter = [self topPresentedControllerForModalPresentation] ?: self;
+  [presenter presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)confirmClearAllShaderCaches {
+  UIAlertController* confirm =
+      [UIAlertController alertControllerWithTitle:@"Clear All Shader Caches?"
+                                          message:@"Delete persistent shader storage for every title. Games, saves, content, and settings are not removed."
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+  __unsafe_unretained XeniaViewController* unsafe_self = self;
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Clear All"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction* action) {
+                                              [unsafe_self clearAllShaderCaches];
+                                            }]];
+  UIViewController* presenter = [self topPresentedControllerForModalPresentation] ?: self;
+  [presenter presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)presentShaderCacheResultWithTitle:(NSString*)title
+                                  success:(BOOL)success
+                                  removed:(uintmax_t)removed
+                                    error:(const std::error_code&)error {
+  NSString* message = nil;
+  if (success) {
+    message = removed == 0
+                  ? @"No matching shader cache files were found."
+                  : [NSString stringWithFormat:@"Removed %llu cached item(s). Relaunch before testing.",
+                                               static_cast<unsigned long long>(removed)];
+  } else {
+    message = [NSString stringWithFormat:@"Failed to clear shader cache: %s",
+                                         error.message().c_str()];
+  }
+  XEPresentOKAlert([self topPresentedControllerForModalPresentation] ?: self, title, message);
+  [self showStatusToastForMessage:message];
+}
+
+- (void)clearCurrentGameShaderCache {
+  uintmax_t removed = 0;
+  std::error_code error;
+  BOOL success = xe_clear_shader_cache_for_title(active_game_title_id_, &removed, &error) ? YES : NO;
+  [self presentShaderCacheResultWithTitle:(success ? @"Shader Cache Cleared"
+                                                   : @"Shader Cache Not Cleared")
+                                  success:success
+                                  removed:removed
+                                    error:error];
+}
+
+- (void)clearAllShaderCaches {
+  uintmax_t removed = 0;
+  std::error_code error;
+  BOOL success = xe_clear_all_shader_caches(&removed, &error) ? YES : NO;
+  [self presentShaderCacheResultWithTitle:(success ? @"Shader Caches Cleared"
+                                                   : @"Shader Caches Not Cleared")
+                                  success:success
+                                  removed:removed
+                                    error:error];
 }
 
 - (void)presentSystemSigninPromptForUserIndex:(uint32_t)user_index
@@ -1512,11 +1834,39 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   ApplyIOSCompatibilityDataToDiscoveredGames(compat_data_, &discovered_games_);
 }
 
-- (void)presentJITRequiredAlert {
+- (void)presentJITRequiredAlertForLaunchPath:(const std::filesystem::path&)gamePath
+                                 displayName:(NSString*)displayName {
+  NSString* launch_path_string = gamePath.empty() ? nil : ToNSString(gamePath.string());
+  NSString* message = xe_jit_not_detected_guidance_message();
+  if (displayName.length > 0) {
+    message = [NSString
+        stringWithFormat:@"%@\n\nStikDebug can enable JIT and return to XeniOS to launch %@.",
+                         message, displayName];
+  }
+
   UIAlertController* alert =
       [UIAlertController alertControllerWithTitle:@"JIT Not Detected"
-                                          message:xe_jit_not_detected_guidance_message()
+                                          message:message
                                    preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction
+                       actionWithTitle:@"Enable via StikDebug"
+                                 style:UIAlertActionStyleDefault
+                               handler:^(__unused UIAlertAction* action) {
+                                 std::filesystem::path launch_path;
+                                 if (launch_path_string.length > 0) {
+                                   launch_path =
+                                       std::filesystem::path(launch_path_string.UTF8String);
+                                 }
+                                 const std::filesystem::path* launch_path_ptr =
+                                     launch_path.empty() ? nullptr : &launch_path;
+                                 if ([self
+                                         requestStikDebugJITHandoffForPendingLaunchPath:
+                                             launch_path_ptr
+                                                               requirePreference:NO
+                                                  promptForAutomationOnSuccess:YES]) {
+                                   self->pending_external_launch_path_ = launch_path;
+                                 }
+                               }]];
   [alert addAction:[UIAlertAction actionWithTitle:@"Open Settings"
                                             style:UIAlertActionStyleDefault
                                           handler:^(__unused UIAlertAction* action) {
@@ -1575,9 +1925,12 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   return YES;
 }
 
-- (BOOL)requestAutomaticStikDebugJITHandoffForPendingLaunchPath:
-    (const std::filesystem::path*)launch_path {
-  if (!GetUserDefaultBool(kXeniaAutoOpenStikDebugOnLaunchPreferenceKey, false)) {
+- (BOOL)requestStikDebugJITHandoffForPendingLaunchPath:
+            (const std::filesystem::path*)launch_path
+                                      requirePreference:(BOOL)require_preference
+                         promptForAutomationOnSuccess:(BOOL)prompt_for_automation {
+  if (require_preference &&
+      !GetUserDefaultBool(kXeniaAutoOpenStikDebugOnLaunchPreferenceKey, false)) {
     XELOGI("iOS: Automatic StikDebug handoff skipped (disabled)");
     return NO;
   }
@@ -1604,7 +1957,8 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   const double now = GetUnixTimeSeconds();
   const double last_attempt =
       GetUserDefaultDouble(kXeniaLastAutoStikDebugAttemptTimestampPreferenceKey, 0.0);
-  if (last_attempt > 0.0 && (now - last_attempt) < kXeniaAutoStikDebugCooldownSeconds) {
+  if (require_preference && last_attempt > 0.0 &&
+      (now - last_attempt) < kXeniaAutoStikDebugCooldownSeconds) {
     XELOGI("iOS: Skipping automatic StikDebug handoff (cooldown active)");
     return NO;
   }
@@ -1630,6 +1984,9 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   if (launch_path && !launch_path->empty()) {
     StorePendingExternalLaunchPathPreference(*launch_path);
   }
+  if (prompt_for_automation) {
+    SetUserDefaultBool(kXeniaPendingStikDebugAutomationPromptPreferenceKey, true);
+  }
 
   const BOOL has_pending_launch = launch_path && !launch_path->empty();
   SetUserDefaultDouble(kXeniaLastAutoStikDebugAttemptTimestampPreferenceKey, now);
@@ -1650,10 +2007,21 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
                            if (has_pending_launch) {
                              ClearPendingExternalLaunchPathPreference();
                            }
+                           if (prompt_for_automation) {
+                             SetUserDefaultBool(kXeniaPendingStikDebugAutomationPromptPreferenceKey,
+                                                false);
+                           }
                          }
                        }];
                  });
   return YES;
+}
+
+- (BOOL)requestAutomaticStikDebugJITHandoffForPendingLaunchPath:
+    (const std::filesystem::path*)launch_path {
+  return [self requestStikDebugJITHandoffForPendingLaunchPath:launch_path
+                                            requirePreference:YES
+                               promptForAutomationOnSuccess:NO];
 }
 
 - (void)evaluateAutomaticStikDebugJITHandoffIfNeeded {
@@ -1900,7 +2268,7 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   }
 
   if (!self.jitAcquired) {
-    [self presentJITRequiredAlert];
+    [self presentJITRequiredAlertForLaunchPath:game_path displayName:display_name];
     return;
   }
 
@@ -2030,6 +2398,9 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
     case XeniaIOSGameActionGameSettings:
       [self presentGameSettingsSheetForIndex:game_index];
       break;
+    case XeniaIOSGameActionResetGameSettings:
+      [self confirmResetGameSettingsForIndex:game_index];
+      break;
     case XeniaIOSGameActionTouchLayout:
       [self presentGameTouchLayoutSheetForIndex:game_index];
       break;
@@ -2135,6 +2506,55 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
   [config_controller release];
 }
 
+- (void)confirmResetGameSettingsForIndex:(size_t)game_index {
+  if (game_index >= discovered_games_.size()) {
+    return;
+  }
+
+  const IOSDiscoveredGame& game = discovered_games_[game_index];
+  if (!game.title_id) {
+    XEPresentOKAlert(self, @"Unavailable",
+                     @"This item does not expose a title ID, so game settings cannot be reset.");
+    return;
+  }
+
+  NSString* game_title =
+      game.title.empty() ? ToNSString(game.path.stem().string()) : ToNSString(game.title);
+  UIAlertController* confirm =
+      [UIAlertController alertControllerWithTitle:@"Reset Game Settings?"
+                                          message:[NSString
+                                                      stringWithFormat:
+                                                          @"Delete saved overrides for %@ and "
+                                                          @"return this title to defaults.",
+                                                          game_title]
+                                   preferredStyle:UIAlertControllerStyleAlert];
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+
+  const uint32_t title_id = game.title_id;
+  __unsafe_unretained XeniaViewController* unsafe_self = self;
+  [confirm addAction:[UIAlertAction actionWithTitle:@"Reset"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction* action) {
+                                              const bool deleted = config::DeleteGameConfig(title_id);
+                                              NSString* title = deleted ? @"Game Settings Reset"
+                                                                        : @"Game Settings Not Reset";
+                                              NSString* message =
+                                                  deleted
+                                                      ? @"Deleted title-specific overrides. Relaunch before testing."
+                                                      : @"Failed to delete title-specific overrides. Check xenia.log.";
+                                              UIViewController* top_presenter =
+                                                  [unsafe_self topPresentedControllerForModalPresentation];
+                                              UIViewController* presenter =
+                                                  top_presenter ?: unsafe_self;
+                                              XEPresentOKAlert(presenter, title, message);
+                                              [unsafe_self showStatusToastForMessage:message];
+                                            }]];
+  UIViewController* presenter = [self topPresentedControllerForModalPresentation] ?: self;
+  [presenter presentViewController:confirm animated:YES completion:nil];
+}
+
 - (void)presentGameTouchLayoutSheetForIndex:(size_t)game_index {
   if (game_index >= discovered_games_.size()) {
     return;
@@ -2155,6 +2575,7 @@ static BOOL xe_game_system_supports_remote_art(xe::ui::IOSGameSystem system) {
                                                                  title:game_title];
   XeniaLandscapeNavigationController* navigation_controller =
       [[XeniaLandscapeNavigationController alloc] initWithRootViewController:editor_controller];
+  navigation_controller.landscapeOnly = YES;
   navigation_controller.modalPresentationStyle = UIModalPresentationFullScreen;
   navigation_controller.navigationBarHidden = YES;
   [self presentViewController:navigation_controller animated:YES completion:nil];
@@ -2355,6 +2776,9 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
 }
 
 - (void)setCurrentWindowScalingMode:(XeniaIOSWindowScalingMode)mode {
+  if (mode == XeniaIOSWindowScalingModeStretch && [self isPresentLetterboxEnabled]) {
+    [self setPresentLetterboxEnabled:NO];
+  }
   XeniaIOSSetCurrentWindowScalingMode(mode);
   [self.view setNeedsLayout];
   [self.view layoutIfNeeded];
@@ -2382,6 +2806,9 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
 }
 
 - (void)setPresentLetterboxEnabled:(BOOL)enabled {
+  if (enabled && [self currentWindowScalingMode] == XeniaIOSWindowScalingModeStretch) {
+    enabled = NO;
+  }
   if (!self.appContext) {
     cvars::present_letterbox = enabled;
     return;
@@ -2414,6 +2841,9 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   const CGFloat guest_aspect = [self currentGuestDisplayAspectRatio];
   const CGFloat parent_aspect = parent.size.width / MAX(parent.size.height, 1.0);
   const XeniaIOSWindowScalingMode mode = [self currentWindowScalingMode];
+  if (mode == XeniaIOSWindowScalingModeStretch && [self isPresentLetterboxEnabled]) {
+    [self setPresentLetterboxEnabled:NO];
+  }
   self.metalView.xeniaDrawableAspectRatio =
       mode == XeniaIOSWindowScalingModeStretch ? parent_aspect : guest_aspect;
   CGRect frame = XeniaIOSMetalViewFrameForParent(parent, guest_aspect, mode,
@@ -2427,6 +2857,18 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
 - (UIMenu*)buildInGameDisplayMenu {
   __unsafe_unretained XeniaViewController* unsafe_self = self;
   const XeniaIOSWindowScalingMode current_mode = [self currentWindowScalingMode];
+  NSString* scaling_title = @"Scaling";
+  switch (current_mode) {
+    case XeniaIOSWindowScalingModeFit:
+      scaling_title = @"Scaling: Fit";
+      break;
+    case XeniaIOSWindowScalingModeStretch:
+      scaling_title = @"Scaling: Stretch";
+      break;
+    case XeniaIOSWindowScalingModeZoom:
+      scaling_title = @"Scaling: Fill";
+      break;
+  }
 
   UIAction* fit_action =
       [UIAction actionWithTitle:@"Fit (Preserve Aspect)"
@@ -2461,13 +2903,16 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
   zoom_action.state =
       current_mode == XeniaIOSWindowScalingModeZoom ? UIMenuElementStateOn : UIMenuElementStateOff;
 
-  UIMenu* scaling_submenu = [UIMenu menuWithTitle:@"Scaling"
-                                            image:nil
+  UIMenu* scaling_submenu = [UIMenu menuWithTitle:scaling_title
+                                            image:[UIImage systemImageNamed:@"rectangle.on.rectangle"]
                                        identifier:nil
-                                          options:UIMenuOptionsDisplayInline
+                                          options:0
                                          children:@[ fit_action, stretch_action, zoom_action ]];
 
-  const BOOL letterbox_enabled = [self isPresentLetterboxEnabled];
+  const BOOL letterbox_available = current_mode != XeniaIOSWindowScalingModeStretch;
+  const BOOL letterbox_enabled = letterbox_available && [self isPresentLetterboxEnabled];
+  NSString* presentation_title =
+      letterbox_enabled ? @"Presentation: Letterbox" : @"Presentation";
   UIAction* letterbox_action =
       [UIAction actionWithTitle:@"Letterbox"
                           image:[UIImage systemImageNamed:@"rectangle.center.inset.filled"]
@@ -2478,14 +2923,18 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
                           [unsafe_self refreshInGameDisplayMenu];
                         }];
   letterbox_action.state = letterbox_enabled ? UIMenuElementStateOn : UIMenuElementStateOff;
+  if (!letterbox_available) {
+    letterbox_action.attributes = UIMenuElementAttributesDisabled;
+  }
 
-  UIMenu* presentation_submenu = [UIMenu menuWithTitle:@"Presentation"
-                                                 image:nil
+  UIMenu* presentation_submenu = [UIMenu menuWithTitle:presentation_title
+                                                 image:[UIImage systemImageNamed:@"rectangle.center.inset.filled"]
                                             identifier:nil
-                                               options:UIMenuOptionsDisplayInline
+                                               options:0
                                               children:@[ letterbox_action ]];
 
   const BOOL display_uncapped = [self isGuestDisplayUncapped];
+  NSString* refresh_title = display_uncapped ? @"Refresh: Uncapped" : @"Refresh";
   UIAction* uncapped_action =
       [UIAction actionWithTitle:@"Emulated Display Uncapped"
                           image:[UIImage systemImageNamed:@"speedometer"]
@@ -2497,17 +2946,17 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
                         }];
   uncapped_action.state = display_uncapped ? UIMenuElementStateOn : UIMenuElementStateOff;
 
-  UIMenu* refresh_submenu = [UIMenu menuWithTitle:@"Refresh Rate"
-                                            image:nil
+  UIMenu* refresh_submenu = [UIMenu menuWithTitle:refresh_title
+                                            image:[UIImage systemImageNamed:@"speedometer"]
                                        identifier:nil
-                                          options:UIMenuOptionsDisplayInline
+                                          options:0
                                          children:@[ uncapped_action ]];
 
-  // Portrait position controls — only meaningful in portrait + Fit mode where
+  // Portrait position controls are only meaningful in portrait + Fit mode where
   // there's actual slack to drag the surface within.
   const BOOL is_portrait = self.view.bounds.size.height >= self.view.bounds.size.width;
   const BOOL position_available = is_portrait && current_mode == XeniaIOSWindowScalingModeFit;
-  UIAction* position_action = [UIAction actionWithTitle:@"Position in Portrait…"
+  UIAction* position_action = [UIAction actionWithTitle:@"Position in Portrait..."
                                                   image:[UIImage systemImageNamed:@"hand.draw"]
                                              identifier:nil
                                                 handler:^(__unused UIAction* action) {
@@ -2526,9 +2975,9 @@ static constexpr NSUInteger kXeniaIOSTouchLayoutURLMaxLength = 2048;
                         }];
 
   UIMenu* position_submenu = [UIMenu menuWithTitle:@"Position"
-                                             image:nil
+                                             image:[UIImage systemImageNamed:@"hand.draw"]
                                         identifier:nil
-                                           options:UIMenuOptionsDisplayInline
+                                           options:0
                                           children:@[ position_action, reset_action ]];
 
   return [UIMenu

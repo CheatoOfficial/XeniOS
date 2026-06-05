@@ -17,6 +17,7 @@
 // to override the orientation gating that UIKit otherwise inherits from the
 // presenting controller.
 @interface XeniaLandscapeNavigationController : UINavigationController
+@property(nonatomic, assign) BOOL landscapeOnly;
 @end
 
 #endif  // XENIA_UI_IOS_LANDSCAPE_NAVIGATION_CONTROLLER_H_

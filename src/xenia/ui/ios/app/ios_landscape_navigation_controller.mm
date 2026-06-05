@@ -14,10 +14,16 @@
 @implementation XeniaLandscapeNavigationController
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  if (self.landscapeOnly) {
+    return UIInterfaceOrientationMaskLandscape;
+  }
   return UIInterfaceOrientationMaskAll;
 }
 
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  if (self.landscapeOnly) {
+    return UIInterfaceOrientationLandscapeRight;
+  }
   return xe_current_interface_orientation(self.view);
 }
 

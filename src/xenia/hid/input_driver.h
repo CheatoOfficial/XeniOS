@@ -44,6 +44,10 @@ struct InputDeviceInfo {
   // encounter. Devices that should only be bound by explicit user action set
   // this to false.
   bool auto_bind = true;
+  // Fallback devices are auto-bound only while no non-fallback controller is
+  // available, and are replaced in-place by real controllers. iOS touch input
+  // uses this so slot 0 becomes the hardware pad when one connects.
+  bool fallback_auto_bind = false;
 };
 
 class InputDriver {

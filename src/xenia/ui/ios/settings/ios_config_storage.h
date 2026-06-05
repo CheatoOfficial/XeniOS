@@ -32,6 +32,7 @@ bool ApplyIOSConfigSectionsToGameConfig(const std::vector<IOSConfigSection>& sec
 // NSUserDefaults helpers re-used by the launcher main view controller.
 bool GetUserDefaultBool(NSString* key, bool fallback);
 double GetUserDefaultDouble(NSString* key, double fallback);
+void SetUserDefaultBool(NSString* key, bool value);
 void SetUserDefaultDouble(NSString* key, double value);
 
 // Pending external-launch path persistence: when the launcher hands off to

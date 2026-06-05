@@ -105,11 +105,18 @@ constexpr NSInteger kSectionOptions = 1;
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
   cell.textLabel.textColor = [XeniaTheme textPrimary];
   if (indexPath.row == 0) {
+    const BOOL letterbox_available =
+        host_ && [host_ currentWindowScalingMode] != XeniaIOSWindowScalingModeStretch;
     cell.textLabel.text = @"Letterbox";
-    cell.accessoryView = [self switchWithOn:(host_ && [host_ isPresentLetterboxEnabled])
-                                     action:@selector(letterboxChanged:)];
+    cell.textLabel.enabled = letterbox_available;
+    UISwitch* letterbox_switch =
+        [self switchWithOn:(letterbox_available && [host_ isPresentLetterboxEnabled])
+                    action:@selector(letterboxChanged:)];
+    letterbox_switch.enabled = letterbox_available;
+    cell.accessoryView = letterbox_switch;
   } else {
     cell.textLabel.text = @"Uncapped Emulated Display";
+    cell.textLabel.enabled = YES;
     cell.accessoryView = [self switchWithOn:(host_ && [host_ isGuestDisplayUncapped])
                                      action:@selector(uncappedChanged:)];
   }
@@ -122,12 +129,13 @@ constexpr NSInteger kSectionOptions = 1;
     return;
   }
   [host_ setCurrentWindowScalingMode:kScreenModes[(size_t)indexPath.row].mode];
-  [tableView reloadSections:[NSIndexSet indexSetWithIndex:kSectionScreenMode]
+  [tableView reloadSections:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 2)]
            withRowAnimation:UITableViewRowAnimationAutomatic];
 }
 
 - (void)letterboxChanged:(UISwitch*)sender {
   [host_ setPresentLetterboxEnabled:sender.on];
+  sender.on = host_ && [host_ isPresentLetterboxEnabled];
 }
 
 - (void)uncappedChanged:(UISwitch*)sender {
