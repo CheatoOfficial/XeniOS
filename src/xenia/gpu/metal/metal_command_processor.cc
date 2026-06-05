@@ -81,6 +81,20 @@ constexpr size_t kMaxPendingSharedMemoryWriteCapacity = 64;
 constexpr size_t kMaxSharedMemoryWaitSegmentsPerPending = 64;
 constexpr size_t kMaxCurrentDrawVertexFetchRanges =
     xenos::kVertexFetchConstantCount;
+
+class ScopedAutoreleasePool {
+ public:
+  ScopedAutoreleasePool() : pool_(NS::AutoreleasePool::alloc()->init()) {}
+  ~ScopedAutoreleasePool() {
+    if (pool_) {
+      pool_->drain();
+    }
+  }
+
+ private:
+  NS::AutoreleasePool* pool_ = nullptr;
+};
+
 const char* MetalTelemetryCbvSlotName(size_t slot) {
   switch (slot) {
     case 0:
@@ -5936,18 +5950,22 @@ MTL::CommandBuffer* MetalCommandProcessor::EnsureCommandBuffer() {
   EnsureCommandBufferAutoreleasePool();
 
   // Note: commandBuffer() returns an autoreleased object, we must retain it.
-  current_command_buffer_ = command_queue_->commandBuffer();
+  {
+    ScopedAutoreleasePool autorelease_pool;
+    current_command_buffer_ = command_queue_->commandBuffer();
+    if (current_command_buffer_) {
+      current_command_buffer_->retain();
+      current_command_buffer_->setLabel(
+          NS::String::string("XeniaCommandBuffer", NS::UTF8StringEncoding));
+    }
+  }
   if (!current_command_buffer_) {
     XELOGE("EnsureCommandBuffer: failed to create command buffer");
     DrainCommandBufferAutoreleasePool();
     return nullptr;
   }
-  current_command_buffer_->retain();
 
   ++submission_current_;
-
-  current_command_buffer_->setLabel(
-      NS::String::string("XeniaCommandBuffer", NS::UTF8StringEncoding));
 
   pending_completion_handlers_.fetch_add(1, std::memory_order_relaxed);
   current_command_buffer_->addCompletedHandler(
@@ -6959,13 +6977,19 @@ MetalCommandProcessor::CreateStandaloneTransferCommandBuffer(
   if (!command_queue_) {
     return nullptr;
   }
-  MTL::CommandBuffer* cmd = command_queue_->commandBuffer();
+  MTL::CommandBuffer* cmd = nullptr;
+  {
+    ScopedAutoreleasePool autorelease_pool;
+    cmd = command_queue_->commandBuffer();
+    if (cmd) {
+      cmd->retain();
+      if (label) {
+        cmd->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
+      }
+    }
+  }
   if (!cmd) {
     return nullptr;
-  }
-  cmd->retain();
-  if (label) {
-    cmd->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
   }
   return cmd;
 }
@@ -7850,22 +7874,27 @@ bool MetalCommandProcessor::BeginRenderEncoderForDraw(
     // avoid leaking cached binding state into the new encoder.
     // Note: renderCommandEncoder() returns an autoreleased object, we must
     // retain it.
-    current_render_encoder_ =
-        current_command_buffer_->renderCommandEncoder(pass_descriptor);
+    {
+      ScopedAutoreleasePool autorelease_pool;
+      current_render_encoder_ =
+          current_command_buffer_->renderCommandEncoder(pass_descriptor);
+      if (current_render_encoder_) {
+        current_render_encoder_->retain();
+        current_render_encoder_->setLabel(
+            NS::String::string("XeniaRenderEncoder", NS::UTF8StringEncoding));
+      }
+    }
     if (!current_render_encoder_) {
       ++backend_telemetry_.begin_encoder_creation_failures;
       XELOGE("Failed to create render command encoder");
       return false;
     }
     ++backend_telemetry_.begin_encoder_created;
-    current_render_encoder_->retain();
     current_render_encoder_has_zpd_visibility_ =
         zpd_visibility_pool_ && zpd_visibility_pool_->is_initialized() &&
         pass_descriptor->visibilityResultBuffer() ==
             zpd_visibility_pool_->visibility_buffer();
     ResetRenderEncoderBufferBindings();
-    current_render_encoder_->setLabel(
-        NS::String::string("XeniaRenderEncoder", NS::UTF8StringEncoding));
     current_render_pipeline_state_ = nullptr;
     ff_blend_factor_valid_ = false;
     rasterizer_state_valid_ = false;
