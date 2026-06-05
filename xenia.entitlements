@@ -14,7 +14,5 @@
 	<false/>
 	<key>com.apple.security.cs.jit-write-allowlist-freeze-late</key>
 	<true/>
-	<key>com.apple.security.get-task-allow</key>
-	<true/>
 </dict>
 </plist>

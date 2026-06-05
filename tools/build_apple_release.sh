@@ -67,6 +67,34 @@ need_file_exec() {
   [ -x "$1" ] || die "missing required executable: $1"
 }
 
+has_bundled_patch_files() {
+  local patches_dir="$1"
+  local first_patch
+  [ -d "$patches_dir" ] || return 1
+  first_patch="$(find "$patches_dir" -type f -name "*.patch.toml" -print -quit 2>/dev/null || true)"
+  [ -n "$first_patch" ]
+}
+
+release_data_repos_ready() {
+  local data_dir="$root/build/data_repos"
+  has_bundled_patch_files "$data_dir/game-patches/patches" || return 1
+  [ -f "$data_dir/xenia-manager-database/data/game-compatibility/canary.json" ] || return 1
+  [ -f "$data_dir/xenia-manager-database/data/game-compatibility/stable.json" ] || return 1
+  [ -f "$data_dir/SDL_GameControllerDB/gamecontrollerdb.txt" ] || return 1
+  return 0
+}
+
+ensure_release_data_repos() {
+  if release_data_repos_ready; then
+    echo "Data repos: ready"
+    return 0
+  fi
+
+  echo "Data repos: missing or incomplete; running ./xb fetchdata"
+  ./xb fetchdata
+  release_data_repos_ready || die "data repos still incomplete after ./xb fetchdata"
+}
+
 cap_config() {
   # checked -> Checked, debug -> Debug, release -> Release, valgrind -> Valgrind
   local s
@@ -89,7 +117,7 @@ trim_string() {
 }
 
 default_marketing_version() {
-  printf '%s' "1.0.1"
+  printf '%s' "2.0"
 }
 
 validate_marketing_version() {
@@ -660,7 +688,6 @@ package_ios_ipa() {
   local ipa_out="$2"
   local bundle_identifier="$3"
 
-  # Make the output absolute because we `cd` into a temp directory.
   local ipa_dir ipa_base
   ipa_dir="$(cd "$(dirname "$ipa_out")" && pwd)"
   ipa_base="$(basename "$ipa_out")"
@@ -943,6 +970,10 @@ if [ -n "$package_macos_universal_arm64_app" ] || [ -n "$package_macos_universal
   exit 0
 fi
 
+if [ "$build_ios" -eq 1 ] || [ "$build_macos_arm64" -eq 1 ] || [ "$build_macos_x86_64" -eq 1 ]; then
+  ensure_release_data_repos
+fi
+
 echo "Config: $buildcfg"
 echo "Output: $out_dir"
 if [ -n "$release_version" ] && [ -n "$release_build_number" ]; then
@@ -1023,17 +1054,23 @@ fi
 
 if [ "$build_ios" -eq 1 ]; then
   echo ""
-  echo "== iOS arm64 (ad-hoc-signed ipa) =="
+  echo "== iOS arm64 (Xcode-built, ad-hoc-signed ipa) =="
 
   ./xb build --config="$config" --target=xenia-shader-cc
-  ./xb build --config="$config" --target-os=ios --target=xenia-app
+  ./xb devenv --target-os=ios --config="$config" --no-open
+  xcodebuild \
+    -project build-ios-xcode/xenia.xcodeproj \
+    -scheme xenia-app \
+    -configuration "$buildcfg" \
+    -destination generic/platform=iOS \
+    CODE_SIGNING_ALLOWED=NO \
+    build
 
-  ios_dir="build-ios/bin/iOS/$buildcfg"
+  ios_dir="build-ios-xcode/bin/iOS/$buildcfg"
   app_bundle="$(find_first_app "$ios_dir")" || die "iOS app not found in $ios_dir"
 
   stamp_bundle_version_metadata "$app_bundle" "$release_version" "$release_build_number"
   stamp_bundle_stage_metadata "$app_bundle" "$release_stage"
-  compile_bundle_icon_assets "$app_bundle" "iphoneos" "$ios_min"
   stamp_bundle_attestation "$app_bundle" "ios" "$build_channel" "$release_version" \
     "$release_build_number" "$release_stage" "$commit_short" "$issued_at" "$attestation_key_id" "$attestation_key"
   # Ad-hoc sign to embed entitlements (increased-memory-limit).
