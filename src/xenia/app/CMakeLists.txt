@@ -1,5 +1,8 @@
 if(XE_PLATFORM_IOS)
   set(_xe_ios_entitlements "${PROJECT_SOURCE_DIR}/xenia_ios.entitlements")
+  set(_xe_ios_app_icon "${PROJECT_SOURCE_DIR}/assets/apple/AppIcon.icon")
+  set(_xe_ios_asset_catalog
+      "${PROJECT_SOURCE_DIR}/assets/apple/XeniOSAssets.xcassets")
   add_executable(xenia-app MACOSX_BUNDLE
     ${CMAKE_CURRENT_SOURCE_DIR}/xenia_main_ios.mm
     ${PROJECT_SOURCE_DIR}/src/xenia/ui/ios/app/windowed_app_main_ios.mm
@@ -13,9 +16,28 @@ if(XE_PLATFORM_IOS)
     MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.xenios"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
+    XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES
+      "AppIconLight AppIconDark"
+    XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS YES
     XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS
       "${_xe_ios_entitlements}")
   target_sources(xenia-app PRIVATE "${_xe_ios_entitlements}")
+  if(XCODE)
+    set_source_files_properties(
+      "${_xe_ios_app_icon}"
+      PROPERTIES
+        XCODE_LAST_KNOWN_FILE_TYPE "folder.iconcomposer.icon"
+        MACOSX_PACKAGE_LOCATION Resources)
+    set_source_files_properties(
+      "${_xe_ios_asset_catalog}"
+      PROPERTIES
+        XCODE_LAST_KNOWN_FILE_TYPE "folder.assetcatalog"
+        MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(xenia-app PRIVATE
+      "${_xe_ios_app_icon}"
+      "${_xe_ios_asset_catalog}")
+  endif()
   target_compile_definitions(xenia-app PRIVATE
     XBYAK_NO_OP_NAMES
     XBYAK_ENABLE_OMITTED_OPERAND
@@ -129,15 +151,6 @@ if(XE_PLATFORM_IOS)
   xe_embed_compressed_bundle(xenia-app
     "${PROJECT_SOURCE_DIR}/build/data_repos/xenia-manager-database/data/game-compatibility"
     game_compat)
-  set(_xe_ios_ad_hoc_sign_command
-    codesign --force --deep --sign -
-    --entitlements "${_xe_ios_entitlements}"
-    "$<TARGET_BUNDLE_DIR:xenia-app>")
-  if(NOT XCODE)
-    add_custom_command(TARGET xenia-app POST_BUILD
-      COMMAND ${_xe_ios_ad_hoc_sign_command}
-      VERBATIM)
-  endif()
   set(_xe_ios_package_command
     /bin/bash "${PROJECT_SOURCE_DIR}/tools/package_ios_ipa.sh"
     "$<TARGET_BUNDLE_DIR:xenia-app>"
@@ -145,9 +158,6 @@ if(XE_PLATFORM_IOS)
     "$<TARGET_BUNDLE_DIR:xenia-app>/../XeniOS.ipa"
     "$<TARGET_BUNDLE_DIR:xenia-app>/../XeniOS.requested-entitlements.plist"
     "$<TARGET_BUNDLE_DIR:xenia-app>/../XeniOS.signed-entitlements.plist")
-  add_custom_command(TARGET xenia-app POST_BUILD
-    COMMAND ${_xe_ios_package_command}
-    VERBATIM)
   if(XCODE)
     add_custom_target(xenia-app-ios-package
       COMMAND ${_xe_ios_package_command}
@@ -155,8 +165,9 @@ if(XE_PLATFORM_IOS)
       VERBATIM)
   else()
     add_custom_target(xenia-app-ios-package
-      COMMAND ${_xe_ios_ad_hoc_sign_command}
-      COMMAND ${_xe_ios_package_command}
+      COMMAND "${CMAKE_COMMAND}" -E echo
+              "xenia-app-ios-package requires the Xcode generator so Icon Composer .icon packages are compiled. Use: ./xb build --config=release --target-os=ios --target=xenia-app-ios-package"
+      COMMAND "${CMAKE_COMMAND}" -E false
       DEPENDS xenia-app
       VERBATIM)
   endif()

@@ -586,6 +586,18 @@ def get_build_dir(target_arch=None, target_os=None):
     return "build"
 
 
+def get_ios_xcode_build_dir():
+    return "build-ios-xcode"
+
+
+def get_ios_xcode_project_path():
+    return os.path.join(get_ios_xcode_build_dir(), "xenia.xcodeproj")
+
+
+def get_ios_xcode_bin_dir(config):
+    return os.path.join(self_path, get_ios_xcode_build_dir(), "bin", "iOS", config.title())
+
+
 def run_cmake_configure(cc=None, generator=None, build_tests=False,
                         disable_lto=False, enable_profiler=False,
                         enable_itrace=False, enable_dtrace=False,
@@ -724,6 +736,79 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
     if ret == 0:
         generate_version_h(build_dir)
     return ret
+
+
+def run_ios_xcode_configure():
+    return run_cmake_configure(
+        generator="Xcode",
+        target_arch="arm64",
+        target_os="ios",
+        build_dir=get_ios_xcode_build_dir(),
+        configuration_types="Checked;Debug;Release",
+        xcode_generate_schemes=True,
+    )
+
+
+def build_ios_xcode_app(config, force=False, configure=True, pass_args=None):
+    """Builds the iOS app with Xcode so Icon Composer packages are processed."""
+    if sys.platform != "darwin":
+        print_error("--target-os=ios is only supported from macOS.")
+        return 1
+    if not has_bin("xcodebuild"):
+        print_error("Xcode command line tools are not available.")
+        return 1
+
+    if configure:
+        print("- running Xcode cmake configure...")
+        ret = run_ios_xcode_configure()
+        if ret:
+            return ret
+        print("")
+
+    project_path = get_ios_xcode_project_path()
+    if not os.path.exists(project_path):
+        print_error(f"Xcode project not found: {project_path}")
+        return 1
+
+    config_title = config.title()
+    print(f"- building xenia-app with Xcode:{config_title}...")
+    xcode_args = [
+        "xcodebuild",
+        "-project", project_path,
+        "-scheme", "xenia-app",
+        "-configuration", config_title,
+        "-destination", "generic/platform=iOS",
+        "CODE_SIGNING_ALLOWED=NO",
+    ]
+    if force:
+        xcode_args.append("clean")
+    if pass_args:
+        xcode_args.extend(pass_args)
+    xcode_args.append("build")
+    ret = subprocess.call(xcode_args)
+    if ret != 0:
+        print_error("xcodebuild failed with one or more errors.")
+    return ret
+
+
+def package_ios_xcode_app(config):
+    config_title = config.title()
+    ios_dir = get_ios_xcode_bin_dir(config)
+    app_bundle = os.path.join(ios_dir, "XeniOS.app")
+    if not os.path.isdir(app_bundle):
+        print_error(f"iOS app not found: {app_bundle}")
+        return 1
+
+    print(f"- packaging XeniOS.ipa from Xcode app:{config_title}...")
+    return subprocess.call([
+        "/bin/bash",
+        os.path.join(self_path, "tools", "package_ios_ipa.sh"),
+        app_bundle,
+        os.path.join(self_path, "xenia_ios.entitlements"),
+        os.path.join(ios_dir, "XeniOS.ipa"),
+        os.path.join(ios_dir, "XeniOS.requested-entitlements.plist"),
+        os.path.join(ios_dir, "XeniOS.signed-entitlements.plist"),
+    ])
 
 
 def get_build_bin_path(args):
@@ -973,6 +1058,28 @@ class BaseBuildCommand(Command):
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
         target_os = args.get("target_os")
+        targets = args["target"]
+        if target_os == "ios" and "xenia-app-ios-package" in targets:
+            unsupported_targets = [
+                target for target in targets if target != "xenia-app-ios-package"]
+            if unsupported_targets:
+                print_error(
+                    "xenia-app-ios-package must be built by itself for iOS. "
+                    f"Unsupported extra target(s): {', '.join(unsupported_targets)}")
+                return 1
+            ret = build_ios_xcode_app(
+                args["config"],
+                force=args["force"],
+                configure=not args["no_configure"],
+                pass_args=pass_args,
+            )
+            if ret:
+                return ret
+            ret = package_ios_xcode_app(args["config"])
+            if ret != 0:
+                print_error("iOS IPA packaging failed.")
+            return ret
+
         if not args["no_configure"]:
             print("- running cmake configure...")
             ret = run_cmake_configure(
@@ -1586,12 +1693,15 @@ class DevenvCommand(Command):
             help="Build configuration the IDE solution is pinned to. The VS "
                  "dropdown is restricted to this single config; re-run xb "
                  "devenv with a different --config to switch.")
+        self.parser.add_argument(
+            "--no-open", action="store_true",
+            help="Configure the IDE build tree without launching the IDE.")
 
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
         target_os = args.get("target_os")
         if sys.platform == "darwin" and target_os == "ios":
-            return self._launch_xcode_ios(args["config"])
+            return self._launch_xcode_ios(args["config"], open_project=not args["no_open"])
         if sys.platform == "win32":
             return self._launch_visual_studio(target_arch, args["config"])
         # Non-Windows: CLion is the only IDE we know how to launch
@@ -1648,31 +1758,24 @@ class DevenvCommand(Command):
         shell_call(["devenv", sln_path])
         return 0
 
-    def _launch_xcode_ios(self, config="debug"):
+    def _launch_xcode_ios(self, config="debug", open_project=True):
         """Configures a separate Xcode iOS build tree, then opens it."""
-        if not has_bin("xcodebuild"):
-            print_error("Xcode command line tools are not available.")
-            return 1
-
-        build_dir = "build-ios-xcode"
         config_title = config.title()
+        build_dir = get_ios_xcode_build_dir()
         print(f"Configuring Xcode iOS build tree ({config_title}) in {build_dir}...")
-        ret = run_cmake_configure(
-            generator="Xcode",
-            target_arch="arm64",
-            target_os="ios",
-            build_dir=build_dir,
-            configuration_types="Checked;Debug;Release",
-            xcode_generate_schemes=True,
-        )
+        ret = run_ios_xcode_configure()
         if ret != 0:
             print_error("cmake configure failed for the Xcode iOS build tree")
             return ret
 
-        project_path = os.path.join(build_dir, "xenia.xcodeproj")
+        project_path = get_ios_xcode_project_path()
         if not os.path.exists(project_path):
             print_error("cmake configured successfully but no xenia.xcodeproj was produced")
             return 1
+
+        if not open_project:
+            print(f"\n- Xcode project configured at {project_path}")
+            return 0
 
         print(f"\n- launching Xcode on {project_path}...")
         print("  Select the xenia-app scheme and a physical iOS device.")
