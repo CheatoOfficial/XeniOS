@@ -22,9 +22,12 @@
 namespace xe {
 namespace ui {
 
-inline constexpr const char* kOfficialTouchLayoutLocalID = "fps_standard";
-inline constexpr const char* kOfficialTouchLayoutExpandedLocalID = "fps_expanded";
-inline constexpr const char* kOfficialTouchLayoutMirroredLocalID = "fps_mirrored";
+inline constexpr const char* kOfficialTouchLayoutFPSCompactLocalID = "fps_compact";
+inline constexpr const char* kOfficialTouchLayoutFPSFullLocalID = "fps_full";
+inline constexpr const char* kOfficialTouchLayoutActionAdventureLocalID = "action_adventure";
+inline constexpr const char* kOfficialTouchLayoutArcadeDpadLocalID = "arcade_dpad";
+inline constexpr const char* kOfficialTouchLayoutDrivingLocalID = "driving";
+inline constexpr const char* kOfficialTouchLayoutMinimalStarterLocalID = "minimal_starter";
 inline constexpr const char* kTouchLayoutAssignmentSection = "TouchLayoutAssignment";
 
 struct IOSTouchLocalLayoutInfo {
@@ -45,12 +48,17 @@ std::string MakeTouchLayoutSlug(std::string value);
 bool TryNormalizeConfiguredTouchLayoutLocalID(const std::string& configured_local_id,
                                               std::string* normalized_local_id_out);
 std::string TouchLayoutBaseTemplateForTable(const toml::table& table);
+std::string DefaultOfficialTouchLayoutLocalID();
 xe::hid::touch::IOSTouchLayoutModel MakeTouchLayoutSeedModelForTable(const toml::table& table);
 xe::hid::touch::IOSTouchLayoutModel MakeOfficialIOSTouchLayoutModelForLocalID(
     const std::string& local_id);
 xe::hid::touch::IOSTouchLayoutModel MakeOfficialIOSTouchLayoutModel();
 UIImage* RenderTouchLayoutThumbnail(const xe::hid::touch::IOSTouchLayoutModel& layout, CGSize size);
+std::string ReadGlobalTouchLayoutAssignment();
+void WriteGlobalTouchLayoutAssignment(const std::string& local_id);
 std::string ReadTitleTouchLayoutAssignment(uint32_t title_id);
+bool IsFavoriteTouchLayoutLocalID(const std::string& local_id);
+void SetFavoriteTouchLayoutLocalID(const std::string& local_id, bool favorite);
 bool TouchLayoutContentMatches(const xe::hid::touch::IOSTouchLayoutModel& a,
                                const xe::hid::touch::IOSTouchLayoutModel& b);
 

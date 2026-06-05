@@ -57,8 +57,10 @@ struct TouchEditSnapResult {
 
 CGRect CGRectFromTouchRect(const xe::hid::touch::IOSTouchRect& rect);
 bool TouchOverlayIsPortraitForView(UIView* view);
+xe::hid::touch::IOSTouchLayoutSpace TouchLayoutSpaceForView(UIView* view);
 xe::hid::touch::IOSTouchLayoutSpace TouchSafeAreaSpaceForView(UIView* view);
-xe::hid::touch::IOSTouchLayoutSpace TouchControlDeckSpaceForView(UIView* view);
+xe::hid::touch::IOSTouchLayoutSpace TouchControlPositionSpaceForControlType(
+    UIView* view, xe::hid::touch::IOSTouchControlType control_type);
 xe::hid::touch::IOSTouchLayoutSpace TouchControlSizeSpaceForControlType(
     UIView* view, xe::hid::touch::IOSTouchControlType control_type);
 xe::hid::touch::IOSTouchRect ClampNormalizedControlFrame(

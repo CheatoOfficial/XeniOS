@@ -83,6 +83,12 @@ enum class IOSTouchInteractionTrigger : uint8_t {
   kDoubleTapForward,
 };
 
+enum class IOSTouchAnalogOutput : uint8_t {
+  kNone = 0,
+  kLook,
+  kMove,
+};
+
 inline constexpr std::array<IOSTouchAction, 17> kIOSTouchEditableActions = {
     IOSTouchAction::kButtonA,     IOSTouchAction::kButtonB,
     IOSTouchAction::kButtonX,     IOSTouchAction::kButtonY,
@@ -93,6 +99,13 @@ inline constexpr std::array<IOSTouchAction, 17> kIOSTouchEditableActions = {
     IOSTouchAction::kDpadUp,      IOSTouchAction::kDpadDown,
     IOSTouchAction::kDpadLeft,    IOSTouchAction::kDpadRight,
     IOSTouchAction::kNone,
+};
+
+inline constexpr std::array<IOSTouchAnalogOutput, 3>
+    kIOSTouchEditableAnalogOutputs = {
+        IOSTouchAnalogOutput::kNone,
+        IOSTouchAnalogOutput::kLook,
+        IOSTouchAnalogOutput::kMove,
 };
 
 inline constexpr std::array<IOSTouchTintStyle, 8> kIOSTouchEditableTintStyles =
@@ -117,6 +130,20 @@ struct IOSTouchRect {
   float height = 0.0f;
 };
 
+struct IOSTouchAnalogTuning {
+  float deadzone = 0.0f;
+  float activation_radius = 1.0f;
+  float horizontal_scale = 1.0f;
+  float vertical_scale = 1.0f;
+  float diagonal_scale = 1.0f;
+  float response_curve = 1.0f;
+  float acceleration_scale = 0.0f;
+  float smoothing = 0.0f;
+  float max_output = 1.0f;
+  bool invert_x = false;
+  bool invert_y = false;
+};
+
 struct IOSTouchLayoutSpace {
   float origin_x = 0.0f;
   float origin_y = 0.0f;
@@ -129,6 +156,11 @@ struct IOSTouchLayoutSpace {
 struct IOSTouchInteractionBehavior {
   IOSTouchInteractionTrigger trigger = IOSTouchInteractionTrigger::kNone;
   IOSTouchAction action = IOSTouchAction::kNone;
+  IOSTouchAnalogOutput analog_output = IOSTouchAnalogOutput::kNone;
+  IOSTouchAnalogTuning analog_tuning;
+  // Legacy alias for layouts saved before analog_output existed. New code
+  // keeps this synchronized when analog_output == kLook so older readers still
+  // understand hold-drag look behavior.
   bool enables_relative_look = false;
   float relative_look_scale = 1.0f;
   float hold_seconds = 0.30f;
@@ -159,6 +191,8 @@ struct IOSTouchControlDefinition {
   IOSTouchTintStyle tint_style = IOSTouchTintStyle::kAuto;
   bool hold_while_captured = false;
   bool enables_relative_look = false;
+  IOSTouchAnalogOutput drag_output = IOSTouchAnalogOutput::kNone;
+  IOSTouchAnalogTuning analog_tuning;
   // Per-control look sensitivity multiplier, exposed in the touch editor.
   // For Look swipe zones: scales the swipe-points-per-full-deflection so
   // that 2.0x means full look output is reached with half as much swipe
@@ -167,6 +201,12 @@ struct IOSTouchControlDefinition {
   // output emitted while the button is held.
   // Effective editor-clamped range: 0.25 .. 4.0.
   float relative_look_scale = 1.0f;
+  // While this control is held, scale all analog look / move output. Defaults
+  // to 1.0 so existing layouts are unchanged; layouts can use this for
+  // aim-down-sights style lower look sensitivity or flight controls that move
+  // differently while LT/RB/etc. is held.
+  float held_look_scale = 1.0f;
+  float held_move_scale = 1.0f;
   // Move + D-Pad combo: when set on a kMoveStick, the control renders four
   // tappable D-Pad arrows around the stick base and the publish path emits
   // the corresponding D-Pad bit (Up/Down/Left/Right) while a finger is held
@@ -249,6 +289,7 @@ bool IsSupportedIOSTouchPrimaryAction(IOSTouchControlType control_type,
 const char* IOSTouchActionDisplayName(IOSTouchAction action);
 const char* IOSTouchInteractionTriggerDisplayName(
     IOSTouchInteractionTrigger trigger);
+const char* IOSTouchAnalogOutputDisplayName(IOSTouchAnalogOutput output);
 float DefaultIOSTouchHoldSecondsForInteractionTrigger(
     IOSTouchInteractionTrigger trigger);
 bool IOSTouchControlHasCustomLabel(const IOSTouchControlDefinition& control);

@@ -15,6 +15,7 @@
 #include <string>
 
 #import "xenia/hid/touch/touch_layout_ios.h"
+#import "xenia/ui/ios/shared/ios_system_utils.h"
 #import "xenia/ui/ios/shared/ios_theme.h"
 #import "xenia/ui/ios/touch/touch_controls_overlay_ios.h"
 
@@ -103,13 +104,48 @@
   overlay_.layoutLibraryResetHandler = ^{
     [block_self->coordinator_ resetToOfficialPreset];
   };
+  overlay_.layoutLibraryRenameLayoutHandler = ^(NSString* localID) {
+    [block_self->coordinator_ renameLayoutWithLocalID:localID];
+  };
+  overlay_.layoutLibraryDeleteLayoutHandler = ^(NSString* localID) {
+    [block_self->coordinator_ deleteLayoutWithLocalID:localID];
+  };
+  overlay_.layoutLibraryExportLayoutHandler = ^(NSString* localID) {
+    [block_self->coordinator_ exportLayoutWithLocalID:localID];
+  };
+  overlay_.layoutLibrarySetTitleDefaultHandler = ^(NSString* localID) {
+    [block_self->coordinator_ setLayoutDefaultForCurrentTitleWithLocalID:localID];
+  };
+  overlay_.layoutLibrarySetGlobalDefaultHandler = ^(NSString* localID) {
+    [block_self->coordinator_ setLayoutDefaultForAllGamesWithLocalID:localID];
+  };
+  overlay_.layoutLibraryFavoriteHandler = ^(NSString* localID, BOOL favorite) {
+    [block_self->coordinator_ setLayoutFavoriteWithLocalID:localID favorite:favorite];
+  };
 
   [coordinator_ applyLayoutModelForTitleID:title_id_];
   [overlay_ setGameplayOverlayVisible:YES animated:NO];
   [overlay_ setEditingControlsEnabled:YES animated:NO];
 }
 
+- (void)viewDidAppear:(BOOL)animated {
+  [super viewDidAppear:animated];
+  xe_request_landscape_orientation(self);
+}
+
 - (BOOL)prefersStatusBarHidden {
+  return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+  return UIInterfaceOrientationMaskLandscape;
+}
+
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+  return UIInterfaceOrientationLandscapeRight;
+}
+
+- (BOOL)shouldAutorotate {
   return YES;
 }
 
@@ -128,6 +164,15 @@
                              self.isMovingFromParentViewController)) {
     [coordinator_ saveCurrentLayoutForTitleID:title_id_];
     saved_on_dismiss_ = YES;
+  }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+  [super viewDidDisappear:animated];
+  UINavigationController* nav = self.navigationController;
+  if (self.isBeingDismissed || nav.isBeingDismissed) {
+    UIViewController* presenter = nav.presentingViewController ?: self.presentingViewController;
+    xe_request_current_orientation(presenter);
   }
 }
 

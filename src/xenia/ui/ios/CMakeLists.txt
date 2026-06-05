@@ -127,6 +127,10 @@ target_sources(xenia-ui-ios PRIVATE
   touch/touch_controls_overlay_helpers_ios.h
   touch/touch_controls_overlay_helpers_ios.mm
   touch/touch_controls_overlay_ios.mm
+  touch/touch_edit_command_bar_ios.h
+  touch/touch_edit_command_bar_ios.mm
+  touch/touch_edit_panel_ios.h
+  touch/touch_edit_panel_ios.mm
   touch/touch_layout_library_controller_ios.h
   touch/touch_layout_library_controller_ios.mm
   touch/touch_layout_library_ios.h

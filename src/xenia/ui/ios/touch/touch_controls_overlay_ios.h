@@ -36,6 +36,12 @@ class IOSTouchRuntimeModel;
 @property(nonatomic, copy) void (^layoutLibraryImportHandler)(void);
 @property(nonatomic, copy) void (^layoutLibraryExportHandler)(void);
 @property(nonatomic, copy) void (^layoutLibraryResetHandler)(void);
+@property(nonatomic, copy) void (^layoutLibraryRenameLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^layoutLibraryDeleteLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^layoutLibraryExportLayoutHandler)(NSString* localID);
+@property(nonatomic, copy) void (^layoutLibrarySetTitleDefaultHandler)(NSString* localID);
+@property(nonatomic, copy) void (^layoutLibrarySetGlobalDefaultHandler)(NSString* localID);
+@property(nonatomic, copy) void (^layoutLibraryFavoriteHandler)(NSString* localID, BOOL favorite);
 
 - (instancetype)initWithRuntimeModel:(xe::hid::touch::IOSTouchRuntimeModel*)runtime_model
     NS_DESIGNATED_INITIALIZER;

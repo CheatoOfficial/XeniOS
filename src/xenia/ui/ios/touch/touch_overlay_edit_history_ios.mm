@@ -28,6 +28,21 @@ bool TouchRectsEqual(const xe::hid::touch::IOSTouchRect& left,
 bool TouchInteractionBehaviorsEqual(const xe::hid::touch::IOSTouchInteractionBehavior& left,
                                     const xe::hid::touch::IOSTouchInteractionBehavior& right) {
   return left.trigger == right.trigger && left.action == right.action &&
+         left.analog_output == right.analog_output &&
+         TouchFloatNear(left.analog_tuning.deadzone, right.analog_tuning.deadzone) &&
+         TouchFloatNear(left.analog_tuning.activation_radius,
+                        right.analog_tuning.activation_radius) &&
+         TouchFloatNear(left.analog_tuning.horizontal_scale,
+                        right.analog_tuning.horizontal_scale) &&
+         TouchFloatNear(left.analog_tuning.vertical_scale, right.analog_tuning.vertical_scale) &&
+         TouchFloatNear(left.analog_tuning.diagonal_scale, right.analog_tuning.diagonal_scale) &&
+         TouchFloatNear(left.analog_tuning.response_curve, right.analog_tuning.response_curve) &&
+         TouchFloatNear(left.analog_tuning.acceleration_scale,
+                        right.analog_tuning.acceleration_scale) &&
+         TouchFloatNear(left.analog_tuning.smoothing, right.analog_tuning.smoothing) &&
+         TouchFloatNear(left.analog_tuning.max_output, right.analog_tuning.max_output) &&
+         left.analog_tuning.invert_x == right.analog_tuning.invert_x &&
+         left.analog_tuning.invert_y == right.analog_tuning.invert_y &&
          left.enables_relative_look == right.enables_relative_look &&
          TouchFloatNear(left.relative_look_scale, right.relative_look_scale) &&
          TouchFloatNear(left.hold_seconds, right.hold_seconds) &&
@@ -50,7 +65,24 @@ bool TouchControlDefinitionsEqual(const xe::hid::touch::IOSTouchControlDefinitio
          left.tint_style == right.tint_style &&
          left.hold_while_captured == right.hold_while_captured &&
          left.enables_relative_look == right.enables_relative_look &&
+         left.drag_output == right.drag_output &&
+         TouchFloatNear(left.analog_tuning.deadzone, right.analog_tuning.deadzone) &&
+         TouchFloatNear(left.analog_tuning.activation_radius,
+                        right.analog_tuning.activation_radius) &&
+         TouchFloatNear(left.analog_tuning.horizontal_scale,
+                        right.analog_tuning.horizontal_scale) &&
+         TouchFloatNear(left.analog_tuning.vertical_scale, right.analog_tuning.vertical_scale) &&
+         TouchFloatNear(left.analog_tuning.diagonal_scale, right.analog_tuning.diagonal_scale) &&
+         TouchFloatNear(left.analog_tuning.response_curve, right.analog_tuning.response_curve) &&
+         TouchFloatNear(left.analog_tuning.acceleration_scale,
+                        right.analog_tuning.acceleration_scale) &&
+         TouchFloatNear(left.analog_tuning.smoothing, right.analog_tuning.smoothing) &&
+         TouchFloatNear(left.analog_tuning.max_output, right.analog_tuning.max_output) &&
+         left.analog_tuning.invert_x == right.analog_tuning.invert_x &&
+         left.analog_tuning.invert_y == right.analog_tuning.invert_y &&
          TouchFloatNear(left.relative_look_scale, right.relative_look_scale) &&
+         TouchFloatNear(left.held_look_scale, right.held_look_scale) &&
+         TouchFloatNear(left.held_move_scale, right.held_move_scale) &&
          TouchInteractionBehaviorsEqual(left.secondary_behavior, right.secondary_behavior) &&
          left.capture_priority == right.capture_priority &&
          left.mapped_buttons == right.mapped_buttons &&

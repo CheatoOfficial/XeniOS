@@ -25,19 +25,25 @@ namespace xe::ui::ios::touch_overlay {
 
 inline constexpr float kTouchAxisMax = 32767.0f;
 inline constexpr CGFloat kEditGridSpacingPoints = 28.0f;
-inline constexpr CGFloat kEditGridDotRadius = 1.15f;
-inline constexpr CGFloat kEditMoveSnapThresholdPoints = 18.0f;
-inline constexpr CGFloat kEditResizeSnapThresholdPoints = 14.0f;
-inline constexpr CGFloat kEditGridMoveSnapThresholdPoints = 32.0f;
-inline constexpr CGFloat kEditGridResizeSnapThresholdPoints = 24.0f;
-inline constexpr CGFloat kEditSnapGuideLineWidth = 1.25f;
+inline constexpr CGFloat kEditGridDotRadius = 1.55f;
+inline constexpr CGFloat kEditMoveSnapThresholdPoints = 22.0f;
+inline constexpr CGFloat kEditResizeSnapThresholdPoints = 18.0f;
+inline constexpr CGFloat kEditGridMoveSnapThresholdPoints = 38.0f;
+inline constexpr CGFloat kEditGridResizeSnapThresholdPoints = 30.0f;
+inline constexpr CGFloat kEditSnapGuideLineWidth = 1.75f;
 inline constexpr CGFloat kEditChromeHeaderHeight = 44.0f;
-inline constexpr NSInteger kEditChromeDockAuto = -1;
 inline constexpr NSInteger kEditChromeDockCount = 8;
 
 extern const float kEditCanonicalControlSizes[9];
 extern const float kLookZoneScaleChoices[8];
 extern const float kRelativeLookScaleChoices[8];
+extern const float kTouchAnalogScaleChoices[9];
+extern const float kTouchAnalogPercentChoices[8];
+extern const float kTouchAnalogRadiusChoices[7];
+extern const float kTouchAnalogCurveChoices[7];
+extern const float kTouchAnalogAccelerationChoices[6];
+extern const float kTouchAnalogSmoothingChoices[6];
+extern const float kTouchAnalogMaxOutputChoices[5];
 extern const xe::hid::touch::IOSTouchControlShape kEditShapeChoices[2];
 
 struct TouchCaptureState {
@@ -60,6 +66,7 @@ struct TouchCaptureState {
   CGPoint anchor_point = CGPointZero;
   CGPoint current_point = CGPointZero;
   CFTimeInterval began_time = 0.0;
+  CFTimeInterval last_motion_time = 0.0;
   bool secondary_behavior_triggered = false;
   xe::hid::touch::IOSTouchRect normalized_frame_at_capture;
   EditGestureMode edit_gesture_mode = EditGestureMode::kMove;
@@ -74,6 +81,10 @@ float TouchLookHoldSeconds();
 float TouchButtonTapHoldSeconds();
 CGPoint ClampLookVector(CGPoint value);
 CGPoint SwipeLookVectorForDelta(CGPoint delta, float look_scale);
+CGPoint ApplyTouchAnalogTuning(CGPoint value, const xe::hid::touch::IOSTouchAnalogTuning& tuning);
+CGPoint ApplyTouchAnalogTuningWithVelocity(CGPoint value,
+                                           const xe::hid::touch::IOSTouchAnalogTuning& tuning,
+                                           float velocity_full_scales_per_second);
 
 std::array<CGRect, kEditChromeDockCount> EditChromeDockCandidateFrames(
     const xe::hid::touch::IOSTouchLayoutSpace& safe_area, CGFloat chrome_margin,

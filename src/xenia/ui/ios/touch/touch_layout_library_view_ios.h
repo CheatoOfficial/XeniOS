@@ -23,6 +23,9 @@
 @property(nonatomic, strong) UIImage* thumbnail;
 // True if this layout is the currently bound default for the active game title.
 @property(nonatomic, assign) BOOL isDefaultForCurrentTitle;
+// True if this layout is used when a game has no title-specific assignment.
+@property(nonatomic, assign) BOOL isDefaultForAllGames;
+@property(nonatomic, assign) BOOL isFavorite;
 
 @end
 

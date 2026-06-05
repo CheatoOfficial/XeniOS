@@ -24,7 +24,7 @@ namespace {
 constexpr float kMinControlSize = 0.05f;
 constexpr float kMaxControlSize = 0.98f;
 constexpr float kLegacyTouchBehaviorHoldSeconds = 0.18f;
-constexpr int64_t kCurrentTouchLayoutSchemaVersion = 4;
+constexpr int64_t kCurrentTouchLayoutSchemaVersion = 5;
 constexpr size_t kMaxTouchControlIdentifierLength = 64;
 
 bool UsesLegacyTouchBehaviorHoldDefault(float hold_seconds) {
@@ -228,6 +228,38 @@ bool ParseIOSTouchInteractionTriggerConfigName(
   return false;
 }
 
+const char* IOSTouchAnalogOutputConfigName(IOSTouchAnalogOutput output) {
+  switch (output) {
+    case IOSTouchAnalogOutput::kNone:
+      return "none";
+    case IOSTouchAnalogOutput::kLook:
+      return "look";
+    case IOSTouchAnalogOutput::kMove:
+      return "move";
+  }
+  return "none";
+}
+
+bool ParseIOSTouchAnalogOutputConfigName(const std::string& value,
+                                         IOSTouchAnalogOutput* output_out) {
+  if (!output_out) {
+    return false;
+  }
+  if (value == "none" || value == "off") {
+    *output_out = IOSTouchAnalogOutput::kNone;
+    return true;
+  }
+  if (value == "look") {
+    *output_out = IOSTouchAnalogOutput::kLook;
+    return true;
+  }
+  if (value == "move") {
+    *output_out = IOSTouchAnalogOutput::kMove;
+    return true;
+  }
+  return false;
+}
+
 const char* IOSTouchTintStyleConfigName(IOSTouchTintStyle tint_style) {
   switch (tint_style) {
     case IOSTouchTintStyle::kAuto:
@@ -285,6 +317,7 @@ bool ValidateIOSTouchControlDefinitions(
 
   std::unordered_set<std::string> identifiers;
   size_t move_stick_count = 0;
+  size_t look_stick_count = 0;
   size_t look_zone_count = 0;
   size_t pause_button_count = 0;
   for (const auto& control : controls) {
@@ -296,7 +329,11 @@ bool ValidateIOSTouchControlDefinitions(
 
     switch (control.type) {
       case IOSTouchControlType::kMoveStick:
-        ++move_stick_count;
+        if (control.action == IOSTouchAction::kLook) {
+          ++look_stick_count;
+        } else {
+          ++move_stick_count;
+        }
         break;
       case IOSTouchControlType::kLookSwipeZone:
         ++look_zone_count;
@@ -309,8 +346,8 @@ bool ValidateIOSTouchControlDefinitions(
     }
   }
 
-  return move_stick_count <= 1 && look_zone_count <= 1 &&
-         pause_button_count <= 1;
+  return move_stick_count <= 1 && look_stick_count <= 1 &&
+         look_zone_count <= 1 && pause_button_count <= 1;
 }
 
 float ClampNormalizedScalar(float value) {
@@ -319,6 +356,28 @@ float ClampNormalizedScalar(float value) {
 
 float ClampPositiveScalar(float value, float min_value, float max_value) {
   return std::clamp(value, min_value, max_value);
+}
+
+float ClampAnalogScale(float value) { return std::clamp(value, 0.1f, 4.0f); }
+
+float ClampAnalogDeadzone(float value) {
+  return std::clamp(value, 0.0f, 0.95f);
+}
+
+float ClampAnalogActivationRadius(float value) {
+  return std::clamp(value, 0.05f, 1.0f);
+}
+
+float ClampAnalogMaxOutput(float value) {
+  return std::clamp(value, 0.1f, 1.0f);
+}
+
+float ClampAnalogAcceleration(float value) {
+  return std::clamp(value, 0.0f, 2.0f);
+}
+
+float ClampAnalogSmoothing(float value) {
+  return std::clamp(value, 0.0f, 0.95f);
 }
 
 float MaxNormalizedControlSize(IOSTouchControlType control_type) {
@@ -371,6 +430,134 @@ void ApplyControlFrame(const toml::table& table, IOSTouchRect* rect,
   *rect = ClampNormalizedRect(next_rect, control_type);
 }
 
+void EncodeAnalogTuning(const IOSTouchAnalogTuning& tuning,
+                        toml::table* table) {
+  if (!table) {
+    return;
+  }
+  table->insert_or_assign("deadzone", tuning.deadzone);
+  table->insert_or_assign("activation_radius", tuning.activation_radius);
+  table->insert_or_assign("horizontal_scale", tuning.horizontal_scale);
+  table->insert_or_assign("vertical_scale", tuning.vertical_scale);
+  table->insert_or_assign("diagonal_scale", tuning.diagonal_scale);
+  table->insert_or_assign("response_curve", tuning.response_curve);
+  table->insert_or_assign("acceleration_scale", tuning.acceleration_scale);
+  table->insert_or_assign("smoothing", tuning.smoothing);
+  table->insert_or_assign("max_output", tuning.max_output);
+  table->insert_or_assign("invert_x", tuning.invert_x);
+  table->insert_or_assign("invert_y", tuning.invert_y);
+}
+
+void ApplyAnalogTuning(const toml::table& table, IOSTouchAnalogTuning* tuning) {
+  if (!tuning) {
+    return;
+  }
+  if (auto value = table["deadzone"].value<double>()) {
+    tuning->deadzone = ClampAnalogDeadzone(static_cast<float>(*value));
+  }
+  if (auto value = table["activation_radius"].value<double>()) {
+    tuning->activation_radius =
+        ClampAnalogActivationRadius(static_cast<float>(*value));
+  }
+  if (auto value = table["horizontal_scale"].value<double>()) {
+    tuning->horizontal_scale = ClampAnalogScale(static_cast<float>(*value));
+  }
+  if (auto value = table["vertical_scale"].value<double>()) {
+    tuning->vertical_scale = ClampAnalogScale(static_cast<float>(*value));
+  }
+  if (auto value = table["diagonal_scale"].value<double>()) {
+    tuning->diagonal_scale = ClampAnalogScale(static_cast<float>(*value));
+  }
+  if (auto value = table["response_curve"].value<double>()) {
+    tuning->response_curve = ClampAnalogScale(static_cast<float>(*value));
+  }
+  if (auto value = table["acceleration_scale"].value<double>()) {
+    tuning->acceleration_scale =
+        ClampAnalogAcceleration(static_cast<float>(*value));
+  }
+  if (auto value = table["smoothing"].value<double>()) {
+    tuning->smoothing = ClampAnalogSmoothing(static_cast<float>(*value));
+  }
+  if (auto value = table["max_output"].value<double>()) {
+    tuning->max_output = ClampAnalogMaxOutput(static_cast<float>(*value));
+  }
+  if (auto value = table["invert_x"].value<bool>()) {
+    tuning->invert_x = *value;
+  }
+  if (auto value = table["invert_y"].value<bool>()) {
+    tuning->invert_y = *value;
+  }
+}
+
+void SyncLegacyLookScaleToAnalogTuning(float relative_look_scale,
+                                       IOSTouchAnalogTuning* tuning) {
+  if (!tuning) {
+    return;
+  }
+  const float clamped_scale =
+      ClampPositiveScalar(relative_look_scale, 0.25f, 4.0f);
+  tuning->horizontal_scale = clamped_scale;
+  tuning->vertical_scale = clamped_scale;
+}
+
+void FinalizeAnalogBehaviorFromLegacyFields(
+    bool analog_output_overridden, bool analog_tuning_overridden,
+    IOSTouchInteractionBehavior* behavior) {
+  if (!behavior) {
+    return;
+  }
+  if (!analog_output_overridden && behavior->enables_relative_look) {
+    behavior->analog_output = IOSTouchAnalogOutput::kLook;
+  }
+  if (!analog_tuning_overridden &&
+      behavior->analog_output == IOSTouchAnalogOutput::kLook) {
+    SyncLegacyLookScaleToAnalogTuning(behavior->relative_look_scale,
+                                      &behavior->analog_tuning);
+  }
+  behavior->enables_relative_look =
+      behavior->analog_output == IOSTouchAnalogOutput::kLook;
+  if (behavior->enables_relative_look) {
+    behavior->relative_look_scale = behavior->analog_tuning.horizontal_scale;
+  }
+}
+
+void FinalizeAnalogControlFromLegacyFields(bool drag_output_overridden,
+                                           bool analog_tuning_overridden,
+                                           IOSTouchControlDefinition* control) {
+  if (!control) {
+    return;
+  }
+  if (!drag_output_overridden) {
+    if (control->enables_relative_look) {
+      control->drag_output = IOSTouchAnalogOutput::kLook;
+    } else if (control->type == IOSTouchControlType::kLookSwipeZone) {
+      control->drag_output = control->action == IOSTouchAction::kMove
+                                 ? IOSTouchAnalogOutput::kMove
+                                 : IOSTouchAnalogOutput::kLook;
+    }
+  }
+  if (!analog_tuning_overridden) {
+    if (control->drag_output == IOSTouchAnalogOutput::kLook ||
+        control->type == IOSTouchControlType::kLookSwipeZone) {
+      SyncLegacyLookScaleToAnalogTuning(control->relative_look_scale,
+                                        &control->analog_tuning);
+    }
+    control->analog_tuning.deadzone = control->deadzone;
+    if (control->activation_radius > 0.0f) {
+      control->analog_tuning.activation_radius = control->activation_radius;
+    }
+  } else {
+    control->deadzone = control->analog_tuning.deadzone;
+    control->activation_radius = control->analog_tuning.activation_radius;
+  }
+  control->enables_relative_look =
+      control->drag_output == IOSTouchAnalogOutput::kLook;
+  if (control->enables_relative_look ||
+      control->type == IOSTouchControlType::kLookSwipeZone) {
+    control->relative_look_scale = control->analog_tuning.horizontal_scale;
+  }
+}
+
 void EncodeInteractionBehavior(const IOSTouchInteractionBehavior& behavior,
                                toml::table* table) {
   if (!table) {
@@ -381,6 +568,12 @@ void EncodeInteractionBehavior(const IOSTouchInteractionBehavior& behavior,
       std::string(IOSTouchInteractionTriggerConfigName(behavior.trigger)));
   table->insert_or_assign(
       "action", std::string(IOSTouchActionConfigName(behavior.action)));
+  table->insert_or_assign(
+      "analog_output",
+      std::string(IOSTouchAnalogOutputConfigName(behavior.analog_output)));
+  toml::table tuning_table;
+  EncodeAnalogTuning(behavior.analog_tuning, &tuning_table);
+  table->insert_or_assign("analog_tuning", std::move(tuning_table));
   table->insert_or_assign("enables_relative_look",
                           behavior.enables_relative_look);
   table->insert_or_assign("relative_look_scale", behavior.relative_look_scale);
@@ -396,6 +589,8 @@ void ApplyInteractionBehavior(const toml::table& table,
   }
 
   bool hold_seconds_overridden = false;
+  bool analog_output_overridden = false;
+  bool analog_tuning_overridden = false;
   if (auto value = table["trigger"].value<std::string>()) {
     IOSTouchInteractionTrigger trigger = behavior->trigger;
     if (ParseIOSTouchInteractionTriggerConfigName(*value, &trigger)) {
@@ -407,6 +602,17 @@ void ApplyInteractionBehavior(const toml::table& table,
     if (ParseIOSTouchActionConfigName(*value, &action)) {
       behavior->action = action;
     }
+  }
+  if (auto value = table["analog_output"].value<std::string>()) {
+    IOSTouchAnalogOutput output = behavior->analog_output;
+    if (ParseIOSTouchAnalogOutputConfigName(*value, &output)) {
+      behavior->analog_output = output;
+      analog_output_overridden = true;
+    }
+  }
+  if (const toml::table* tuning_table = table["analog_tuning"].as_table()) {
+    ApplyAnalogTuning(*tuning_table, &behavior->analog_tuning);
+    analog_tuning_overridden = true;
   }
   if (auto value = table["enables_relative_look"].value<bool>()) {
     behavior->enables_relative_look = *value;
@@ -433,10 +639,15 @@ void ApplyInteractionBehavior(const toml::table& table,
   }
   if (behavior->trigger == IOSTouchInteractionTrigger::kNone) {
     behavior->enables_relative_look = false;
+    behavior->analog_output = IOSTouchAnalogOutput::kNone;
   } else if (behavior->trigger == IOSTouchInteractionTrigger::kHoldDrag &&
+             !analog_output_overridden &&
              !table["enables_relative_look"].value<bool>().has_value()) {
     behavior->enables_relative_look = true;
+    behavior->analog_output = IOSTouchAnalogOutput::kLook;
   }
+  FinalizeAnalogBehaviorFromLegacyFields(analog_output_overridden,
+                                         analog_tuning_overridden, behavior);
 }
 
 void ApplyStoredControlLabelState(const toml::table& control_table,
@@ -489,6 +700,8 @@ IOSTouchControlDefinition DecodeIOSTouchControlDefinition(
 
   IOSTouchControlDefinition control =
       MakeDefaultIOSTouchControlDefinitionImpl(control_type);
+  bool drag_output_overridden = false;
+  bool analog_tuning_overridden = false;
   if (auto value = control_table["id"].value<std::string>()) {
     control.identifier = *value;
   } else {
@@ -552,8 +765,28 @@ IOSTouchControlDefinition DecodeIOSTouchControlDefinition(
   if (auto value = control_table["enables_relative_look"].value<bool>()) {
     control.enables_relative_look = *value;
   }
+  if (auto value = control_table["drag_output"].value<std::string>()) {
+    IOSTouchAnalogOutput output = control.drag_output;
+    if (ParseIOSTouchAnalogOutputConfigName(*value, &output)) {
+      control.drag_output = output;
+      drag_output_overridden = true;
+    }
+  }
+  if (const toml::table* tuning_table =
+          control_table["analog_tuning"].as_table()) {
+    ApplyAnalogTuning(*tuning_table, &control.analog_tuning);
+    analog_tuning_overridden = true;
+  }
   if (auto value = control_table["relative_look_scale"].value<double>()) {
     control.relative_look_scale =
+        ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
+  }
+  if (auto value = control_table["held_look_scale"].value<double>()) {
+    control.held_look_scale =
+        ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
+  }
+  if (auto value = control_table["held_move_scale"].value<double>()) {
+    control.held_move_scale =
         ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
   }
   if (auto value = control_table["move_with_dpad_ring"].value<bool>()) {
@@ -567,6 +800,8 @@ IOSTouchControlDefinition DecodeIOSTouchControlDefinition(
     control.capture_priority =
         static_cast<uint8_t>(std::clamp<int64_t>(*value, 0, 255));
   }
+  FinalizeAnalogControlFromLegacyFields(drag_output_overridden,
+                                        analog_tuning_overridden, &control);
   ApplyDerivedTouchControlDefaults(&control);
   return control;
 }
@@ -616,8 +851,17 @@ toml::table EncodeIOSTouchLayoutModel(const IOSTouchLayoutModel& layout) {
                                    control.hold_while_captured);
     control_table.insert_or_assign("enables_relative_look",
                                    control.enables_relative_look);
+    control_table.insert_or_assign(
+        "drag_output",
+        std::string(IOSTouchAnalogOutputConfigName(control.drag_output)));
+    toml::table analog_tuning_table;
+    EncodeAnalogTuning(control.analog_tuning, &analog_tuning_table);
+    control_table.insert_or_assign("analog_tuning",
+                                   std::move(analog_tuning_table));
     control_table.insert_or_assign("relative_look_scale",
                                    control.relative_look_scale);
+    control_table.insert_or_assign("held_look_scale", control.held_look_scale);
+    control_table.insert_or_assign("held_move_scale", control.held_move_scale);
     control_table.insert_or_assign("move_with_dpad_ring",
                                    control.move_with_dpad_ring);
     toml::table secondary_behavior_table;
@@ -699,6 +943,8 @@ bool ApplyIOSTouchLayoutModel(const toml::table& table,
     if (!control_table) {
       continue;
     }
+    bool drag_output_overridden = false;
+    bool analog_tuning_overridden = false;
     if (auto value = (*control_table)["action"].value<std::string>()) {
       IOSTouchAction parsed_action = control.action;
       if (ParseIOSTouchActionConfigName(*value, &parsed_action) &&
@@ -752,8 +998,28 @@ bool ApplyIOSTouchLayoutModel(const toml::table& table,
     if (auto value = (*control_table)["enables_relative_look"].value<bool>()) {
       control.enables_relative_look = *value;
     }
+    if (auto value = (*control_table)["drag_output"].value<std::string>()) {
+      IOSTouchAnalogOutput output = control.drag_output;
+      if (ParseIOSTouchAnalogOutputConfigName(*value, &output)) {
+        control.drag_output = output;
+        drag_output_overridden = true;
+      }
+    }
+    if (const toml::table* tuning_table =
+            (*control_table)["analog_tuning"].as_table()) {
+      ApplyAnalogTuning(*tuning_table, &control.analog_tuning);
+      analog_tuning_overridden = true;
+    }
     if (auto value = (*control_table)["relative_look_scale"].value<double>()) {
       control.relative_look_scale =
+          ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
+    }
+    if (auto value = (*control_table)["held_look_scale"].value<double>()) {
+      control.held_look_scale =
+          ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
+    }
+    if (auto value = (*control_table)["held_move_scale"].value<double>()) {
+      control.held_move_scale =
           ClampPositiveScalar(static_cast<float>(*value), 0.25f, 4.0f);
     }
     if (auto value = (*control_table)["move_with_dpad_ring"].value<bool>()) {
@@ -767,6 +1033,8 @@ bool ApplyIOSTouchLayoutModel(const toml::table& table,
       control.capture_priority =
           static_cast<uint8_t>(std::clamp<int64_t>(*value, 0, 255));
     }
+    FinalizeAnalogControlFromLegacyFields(drag_output_overridden,
+                                          analog_tuning_overridden, &control);
     ApplyDerivedTouchControlDefaults(&control);
   }
 

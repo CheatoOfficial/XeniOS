@@ -220,10 +220,24 @@ void EnsureOfficialIOSTouchLayoutPresets() {
     return;
   }
   const char* official_layout_ids[] = {
-      kOfficialTouchLayoutLocalID,
-      kOfficialTouchLayoutExpandedLocalID,
-      kOfficialTouchLayoutMirroredLocalID,
+      kOfficialTouchLayoutFPSCompactLocalID,
+      kOfficialTouchLayoutFPSFullLocalID,
+      kOfficialTouchLayoutActionAdventureLocalID,
+      kOfficialTouchLayoutArcadeDpadLocalID,
+      kOfficialTouchLayoutDrivingLocalID,
+      kOfficialTouchLayoutMinimalStarterLocalID,
   };
+  const char* obsolete_official_layout_ids[] = {
+      "fps_standard",
+      "fps_ipad",
+      "fps_expanded",
+      "fps_mirrored",
+  };
+  for (const char* local_id : obsolete_official_layout_ids) {
+    std::error_code remove_error;
+    std::filesystem::remove(IOSTouchLayoutPathForLocalID(local_id),
+                            remove_error);
+  }
   for (const char* local_id : official_layout_ids) {
     NSString* error_message = nil;
     if (!WriteIOSTouchLayoutModel(

@@ -23,11 +23,89 @@ constexpr float kMoveStickDoubleTapMaxSeconds = 0.34f;
 constexpr float kMoveStickDoubleTapForwardThreshold = 0.58f;
 constexpr float kMoveStickDoubleTapLateralThreshold = 0.58f;
 
+IOSTouchPoint ApplyTouchAnalogTuningImpl(
+    IOSTouchPoint value, const IOSTouchAnalogTuning& tuning,
+    bool apply_deadzone, float velocity_full_scales_per_second) {
+  if (tuning.invert_x) {
+    value.x = -value.x;
+  }
+  if (tuning.invert_y) {
+    value.y = -value.y;
+  }
+
+  const float magnitude = std::hypot(value.x, value.y);
+  if (apply_deadzone) {
+    const float deadzone = std::clamp(tuning.deadzone, 0.0f, 0.95f);
+    if (magnitude <= deadzone || magnitude <= 0.0f) {
+      return IOSTouchPoint{};
+    }
+    const float rescaled_magnitude = std::clamp(
+        (magnitude - deadzone) / std::max(1.0f - deadzone, 0.001f), 0.0f, 1.0f);
+    value.x = value.x / magnitude * rescaled_magnitude;
+    value.y = value.y / magnitude * rescaled_magnitude;
+  }
+
+  value.x *= std::clamp(tuning.horizontal_scale, 0.1f, 4.0f);
+  value.y *= std::clamp(tuning.vertical_scale, 0.1f, 4.0f);
+
+  const float abs_x = std::abs(value.x);
+  const float abs_y = std::abs(value.y);
+  const float dominant_axis = std::max(abs_x, abs_y);
+  if (dominant_axis > 0.0f) {
+    const float diagonal_mix = std::min(abs_x, abs_y) / dominant_axis;
+    const float diagonal_target = std::clamp(tuning.diagonal_scale, 0.1f, 4.0f);
+    const float diagonal_scale = 1.0f + (diagonal_target - 1.0f) * diagonal_mix;
+    value.x *= diagonal_scale;
+    value.y *= diagonal_scale;
+  }
+
+  const float tuned_magnitude = std::hypot(value.x, value.y);
+  if (tuned_magnitude > 0.0f) {
+    const float curve = std::clamp(tuning.response_curve, 0.25f, 4.0f);
+    const float curved_magnitude =
+        std::pow(std::min(tuned_magnitude, 1.0f), curve);
+    const float curve_scale = curved_magnitude / tuned_magnitude;
+    value.x *= curve_scale;
+    value.y *= curve_scale;
+  }
+
+  const float acceleration = std::clamp(tuning.acceleration_scale, 0.0f, 2.0f);
+  if (acceleration > 0.0f && velocity_full_scales_per_second > 0.0f) {
+    const float velocity_mix =
+        std::clamp(velocity_full_scales_per_second / 80.0f, 0.0f, 1.0f);
+    const float acceleration_boost = 1.0f + acceleration * velocity_mix;
+    value.x *= acceleration_boost;
+    value.y *= acceleration_boost;
+  }
+
+  const float max_output = std::clamp(tuning.max_output, 0.1f, 1.0f);
+  const float output_magnitude = std::hypot(value.x, value.y);
+  if (output_magnitude > max_output && output_magnitude > 0.0f) {
+    const float scale = max_output / output_magnitude;
+    value.x *= scale;
+    value.y *= scale;
+  }
+
+  return ClampTouchLookVector(value);
+}
+
 }  // namespace
 
 IOSTouchPoint ClampTouchLookVector(IOSTouchPoint value) {
   return IOSTouchPoint{std::clamp(value.x, -1.0f, 1.0f),
                        std::clamp(value.y, -1.0f, 1.0f)};
+}
+
+IOSTouchPoint ApplyTouchAnalogTuning(IOSTouchPoint value,
+                                     const IOSTouchAnalogTuning& tuning) {
+  return ApplyTouchAnalogTuningImpl(value, tuning, true, 0.0f);
+}
+
+IOSTouchPoint ApplyTouchAnalogTuningWithVelocity(
+    IOSTouchPoint value, const IOSTouchAnalogTuning& tuning,
+    float velocity_full_scales_per_second) {
+  return ApplyTouchAnalogTuningImpl(
+      value, tuning, true, std::max(0.0f, velocity_full_scales_per_second));
 }
 
 IOSTouchPoint TouchSwipeLookVectorForDelta(IOSTouchPoint delta,
@@ -162,6 +240,7 @@ bool TouchInteractionBehaviorConfigured(
     const IOSTouchInteractionBehavior& behavior) {
   return behavior.trigger != IOSTouchInteractionTrigger::kNone &&
          (behavior.action != IOSTouchAction::kNone ||
+          behavior.analog_output != IOSTouchAnalogOutput::kNone ||
           behavior.enables_relative_look);
 }
 
@@ -204,9 +283,24 @@ IOSTouchInteractionBehaviorState ResolveTouchInteractionBehaviorState(
   }
 
   state.active = true;
+  state.analog_output = behavior.analog_output;
+  state.analog_tuning = behavior.analog_tuning;
   state.enables_relative_look = behavior.enables_relative_look;
   state.relative_look_scale =
       std::clamp(behavior.relative_look_scale, 0.1f, 2.0f);
+  if (state.analog_output == IOSTouchAnalogOutput::kNone &&
+      behavior.enables_relative_look) {
+    state.analog_output = IOSTouchAnalogOutput::kLook;
+    state.analog_tuning.horizontal_scale = state.relative_look_scale;
+    state.analog_tuning.vertical_scale = state.relative_look_scale;
+  }
+  if (state.analog_output == IOSTouchAnalogOutput::kLook) {
+    state.enables_relative_look = true;
+    state.analog_tuning.horizontal_scale =
+        std::clamp(state.analog_tuning.horizontal_scale, 0.1f, 4.0f);
+    state.analog_tuning.vertical_scale =
+        std::clamp(state.analog_tuning.vertical_scale, 0.1f, 4.0f);
+  }
   return state;
 }
 
@@ -242,11 +336,14 @@ IOSTouchPoint MoveStickUnitVectorForCapture(
   if (magnitude < control.deadzone || magnitude <= 0.0f) {
     return IOSTouchPoint{};
   }
-  const float rescaled_magnitude = std::clamp(
-      (magnitude - control.deadzone) / (1.0f - control.deadzone), 0.0f, 1.0f);
+  const float rescaled_magnitude =
+      std::clamp((magnitude - control.deadzone) /
+                     std::max(1.0f - control.deadzone, 0.001f),
+                 0.0f, 1.0f);
   normalized_x = normalized_x / magnitude * rescaled_magnitude;
   normalized_y = normalized_y / magnitude * rescaled_magnitude;
-  return IOSTouchPoint{normalized_x, normalized_y};
+  return ApplyTouchAnalogTuningImpl(IOSTouchPoint{normalized_x, normalized_y},
+                                    control.analog_tuning, false, 0.0f);
 }
 
 bool MoveStickCaptureQualifiesForDoubleTapForward(
