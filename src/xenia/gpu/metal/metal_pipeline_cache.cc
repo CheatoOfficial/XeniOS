@@ -124,6 +124,19 @@ void LogMetalErrorDetails(const char* label, NS::Error* error) {
   }
 }
 
+class ScopedAutoreleasePool {
+ public:
+  ScopedAutoreleasePool() : pool_(NS::AutoreleasePool::alloc()->init()) {}
+  ~ScopedAutoreleasePool() {
+    if (pool_) {
+      pool_->drain();
+    }
+  }
+
+ private:
+  NS::AutoreleasePool* pool_ = nullptr;
+};
+
 void EnsureDepthFormatForDepthWritingFragment(const char* pipeline_name,
                                               bool fragment_writes_depth,
                                               MTL::PixelFormat* depth_format) {
@@ -1399,6 +1412,7 @@ bool MetalPipelineCache::ConvertDxbcToDxil(
 
 MTL::Library* MetalPipelineCache::NewLibraryFromBytes(
     const std::vector<uint8_t>& bytes, const char* label) {
+  ScopedAutoreleasePool autorelease_pool;
   if (!device_ || bytes.empty()) {
     RecordLibraryCreation(bytes.size(), false, 0);
     return nullptr;
@@ -2231,6 +2245,7 @@ MetalPipelineCache::GetOrCreatePipelineState(
 
 MTL::RenderPipelineState* MetalPipelineCache::CreatePipelineFromHandle(
     const PipelineHandle* handle) {
+  ScopedAutoreleasePool autorelease_pool;
   MetalShader::MetalTranslation* vertex_translation =
       handle->pending_vertex_translation;
   MetalShader::MetalTranslation* pixel_translation =

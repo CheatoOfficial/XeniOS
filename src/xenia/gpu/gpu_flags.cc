@@ -233,7 +233,7 @@ DEFINE_int32(
     "Higher reduces ring churn but uses more memory.",
     "Metal");
 
-DEFINE_bool(metal_backend_telemetry, true,
+DEFINE_bool(metal_backend_telemetry, false,
             "Log concise Metal backend decision counters for render encoder "
             "lifetime, resolve/transfer planning, bindless binding, and "
             "texture upload/load behavior.",
