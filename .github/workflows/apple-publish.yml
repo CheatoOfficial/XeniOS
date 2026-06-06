@@ -495,11 +495,44 @@ jobs:
 
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" > release.json
 
-          echo "html_url=$(jq -r '.html_url' release.json)" >> "$GITHUB_OUTPUT"
-          echo "ios_download_url=$(jq -r '.assets[] | select(.name == \"xenios_ios_iphone_ipad.ipa\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
-          echo "macos_universal_download_url=$(jq -r '.assets[] | select(.name == \"xenios_macos_universal.dmg\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
-          echo "macos_arm64_download_url=$(jq -r '.assets[] | select(.name == \"xenios_macos_apple_silicon.dmg\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
-          echo "macos_x86_64_download_url=$(jq -r '.assets[] | select(.name == \"xenios_macos_intel.dmg\") | .browser_download_url' release.json)" >> "$GITHUB_OUTPUT"
+          html_url="$(jq -r '.html_url' release.json)"
+          ios_download_url="$(jq -r '.assets[] | select(.name == "xenios_ios_iphone_ipad.ipa") | .browser_download_url' release.json)"
+          macos_universal_download_url="$(jq -r '.assets[] | select(.name == "xenios_macos_universal.dmg") | .browser_download_url' release.json)"
+          macos_arm64_download_url="$(jq -r '.assets[] | select(.name == "xenios_macos_apple_silicon.dmg") | .browser_download_url' release.json)"
+          macos_x86_64_download_url="$(jq -r '.assets[] | select(.name == "xenios_macos_intel.dmg") | .browser_download_url' release.json)"
+
+          for output_name in \
+            html_url \
+            ios_download_url \
+            macos_universal_download_url \
+            macos_arm64_download_url \
+            macos_x86_64_download_url; do
+            output_value="${!output_name}"
+            if [ -z "${output_value}" ] || [ "${output_value}" = "null" ]; then
+              echo "::error::Missing GitHub release output: ${output_name}"
+              exit 1
+            fi
+          done
+
+          {
+            echo "html_url=${html_url}"
+            echo "ios_download_url=${ios_download_url}"
+            echo "macos_universal_download_url=${macos_universal_download_url}"
+            echo "macos_arm64_download_url=${macos_arm64_download_url}"
+            echo "macos_x86_64_download_url=${macos_x86_64_download_url}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate xenios.jp credentials
+        shell: bash
+        env:
+          GH_TOKEN: "${{ secrets.XENIOS_WEBSITE_PAT }}"
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::XENIOS_WEBSITE_PAT is not configured"
+            exit 1
+          fi
+          gh api "repos/xenios-jp/xenios.jp" >/dev/null
 
       - name: Check out xenios.jp
         uses: actions/checkout@v4
