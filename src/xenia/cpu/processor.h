@@ -10,6 +10,7 @@
 #ifndef XENIA_CPU_PROCESSOR_H_
 #define XENIA_CPU_PROCESSOR_H_
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/mapped_memory.h"
 #include "xenia/base/mutex.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/debug_listener.h"
 #include "xenia/cpu/entry_table.h"
@@ -123,6 +125,21 @@ class Processor {
   bool ExecuteRaw(ThreadState* thread_state, uint32_t address);
   uint64_t Execute(ThreadState* thread_state, uint32_t address, uint64_t args[],
                    size_t arg_count);
+
+#if XE_PLATFORM_IOS
+  void RequestTitleStopIOS() {
+    ios_title_stop_requested_.store(1, std::memory_order_release);
+  }
+  void ClearTitleStopRequestIOS() {
+    ios_title_stop_requested_.store(0, std::memory_order_release);
+  }
+  bool title_stop_requested_ios() const {
+    return ios_title_stop_requested_.load(std::memory_order_acquire) != 0;
+  }
+  uintptr_t title_stop_requested_address_ios() {
+    return reinterpret_cast<uintptr_t>(&ios_title_stop_requested_);
+  }
+#endif  // XE_PLATFORM_IOS
 
   bool Save(ByteStream* stream);
   bool Restore(ByteStream* stream);
@@ -278,6 +295,10 @@ class Processor {
 
   // TODO(benvanik): cleanup/change structures.
   std::vector<Breakpoint*> breakpoints_;
+
+#if XE_PLATFORM_IOS
+  std::atomic<uint32_t> ios_title_stop_requested_{0};
+#endif  // XE_PLATFORM_IOS
 
   Irql irql_;
 };

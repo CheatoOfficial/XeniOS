@@ -12,6 +12,13 @@
 #include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 
+#if XE_PLATFORM_IOS
+#ifndef SDL_MAIN_HANDLED
+#define SDL_MAIN_HANDLED
+#endif
+#include <SDL3/SDL_main.h>
+#endif
+
 namespace xe {
 namespace helper {
 namespace sdl {

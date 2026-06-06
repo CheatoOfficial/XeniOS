@@ -142,7 +142,11 @@ if(WIN32)
     discord-rpc/src/connection_win.cpp
     discord-rpc/src/discord_register_win.cpp
   )
-elseif(APPLE)
+elseif(XE_PLATFORM_IOS)
+  target_sources(discord-rpc PRIVATE
+    discord-rpc/src/connection_unix.cpp
+  )
+elseif(XE_PLATFORM_MACOS)
   target_sources(discord-rpc PRIVATE
     discord-rpc/src/connection_unix.cpp
     discord-rpc/src/discord_register_osx.m
@@ -165,6 +169,28 @@ add_library(fmt STATIC
 target_include_directories(fmt PUBLIC fmt/include)
 
 # ==============================================================================
+# MoltenVK (iOS Vulkan backend)
+# ==============================================================================
+if(XE_PLATFORM_IOS AND XENIA_ENABLE_IOS_MOLTENVK)
+  set(_xe_moltenvk_ios_framework
+      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/ios/MoltenVK.framework")
+  set(_xe_moltenvk_ios_binary "${_xe_moltenvk_ios_framework}/MoltenVK")
+  if(NOT EXISTS "${_xe_moltenvk_ios_binary}")
+    message(FATAL_ERROR
+      "MoltenVK iOS framework not found at ${_xe_moltenvk_ios_binary}. "
+      "Run tools/fetch_moltenvk.py --platform ios before configuring.")
+  endif()
+  add_library(xenia-third-party-moltenvk SHARED IMPORTED GLOBAL)
+  set_target_properties(xenia-third-party-moltenvk PROPERTIES
+    FRAMEWORK TRUE
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_moltenvk_ios_binary}"
+    IMPORTED_LOCATION_RELEASE "${_xe_moltenvk_ios_binary}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/include")
+endif()
+
+# ==============================================================================
 # glslang-spirv (runtime: SPIR-V emission primitives for Xenia's own
 # SpirvShaderTranslator; used by the Vulkan backend and by the Metal backend's
 # SPIRV-Cross path)
@@ -182,14 +208,15 @@ add_library(glslang-spirv STATIC
 )
 target_include_directories(glslang-spirv PUBLIC glslang)
 
-# Cross-compiling x64-host → ARM64-target on Windows: the cross
-# toolchain produces an ARM64 PE for xenia-shader-cc that won't run on
-# the x64 host, so reuse the binary from a previous native build instead
-# (Windows-on-ARM runs x64 fine via Prism, and macOS handles its own
-# x86_64↔arm64 via Rosetta — both directions are unaffected).
+# Some target builds can't execute their own xenia-shader-cc. Reuse the
+# binary from a previous native build instead.
 set(_xe_use_host_shader_cc FALSE)
-if(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
+if(XE_PLATFORM_IOS)
+  set(_xe_use_host_shader_cc TRUE)
+elseif(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
     AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+  # Cross-compiling x64-host -> ARM64-target on Windows produces an ARM64 PE
+  # that won't run on the x64 host.
   set(_xe_use_host_shader_cc TRUE)
 endif()
 
@@ -284,7 +311,7 @@ endif()  # NOT _xe_use_host_shader_cc (SPIRV-Tools + glslang block)
 # SPIRV-Cross (Apple only — used at runtime by xenia-gpu-metal for SPIR-V → MSL
 # via MslShader, and by MoltenVKShaderConverter below)
 # ==============================================================================
-if(APPLE)
+if(XE_PLATFORM_MACOS)
   add_library(spirv-cross STATIC
     SPIRV-Cross/spirv_cross.cpp
     SPIRV-Cross/spirv_cross_parsed_ir.cpp
@@ -407,6 +434,159 @@ if(APPLE)
 endif()
 
 # ==============================================================================
+# Metal Shader Converter and dxilconv (Apple only)
+# ==============================================================================
+if(APPLE)
+  set(_xe_metal_shader_converter_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/metal-shader-converter")
+  if(XE_PLATFORM_IOS)
+    set(_xe_metal_shader_converter_dylib
+        "${_xe_metal_shader_converter_root}/lib_iOS/libmetalirconverter.dylib")
+  else()
+    set(_xe_metal_shader_converter_dylib
+        "${_xe_metal_shader_converter_root}/lib/libmetalirconverter.dylib")
+  endif()
+  if(NOT EXISTS "${_xe_metal_shader_converter_dylib}")
+    message(FATAL_ERROR
+      "Metal Shader Converter dylib not found at "
+      "${_xe_metal_shader_converter_dylib}.")
+  endif()
+
+  add_library(xenia-third-party-metal-shader-converter SHARED IMPORTED GLOBAL)
+  set_target_properties(xenia-third-party-metal-shader-converter PROPERTIES
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_metal_shader_converter_dylib}"
+    IMPORTED_LOCATION_RELEASE "${_xe_metal_shader_converter_dylib}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_xe_metal_shader_converter_root}/include;${_xe_metal_shader_converter_root}/include/metal_irconverter;${_xe_metal_shader_converter_root}/include/metal_irconverter_runtime"
+    INTERFACE_COMPILE_DEFINITIONS
+      "METAL_SHADER_CONVERTER_AVAILABLE;IR_RUNTIME_METALCPP")
+
+  set(_xe_dxilconv_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler")
+  set(_xe_dxilconv_headers_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/DirectX-Headers/include")
+  # DXC's cross-compile TableGen helper expects Makefile-based native builds.
+  # Do not inherit Xcode from the outer app build.
+  set(_xe_dxilconv_cmake_generator_args -G "Unix Makefiles")
+  set(_xe_dxilconv_cmake_platform_args)
+  if(XE_PLATFORM_IOS)
+    set(_xe_dxilconv_build_dir "${_xe_dxilconv_root}/build_dxilconv_ios")
+    set(_xe_dxilconv_arch "arm64")
+    set(_xe_dxilconv_triple "arm64-apple-ios")
+    list(APPEND _xe_dxilconv_cmake_platform_args
+      -DCMAKE_SYSTEM_NAME=iOS
+      "-DCMAKE_SYSTEM_PROCESSOR=${_xe_dxilconv_arch}"
+      -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+      "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}")
+  elseif(XE_TARGET_X86_64)
+    set(_xe_dxilconv_build_dir
+        "${_xe_dxilconv_root}/build_dxilconv_macos_x86_64")
+    set(_xe_dxilconv_arch "x86_64")
+    set(_xe_dxilconv_triple "x86_64-apple-darwin")
+  else()
+    set(_xe_dxilconv_build_dir "${_xe_dxilconv_root}/build_dxilconv_macos")
+    set(_xe_dxilconv_arch "arm64")
+    set(_xe_dxilconv_triple "arm64-apple-darwin")
+  endif()
+  set(_xe_dxilconv_macos_deployment_target "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  if(XE_PLATFORM_IOS)
+    set(_xe_dxilconv_macos_deployment_target "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  set(_xe_dxilconv_dylib "${_xe_dxilconv_build_dir}/lib/libdxilconv.dylib")
+  set(_xe_dxbc2dxil_bin "${_xe_dxilconv_build_dir}/bin/dxbc2dxil")
+  set(_xe_dxilconv_outputs "${_xe_dxilconv_dylib}")
+  if(NOT XE_PLATFORM_IOS)
+    list(APPEND _xe_dxilconv_outputs "${_xe_dxbc2dxil_bin}")
+  endif()
+  # CMake's bare `--parallel` becomes an unbounded `make -j` with Unix
+  # Makefiles on some hosts. DXC's cross build spawns large native TableGen
+  # tools inside the app build, so keep this nested build deterministic.
+  set(_xe_dxilconv_build_jobs 2)
+
+  add_custom_command(
+    OUTPUT ${_xe_dxilconv_outputs}
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_xe_dxilconv_build_dir}"
+    COMMAND "${CMAKE_COMMAND}"
+            ${_xe_dxilconv_cmake_generator_args}
+            -S "${_xe_dxilconv_root}"
+            -B "${_xe_dxilconv_build_dir}"
+            ${_xe_dxilconv_cmake_platform_args}
+            "-DD3D12_INCLUDE_DIR=${_xe_dxilconv_headers_root}/directx"
+            "-DDXGI_INCLUDE_DIR=${_xe_dxilconv_headers_root}/directx"
+            "-DWSL_INCLUDE_DIR=${_xe_dxilconv_headers_root}/wsl"
+            -DCMAKE_BUILD_TYPE=Release
+            "-DCMAKE_OSX_ARCHITECTURES=${_xe_dxilconv_arch}"
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=${_xe_dxilconv_macos_deployment_target}"
+            -DLLVM_TARGETS_TO_BUILD=None
+            -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=
+            "-DLLVM_DEFAULT_TARGET_TRIPLE=${_xe_dxilconv_triple}"
+            -DLLVM_INSTALL_TOOLCHAIN_ONLY=ON
+            -DLLVM_INCLUDE_TOOLS=OFF
+            -DLLVM_BUILD_TOOLS=OFF
+            -DLLVM_ENABLE_THREADS=ON
+            -DLLVM_ENABLE_PIC=ON
+            -DLLVM_BUILD_32_BITS=OFF
+            -DBUILD_SHARED_LIBS=OFF
+            -DLLVM_OPTIMIZED_TABLEGEN=ON
+            -DLLVM_USE_INTEL_JITEVENTS=OFF
+            -DLLVM_ENABLE_ZLIB=ON
+            -DLLVM_ENABLE_TERMINFO=OFF
+            -DLLVM_ENABLE_LIBXML2=OFF
+            -DCLANG_BUILD_EXAMPLES=OFF
+            -DLLVM_INCLUDE_TESTS=OFF
+            -DLLVM_INCLUDE_EXAMPLES=OFF
+            -DLLVM_INCLUDE_DOCS=OFF
+            -DCLANG_INCLUDE_TESTS=OFF
+            -DHLSL_INCLUDE_TESTS=OFF
+            -DENABLE_SPIRV_CODEGEN=OFF
+            -DSPIRV_BUILD_TESTS=OFF
+            -DCLANG_ENABLE_STATIC_ANALYZER=OFF
+            -DCLANG_ENABLE_ARCMT=OFF
+            -DLLVM_ENABLE_BINDINGS=OFF
+            -DLLVM_ENABLE_EH=ON
+            -DLLVM_ENABLE_RTTI=ON
+            -DLLVM_REQUIRES_EH=ON
+            -DLLVM_REQUIRES_RTTI=ON
+            -DCMAKE_C_COMPILER=/usr/bin/clang
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++
+            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON
+            -DCMAKE_CXX_EXTENSIONS=OFF
+            "-DCMAKE_C_FLAGS="
+            "-DCMAKE_CXX_FLAGS=-stdlib=libc++ -Wno-unknown-warning-option -Wno-deprecated-declarations -Wno-deprecated -Wno-deprecated-literal-operator -Wno-invalid-specialization -Wno-nontrivial-memcall"
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    COMMAND "${CMAKE_COMMAND}" --build "${_xe_dxilconv_build_dir}"
+            --target dxilconv --config Release --parallel ${_xe_dxilconv_build_jobs}
+    DEPENDS
+      "${_xe_dxilconv_root}/projects/dxilconv/include/DxbcConverter.h"
+      "${_xe_dxilconv_root}/projects/dxilconv/tools/dxilconv/dxilconv_unix.cpp"
+      "${_xe_dxilconv_root}/projects/dxilconv/tools/dxbc2dxil/dxbc2dxil_unix.cpp"
+    COMMENT "Building dxilconv for Metal shader conversion"
+    VERBATIM)
+  if(NOT XE_PLATFORM_IOS)
+    add_custom_command(
+      OUTPUT "${_xe_dxbc2dxil_bin}"
+      APPEND
+      COMMAND "${CMAKE_COMMAND}" --build "${_xe_dxilconv_build_dir}"
+              --target dxbc2dxil --config Release --parallel ${_xe_dxilconv_build_jobs}
+      )
+  endif()
+  add_custom_target(xenia-third-party-dxilconv-build
+    DEPENDS ${_xe_dxilconv_outputs})
+
+  add_library(xenia-third-party-dxilconv SHARED IMPORTED GLOBAL)
+  add_dependencies(xenia-third-party-dxilconv xenia-third-party-dxilconv-build)
+  set_target_properties(xenia-third-party-dxilconv PROPERTIES
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_dxilconv_dylib}"
+    IMPORTED_LOCATION_RELEASE "${_xe_dxilconv_dylib}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_xe_dxilconv_root}/include;${_xe_dxilconv_root}/projects/dxilconv/include")
+endif()
+
+# ==============================================================================
 # xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h, and on
 # Apple, XeSL -> MSL metallib -> .h via xcrun metal)
 # ==============================================================================
@@ -427,31 +607,47 @@ if(MSVC)
   target_compile_options(xenia-shader-cc PRIVATE /EHsc)
 endif()
 
-else()  # _xe_use_host_shader_cc: x64→ARM64 cross-compile, use native build's binary
+else()  # _xe_use_host_shader_cc: use native build's binary
 
-# Native x64 build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
+# Native host build lives at <repo>/build/ (xenia-build.py: get_build_dir(None)).
 set(_xe_host_shader_cc_dir "${CMAKE_SOURCE_DIR}/build/host_tools")
+set(_xe_host_shader_cc_name "xenia-shader-cc")
+if(WIN32)
+  set(_xe_host_shader_cc_name "xenia-shader-cc.exe")
+endif()
 set(_xe_host_shader_cc_any "")
 foreach(_cfg Release Checked Debug)
-  if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
-    set(_xe_host_shader_cc_any "${_xe_host_shader_cc_dir}/${_cfg}/xenia-shader-cc.exe")
+  if(EXISTS "${_xe_host_shader_cc_dir}/${_cfg}/${_xe_host_shader_cc_name}")
+    set(_xe_host_shader_cc_any
+        "${_xe_host_shader_cc_dir}/${_cfg}/${_xe_host_shader_cc_name}")
     break()
   endif()
 endforeach()
 if(NOT _xe_host_shader_cc_any)
+  if(XE_PLATFORM_IOS)
+    set(_xe_host_shader_cc_build_hint
+        "./xb build --target=xenia-shader-cc --config=Release")
+    set(_xe_host_shader_cc_target_desc
+        "iOS device builds need a native macOS host xenia-shader-cc")
+  else()
+    set(_xe_host_shader_cc_build_hint
+        "xb build --target=xenia-shader-cc --config=Release")
+    set(_xe_host_shader_cc_target_desc
+        "Cross-compile to ARM64 needs a host xenia-shader-cc.exe")
+  endif()
   message(FATAL_ERROR
-    "Cross-compile to ARM64 needs a host xenia-shader-cc.exe but none was found "
+    "${_xe_host_shader_cc_target_desc} but none was found "
     "under ${_xe_host_shader_cc_dir}/<Config>/.\n"
     "  Run a native build first to produce it, e.g.:\n"
-    "    xb build --target xenia-shader-cc --config=release\n"
-    "  Then re-run the cross-compile.")
+    "    ${_xe_host_shader_cc_build_hint}\n"
+    "  Then re-run the target build.")
 endif()
 add_executable(xenia-shader-cc IMPORTED GLOBAL)
 set_target_properties(xenia-shader-cc PROPERTIES
-  IMPORTED_LOCATION "${_xe_host_shader_cc_any}"
-  IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_dir}/Release/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_dir}/Checked/xenia-shader-cc.exe"
-  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_dir}/Debug/xenia-shader-cc.exe")
+  IMPORTED_CONFIGURATIONS "Debug;Release;Checked"
+  IMPORTED_LOCATION_DEBUG "${_xe_host_shader_cc_any}"
+  IMPORTED_LOCATION_RELEASE "${_xe_host_shader_cc_any}"
+  IMPORTED_LOCATION_CHECKED "${_xe_host_shader_cc_any}")
 
 endif()
 
@@ -1127,7 +1323,7 @@ ffmpeg_common(libavformat)
 # ==============================================================================
 # wxWidgets
 # ==============================================================================
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android")
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT XE_PLATFORM_IOS)
     # Build from vendored source — matches what we ship on Windows/macOS, and
     # on Linux gives us a known-good 3.3 (system 3.2 has GTK3/Wayland issues).
     # Strip the directory-level /W0 (or -w) so wxWidgets's own /W3 doesn't

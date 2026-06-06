@@ -99,8 +99,18 @@ X_STATUS SDLAudioSystem::CreateDriver(size_t index,
 AudioDriver* SDLAudioSystem::CreateDriver(xe::threading::Semaphore* semaphore,
                                           uint32_t frequency, uint32_t channels,
                                           bool need_format_conversion) {
+#if XE_PLATFORM_IOS
+  static std::atomic<bool> logged_independent_fallback{false};
+  if (!logged_independent_fallback.exchange(true, std::memory_order_relaxed)) {
+    XELOGW(
+        "SDLAudioSystem: iOS independent audio drivers use silent fallback; "
+        "secondary SDL/CoreAudio devices are not opened");
+  }
+  return new SilentAudioDriver(semaphore);
+#else
   return new SDLAudioDriver(semaphore, frequency, channels,
                             need_format_conversion);
+#endif  // XE_PLATFORM_IOS
 }
 
 void SDLAudioSystem::DestroyDriver(AudioDriver* driver) {

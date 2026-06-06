@@ -1,6 +1,6 @@
 add_library(xenia-gpu-null STATIC)
 xe_platform_sources(xenia-gpu-null ${CMAKE_CURRENT_SOURCE_DIR})
-if(APPLE)
+if(APPLE AND NOT XE_PLATFORM_IOS)
   target_link_libraries(xenia-gpu-null PUBLIC xenia-base xenia-gpu xenia-ui xxhash)
 else()
   target_include_directories(xenia-gpu-null PRIVATE

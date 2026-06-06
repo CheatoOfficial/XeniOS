@@ -33,9 +33,13 @@
 
 #include "xenia/base/logging.h"
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#endif
+
+#if XE_PLATFORM_IOS
+#include <pthread/qos.h>
 #endif
 
 #if XE_PLATFORM_LINUX
@@ -68,6 +72,26 @@
 
 namespace xe {
 namespace threading {
+
+#if XE_PLATFORM_IOS
+namespace {
+
+qos_class_t ToDarwinQos(ThreadQoS qos) {
+  switch (qos) {
+    case ThreadQoS::kDefault:
+      return QOS_CLASS_DEFAULT;
+    case ThreadQoS::kUtility:
+      return QOS_CLASS_UTILITY;
+    case ThreadQoS::kUserInitiated:
+      return QOS_CLASS_USER_INITIATED;
+    case ThreadQoS::kUserInteractive:
+      return QOS_CLASS_USER_INTERACTIVE;
+  }
+  return QOS_CLASS_DEFAULT;
+}
+
+}  // namespace
+#endif  // XE_PLATFORM_IOS
 
 #if XE_PLATFORM_ANDROID
 // May be null if no dynamically loaded functions are required.
@@ -216,7 +240,7 @@ void Sleep(std::chrono::microseconds duration) {
 void NanoSleep(int64_t duration) { Sleep(std::chrono::nanoseconds(duration)); }
 
 void NanoSleepPrecise(int64_t ns) {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   // Darwin's nanosleep can oversleep by 100-500us under load. Land precisely
   // on the deadline by using mach_wait_until for the bulk of the wait and
   // busy-waiting the last ~200us.
@@ -471,7 +495,13 @@ class PosixCondition<Event> : public PosixConditionBase {
   bool Signal() override {
     auto lock = std::unique_lock(mutex_);
     signal_ = true;
-    cond_.notify_all();
+    // Manual-reset events must release all waiters while signaled. Auto-reset
+    // events consume one signal, so waking one waiter avoids broadcast churn.
+    if (manual_reset_) {
+      cond_.notify_all();
+    } else {
+      cond_.notify_one();
+    }
     return true;
   }
 
@@ -687,6 +717,14 @@ class PosixCondition<Thread> final : public PosixConditionBase {
           return result;
         }
       }
+
+#if XE_PLATFORM_IOS
+      // Xenia uses raw pthreads, which Xcode reports as QoS Unavailable unless
+      // a Darwin QoS class is attached. Use Default here so ordinary Xenia
+      // threads get normal scheduler treatment and higher-priority iOS paths
+      // can opt in explicitly from their own entrypoints.
+      (void)pthread_attr_set_qos_class_np(&attr, QOS_CLASS_DEFAULT, 0);
+#endif
 
       if (params.initial_priority != 0) {
         sched_param sched{};
@@ -926,7 +964,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (ret != 0) {
       return -1;
     }
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
     // Reverse the mapping applied in set_priority so callers see xenia-space
     // values 1..32 regardless of Darwin's SCHED_FIFO range (typically 15..47).
     static const int fifo_min = sched_get_priority_min(SCHED_FIFO);
@@ -947,7 +985,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
     if (!fifo_failed_) {
 #endif
       sched_param param{};
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       // Xenia's POSIX ThreadPriority tiers are 1/8/16/24/32. Darwin's
       // SCHED_FIFO range is typically 15..47, so linearly remap xenia 1..32
       // into that range to keep all five tiers distinct and monotonically
@@ -1490,6 +1528,9 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
   }
 #endif
   threading::set_name("");
+#if XE_PLATFORM_IOS
+  threading::set_current_thread_qos(ThreadQoS::kDefault);
+#endif
 
   auto start_data = static_cast<ThreadStartData*>(parameter);
   assert_not_null(start_data);
@@ -1608,6 +1649,12 @@ void set_name(const std::string_view name) {
 #endif
 #endif
 }
+
+#if XE_PLATFORM_IOS
+bool set_current_thread_qos(ThreadQoS qos) {
+  return pthread_set_qos_class_self_np(ToDarwinQos(qos), 0) == 0;
+}
+#endif  // XE_PLATFORM_IOS
 
 static void signal_handler(int signal, siginfo_t* info, void* /*context*/) {
   switch (GetSystemSignalType(signal)) {

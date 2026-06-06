@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "xenia/base/bit_map.h"
+#include "xenia/base/platform.h"
 #include "xenia/cpu/backend/backend.h"
 #include "xenia/cpu/export_resolver.h"
 #include "xenia/kernel/kernel.h"
@@ -264,6 +265,10 @@ class KernelState {
   // Terminates a title: Unloads all modules, and kills all guest threads.
   // This DOES NOT RETURN if called from a guest thread!
   void TerminateTitle();
+#if XE_PLATFORM_IOS
+  bool IsTitleStopRequestedIOS() const;
+  bool WaitForTitleThreadsToExitIOS(uint32_t timeout_ms);
+#endif  // XE_PLATFORM_IOS
 
   // Gracefully stops the dispatch thread. Call before force-terminating
   // threads to avoid corrupting the CV it's blocked on.

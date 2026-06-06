@@ -192,6 +192,178 @@ TEST_CASE("HOST_GUEST_HOST_ROUNDTRIP", "[backend]") {
   memory->SystemHeapFree(stack_address);
 }
 
+#if XE_ARCH_ARM64
+TEST_CASE("A64_STACKPOINT_SYNC_DEPTH_SELECTION", "[backend]") {
+  using xe::cpu::backend::a64::A64BackendStackpoint;
+  using xe::cpu::backend::a64::FindStackpointSyncDepth;
+
+  A64BackendStackpoint stackpoints[4] = {};
+  stackpoints[0].guest_stack_ = 0xA000;
+  stackpoints[1].guest_stack_ = 0x9000;
+  stackpoints[2].guest_stack_ = 0x8000;
+  stackpoints[3].guest_stack_ = 0x7000;
+
+  REQUIRE(FindStackpointSyncDepth(nullptr, 4, 0x8500, 0x8123456C) == 0);
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 0, 0x8500, 0x8123456C) == 0);
+
+  // Two skipped deeper frames: target stackpoint depth is the existing caller.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 4, 0x8500, 0x8123456C) == 2);
+
+  // One skipped frame can be an early guest SP restore, so it must not repair.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 4, 0x7500, 0x8123456C) == 0);
+
+  // Guest SP unwound past every recorded stackpoint: no safe repair target.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 4, 0xB000, 0x8123456C) == 0);
+}
+
+TEST_CASE("A64_STACKPOINT_SYNC_DEPTH_DISAMBIGUATES_EQUAL_GUEST_STACKS",
+          "[backend]") {
+  using xe::cpu::backend::a64::A64BackendStackpoint;
+  using xe::cpu::backend::a64::FindStackpointSyncDepth;
+
+  A64BackendStackpoint stackpoints[5] = {};
+  stackpoints[0].guest_stack_ = 0xA000;
+  stackpoints[0].guest_return_address_ = 0x80000100;
+  stackpoints[1].guest_stack_ = 0x9000;
+  stackpoints[1].guest_return_address_ = 0x80000200;
+  stackpoints[2].guest_stack_ = 0x9000;
+  stackpoints[2].guest_return_address_ = 0x80000300;
+  stackpoints[3].guest_stack_ = 0x8000;
+  stackpoints[3].guest_return_address_ = 0x80000400;
+  stackpoints[4].guest_stack_ = 0x7000;
+  stackpoints[4].guest_return_address_ = 0x80000500;
+
+  // The guest SP search stops at index 2. The return address identifies the
+  // frame being popped, so the sync target is its caller at depth 2.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 5, 0x8800, 0x80000300) == 2);
+
+  // A match at the shallower equal-stack frame pops to its caller.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 5, 0x8800, 0x80000200) == 1);
+
+  // If no return address in the equal-stack group matches, mirror x64 by
+  // choosing the shallowest equal-stack frame rather than the deepest one.
+  REQUIRE(FindStackpointSyncDepth(stackpoints, 5, 0x8800, 0x80000900) == 2);
+}
+
+static std::atomic<uint32_t> a64_pending_sync_builtin_count{0};
+static uint32_t a64_pending_sync_observed_depth = 0;
+
+static void MarkA64PendingSyncForCaller(ppc::PPCContext* ctx, void* arg0,
+                                        void* arg1) {
+  auto* a64_backend = static_cast<xe::cpu::backend::a64::A64Backend*>(
+      ctx->thread_state->processor()->backend());
+  auto* bctx = a64_backend->BackendContextForGuestContext(ctx);
+  a64_pending_sync_observed_depth = bctx->current_stackpoint_depth;
+  if (bctx->current_stackpoint_depth > 1) {
+    bctx->pending_stackpoint_sync_depth = bctx->current_stackpoint_depth - 1;
+  }
+  a64_pending_sync_builtin_count.fetch_add(1);
+}
+
+TEST_CASE("A64_PENDING_STACKPOINT_SYNC_AFTER_GUEST_CALL", "[backend]") {
+  constexpr uint32_t kCallerAddr = 0x80000000;
+  constexpr uint32_t kCalleeAddr = 0x80001000;
+  constexpr uint64_t kPostCallMarker = 0xA64A64A64A64A64Aull;
+
+  a64_pending_sync_builtin_count = 0;
+  a64_pending_sync_observed_depth = 0;
+
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  auto backend = CreateBackend();
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  auto* marker_fn = processor->DefineBuiltin(
+      "MarkA64PendingSync", MarkA64PendingSyncForCaller, nullptr, nullptr);
+
+  int gen_invocation = 0;
+  Function* callee_fn = nullptr;
+  auto module = std::make_unique<TestModule>(
+      processor.get(), "Test",
+      [](uint32_t address) {
+        return address == kCallerAddr || address == kCalleeAddr;
+      },
+      [&](HIRBuilder& b) {
+        if (gen_invocation++ == 0) {
+          b.CallExtern(marker_fn);
+          b.Return();
+        } else {
+          REQUIRE(callee_fn != nullptr);
+          b.Call(callee_fn);
+          StoreGPR(b, 3, b.LoadConstantUint64(kPostCallMarker));
+          b.Return();
+        }
+        return true;
+      },
+      /*skip_cf_simplification=*/true);
+  processor->AddModule(std::move(module));
+  processor->backend()->CommitExecutableRange(kCallerAddr,
+                                              kCalleeAddr + 0x1000);
+
+  callee_fn = processor->ResolveFunction(kCalleeAddr);
+  REQUIRE(callee_fn != nullptr);
+  auto* caller_fn = processor->ResolveFunction(kCallerAddr);
+  REQUIRE(caller_fn != nullptr);
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+  ctx->lr = 0xBCBCBCBC;
+  ctx->r[3] = 0;
+
+  caller_fn->Call(thread_state.get(), uint32_t(ctx->lr));
+
+  auto* a64_backend =
+      static_cast<xe::cpu::backend::a64::A64Backend*>(processor->backend());
+  auto* bctx = a64_backend->BackendContextForGuestContext(ctx);
+
+  REQUIRE(a64_pending_sync_builtin_count == 1);
+  REQUIRE(a64_pending_sync_observed_depth > 1);
+  REQUIRE(ctx->r[3] == kPostCallMarker);
+  REQUIRE(bctx->pending_stackpoint_sync_depth == 0);
+  REQUIRE(bctx->current_stackpoint_depth == 0);
+
+  memory->SystemHeapFree(stack_address);
+}
+
+TEST_CASE("A64_PREPARE_FOR_REENTRY_CLEARS_PENDING_STACKPOINT_SYNC",
+          "[backend]") {
+  auto memory = std::make_unique<Memory>();
+  memory->Initialize();
+
+  auto backend = CreateBackend();
+  REQUIRE(backend);
+
+  auto processor = std::make_unique<Processor>(memory.get(), nullptr);
+  processor->Setup(std::move(backend));
+
+  uint32_t stack_size = 64 * 1024;
+  uint32_t stack_address = memory->SystemHeapAlloc(stack_size);
+  auto thread_state = std::make_unique<ThreadState>(processor.get(), 0x100,
+                                                    stack_address + stack_size);
+  auto ctx = thread_state->context();
+
+  auto* a64_backend =
+      static_cast<xe::cpu::backend::a64::A64Backend*>(processor->backend());
+  auto* bctx = a64_backend->BackendContextForGuestContext(ctx);
+  bctx->current_stackpoint_depth = 3;
+  bctx->pending_stackpoint_sync_depth = 2;
+
+  processor->backend()->PrepareForReentry(ctx);
+
+  REQUIRE(bctx->current_stackpoint_depth == 0);
+  REQUIRE(bctx->pending_stackpoint_sync_depth == 0);
+
+  memory->SystemHeapFree(stack_address);
+}
+#endif  // XE_ARCH_ARM64
+
 // =============================================================================
 // GPR preservation across GuestToHostThunk
 // =============================================================================

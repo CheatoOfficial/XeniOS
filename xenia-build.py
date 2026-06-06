@@ -1057,6 +1057,14 @@ def normalize_target_arch(value):
     raise ArgumentTypeError(
         f"unknown architecture '{value}' (expected: arm64, aarch64, a64, x64, amd64, x86_64, x86)")
 
+def normalize_target_os(value):
+    """Normalizes --target-os values to canonical names."""
+    v = value.lower()
+    if v in ("ios", "iphoneos"):
+        return "ios"
+    raise ArgumentTypeError(
+        f"unknown target OS '{value}' (expected: ios or iphoneos)")
+
 def is_amd64():
     return normalize_target_arch(platform.machine()) in ("x64", "x86_64", "amd64", "x86")
 
@@ -1375,6 +1383,10 @@ class SetupCommand(Command):
             help="Target architecture (arm64/aarch64/a64, x64/amd64/x86_64/x86). "
                  "On Windows and macOS, non-native values enable cross-compilation "
                  "into a separate build-<arch>/ tree.")
+        self.parser.add_argument(
+            "--target-os", type=normalize_target_os, default=None,
+            help="Target OS override. Currently supports device-only iOS "
+                 "(ios/iphoneos) from macOS.")
 
     def execute(self, args, pass_args, cwd):
         print("Setting up the build environment...\n")
@@ -3066,14 +3078,24 @@ class DevenvCommand(Command):
                  "On Windows, non-native values enable cross-compilation into a "
                  "separate build-vs-<arch>/ tree.")
         self.parser.add_argument(
+            "--target-os", type=normalize_target_os, default=None,
+            help="Target OS override. Currently supports device-only iOS "
+                 "(ios/iphoneos) from macOS.")
+        self.parser.add_argument(
             "--config", choices=["checked", "debug", "release"],
             default="debug", type=str.lower,
             help="Build configuration the IDE solution is pinned to. The VS "
                  "dropdown is restricted to this single config; re-run xb "
                  "devenv with a different --config to switch.")
+        self.parser.add_argument(
+            "--no-open", action="store_true",
+            help="Configure the IDE build tree without launching the IDE.")
 
     def execute(self, args, pass_args, cwd):
         target_arch = args.get("target_arch")
+        target_os = args.get("target_os")
+        if sys.platform == "darwin" and target_os == "ios":
+            return self._launch_xcode_ios(args["config"], open_project=not args["no_open"])
         if sys.platform == "win32":
             if not vs_version:
                 print("ERROR: Visual Studio is not installed.");
@@ -3131,6 +3153,30 @@ class DevenvCommand(Command):
             return 1
         print(f"\n- launching devenv on {sln_path}...")
         shell_call(["devenv", sln_path])
+        return 0
+
+    def _launch_xcode_ios(self, config="debug", open_project=True):
+        """Configures a separate Xcode iOS build tree, then opens it."""
+        config_title = config.title()
+        build_dir = get_ios_xcode_build_dir()
+        print(f"Configuring Xcode iOS build tree ({config_title}) in {build_dir}...")
+        ret = run_ios_xcode_configure()
+        if ret != 0:
+            print_error("cmake configure failed for the Xcode iOS build tree")
+            return ret
+
+        project_path = get_ios_xcode_project_path()
+        if not os.path.exists(project_path):
+            print_error("cmake configured successfully but no xenia.xcodeproj was produced")
+            return 1
+
+        if not open_project:
+            print(f"\n- Xcode project configured at {project_path}")
+            return 0
+
+        print(f"\n- launching Xcode on {project_path}...")
+        print("  Select the xenia-app scheme and a physical iOS device.")
+        shell_call(["open", project_path])
         return 0
 
 

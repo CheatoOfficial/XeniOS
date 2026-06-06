@@ -317,6 +317,10 @@ uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle,
 }
 
 void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+  RequestTextures(used_texture_mask, true);
+}
+
+void TextureCache::RequestTextures(uint32_t used_texture_mask, bool load_data) {
   const auto& regs = register_file();
 
   // Clear the aggregate flag, but invalidate only actually used outdated
@@ -668,6 +672,12 @@ TextureCache::Texture::~Texture() {
 
 void TextureCache::Texture::MakeUpToDateAndWatch(
     const global_unique_lock_type& global_lock) {
+  MakeLoadedDataUpToDateAndWatch(global_lock, true, true);
+}
+
+void TextureCache::Texture::MakeLoadedDataUpToDateAndWatch(
+    const global_unique_lock_type& global_lock, bool loaded_base,
+    bool loaded_mips) {
   SharedMemory& shared_memory = texture_cache().shared_memory();
   if (base_outdated_.load(std::memory_order_relaxed)) {
     assert_not_zero(GetGuestBaseSize());
@@ -675,6 +685,8 @@ void TextureCache::Texture::MakeUpToDateAndWatch(
     base_watch_handle_ = shared_memory.WatchMemoryRange(
         key().base_page << 12, GetGuestBaseSize(), TextureCache::WatchCallback,
         this, nullptr, 0);
+    shared_memory.WatchRangeForCpuWrites(key().base_page << 12,
+                                         GetGuestBaseSize());
   }
   if (mips_outdated_.load(std::memory_order_relaxed)) {
     assert_not_zero(GetGuestMipsSize());
@@ -682,6 +694,8 @@ void TextureCache::Texture::MakeUpToDateAndWatch(
     mips_watch_handle_ = shared_memory.WatchMemoryRange(
         key().mip_page << 12, GetGuestMipsSize(), TextureCache::WatchCallback,
         this, nullptr, 1);
+    shared_memory.WatchRangeForCpuWrites(key().mip_page << 12,
+                                         GetGuestMipsSize());
   }
 }
 
@@ -743,7 +757,26 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
 
-TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+bool TextureCache::DestroyOldestTextureIfUnused(
+    uint64_t completed_submission_index) {
+  Texture* texture = texture_used_first_;
+  if (!texture ||
+      texture->last_usage_submission_index() > completed_submission_index) {
+    return false;
+  }
+  ResetTextureBindings();
+  auto found_texture_it = textures_.find(texture->key());
+  assert_true(found_texture_it != textures_.end());
+  if (found_texture_it == textures_.end()) {
+    return false;
+  }
+  assert_true(found_texture_it->second.get() == texture);
+  textures_.erase(found_texture_it);
+  COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
+  return true;
+}
+
+TextureCache::TextureKey TextureCache::GetHostTextureKey(TextureKey key) const {
   // Check if the texture is a scaled resolve texture.
   if (IsDrawResolutionScaled() && key.tiled &&
       IsScaledResolveSupportedForFormat(key)) {
@@ -760,6 +793,11 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
       key.scaled_resolve = 1;
     }
   }
+  return key;
+}
+
+TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+  key = GetHostTextureKey(key);
 
   uint32_t host_width = key.GetWidth();
   uint32_t host_height = key.GetHeight();
@@ -855,6 +893,10 @@ void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
   if (nkept == 0) {
     return;
   }
+  if (!PrepareTextureDataLoadRanges(textures, n_textures, index_base_outdated,
+                                    index_mips_outdated)) {
+    return;
+  }
 
   for (uint32_t i = 0; i < n_textures; ++i) {
     Texture* p_texture = textures[i];
@@ -880,14 +922,16 @@ void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
     // from the shared memory to load the unscaled parts.
     // TODO(Triang3l): Load unscaled parts.
     if (index_base_outdated & (1ULL << i)) {
-      if (!shared_memory().RequestRange(
+      if (!RequestTextureDataRange(
+              texture, TextureDataRangeSource::kBase,
               texture_key.base_page << 12,
               xe::align(texture.GetGuestBaseSize(), UINT32_C(16)))) {
         continue;
       }
     }
     if (index_mips_outdated & (1ULL << i)) {
-      if (!shared_memory().RequestRange(
+      if (!RequestTextureDataRange(
+              texture, TextureDataRangeSource::kMips,
               texture_key.mip_page << 12,
               xe::align(texture.GetGuestMipsSize(), UINT32_C(16)))) {
         continue;
@@ -956,6 +1000,12 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   }
 
   TextureKey texture_key = texture.key();
+  Texture* texture_to_load = &texture;
+  if (!PrepareTextureDataLoadRanges(&texture_to_load, 1,
+                                    base_outdated ? UINT64_C(1) : 0,
+                                    mips_outdated ? UINT64_C(1) : 0)) {
+    return false;
+  }
 
   // Implementation may load multiple blocks at once via accesses of up to 128
   // bits (R32G32B32A32_UINT), so aligning the size to this value to make sure
@@ -972,15 +1022,15 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   // shared memory to load the unscaled parts.
   // TODO(Triang3l): Load unscaled parts.
   if (base_outdated) {
-    if (!shared_memory().RequestRange(
-            texture_key.base_page << 12,
+    if (!RequestTextureDataRange(
+            texture, TextureDataRangeSource::kBase, texture_key.base_page << 12,
             xe::align(texture.GetGuestBaseSize(), UINT32_C(16)))) {
       return false;
     }
   }
   if (mips_outdated) {
-    if (!shared_memory().RequestRange(
-            texture_key.mip_page << 12,
+    if (!RequestTextureDataRange(
+            texture, TextureDataRangeSource::kMips, texture_key.mip_page << 12,
             xe::align(texture.GetGuestMipsSize(), UINT32_C(16)))) {
       return false;
     }
@@ -1151,7 +1201,7 @@ void TextureCache::UpdateTexturesTotalHostMemoryUsage(uint64_t add,
 }
 
 bool TextureCache::IsRangeScaledResolved(uint32_t start_unscaled,
-                                         uint32_t length_unscaled) {
+                                         uint32_t length_unscaled) const {
   if (!IsDrawResolutionScaled()) {
     return false;
   }

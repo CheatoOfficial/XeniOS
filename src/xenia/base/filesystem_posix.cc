@@ -23,7 +23,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <limits.h>
 #include <mach-o/dyld.h>
 #endif

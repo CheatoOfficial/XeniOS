@@ -97,10 +97,26 @@ void COMMAND_PROCESSOR::ExecuteIndirectBuffer(uint32_t ptr,
     reader_.BeginPrefetchedRead<swcache::PrefetchTag::Level2>(
         COMMAND_PROCESSOR::GetCurrentRingReadCount());
     do {
+#if XE_PLATFORM_IOS
+      if (COMMAND_PROCESSOR::IsTitleStopRequestedIOS() || !worker_running_) {
+        XELOGI(
+            "iOS: abandoning indirect ringbuffer decode during title "
+            "stop/shutdown");
+        break;
+      }
+#endif  // XE_PLATFORM_IOS
       if (COMMAND_PROCESSOR::ExecutePacket()) {
         continue;
       } else {
         // Return up a level if we encounter a bad packet.
+#if XE_PLATFORM_IOS
+        if (COMMAND_PROCESSOR::IsTitleStopRequestedIOS() || !worker_running_) {
+          XELOGI(
+              "iOS: ignoring indirect ringbuffer decode failure during title "
+              "stop/shutdown");
+          break;
+        }
+#endif  // XE_PLATFORM_IOS
         XELOGE("**** INDIRECT RINGBUFFER: Failed to execute packet.");
         assert_always();
         break;
@@ -1740,8 +1756,24 @@ uint32_t COMMAND_PROCESSOR::ExecutePrimaryBuffer(uint32_t read_index,
   reader_.BeginPrefetchedRead<swcache::PrefetchTag::Level2>(
       GetCurrentRingReadCount());
   do {
+#if XE_PLATFORM_IOS
+    if (COMMAND_PROCESSOR::IsTitleStopRequestedIOS() || !worker_running_) {
+      XELOGI(
+          "iOS: abandoning primary ringbuffer decode during title "
+          "stop/shutdown");
+      break;
+    }
+#endif  // XE_PLATFORM_IOS
     if (!COMMAND_PROCESSOR::ExecutePacket()) {
       // This probably should be fatal - but we're going to continue anyways.
+#if XE_PLATFORM_IOS
+      if (COMMAND_PROCESSOR::IsTitleStopRequestedIOS() || !worker_running_) {
+        XELOGI(
+            "iOS: ignoring primary ringbuffer decode failure during title "
+            "stop/shutdown");
+        break;
+      }
+#endif  // XE_PLATFORM_IOS
       XELOGE("**** PRIMARY RINGBUFFER: Failed to execute packet.");
       assert_always();
       break;

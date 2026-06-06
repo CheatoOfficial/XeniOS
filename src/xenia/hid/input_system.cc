@@ -372,6 +372,28 @@ void InputSystem::ReconcileBindings() {
     }
   }
 
+  auto binding_is_fallback = [&live](const SlotBinding& binding) {
+    if (!binding.driver) {
+      return false;
+    }
+    for (const auto& l : live) {
+      if (l.driver == binding.driver &&
+          l.info.driver_slot == binding.driver_slot) {
+        return l.info.fallback_auto_bind;
+      }
+    }
+    return false;
+  };
+
+  bool has_primary_auto_bind_controller = false;
+  for (const auto& l : live) {
+    if (l.info.auto_bind && !l.info.fallback_auto_bind &&
+        l.driver->GetInputType() == InputType::Controller) {
+      has_primary_auto_bind_controller = true;
+      break;
+    }
+  }
+
   // Pass 1: demote bindings whose device has gone away.
   for (auto& b : slot_bindings_) {
     if (!b.driver) {
@@ -403,6 +425,10 @@ void InputSystem::ReconcileBindings() {
       continue;
     }
 
+    if (l.info.fallback_auto_bind && has_primary_auto_bind_controller) {
+      continue;
+    }
+
     // Reattach by stable_id (matches detached bindings).
     bool placed = false;
     if (!l.info.stable_id.empty()) {
@@ -427,6 +453,27 @@ void InputSystem::ReconcileBindings() {
     }
     if (!l.info.stable_id.empty() && dismissed_ids_.count(l.info.stable_id)) {
       continue;
+    }
+
+    // A real controller should replace an auto-bound fallback controller in
+    // the same guest slot instead of appearing as player 2.
+    if (!l.info.fallback_auto_bind &&
+        l.driver->GetInputType() == InputType::Controller) {
+      for (auto& b : slot_bindings_) {
+        if (!binding_is_fallback(b)) {
+          continue;
+        }
+        b.driver = l.driver;
+        b.driver_slot = l.info.driver_slot;
+        b.stable_id = l.info.stable_id;
+        b.display_name = l.info.display_name;
+        b.subtype_override = 0;
+        placed = true;
+        break;
+      }
+      if (placed) {
+        continue;
+      }
     }
 
     // Try preferred slot if it's not currently active.

@@ -178,6 +178,9 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void Call(const hir::Instr* instr, GuestFunction* function);
   void CallIndirect(const hir::Instr* instr, int reg_index);
   void CallExtern(const hir::Instr* instr, const Function* function);
+  bool TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
+                                    const GuestFunction* function);
+  void TailCallGuestAddressInW16();
   void CallNative(void* fn);
   void CallNativeSafe(void* fn);
   void SetReturnAddress(uint64_t value);
@@ -224,6 +227,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void* Emplace(const EmitFunctionInfo& func_info,
                 GuestFunction* function = nullptr);
   bool Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info);
+
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+  void EmitTitleStopPollIOS();
+#endif  // XE_PLATFORM_IOS && XE_ARCH_ARM64
 
  protected:
   Processor* processor_ = nullptr;

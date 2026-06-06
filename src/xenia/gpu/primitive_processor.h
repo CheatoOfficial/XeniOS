@@ -323,6 +323,15 @@ class PrimitiveProcessor {
       xenos::IndexFormat format, uint32_t index_count, bool coalign_for_simd,
       uint32_t coalignment_original_address, size_t& backend_handle_out) = 0;
 
+ protected:
+  virtual bool RequestGuestIndexSharedMemoryRange(
+      uint32_t guest_index_base, uint32_t guest_index_buffer_needed_bytes,
+      ProcessedIndexBufferType index_buffer_type) {
+    (void)index_buffer_type;
+    return shared_memory_.RequestRange(guest_index_base,
+                                       guest_index_buffer_needed_bytes);
+  }
+
  private:
 #if XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
 #if XE_ARCH_AMD64

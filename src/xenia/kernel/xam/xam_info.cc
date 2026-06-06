@@ -292,6 +292,13 @@ dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
 DECLARE_XAM_EXPORT1(XamLoaderGetLaunchData, kNone, kSketchy);
 
 void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
+#if XE_PLATFORM_IOS
+  if (kernel_state()->IsTitleStopRequestedIOS()) {
+    kernel_state()->TerminateTitle();
+    return;
+  }
+#endif  // XE_PLATFORM_IOS
+
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
 
   auto& loader_data = xam->loader_data();
@@ -375,13 +382,12 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
       auto on_launch_new_title =
           kernel_state()->emulator()->on_launch_new_title();
       if (on_launch_new_title) {
-        XELOGI("XamLoaderLaunchTitle: spawning new title process");
+        XELOGI("XamLoaderLaunchTitle: requesting new title launch");
         on_launch_new_title(xe::path_to_utf8(host_path), launch_path,
                             loader_data.launch_flags, launch_data_hex);
-        // Callback calls quick_exit, so we don't reach here
       }
 
-      // Terminate if callback wasn't set
+      // Stop the current title after the callback queues or handles launch.
       XELOGI("XamLoaderLaunchTitle: terminating to launch new title");
       kernel_state()->TerminateTitle();
       // This function does not return

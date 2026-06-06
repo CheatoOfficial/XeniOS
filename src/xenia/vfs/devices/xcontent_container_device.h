@@ -57,14 +57,14 @@ class XContentContainerDevice : public Device {
     return files_total_size_ - sizeof(XContentContainerHeader);
   }
 
-  uint64_t xuid() const { return header_->content_metadata.profile_id; }
+  uint64_t xuid() const { return header_->content_metadata.profile_id_value(); }
 
   uint32_t title_id() const {
     return header_->content_metadata.execution_info.title_id;
   }
 
   uint32_t content_type() const {
-    return static_cast<uint32_t>(header_->content_metadata.content_type.get());
+    return header_->content_metadata.content_type_value();
   }
 
   kernel::xam::XCONTENT_AGGREGATE_DATA content_header() const;

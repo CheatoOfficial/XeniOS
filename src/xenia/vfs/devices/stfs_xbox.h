@@ -10,6 +10,7 @@
 #ifndef XENIA_VFS_DEVICES_STFS_XBOX_H_
 #define XENIA_VFS_DEVICES_STFS_XBOX_H_
 
+#include <stddef.h>
 #include <time.h>
 
 #include "xenia/base/logging.h"
@@ -369,66 +370,143 @@ struct XContentMetadata {
     char16_t chars[kNumLanguagesV2 - kNumLanguagesV1][128];
   } description_ex_raw;
 
-  // Resolves a system language to an STFS metadata slot index. STFS headers
-  // only hold kNumLanguagesV2 languages; the extended languages and kInvalid
-  // have no slot and resolve to English. Warns only for values outside the
-  // enum, which signal a bad language id rather than a known format limit.
-  static uint32_t language_slot(XLanguage language) {
-    uint32_t lang_id = uint32_t(language) - 1;
-    if (lang_id >= kNumLanguagesV2) {
-      if (uint32_t(language) >= uint32_t(XLanguage::kMaxLanguages)) {
-        XELOGW("STFS metadata: invalid language {}, using English",
-               uint32_t(language));
+  static uint16_t load_be16_unaligned(const void* data) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    return uint16_t((uint16_t(bytes[0]) << 8) | uint16_t(bytes[1]));
+  }
+
+  static uint32_t load_be32_unaligned(const void* data) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    return (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
+           (uint32_t(bytes[2]) << 8) | uint32_t(bytes[3]);
+  }
+
+  static uint64_t load_be64_unaligned(const void* data) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    return (uint64_t(bytes[0]) << 56) | (uint64_t(bytes[1]) << 48) |
+           (uint64_t(bytes[2]) << 40) | (uint64_t(bytes[3]) << 32) |
+           (uint64_t(bytes[4]) << 24) | (uint64_t(bytes[5]) << 16) |
+           (uint64_t(bytes[6]) << 8) | uint64_t(bytes[7]);
+  }
+
+  const uint8_t* field_bytes(size_t offset) const {
+    return reinterpret_cast<const uint8_t*>(this) + offset;
+  }
+
+  uint32_t content_type_value() const {
+    return load_be32_unaligned(
+        field_bytes(offsetof(XContentMetadata, content_type)));
+  }
+
+  uint32_t metadata_version_value() const {
+    return load_be32_unaligned(
+        field_bytes(offsetof(XContentMetadata, metadata_version)));
+  }
+
+  uint64_t content_size_value() const {
+    return load_be64_unaligned(
+        field_bytes(offsetof(XContentMetadata, content_size)));
+  }
+
+  uint64_t profile_id_value() const {
+    return load_be64_unaligned(
+        field_bytes(offsetof(XContentMetadata, profile_id)));
+  }
+
+  uint32_t data_file_count_value() const {
+    return load_be32_unaligned(
+        field_bytes(offsetof(XContentMetadata, data_file_count)));
+  }
+
+  uint64_t data_file_size_value() const {
+    return load_be64_unaligned(
+        field_bytes(offsetof(XContentMetadata, data_file_size)));
+  }
+
+  XContentVolumeType volume_type_value() const {
+    return static_cast<XContentVolumeType>(load_be32_unaligned(
+        field_bytes(offsetof(XContentMetadata, volume_type))));
+  }
+
+  uint32_t title_thumbnail_size_value() const {
+    return load_be32_unaligned(
+        field_bytes(offsetof(XContentMetadata, title_thumbnail_size)));
+  }
+
+  static std::u16string load_u16_string_unaligned(const uint8_t* data,
+                                                  size_t max_chars) {
+    std::u16string value;
+    value.reserve(max_chars);
+    for (size_t i = 0; i < max_chars; ++i) {
+      const uint16_t code_unit =
+          load_be16_unaligned(data + i * sizeof(uint16_t));
+      if (!code_unit) {
+        break;
       }
+      value.push_back(static_cast<char16_t>(code_unit));
+    }
+    return value;
+  }
+
+  std::u16string load_localized_string(size_t primary_offset,
+                                       size_t extended_offset,
+                                       XLanguage language) const {
+    uint32_t lang_id = language == XLanguage::kInvalid
+                           ? uint32_t(XLanguage::kEnglish) - 1
+                           : uint32_t(language) - 1;
+
+    if (lang_id >= kNumLanguagesV2) {
+      assert_always();
       lang_id = uint32_t(XLanguage::kEnglish) - 1;
     }
-    return lang_id;
+
+    const size_t kSlotChars = 128;
+    const size_t kSlotBytes = kSlotChars * sizeof(uint16_t);
+    if (lang_id < kNumLanguagesV1) {
+      return load_u16_string_unaligned(
+          field_bytes(primary_offset) + lang_id * kSlotBytes, kSlotChars);
+    }
+    if (metadata_version_value() >= 2) {
+      return load_u16_string_unaligned(
+          field_bytes(extended_offset) +
+              (lang_id - kNumLanguagesV1) * kSlotBytes,
+          kSlotChars);
+    }
+
+    assert_always();
+    return u"";
   }
 
   std::u16string display_name(XLanguage language) const {
-    uint32_t lang_id = language_slot(language);
-
-    const be<uint16_t>* str = 0;
-    if (lang_id < kNumLanguagesV1) {
-      str = display_name_raw.uint[lang_id];
-    } else if (lang_id < kNumLanguagesV2 && metadata_version >= 2) {
-      str = display_name_ex_raw.uint[lang_id - kNumLanguagesV1];
-    }
-
-    if (!str) {
-      return u"";
-    }
-
-    return load_and_swap<std::u16string>(str);
+    return load_localized_string(
+        offsetof(XContentMetadata, display_name_raw),
+        offsetof(XContentMetadata, display_name_ex_raw), language);
   }
 
   std::u16string description(XLanguage language) const {
-    uint32_t lang_id = language_slot(language);
-
-    const be<uint16_t>* str = 0;
-    if (lang_id < kNumLanguagesV1) {
-      str = description_raw.uint[lang_id];
-    } else if (lang_id < kNumLanguagesV2 && metadata_version >= 2) {
-      str = description_ex_raw.uint[lang_id - kNumLanguagesV1];
-    }
-
-    if (!str) {
-      return u"";
-    }
-
-    return load_and_swap<std::u16string>(str);
+    return load_localized_string(offsetof(XContentMetadata, description_raw),
+                                 offsetof(XContentMetadata, description_ex_raw),
+                                 language);
   }
 
   std::u16string publisher() const {
-    return load_and_swap<std::u16string>(publisher_raw.uint);
+    return load_u16_string_unaligned(
+        field_bytes(offsetof(XContentMetadata, publisher_raw)), 64);
   }
 
   std::u16string title_name() const {
-    return load_and_swap<std::u16string>(title_name_raw.uint);
+    return load_u16_string_unaligned(
+        field_bytes(offsetof(XContentMetadata, title_name_raw)), 64);
   }
 
   bool set_display_name(XLanguage language, const std::u16string_view value) {
-    uint32_t lang_id = language_slot(language);
+    uint32_t lang_id = uint32_t(language) - 1;
+
+    if (lang_id >= kNumLanguagesV2) {
+      assert_always();
+      // no room for this lang, store in english slot..
+      lang_id = uint32_t(XLanguage::kEnglish) - 1;
+    }
 
     char16_t* str = 0;
     if (lang_id < kNumLanguagesV1) {
@@ -438,6 +516,8 @@ struct XContentMetadata {
     }
 
     if (!str) {
+      // Invalid language ID?
+      assert_always();
       return false;
     }
 
@@ -447,7 +527,13 @@ struct XContentMetadata {
   }
 
   bool set_description(XLanguage language, const std::u16string_view value) {
-    uint32_t lang_id = language_slot(language);
+    uint32_t lang_id = uint32_t(language) - 1;
+
+    if (lang_id >= kNumLanguagesV2) {
+      assert_always();
+      // no room for this lang, store in english slot..
+      lang_id = uint32_t(XLanguage::kEnglish) - 1;
+    }
 
     char16_t* str = 0;
     if (lang_id < kNumLanguagesV1) {
@@ -457,6 +543,8 @@ struct XContentMetadata {
     }
 
     if (!str) {
+      // Invalid language ID?
+      assert_always();
       return false;
     }
 
@@ -502,7 +590,8 @@ struct XContentContainerHeader {
   // to affect header.header_size
 
   bool is_package_readonly() const {
-    if (content_metadata.volume_type == vfs::XContentVolumeType::kSvod) {
+    if (content_metadata.volume_type_value() ==
+        vfs::XContentVolumeType::kSvod) {
       return true;
     }
 

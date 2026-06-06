@@ -24,6 +24,10 @@
 #include "xenia/ui/windowed_app_context_ios.h"
 #endif
 #include "xenia/ui/imgui_guest_notification.h"
+#if XE_PLATFORM_IOS
+#include "xenia/ui/achievement_notification_payload.h"
+#include "xenia/ui/ios/app/windowed_app_context_ios.h"
+#endif  // XE_PLATFORM_IOS
 
 DEFINE_bool(show_achievement_notification, true,
             "Show achievement notification on screen.", "UI");
@@ -171,8 +175,12 @@ void AchievementManager::ShowAchievementEarnedNotification(
       fmt::format("{}G - {}", achievement->gamerscore, achievement_name);
 
   const Emulator* emulator = kernel_state()->emulator();
-  ui::WindowedAppContext& app_context =
-      emulator->display_window()->app_context();
+  ui::Window* display_window = emulator ? emulator->display_window() : nullptr;
+  if (!display_window) {
+    XELOGI("Achievement notification skipped: no display window available");
+    return;
+  }
+  ui::WindowedAppContext* app_context = &display_window->app_context();
   ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
   if (!imgui_drawer) {
@@ -209,9 +217,21 @@ void AchievementManager::ShowAchievementEarnedNotification(
     ui::AudioHelper::Instance().PlayAchievementSound();
 #endif
 
+#if XE_PLATFORM_IOS
+    auto* ios_context = dynamic_cast<ui::IOSWindowedAppContext*>(app_context);
+    if (ios_context && ios_context->PresentAchievementNotification(payload)) {
+      return;
+    }
+#endif  // XE_PLATFORM_IOS
+
+    if (!imgui_drawer) {
+      XELOGI("Achievement notification skipped: no ImGui drawer available");
+      return;
+    }
+
     // Show notification
-    new ui::AchievementNotificationWindow(imgui_drawer, "Achievement unlocked",
-                                          description, 0, position);
+    new ui::AchievementNotificationWindow(imgui_drawer, title, description, 0,
+                                          position);
   });
 }
 

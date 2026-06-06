@@ -11,6 +11,7 @@
 #define XENIA_CPU_BACKEND_CODE_CACHE_BASE_H_
 
 #include <atomic>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -33,8 +34,16 @@
 #include "xenia/cpu/backend/code_cache.h"
 #include "xenia/cpu/function.h"
 
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && XE_ARCH_ARM64
 #include <pthread.h>
+#endif
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+#include <dirent.h>
+#include <mach/mach.h>
+#include <mach/vm_map.h>
+#include <sys/mman.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
 #endif
 
 namespace xe {
@@ -103,15 +112,21 @@ class CodeCacheBase : public CodeCache {
                                xe::memory::DeallocationType::kRelease);
     }
     if (mapping_ != xe::memory::kFileMappingHandleInvalid) {
-      if (generated_code_write_base_ &&
-          generated_code_write_base_ != generated_code_execute_base_) {
-        xe::memory::UnmapFileView(mapping_, generated_code_write_base_,
-                                  kGeneratedCodeSize);
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (!generated_code_uses_ios_persistent_mapping_) {
+#endif
+        if (generated_code_write_base_ &&
+            generated_code_write_base_ != generated_code_execute_base_) {
+          xe::memory::UnmapFileView(mapping_, generated_code_write_base_,
+                                    kGeneratedCodeSize);
+        }
+        if (generated_code_execute_base_) {
+          xe::memory::UnmapFileView(mapping_, generated_code_execute_base_,
+                                    kGeneratedCodeSize);
+        }
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
       }
-      if (generated_code_execute_base_) {
-        xe::memory::UnmapFileView(mapping_, generated_code_execute_base_,
-                                  kGeneratedCodeSize);
-      }
+#endif
       xe::memory::CloseFileMappingHandle(mapping_, file_name_);
       mapping_ = xe::memory::kFileMappingHandleInvalid;
     }
@@ -155,6 +170,12 @@ class CodeCacheBase : public CodeCache {
   // Virtual so that platform-specific derived classes (Win32/POSIX) can
   // override and chain up to add unwind registration.
   virtual bool Initialize() {
+    generated_code_uses_mprotect_flip_ = false;
+    generated_code_uses_vm_remap_fallback_ = false;
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+    generated_code_uses_ios_persistent_mapping_ = false;
+#endif  // XE_PLATFORM_IOS && XE_ARCH_ARM64
+
     file_name_ =
         fmt::format("xenia_code_cache_{}", Clock::QueryHostTickCount());
     mapping_ = xe::memory::CreateFileMappingHandle(
@@ -173,6 +194,9 @@ class CodeCacheBase : public CodeCache {
     // uses an anonymous MAP_JIT mapping which works.
     bool try_fast_indirection = allow_fast_indirection_;
 #if XE_PLATFORM_MAC && XE_ARCH_AMD64
+    try_fast_indirection = false;
+#endif
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
     try_fast_indirection = false;
 #endif
     if (try_fast_indirection) {
@@ -240,7 +264,7 @@ class CodeCacheBase : public CodeCache {
 
     // Try the preferred fixed address first; fall back to OS-chosen on fail.
     if (wx_preferred) {
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS
       // macOS allows RWX only on anonymous MAP_JIT regions; the W^X gate
       // happens via pthread_jit_write_protect_np in PlaceGuestCode/PlaceData.
       generated_code_execute_base_ = reinterpret_cast<uint8_t*>(
@@ -263,6 +287,82 @@ class CodeCacheBase : public CodeCache {
       generated_code_write_base_ = generated_code_execute_base_;
 #endif
     } else {
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      const bool use_txm_broker_path = IOSUseTXMBrokerPath();
+      if (use_txm_broker_path) {
+        const int ios_major_version = IOSProductMajorVersion();
+        if (ios_major_version > 0) {
+          XELOGI("iOS JIT: TXM detected on iOS {}; using broker-capable path",
+                 ios_major_version);
+        } else {
+          XELOGI("iOS JIT: TXM detected; using broker-capable path");
+        }
+
+        if (AcquireIOSPersistentGeneratedCodeMapping(
+                generated_code_execute_base_, generated_code_write_base_)) {
+          generated_code_uses_vm_remap_fallback_ = true;
+          generated_code_uses_ios_persistent_mapping_ = true;
+        } else {
+          generated_code_execute_base_ = nullptr;
+          generated_code_write_base_ = nullptr;
+          XELOGW("iOS JIT persistent dual-map setup failed");
+        }
+      } else if (IOSHasTXM()) {
+        const int ios_major_version = IOSProductMajorVersion();
+        if (ios_major_version > 0) {
+          XELOGI(
+              "iOS JIT: TXM detected on iOS {}; using non-broker W^X defaults",
+              ios_major_version);
+        } else {
+          XELOGI(
+              "iOS JIT: TXM detected with unknown OS version; using "
+              "non-broker W^X defaults");
+        }
+      } else {
+        const int ios_major_version = IOSProductMajorVersion();
+        if (ios_major_version > 0) {
+          XELOGI(
+              "iOS JIT: non-TXM path on iOS {}; using non-broker W^X "
+              "defaults",
+              ios_major_version);
+        } else {
+          XELOGI("iOS JIT: non-TXM path; using non-broker W^X defaults");
+        }
+      }
+
+      if (!generated_code_execute_base_ || !generated_code_write_base_) {
+        if (generated_code_execute_base_) {
+          munmap(generated_code_execute_base_, kGeneratedCodeSize);
+        }
+        generated_code_execute_base_ = nullptr;
+        generated_code_write_base_ = nullptr;
+        generated_code_uses_vm_remap_fallback_ = false;
+        generated_code_uses_ios_persistent_mapping_ = false;
+
+        generated_code_write_base_ = reinterpret_cast<uint8_t*>(
+            mmap(nullptr, kGeneratedCodeSize, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        if (generated_code_write_base_ == MAP_FAILED) {
+          generated_code_write_base_ = nullptr;
+          XELOGE("Unable to allocate iOS JIT code cache (RX mapping)");
+          return false;
+        }
+        generated_code_execute_base_ = generated_code_write_base_;
+        generated_code_uses_mprotect_flip_ = true;
+        if (use_txm_broker_path) {
+          XELOGI("iOS JIT mprotect-flip fallback active (TXM/broker path)");
+        } else if (IOSHasTXM()) {
+          XELOGI(
+              "iOS JIT mprotect-flip fallback active (TXM, non-broker path)");
+        } else {
+          XELOGI(
+              "iOS JIT mprotect-flip fallback active (non-TXM, no external "
+              "BRK)");
+        }
+        XELOGI("iOS JIT mprotect-flip mapping (RX base): {:p}",
+               static_cast<void*>(generated_code_execute_base_));
+      }
+#else
       generated_code_execute_base_ =
           reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
               mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
@@ -282,6 +382,7 @@ class CodeCacheBase : public CodeCache {
             xe::memory::MapFileView(mapping_, nullptr, kGeneratedCodeSize,
                                     xe::memory::PageAccess::kReadWrite, 0));
       }
+#endif
     }
     if (!generated_code_execute_base_ || !generated_code_write_base_) {
       XELOGE("Unable to allocate code cache generated code storage");
@@ -436,6 +537,13 @@ class CodeCacheBase : public CodeCache {
     {
       auto global_lock = global_critical_region_.Acquire();
 
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (generated_code_uses_mprotect_flip_) {
+        generated_code_offset_ =
+            xe::align(generated_code_offset_, xe::memory::page_size());
+      }
+#endif
+
       code_execute_address =
           generated_code_execute_base_ + generated_code_offset_;
       code_execute_address_out = code_execute_address;
@@ -453,6 +561,8 @@ class CodeCacheBase : public CodeCache {
 
       auto end_write_address =
           generated_code_write_base_ + generated_code_offset_;
+      const size_t write_span_length =
+          static_cast<size_t>(end_write_address - code_write_address);
 
       size_t high_mark = generated_code_offset_;
 
@@ -465,7 +575,22 @@ class CodeCacheBase : public CodeCache {
       // Commit memory if needed.
       EnsureCommitted(high_mark);
 
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (generated_code_uses_mprotect_flip_ &&
+          !RegionLockRead(code_write_address, write_span_length)) {
+        XELOGE("iOS JIT mprotect flip: failed to lock code range for writes");
+        assert_always();
+      }
+      if (generated_code_uses_mprotect_flip_ &&
+          !RegionUnlockWrite(code_write_address, write_span_length)) {
+        XELOGE(
+            "iOS JIT mprotect flip: failed to enable writes before code "
+            "publish");
+        assert_always();
+      }
+#endif
+
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && XE_ARCH_ARM64
       // Toggle the per-thread MAP_JIT write gate around writes. Only needed
       // when execute and write bases alias (single MAP_JIT region); a
       // separate RW view needs no gating.
@@ -489,19 +614,41 @@ class CodeCacheBase : public CodeCache {
       self().PlaceCode(guest_address, machine_code, func_info,
                        code_execute_address, unwind_reservation);
 
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && XE_ARCH_ARM64
       if (jit_write_toggle) {
         pthread_jit_write_protect_np(1);
       }
 #endif
 
       // Flush I-cache for code and fill regions.
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      auto* tail_execute_address =
+          generated_code_execute_base_ +
+          (tail_write_address - generated_code_write_base_);
+      self().FlushCodeRange(code_execute_address, func_info.code_size.total);
+      if (tail_execute_address <
+          generated_code_execute_base_ +
+              (end_write_address - generated_code_write_base_)) {
+        self().FlushCodeRange(
+            tail_execute_address,
+            static_cast<size_t>(end_write_address - tail_write_address));
+      }
+#else
       self().FlushCodeRange(code_write_address, func_info.code_size.total);
       if (tail_write_address < end_write_address) {
         self().FlushCodeRange(
             tail_write_address,
             static_cast<size_t>(end_write_address - tail_write_address));
       }
+#endif
+
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (generated_code_uses_mprotect_flip_ &&
+          !RegionSetExec(code_execute_address, write_span_length)) {
+        XELOGE("iOS JIT mprotect flip: failed to restore RX after code write");
+        assert_always();
+      }
+#endif
     }
 
     // Post-placement hook (e.g. VTune notification).
@@ -519,12 +666,33 @@ class CodeCacheBase : public CodeCache {
     uint8_t* data_address = nullptr;
     {
       auto global_lock = global_critical_region_.Acquire();
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (generated_code_uses_mprotect_flip_) {
+        generated_code_offset_ =
+            xe::align(generated_code_offset_, xe::memory::page_size());
+      }
+#endif
       data_address = generated_code_write_base_ + generated_code_offset_;
       generated_code_offset_ += xe::round_up(length, 16);
       high_mark = generated_code_offset_;
     }
     EnsureCommitted(high_mark);
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+    const size_t reserved_length = xe::round_up(length, 16);
+    if (generated_code_uses_mprotect_flip_ &&
+        !RegionLockRead(data_address, reserved_length)) {
+      XELOGE("iOS JIT mprotect flip: failed to lock data range for writes");
+      assert_always();
+    }
+    if (generated_code_uses_mprotect_flip_ &&
+        !RegionUnlockWrite(data_address, reserved_length)) {
+      XELOGE(
+          "iOS JIT mprotect flip: failed to enable writes before data "
+          "publish");
+      assert_always();
+    }
+#endif
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && XE_ARCH_ARM64
     const bool jit_write_toggle =
         generated_code_execute_base_ == generated_code_write_base_;
     if (jit_write_toggle) {
@@ -532,9 +700,21 @@ class CodeCacheBase : public CodeCache {
     }
 #endif
     std::memcpy(data_address, data, length);
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_APPLE && !XE_PLATFORM_IOS && XE_ARCH_ARM64
     if (jit_write_toggle) {
       pthread_jit_write_protect_np(1);
+    }
+#endif
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+    if (generated_code_uses_mprotect_flip_ &&
+        !RegionLockRead(data_address, reserved_length)) {
+      XELOGE("iOS JIT mprotect flip: failed to lock data range before RX");
+      assert_always();
+    }
+    if (generated_code_uses_mprotect_flip_ &&
+        !RegionSetExec(data_address, reserved_length)) {
+      XELOGE("iOS JIT mprotect flip: failed to restore RX after data write");
+      assert_always();
     }
 #endif
     return uint32_t(uintptr_t(data_address));
@@ -604,6 +784,11 @@ class CodeCacheBase : public CodeCache {
   uint8_t* indirection_table_base_ = nullptr;
   uint8_t* generated_code_execute_base_ = nullptr;
   uint8_t* generated_code_write_base_ = nullptr;
+  bool generated_code_uses_vm_remap_fallback_ = false;
+  bool generated_code_uses_mprotect_flip_ = false;
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+  bool generated_code_uses_ios_persistent_mapping_ = false;
+#endif  // XE_PLATFORM_IOS && XE_ARCH_ARM64
   size_t generated_code_offset_ = 0;
   std::atomic<size_t> generated_code_commit_mark_ = {0};
   std::vector<std::pair<uint64_t, GuestFunction*>> generated_code_map_;
@@ -619,6 +804,434 @@ class CodeCacheBase : public CodeCache {
  private:
   Derived& self() { return static_cast<Derived&>(*this); }
 
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+  static std::atomic<bool>& IOSExternalPrepareIssued() {
+    static std::atomic<bool> issued{false};
+    return issued;
+  }
+
+  static std::atomic<bool>& IOSExternalDetachIssued() {
+    static std::atomic<bool> issued{false};
+    return issued;
+  }
+
+  struct IOSPersistentGeneratedCodeMapping {
+    std::mutex mutex;
+    uint8_t* execute_base = nullptr;
+    uint8_t* write_base = nullptr;
+    bool initialized = false;
+  };
+
+  static IOSPersistentGeneratedCodeMapping&
+  IOSPersistentGeneratedCodeMappingState() {
+    static IOSPersistentGeneratedCodeMapping state;
+    return state;
+  }
+
+  static bool AcquireIOSPersistentGeneratedCodeMapping(uint8_t*& execute_base,
+                                                       uint8_t*& write_base) {
+    auto& state = IOSPersistentGeneratedCodeMappingState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.initialized) {
+      execute_base = state.execute_base;
+      write_base = state.write_base;
+      return true;
+    }
+
+    auto* execute = reinterpret_cast<uint8_t*>(
+        mmap(nullptr, kGeneratedCodeSize, PROT_READ | PROT_EXEC,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    if (execute == MAP_FAILED) {
+      XELOGW("iOS JIT persistent dual-map setup (RX base) failed");
+      execute_base = nullptr;
+      write_base = nullptr;
+      return false;
+    }
+
+    if (!MaybeRequestExternalJitPrepare(execute, kGeneratedCodeSize)) {
+      XELOGW("iOS JIT TXM: persistent external prepare request failed");
+    }
+
+    vm_address_t remap_addr = 0;
+    vm_prot_t cur_prot = 0;
+    vm_prot_t max_prot = 0;
+    const kern_return_t remap_result = vm_remap(
+        mach_task_self(), &remap_addr, kGeneratedCodeSize, 0, VM_FLAGS_ANYWHERE,
+        mach_task_self(), reinterpret_cast<vm_address_t>(execute), FALSE,
+        &cur_prot, &max_prot, VM_INHERIT_NONE);
+    if (remap_result != KERN_SUCCESS) {
+      XELOGW("iOS JIT persistent dual-mapping: vm_remap failed (kr={})",
+             remap_result);
+      munmap(execute, kGeneratedCodeSize);
+      execute_base = nullptr;
+      write_base = nullptr;
+      return false;
+    }
+
+    auto* write = reinterpret_cast<uint8_t*>(remap_addr);
+    if (mprotect(write, kGeneratedCodeSize, PROT_READ | PROT_WRITE) != 0) {
+      XELOGE(
+          "iOS JIT persistent dual-mapping: mprotect RW alias failed "
+          "addr=0x{:X} len=0x{:X} err={} ({})",
+          reinterpret_cast<uintptr_t>(write),
+          static_cast<uint32_t>(kGeneratedCodeSize), errno,
+          std::strerror(errno));
+      vm_deallocate(mach_task_self(), remap_addr, kGeneratedCodeSize);
+      munmap(execute, kGeneratedCodeSize);
+      execute_base = nullptr;
+      write_base = nullptr;
+      return false;
+    }
+
+    state.execute_base = execute;
+    state.write_base = write;
+    state.initialized = true;
+    execute_base = execute;
+    write_base = write;
+    XELOGI("iOS JIT persistent dual-mapping active: execute={:p} write={:p}",
+           static_cast<void*>(execute_base), static_cast<void*>(write_base));
+    return true;
+  }
+
+  static std::string FindChildWithNameLength(const std::string& directory,
+                                             size_t name_length) {
+    DIR* dir = opendir(directory.c_str());
+    if (!dir) {
+      return std::string();
+    }
+
+    std::string found;
+    while (dirent* entry = readdir(dir)) {
+      const char* name = entry->d_name;
+      if (!name || name[0] == '.') {
+        continue;
+      }
+      if (std::strlen(name) == name_length) {
+        found = directory + "/" + name;
+        break;
+      }
+    }
+    closedir(dir);
+    return found;
+  }
+
+  static bool IOSHasTXM() {
+    static const bool has_txm = []() -> bool {
+      if (const char* env = std::getenv("HAS_TXM")) {
+        if (env[0] == '1' && env[1] == '\0') {
+          return true;
+        }
+        if (env[0] == '0' && env[1] == '\0') {
+          return false;
+        }
+      }
+
+      const std::string preboot_uuid =
+          FindChildWithNameLength("/System/Volumes/Preboot", 36);
+      if (!preboot_uuid.empty()) {
+        const std::string txm_root =
+            FindChildWithNameLength(preboot_uuid + "/boot", 96);
+        if (!txm_root.empty()) {
+          const std::string txm_path =
+              txm_root +
+              "/usr/standalone/firmware/FUD/Ap,TrustedExecutionMonitor.img4";
+          if (access(txm_path.c_str(), F_OK) == 0) {
+            return true;
+          }
+        }
+      }
+
+      const std::string private_preboot_root =
+          FindChildWithNameLength("/private/preboot", 96);
+      if (!private_preboot_root.empty()) {
+        const std::string txm_path = private_preboot_root +
+                                     "/usr/standalone/firmware/FUD/"
+                                     "Ap,TrustedExecutionMonitor.img4";
+        if (access(txm_path.c_str(), F_OK) == 0) {
+          return true;
+        }
+      }
+
+      return false;
+    }();
+    return has_txm;
+  }
+
+  static int IOSProductMajorVersion() {
+    static const int major_version = []() -> int {
+      size_t version_size = 0;
+      if (sysctlbyname("kern.osproductversion", nullptr, &version_size, nullptr,
+                       0) != 0 ||
+          version_size == 0) {
+        return -1;
+      }
+
+      std::string version(version_size, '\0');
+      if (sysctlbyname("kern.osproductversion", version.data(), &version_size,
+                       nullptr, 0) != 0 ||
+          version_size == 0) {
+        return -1;
+      }
+      if (!version.empty() && version.back() == '\0') {
+        version.pop_back();
+      }
+      if (version.empty()) {
+        return -1;
+      }
+
+      int parsed_major = 0;
+      size_t index = 0;
+      while (index < version.size() && version[index] >= '0' &&
+             version[index] <= '9') {
+        parsed_major = parsed_major * 10 + (version[index] - '0');
+        ++index;
+      }
+      return parsed_major > 0 ? parsed_major : -1;
+    }();
+    return major_version;
+  }
+
+  static bool IOSUseTXMBrokerPath() {
+    if (!IOSHasTXM()) {
+      return false;
+    }
+    const int ios_major_version = IOSProductMajorVersion();
+    return ios_major_version >= 26;
+  }
+
+  static bool GetPageAlignedGeneratedCodeRange(void* address, size_t length,
+                                               uintptr_t& aligned_start,
+                                               size_t& aligned_length) {
+    if (!length) {
+      aligned_start = 0;
+      aligned_length = 0;
+      return true;
+    }
+    const uintptr_t start = reinterpret_cast<uintptr_t>(address);
+    const size_t host_page_size = xe::memory::page_size();
+    aligned_start = start & ~(host_page_size - 1);
+    const uintptr_t aligned_end = xe::align(start + length, host_page_size);
+    if (aligned_end <= aligned_start) {
+      aligned_length = 0;
+      return true;
+    }
+    aligned_length = aligned_end - aligned_start;
+    return true;
+  }
+
+  static vm_prot_t ToMachProtectFlags(xe::memory::PageAccess access) {
+    switch (access) {
+      case xe::memory::PageAccess::kNoAccess:
+        return VM_PROT_NONE;
+      case xe::memory::PageAccess::kReadOnly:
+        return VM_PROT_READ;
+      case xe::memory::PageAccess::kReadWrite:
+        return VM_PROT_READ | VM_PROT_WRITE;
+      case xe::memory::PageAccess::kExecuteReadOnly:
+        return VM_PROT_READ | VM_PROT_EXECUTE;
+      case xe::memory::PageAccess::kExecuteReadWrite:
+        return VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+      default:
+        assert_unhandled_case(access);
+        return VM_PROT_NONE;
+    }
+  }
+
+  static bool SetPageAlignedAccess(void* address, size_t length,
+                                   xe::memory::PageAccess access) {
+    uintptr_t aligned_start = 0;
+    size_t aligned_length = 0;
+    if (!GetPageAlignedGeneratedCodeRange(address, length, aligned_start,
+                                          aligned_length) ||
+        !aligned_length) {
+      return true;
+    }
+    return xe::memory::Protect(reinterpret_cast<void*>(aligned_start),
+                               aligned_length, access);
+  }
+
+  static bool SetPageAlignedAccessWithMaxProtRetry(
+      void* address, size_t length, xe::memory::PageAccess access) {
+    if (SetPageAlignedAccess(address, length, access)) {
+      return true;
+    }
+
+    uintptr_t aligned_start = 0;
+    size_t aligned_length = 0;
+    if (!GetPageAlignedGeneratedCodeRange(address, length, aligned_start,
+                                          aligned_length) ||
+        !aligned_length) {
+      return true;
+    }
+
+    constexpr vm_prot_t kMaxProtect =
+        VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
+    const kern_return_t max_result =
+        vm_protect(mach_task_self(), static_cast<vm_address_t>(aligned_start),
+                   aligned_length, TRUE, kMaxProtect);
+    if (max_result != KERN_SUCCESS) {
+      XELOGE(
+          "iOS JIT code cache: vm_protect max failed addr=0x{:X} len=0x{:X} "
+          "kr={}",
+          aligned_start, static_cast<uint32_t>(aligned_length), max_result);
+      return false;
+    }
+
+    const vm_prot_t target_protect = ToMachProtectFlags(access);
+    const kern_return_t protect_result =
+        vm_protect(mach_task_self(), static_cast<vm_address_t>(aligned_start),
+                   aligned_length, FALSE, target_protect);
+    if (protect_result != KERN_SUCCESS) {
+      XELOGE(
+          "iOS JIT code cache: vm_protect current failed addr=0x{:X} "
+          "len=0x{:X} prot=0x{:X} kr={}",
+          aligned_start, static_cast<uint32_t>(aligned_length),
+          static_cast<uint32_t>(target_protect), protect_result);
+      return false;
+    }
+    return true;
+  }
+
+  static bool AccessSatisfies(xe::memory::PageAccess actual,
+                              xe::memory::PageAccess desired) {
+    const uint32_t actual_bits = static_cast<uint32_t>(actual);
+    const uint32_t desired_bits = static_cast<uint32_t>(desired);
+    return (actual_bits & desired_bits) == desired_bits;
+  }
+
+  static void InvokeUniversalPrepareBreakpoint(uintptr_t aligned_start,
+                                               size_t aligned_length) {
+    register uint64_t x0 __asm("x0") = static_cast<uint64_t>(aligned_start);
+    register uint64_t x1 __asm("x1") = static_cast<uint64_t>(aligned_length);
+    register uint64_t x16 __asm("x16") = 1;
+    asm volatile("brk #0xf00d" : "+r"(x0), "+r"(x1), "+r"(x16) : : "memory");
+  }
+
+  static void InvokeUniversalDetachBreakpoint() {
+    register uint64_t x16 __asm("x16") = 0;
+    asm volatile("brk #0xf00d" : "+r"(x16) : : "memory");
+  }
+
+  static bool MaybeRequestExternalJitDetach() {
+    bool expected = false;
+    if (!IOSExternalDetachIssued().compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+      return true;
+    }
+    InvokeUniversalDetachBreakpoint();
+    return true;
+  }
+
+  static bool RequestExternalJitPrepare(void* address, size_t length) {
+    uintptr_t aligned_start = 0;
+    size_t aligned_length = 0;
+    if (!GetPageAlignedGeneratedCodeRange(address, length, aligned_start,
+                                          aligned_length) ||
+        !aligned_length) {
+      return true;
+    }
+    InvokeUniversalPrepareBreakpoint(aligned_start, aligned_length);
+    MaybeRequestExternalJitDetach();
+    return true;
+  }
+
+  static bool MaybeRequestExternalJitPrepare(void* address, size_t length) {
+    bool expected = false;
+    if (!IOSExternalPrepareIssued().compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+      return true;
+    }
+    return RequestExternalJitPrepare(address, length);
+  }
+
+  static bool SetPageAlignedAccessWithExternalPrepareFallback(
+      void* address, size_t length, xe::memory::PageAccess desired_access,
+      const char* transition_name) {
+    const bool use_txm_broker_path = IOSUseTXMBrokerPath();
+    if (use_txm_broker_path) {
+      if (SetPageAlignedAccessWithMaxProtRetry(address, length,
+                                               desired_access)) {
+        return true;
+      }
+    } else if (SetPageAlignedAccess(address, length, desired_access)) {
+      return true;
+    }
+
+    if (!use_txm_broker_path) {
+      const int ios_major_version = IOSProductMajorVersion();
+      if (ios_major_version > 0) {
+        XELOGW(
+            "iOS JIT mprotect flip: {} denied on iOS {} without RWX retry or "
+            "external brk fallback (non-broker path)",
+            transition_name, ios_major_version);
+      } else {
+        XELOGW(
+            "iOS JIT mprotect flip: {} denied without RWX retry or external "
+            "brk fallback (non-broker path)",
+            transition_name);
+      }
+      return false;
+    }
+
+    XELOGW(
+        "iOS JIT mprotect flip: {} denied, requesting external prepare via "
+        "brk #0xf00d (x16=1)",
+        transition_name);
+    if (!MaybeRequestExternalJitPrepare(address, length)) {
+      return false;
+    }
+
+    if (SetPageAlignedAccessWithMaxProtRetry(address, length, desired_access)) {
+      return true;
+    }
+
+    uintptr_t aligned_start = 0;
+    size_t aligned_length = 0;
+    if (!GetPageAlignedGeneratedCodeRange(address, length, aligned_start,
+                                          aligned_length) ||
+        !aligned_length) {
+      return true;
+    }
+
+    size_t query_length = 0;
+    xe::memory::PageAccess query_access = xe::memory::PageAccess::kNoAccess;
+    const bool query_ok = xe::memory::QueryProtect(
+        reinterpret_cast<void*>(aligned_start), query_length, query_access);
+    if (query_ok && AccessSatisfies(query_access, desired_access)) {
+      return true;
+    }
+
+    XELOGE(
+        "iOS JIT mprotect flip: external prepare did not yield {} mapping "
+        "addr=0x{:X} len=0x{:X} query_ok={} query_access={} query_len=0x{:X}",
+        transition_name, aligned_start, static_cast<uint32_t>(aligned_length),
+        query_ok, static_cast<uint32_t>(query_access),
+        static_cast<uint32_t>(query_length));
+    return false;
+  }
+
+  static bool RegionLockRead(void* address, size_t length) {
+    if (IOSUseTXMBrokerPath()) {
+      return SetPageAlignedAccessWithMaxProtRetry(
+          address, length, xe::memory::PageAccess::kReadOnly);
+    }
+    return SetPageAlignedAccess(address, length,
+                                xe::memory::PageAccess::kReadOnly);
+  }
+
+  static bool RegionUnlockWrite(void* address, size_t length) {
+    return SetPageAlignedAccessWithExternalPrepareFallback(
+        address, length, xe::memory::PageAccess::kReadWrite, "RW transition");
+  }
+
+  static bool RegionSetExec(void* address, size_t length) {
+    return SetPageAlignedAccessWithExternalPrepareFallback(
+        address, length, xe::memory::PageAccess::kExecuteReadOnly,
+        "RX transition");
+  }
+
+#endif
+
   void EnsureCommitted(size_t high_mark) {
     using namespace xe::literals;
     size_t old_commit_mark, new_commit_mark;
@@ -628,18 +1241,25 @@ class CodeCacheBase : public CodeCache {
         break;
       }
       new_commit_mark = old_commit_mark + 16_MiB;
-      if (generated_code_execute_base_ == generated_code_write_base_) {
-        xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kExecuteReadWrite);
-      } else {
-        xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kExecuteReadOnly);
-        xe::memory::AllocFixed(generated_code_write_base_, new_commit_mark,
-                               xe::memory::AllocationType::kCommit,
-                               xe::memory::PageAccess::kReadWrite);
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
+      if (!generated_code_uses_vm_remap_fallback_ &&
+          !generated_code_uses_mprotect_flip_) {
+#endif
+        if (generated_code_execute_base_ == generated_code_write_base_) {
+          xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
+                                 xe::memory::AllocationType::kCommit,
+                                 xe::memory::PageAccess::kExecuteReadWrite);
+        } else {
+          xe::memory::AllocFixed(generated_code_execute_base_, new_commit_mark,
+                                 xe::memory::AllocationType::kCommit,
+                                 xe::memory::PageAccess::kExecuteReadOnly);
+          xe::memory::AllocFixed(generated_code_write_base_, new_commit_mark,
+                                 xe::memory::AllocationType::kCommit,
+                                 xe::memory::PageAccess::kReadWrite);
+        }
+#if XE_PLATFORM_IOS && XE_ARCH_ARM64
       }
+#endif
     } while (generated_code_commit_mark_.compare_exchange_weak(
         old_commit_mark, new_commit_mark));
   }

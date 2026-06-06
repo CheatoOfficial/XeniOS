@@ -340,6 +340,10 @@ const BundledIndex& GetBundledIndex() {
 
 }  // namespace
 
+std::vector<BundledPatchFile> EnumerateBundledPatches() {
+  return GetBundledIndex().all;
+}
+
 std::vector<BundledPatchFile> EnumerateBundledPatchesForTitle(
     uint32_t title_id) {
   std::vector<BundledPatchFile> out;

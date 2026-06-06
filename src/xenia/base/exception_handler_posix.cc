@@ -39,7 +39,7 @@ std::pair<ExceptionHandler::Handler, void*> handlers_[kMaxHandlerCount];
 
 static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                      void* signal_context) {
-#if XE_PLATFORM_MAC && XE_ARCH_ARM64
+#if XE_PLATFORM_APPLE && XE_ARCH_ARM64
   // The Darwin kernel may pass an unaligned ucontext_t pointer to signal
   // handlers; copy into an aligned local before reading. mcontext_t is a
   // pointer on Mac, so writes still reach kernel storage via the pointer.
@@ -54,7 +54,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
   HostThreadContext thread_context;
 
 #if XE_ARCH_AMD64
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   // Darwin: mcontext is a pointer; integer state in __ss, FP/XMM in __fs.
   // __fpu_xmm0..__fpu_xmm15 are laid out contiguously in
   // __darwin_x86_float_state64.
@@ -101,9 +101,9 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
   thread_context.r15 = uint64_t(mcontext.gregs[REG_R15]);
   std::memcpy(thread_context.xmm_registers, mcontext.fpregs->_xmm,
               sizeof(thread_context.xmm_registers));
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #elif XE_ARCH_ARM64
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   // Darwin: mcontext is a pointer, registers in __ss and __ns.
   for (int i = 0; i < 29; ++i) {
     thread_context.x[i] = mcontext->__ss.__x[i];
@@ -150,7 +150,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
     std::memcpy(thread_context.v, mcontext_fpsimd->vregs,
                 sizeof(thread_context.v));
   }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #endif  // XE_ARCH
 
   Exception ex;
@@ -164,7 +164,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
 #if XE_ARCH_AMD64
       // x86_pf_error_code::X86_PF_WRITE
       constexpr uint64_t kX86PageFaultErrorCodeWrite = UINT64_C(1) << 1;
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       access_violation_operation =
           (uint64_t(mcontext->__es.__err) & kX86PageFaultErrorCodeWrite)
               ? Exception::AccessViolationOperation::kWrite
@@ -176,7 +176,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
               : Exception::AccessViolationOperation::kRead;
 #endif
 #elif XE_ARCH_ARM64
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       {
         // On Darwin, determine access direction from the faulting instruction.
         uint64_t fault_pc = mcontext->__ss.__pc;
@@ -242,7 +242,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
               Exception::AccessViolationOperation::kUnknown;
         }
       }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #else
       access_violation_operation =
           Exception::AccessViolationOperation::kUnknown;
@@ -260,7 +260,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       // Exception handled.
 #if XE_ARCH_AMD64
       uint32_t modified_register_index;
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       mcontext->__ss.__rip = thread_context.rip;
       mcontext->__ss.__rflags = thread_context.eflags;
       // Pointer-to-member map; order must match X64Register.
@@ -327,10 +327,10 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                     &thread_context.xmm_registers[modified_register_index],
                     sizeof(vec128_t));
       }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #elif XE_ARCH_ARM64
       uint32_t modified_register_index;
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
       uint32_t modified_x_registers_remaining = ex.modified_x_registers();
       while (xe::bit_scan_forward(modified_x_registers_remaining,
                                   &modified_register_index)) {
@@ -386,7 +386,7 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
               thread_context.x[modified_register_index];
         }
       }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 #endif  // XE_ARCH
       return;
     }

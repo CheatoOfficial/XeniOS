@@ -13,6 +13,8 @@ Adds a alternative advanced touch interface with full customizability in mind
 -You can enable touchpad mode which makes entire right side of screen a touchpad (in beta lol). You can adjust the sensitivity of it using most games built in setting for camera sensitivity.
 -Some performance optimizations for all the touch stuff/ui
 
+Current published releases focus on iOS and macOS.
+For Windows or Linux builds, use [Xenia Edge](https://github.com/has207/xenia-edge) or [Xenia Canary](https://github.com/xenia-canary/xenia-canary).
 
 TO BUILD:
 

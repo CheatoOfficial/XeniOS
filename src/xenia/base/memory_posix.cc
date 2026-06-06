@@ -35,11 +35,13 @@
 #include <sstream>
 #include "xenia/base/logging.h"
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <mach/mach.h>
+#if XE_PLATFORM_MAC
 #include <mach/mach_vm.h>
+#endif
 #include <mach/vm_region.h>
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -635,7 +637,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
 #else
   std::lock_guard guard(g_mapped_file_ranges_mutex);
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   uintptr_t unmap_begin = reinterpret_cast<uintptr_t>(base_address);
   uintptr_t unmap_end = unmap_begin + length;
 
