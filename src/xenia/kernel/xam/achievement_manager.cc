@@ -229,6 +229,18 @@ void AchievementManager::ShowAchievementEarnedNotification(
       return;
     }
 
+#if XE_PLATFORM_IOS
+    auto* ios_context = dynamic_cast<ui::IOSWindowedAppContext*>(app_context);
+    if (ios_context && ios_context->PresentAchievementNotification(payload)) {
+      return;
+    }
+#endif  // XE_PLATFORM_IOS
+
+    if (!imgui_drawer) {
+      XELOGI("Achievement notification skipped: no ImGui drawer available");
+      return;
+    }
+
     // Show notification
     new ui::AchievementNotificationWindow(imgui_drawer, title, description, 0,
                                           position);
