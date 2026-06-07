@@ -933,11 +933,11 @@ ZarConversionResult ConvertPathToZar(
                            : 0.0;
   XELOGI(
       "ZAR convert: success source='{}' output='{}' files={} bytes={} "
-      "total_bytes={} output_bytes={} workers={} elapsed={:.2f}s "
+      "total_bytes={} output_bytes={} requested_workers={} elapsed={:.2f}s "
       "throughput={:.1f} MiB/s ratio={:.3f}",
       PathForMessage(source_path), PathForMessage(output_path),
       result.files_written, result.bytes_written, result.total_bytes,
-      output_size_ec ? 0ull : output_bytes, compression_workers,
+      output_size_ec ? 0ull : output_bytes, options.compression_thread_count,
       elapsed_seconds, throughput_mib_s, ratio);
   return result;
 }
