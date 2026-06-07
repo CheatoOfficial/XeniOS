@@ -10,30 +10,17 @@
 #include "xenia/vfs/zar_metadata.h"
 
 #include <algorithm>
-#include <cctype>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "third_party/zarchive/include/zarchive/zarchivereader.h"
+#include "xenia/base/utf8.h"
 
 namespace xe {
 namespace vfs {
 
 namespace {
-
-bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
-  if (a.size() != b.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < a.size(); i++) {
-    if (std::tolower(static_cast<unsigned char>(a[i])) !=
-        std::tolower(static_cast<unsigned char>(b[i]))) {
-      return false;
-    }
-  }
-  return true;
-}
 
 // Recursively search for default.xex in the archive.
 ZArchiveNodeHandle FindDefaultXex(ZArchiveReader* reader,
@@ -54,7 +41,7 @@ ZArchiveNodeHandle FindDefaultXex(ZArchiveReader* reader,
       continue;
     }
 
-    if (entry.isFile && EqualsIgnoreCase(entry.name, "default.xex")) {
+    if (entry.isFile && xe::utf8::equal_case(entry.name, "default.xex")) {
       std::string file_path = dir_path;
       if (!file_path.empty() && file_path.back() != '/') {
         file_path += '/';
@@ -122,13 +109,23 @@ std::optional<XexMetadata> ExtractZarMetadata(
     return std::nullopt;
   }
 
-  std::vector<uint8_t> header_data(header_size);
-  if (reader->ReadFromFile(handle, 0, header_size, header_data.data()) !=
-      header_size) {
+  // Read the whole embedded default.xex (capped via kMaxXexMetadataReadBytes),
+  // not just the header region. Optional headers such as
+  // XEX_HEADER_EXECUTION_INFO (which carries the title_id) are referenced by
+  // offset and GetXexOptHeader does not bounds-check against the buffer, so a
+  // header-only read could pull a truncated/garbled title_id. That then misses
+  // the title-name cache and the UI falls back to the PE module name (e.g.
+  // "default.pe" / "simpsonsfe.exe"). The ISO path already hands
+  // ExtractXexMetadata the entire xex; match that here.
+  const uint64_t read_size =
+      std::min<uint64_t>(file_size, kMaxXexMetadataReadBytes);
+  std::vector<uint8_t> xex_data(static_cast<size_t>(read_size));
+  if (reader->ReadFromFile(handle, 0, read_size, xex_data.data()) !=
+      read_size) {
     return std::nullopt;
   }
 
-  return ExtractXexMetadata(header_data.data(), header_data.size());
+  return ExtractXexMetadata(xex_data.data(), xex_data.size());
 }
 
 }  // namespace vfs

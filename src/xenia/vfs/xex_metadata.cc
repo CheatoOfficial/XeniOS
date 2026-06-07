@@ -9,6 +9,7 @@
 
 #include "xenia/vfs/xex_metadata.h"
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <vector>
@@ -189,14 +190,28 @@ std::optional<XexMetadata> ExtractXexMetadata(
     return std::nullopt;
   }
 
-  std::vector<uint8_t> header_data(header_size);
-  file.seekg(0);
-  file.read(reinterpret_cast<char*>(header_data.data()), header_size);
-  if (!file || file.gcount() < static_cast<std::streamsize>(header_size)) {
+  // Read the whole xex (capped), not just the header region, so offset-based
+  // optional headers (e.g. the title_id in XEX_HEADER_EXECUTION_INFO) are fully
+  // in-bounds for ExtractXexMetadata. See ExtractZarMetadata for the rationale.
+  file.seekg(0, std::ios::end);
+  const std::streamoff file_size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  // A seek/tell failure yields file_size == -1; guard explicitly so it can
+  // never fall through into the read_size computation as an enormous unsigned
+  // size.
+  if (!file || file_size < static_cast<std::streamoff>(header_size)) {
+    return std::nullopt;
+  }
+  const std::streamoff read_size = std::min<std::streamoff>(
+      file_size, static_cast<std::streamoff>(kMaxXexMetadataReadBytes));
+
+  std::vector<uint8_t> xex_data(static_cast<size_t>(read_size));
+  file.read(reinterpret_cast<char*>(xex_data.data()), read_size);
+  if (file.gcount() < read_size) {
     return std::nullopt;
   }
 
-  return ExtractXexMetadata(header_data.data(), header_data.size());
+  return ExtractXexMetadata(xex_data.data(), xex_data.size());
 }
 
 }  // namespace vfs

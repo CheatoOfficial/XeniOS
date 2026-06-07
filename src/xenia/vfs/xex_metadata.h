@@ -20,6 +20,14 @@
 namespace xe {
 namespace vfs {
 
+// Upper bound on bytes read from an XEX to extract its metadata. We read the
+// whole module rather than just header_size so offset-based optional headers
+// (e.g. XEX_HEADER_EXECUTION_INFO, which carries the title_id) are fully
+// in-bounds for GetXexOptHeader, but cap the read so a corrupt or hostile
+// header_size (a uint32_t, up to ~4 GB) cannot blow up the allocation. 64 MiB
+// comfortably covers any real default.xex.
+constexpr uint64_t kMaxXexMetadataReadBytes = 64ull * 1024 * 1024;
+
 enum class XexFormat {
   kUnknown,
   kXex1,
