@@ -1159,6 +1159,12 @@ static const Xbyak_aarch64::XReg& LoadBackendCtxPtr(A64Emitter& e) {
 // concurrent lwarx reservations on others (PPC semantics). Doing this purely
 // inline with ldaxr/stlxr would only protect against contention on the same
 // host cache line; ABA on the cached value would silently succeed.
+//
+// CallReservationHelper picks the call path: on FEAT_LSE hosts a hand-emitted
+// GPR-only thunk reached by BLR (single ldsetal/ldclral/casal, no vector spill);
+// otherwise the portable C helper via CallNativeSafe. Both take the guest
+// address in w1, host address in x2 and value in w3/x3, so the arg setup below
+// is identical for either path.
 struct RESERVED_LOAD_I32
     : Sequence<RESERVED_LOAD_I32, I<OPCODE_RESERVED_LOAD, I32Op, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
@@ -1167,7 +1173,7 @@ struct RESERVED_LOAD_I32
     } else {
       e.mov(e.w1, WReg(i.src1.reg().getIdx()));
     }
-    e.CallNativeSafe(e.backend()->try_acquire_reservation_helper_);
+    e.CallReservationHelper(e.backend()->try_acquire_reservation_helper_);
     auto addr = ComputeMemoryAddress(e, i.src1);
     e.ldr(i.dest, ptr(e.GetMembaseReg(), addr));
     auto bctx = LoadBackendCtxPtr(e);
@@ -1184,7 +1190,7 @@ struct RESERVED_LOAD_I64
     } else {
       e.mov(e.w1, WReg(i.src1.reg().getIdx()));
     }
-    e.CallNativeSafe(e.backend()->try_acquire_reservation_helper_);
+    e.CallReservationHelper(e.backend()->try_acquire_reservation_helper_);
     auto addr = ComputeMemoryAddress(e, i.src1);
     e.ldr(i.dest, ptr(e.GetMembaseReg(), addr));
     auto bctx = LoadBackendCtxPtr(e);
@@ -1214,7 +1220,7 @@ struct RESERVED_STORE_I32
     } else {
       e.mov(e.w1, WReg(i.src1.reg().getIdx()));
     }
-    e.CallNativeSafe(e.backend()->reserved_store_32_helper);
+    e.CallReservationHelper(e.backend()->reserved_store_32_helper);
     e.mov(i.dest, e.w0);
   }
 };
@@ -1234,7 +1240,7 @@ struct RESERVED_STORE_I64
     } else {
       e.mov(e.w1, WReg(i.src1.reg().getIdx()));
     }
-    e.CallNativeSafe(e.backend()->reserved_store_64_helper);
+    e.CallReservationHelper(e.backend()->reserved_store_64_helper);
     e.mov(i.dest, e.w0);
   }
 };

@@ -19,6 +19,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/platform_arm64.h"
 #if XE_PLATFORM_WIN32
 #include "xenia/base/platform_win.h"
 #endif
@@ -112,6 +113,8 @@ class A64HelperEmitter : public A64Emitter {
   GuestToHostThunk EmitGuestToHostThunk();
   ResolveFunctionThunk EmitResolveFunctionThunk();
   void* EmitGuestAndHostSynchronizeStackHelper();
+  void* EmitTryAcquireReservationHelper();
+  void* EmitReservedStoreHelper(bool bit64);
 };
 
 A64HelperEmitter::A64HelperEmitter(A64Backend* backend,
@@ -509,6 +512,192 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
   return Emplace(func_info);
 }
 
+// --------------------------------------------------------------------------
+// Reservation helpers — FEAT_LSE fast path
+// --------------------------------------------------------------------------
+// Hand-emitted leaf thunks for PPC lwarx/stwcx on hosts with FEAT_LSE (every
+// Apple arm64 part). They mirror the x64 backend's hand-emitted helpers
+// (x64_backend.cc EmitTryAcquireReservationHelper / EmitReservedStoreHelper):
+// single atomic instructions (ldsetal / ldclral / casal) in place of the
+// portable C helpers' compare-exchange retry loops, and — because they touch
+// only GPRs — they are reached with a plain BLR, skipping GuestToHostThunk's
+// 448-byte vector spill + FPCR restore.
+//
+// Calling-convention safety: the a64 register allocator only ever places live
+// guest values in GPRs x22-x28 (callee-saved) and vector regs v4-v31
+// (a64_emitter.cc gpr_reg_map_ / vec_reg_map_). x0-x18, x29, x30 and v0-v3 are
+// pure scratch and never hold live guest state across an opcode. A GPR-only
+// leaf therefore preserves every live guest register with no save/restore, and
+// BLR's clobber of x30 is harmless. Non-LSE hosts keep the original C helper +
+// CallNativeSafe path unchanged (see A64Backend::Initialize).
+//
+// On entry:
+//   w1  = guest effective address (32-bit)
+//   x19 = A64BackendContext* (reserved register, set up by HostToGuestThunk)
+// On return:
+//   w0  = 1 if the reservation was acquired. The RESERVED_LOAD sequence
+//         ignores it; acquisition state lives in A64BackendContext::flags.
+void* A64HelperEmitter::EmitTryAcquireReservationHelper() {
+  using namespace Xbyak_aarch64;
+  struct {
+    size_t prolog;
+    size_t prolog_stack_alloc;
+    size_t body;
+    size_t epilog;
+    size_t tail;
+  } code_offsets = {};
+  code_offsets.prolog = getSize();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
+
+  // x2 = &reserve_helper_->blocks[0] (blocks[] is at offset 0 of ReserveHelper).
+  ldr(x2, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, reserve_helper_))));
+  lsr(w3, w1, A64_RESERVE_BLOCK_SHIFT);  // block_idx = guest_addr >> 16
+  lsr(w4, w3, 6);                        // word index = block_idx >> 6
+  and_(w5, w3, 63);                      // bit index = block_idx & 63
+  lsl(x6, x4, 3);                        // byte offset of the word (word * 8)
+  add(x2, x2, x6);                       // x2 = &blocks[word]
+  mov(x7, static_cast<uint64_t>(1));
+  lsl(x7, x7, x5);                       // mask = 1 << bit
+
+  // Atomically OR the reservation bit in; x8 = previous word value. Equivalent
+  // to the C helper's "set the bit if it was clear" CAS loop: the post-state
+  // has the bit set either way, and (old & mask) tells us whether *we* set it.
+  ldsetal(x7, x8, ptr(x2));
+
+  // Cache the resolved block/bit so the matching stwcx. can validate.
+  str(x2, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, cached_reserve_offset))));
+  str(w5, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, cached_reserve_bit))));
+
+  // flags = (flags & ~reserve_bit) | (acquired ? reserve_bit : 0). PPC lwarx
+  // implicitly drops any prior reservation, so we always clear first.
+  ldr(w9, ptr(x19,
+              static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+  mov(w10, static_cast<uint32_t>(1u << kA64BackendHasReserveBit));
+  bic(w9, w9, w10);   // drop prior reservation
+  orr(w11, w9, w10);  // candidate flags with the reserve bit set
+  tst(x8, x7);        // Z = ((old & mask) == 0) == acquired
+  csel(w9, w11, w9, EQ);
+  str(w9, ptr(x19,
+              static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+  cset(w0, EQ);
+  ret();
+
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
+
+  EmitFunctionInfo func_info = {};
+  func_info.code_size.total = getSize();
+  func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
+  func_info.code_size.body = code_offsets.epilog - code_offsets.body;
+  func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
+  func_info.prolog_stack_alloc_offset =
+      code_offsets.prolog_stack_alloc - code_offsets.prolog;
+  func_info.stack_size = 0;
+  return Emplace(func_info);
+}
+
+// On entry:
+//   w1    = guest effective address (32-bit)
+//   x2    = host address of the value
+//   w3/x3 = value to store (32- or 64-bit per `bit64`)
+//   x19   = A64BackendContext*
+// On return:
+//   w0    = 1 if the store was performed (CAS succeeded), else 0 -> CR0.eq.
+void* A64HelperEmitter::EmitReservedStoreHelper(bool bit64) {
+  using namespace Xbyak_aarch64;
+  struct {
+    size_t prolog;
+    size_t prolog_stack_alloc;
+    size_t body;
+    size_t epilog;
+    size_t tail;
+  } code_offsets = {};
+  code_offsets.prolog = getSize();
+  code_offsets.prolog_stack_alloc = getSize();
+  code_offsets.body = getSize();
+
+  auto& done = NewCachedLabel();
+
+  // had_reservation = flags & reserve_bit; clear the bit unconditionally
+  // (PPC stwcx. always releases the reservation).
+  ldr(w9, ptr(x19,
+              static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+  mov(w10, static_cast<uint32_t>(1u << kA64BackendHasReserveBit));
+  and_(w11, w9, w10);  // w11 = had_reservation ? reserve_bit : 0
+  bic(w9, w9, w10);
+  str(w9, ptr(x19,
+              static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+  mov(w0, 0);      // default: store not performed
+  cbz(w11, done);  // no reservation held -> fail
+
+  // Recompute the block pointer and bit from the guest address.
+  ldr(x4, ptr(x19, static_cast<uint32_t>(
+                       offsetof(A64BackendContext, reserve_helper_))));
+  lsr(w5, w1, A64_RESERVE_BLOCK_SHIFT);  // block_idx
+  lsr(w6, w5, 6);                        // word index
+  and_(w7, w5, 63);                      // bit index
+  lsl(x8, x6, 3);
+  add(x4, x4, x8);                       // x4 = &blocks[word]
+
+  // Validate the reservation matches the one taken by the lwarx. In correct
+  // PPC code stwcx. targets the same granule as the lwarx, so this always
+  // holds; on mismatch we fail the store, matching the C helper's release-mode
+  // behavior (its assert_always() is a no-op under NDEBUG).
+  ldr(x12, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext, cached_reserve_offset))));
+  sub(x12, x12, x4);
+  cbnz(x12, done);
+  ldr(w12, ptr(x19, static_cast<uint32_t>(
+                        offsetof(A64BackendContext, cached_reserve_bit))));
+  sub(w12, w12, w7);
+  cbnz(w12, done);
+
+  // Compare-and-swap the value: succeed iff memory still holds the value the
+  // matching lwarx observed (A64BackendContext::cached_reserve_value_). casal
+  // returns the prior memory contents in the comparand register.
+  if (!bit64) {
+    ldr(w13, ptr(x19, static_cast<uint32_t>(offsetof(
+                          A64BackendContext, cached_reserve_value_))));
+    mov(w14, w13);  // keep the expected value (casal overwrites w13)
+    casal(w13, w3, ptr(x2));
+    cmp(w13, w14);
+  } else {
+    ldr(x13, ptr(x19, static_cast<uint32_t>(offsetof(
+                          A64BackendContext, cached_reserve_value_))));
+    mov(x14, x13);
+    casal(x13, x3, ptr(x2));
+    cmp(x13, x14);
+  }
+  cset(w0, EQ);  // w0 = exchange succeeded
+
+  // Release our reservation bit (PPC stwcx. always clears it). x8 discards old.
+  mov(x15, static_cast<uint64_t>(1));
+  lsl(x15, x15, x7);
+  ldclral(x15, x8, ptr(x4));
+
+  L(done);
+  ret();
+
+  code_offsets.epilog = getSize();
+  code_offsets.tail = getSize();
+
+  EmitFunctionInfo func_info = {};
+  func_info.code_size.total = getSize();
+  func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
+  func_info.code_size.body = code_offsets.epilog - code_offsets.body;
+  func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
+  func_info.prolog_stack_alloc_offset =
+      code_offsets.prolog_stack_alloc - code_offsets.prolog;
+  func_info.stack_size = 0;
+  return Emplace(func_info);
+}
+
 // ==========================================================================
 // Reservation helpers — implement PPC lwarx/stwcx semantics with a global
 // per-cache-line bitmap so cross-thread stores invalidate other threads'
@@ -850,10 +1039,22 @@ bool A64Backend::Initialize(Processor* processor) {
   }
 
   // Wire up reservation helpers used by RESERVED_LOAD/STORE codegen.
-  try_acquire_reservation_helper_ =
-      reinterpret_cast<void*>(&TryAcquireReservationHelper);
-  reserved_store_32_helper = reinterpret_cast<void*>(&ReservedStore32Helper);
-  reserved_store_64_helper = reinterpret_cast<void*>(&ReservedStore64Helper);
+  // On FEAT_LSE hosts (all Apple arm64) use hand-emitted single-atomic thunks
+  // reached by a plain BLR; otherwise fall back to the portable C helpers
+  // invoked through GuestToHostThunk (CallNativeSafe). The same FEAT_LSE check
+  // gates the call site in A64Emitter::CallReservationHelper, so the chosen
+  // helper and call mechanism always agree.
+  if (thunk_emitter.IsFeatureEnabled(xe::arm64::kA64EmitLSE)) {
+    try_acquire_reservation_helper_ =
+        thunk_emitter.EmitTryAcquireReservationHelper();
+    reserved_store_32_helper = thunk_emitter.EmitReservedStoreHelper(false);
+    reserved_store_64_helper = thunk_emitter.EmitReservedStoreHelper(true);
+  } else {
+    try_acquire_reservation_helper_ =
+        reinterpret_cast<void*>(&TryAcquireReservationHelper);
+    reserved_store_32_helper = reinterpret_cast<void*>(&ReservedStore32Helper);
+    reserved_store_64_helper = reinterpret_cast<void*>(&ReservedStore64Helper);
+  }
 
   // Set the indirection table default to point at the resolve thunk.
   // Use 64-bit encoding: the resolve thunk address is encoded as a rel32

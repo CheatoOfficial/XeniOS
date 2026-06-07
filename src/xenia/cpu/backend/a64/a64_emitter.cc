@@ -783,6 +783,21 @@ void A64Emitter::CallNativeSafe(void* fn) {
   blr(x9);
 }
 
+void A64Emitter::CallReservationHelper(void* fn) {
+  // On FEAT_LSE hosts `fn` is a GPR-only leaf thunk (single ldsetal/ldclral/
+  // casal) that reads its A64BackendContext from x19 and takes its args in
+  // x1/x2/x3 (same regs the C-helper ABI would, so the caller's arg setup is
+  // shared by both paths). It clobbers only scratch regs (x0-x18, x30) and no
+  // vector regs, so a plain BLR is safe — no GuestToHostThunk vector spill or
+  // FPCR restore. Without FEAT_LSE `fn` is the portable C helper.
+  if (IsFeatureEnabled(arm64::kA64EmitLSE)) {
+    mov(x16, reinterpret_cast<uint64_t>(fn));
+    blr(x16);
+  } else {
+    CallNativeSafe(fn);
+  }
+}
+
 void A64Emitter::SetReturnAddress(uint64_t value) {
   mov(x0, value);
   str(x0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_CALL_RET_ADDR)));
