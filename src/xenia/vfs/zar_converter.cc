@@ -839,9 +839,7 @@ ZarConversionResult ConvertPathToZar(
 
   ZarOutputContext output_context;
   output_context.output_path = output_path;
-  ZArchiveWriter writer(ZarOpenOutputFile, ZarWriteOutputData, &output_context,
-                        options.compression_thread_count,
-                        options.compression_thread_initializer);
+  ZArchiveWriter writer(ZarOpenOutputFile, ZarWriteOutputData, &output_context);
   if (output_context.has_error) {
     result.error_message = output_context.error_message;
     XELOGI("ZAR convert: failed opening output='{}' error='{}'",
@@ -849,12 +847,12 @@ ZarConversionResult ConvertPathToZar(
     return result;
   }
 
-  const bool parallel_compression = options.compression_thread_count > 1;
-  const unsigned compression_workers =
-      parallel_compression ? options.compression_thread_count : 1u;
-  XELOGI("ZAR convert: compression={} workers={} output='{}'",
-         parallel_compression ? "parallel" : "synchronous", compression_workers,
-         PathForMessage(output_path));
+  // The bundled zarchive compresses blocks synchronously on this thread. The
+  // requested compression_thread_count is honored only by the parallel-writer
+  // build of zarchive; the stock submodule ignores it.
+  XELOGI(
+      "ZAR convert: compression=synchronous requested_workers={} output='{}'",
+      options.compression_thread_count, PathForMessage(output_path));
   const auto convert_start = std::chrono::steady_clock::now();
 
   bool packed = false;
@@ -891,10 +889,9 @@ ZarConversionResult ConvertPathToZar(
     }
     CheckCancellation(cancel_callback, &result);
   } else {
-    // Finalize() is skipped on cancel/failure, but it is what drains and joins
-    // the parallel compression pool. Abort here so no serializer thread is
-    // still writing to the stream we are about to close and remove.
-    writer.Abort();
+    // Cancelled or failed: skip Finalize() so no archive footer is written.
+    // Compression is synchronous, so nothing is still touching the stream; it
+    // is closed and the partial output is removed below.
   }
   output_context.stream.close();
 
