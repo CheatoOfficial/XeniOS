@@ -269,6 +269,7 @@ class KernelState {
 #if XE_PLATFORM_IOS
   bool IsTitleStopRequestedIOS() const;
   bool WaitForTitleThreadsToExitIOS(uint32_t timeout_ms);
+  void TerminateTitleThreadsIOS();
 #endif  // XE_PLATFORM_IOS
 
   // Gracefully stops the dispatch thread. Call before force-terminating

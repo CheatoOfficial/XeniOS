@@ -34,7 +34,11 @@ namespace kernel {
 #if XE_PLATFORM_IOS
 namespace {
 
-constexpr std::chrono::milliseconds kTitleStopWaitPollIntervalIOS(10);
+// How often a blocked guest thread re-checks the iOS title-stop flag. A
+// signaled wait object still wakes the host primitive immediately mid-slice,
+// so this only bounds title-stop detection latency (not normal wait latency).
+// Kept generous to minimize per-thread wakeup/clock churn while idle.
+constexpr std::chrono::milliseconds kTitleStopWaitPollIntervalIOS(50);
 
 XThread* CurrentXThreadIOS() {
   if (!XThread::IsInThread()) {

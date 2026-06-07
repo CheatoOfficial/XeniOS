@@ -183,6 +183,14 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void TailCallGuestAddressInW16();
   void CallNative(void* fn);
   void CallNativeSafe(void* fn);
+  // Calls a RESERVED_LOAD/STORE reservation helper. On FEAT_LSE hosts `fn` is a
+  // hand-emitted GPR-only leaf thunk (a64_backend.cc) reached by a plain BLR —
+  // the register allocator keeps no live guest state in scratch GPRs/x30 and
+  // the thunk touches no vector regs, so the heavy GuestToHostThunk save path
+  // is unnecessary. Without FEAT_LSE `fn` is the portable C helper and this
+  // falls back to CallNativeSafe. The same FEAT_LSE check selects `fn` in
+  // A64Backend::Initialize, so helper and call mechanism always match.
+  void CallReservationHelper(void* fn);
   void SetReturnAddress(uint64_t value);
 
   // Backend context register = x19.

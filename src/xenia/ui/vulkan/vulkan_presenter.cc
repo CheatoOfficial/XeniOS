@@ -24,6 +24,9 @@
 #if XE_PLATFORM_MAC
 #include "xenia/ui/surface_mac.h"
 #endif
+#if XE_PLATFORM_IOS
+#include "xenia/ui/ios/game/surface_ios.h"
+#endif
 #if XE_PLATFORM_GNU_LINUX
 #include "xenia/ui/surface_gnulinux.h"
 #endif
@@ -214,6 +217,11 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
 #if XE_PLATFORM_MAC
   if (instance_extensions.ext_EXT_metal_surface) {
     type_flags |= Surface::kTypeFlag_MacNSView;
+  }
+#endif
+#if XE_PLATFORM_IOS
+  if (instance_extensions.ext_EXT_metal_surface) {
+    type_flags |= Surface::kTypeFlag_iOSUIView;
   }
 #endif
 #if XE_PLATFORM_GNU_LINUX
@@ -559,6 +567,14 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
           new_surface_width, new_surface_height, contents_scale);
     }
 #endif  // XE_PLATFORM_MAC
+#if XE_PLATFORM_IOS
+    if (new_surface.GetType() == Surface::kTypeIndex_iOSUIView) {
+      auto& ios_ui_view_surface =
+          static_cast<const iOSUIViewSurface&>(new_surface);
+      ios_ui_view_surface.ConfigureMetalLayer(new_surface_width,
+                                              new_surface_height, 1.0);
+    }
+#endif  // XE_PLATFORM_IOS
     VkSwapchainKHR old_swapchain =
         paint_context_.PrepareForSwapchainRetirement();
     bool surface_unusable;
@@ -666,6 +682,30 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
                                         &paint_context_.vulkan_surface);
       } break;
 #endif  // XE_PLATFORM_MAC
+#if XE_PLATFORM_IOS
+      case Surface::kTypeIndex_iOSUIView: {
+        auto& ios_ui_view_surface =
+            static_cast<const iOSUIViewSurface&>(new_surface);
+        ios_ui_view_surface.ConfigureMetalLayer(new_surface_width,
+                                                new_surface_height, 1.0);
+        CAMetalLayer* const metal_layer =
+            ios_ui_view_surface.GetOrCreateMetalLayer();
+        if (!metal_layer) {
+          XELOGE(
+              "VulkanPresenter: Failed to create a CAMetalLayer for MoltenVK");
+          return SurfacePaintConnectResult::kFailureSurfaceUnusable;
+        }
+        VkMetalSurfaceCreateInfoEXT surface_create_info;
+        surface_create_info.sType =
+            VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
+        surface_create_info.pNext = nullptr;
+        surface_create_info.flags = 0;
+        surface_create_info.pLayer = metal_layer;
+        vulkan_surface_create_result =
+            ifn.vkCreateMetalSurfaceEXT(instance, &surface_create_info, nullptr,
+                                        &paint_context_.vulkan_surface);
+      } break;
+#endif  // XE_PLATFORM_IOS
 #if XE_PLATFORM_WIN32
       case Surface::kTypeIndex_Win32Hwnd: {
         auto& win32_hwnd_surface =

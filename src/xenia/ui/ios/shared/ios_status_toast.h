@@ -24,6 +24,11 @@ typedef NS_ENUM(NSInteger, XeniaIOSStatusToastStyle) {
 - (void)presentMessage:(NSString*)message
                  style:(XeniaIOSStatusToastStyle)style
                 inView:(UIView*)view;
+- (void)presentMessage:(NSString*)message
+                 style:(XeniaIOSStatusToastStyle)style
+                inView:(UIView*)view
+              duration:(NSTimeInterval)duration;
+- (void)updateMessage:(NSString*)message;
 - (void)dismiss;
 
 @end

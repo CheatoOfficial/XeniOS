@@ -97,10 +97,16 @@ KernelState::~KernelState() {
 
   ShutdownDispatchThread();
 #if XE_PLATFORM_IOS
-  if (ios_title_stop && !WaitForTitleThreadsToExitIOS(500)) {
-    XELOGW(
-        "iOS: kernel reset continuing with guest thread(s) still marked "
-        "running");
+  if (ios_title_stop) {
+    guest_scheduler()->Shutdown();
+    if (!WaitForTitleThreadsToExitIOS(500)) {
+      TerminateTitleThreadsIOS();
+      if (!WaitForTitleThreadsToExitIOS(500)) {
+        XELOGW(
+            "iOS: kernel reset continuing with guest thread(s) still marked "
+            "running");
+      }
+    }
   }
 #endif  // XE_PLATFORM_IOS
 
@@ -1132,6 +1138,45 @@ bool KernelState::WaitForTitleThreadsToExitIOS(uint32_t timeout_ms) {
     }
 
     xe::threading::Sleep(std::chrono::milliseconds(10));
+  }
+}
+
+void KernelState::TerminateTitleThreadsIOS() {
+  size_t terminated_guest_threads = 0;
+  auto threads = object_table()->GetObjectsByType<XThread>();
+  for (auto& thread : threads) {
+    if (!thread || !thread->is_guest_thread() ||
+        XThread::IsInThread(thread.get())) {
+      continue;
+    }
+
+    bool guest_thread_signaled = false;
+    if (thread->guest_object()) {
+      auto* guest_thread = thread->guest_object<X_KTHREAD>();
+      guest_thread_signaled =
+          guest_thread->terminated || guest_thread->header.signal_state;
+    }
+
+    bool native_thread_running = false;
+    if (auto* native_thread = thread->thread()) {
+      native_thread_running =
+          xe::threading::Wait(native_thread, false,
+                              std::chrono::milliseconds::zero()) ==
+          xe::threading::WaitResult::kTimeout;
+    }
+
+    if (!thread->is_running() && guest_thread_signaled &&
+        !native_thread_running) {
+      continue;
+    }
+
+    thread->Terminate(0);
+    ++terminated_guest_threads;
+  }
+
+  if (terminated_guest_threads) {
+    XELOGW("iOS: force-terminated {} guest thread(s) after title stop timeout",
+           terminated_guest_threads);
   }
 }
 #endif  // XE_PLATFORM_IOS

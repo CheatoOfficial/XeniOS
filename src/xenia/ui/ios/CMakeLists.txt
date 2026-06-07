@@ -54,6 +54,8 @@ target_sources(xenia-ui-ios PRIVATE
   launcher/ios_content_management.mm
   launcher/ios_document_import_coordinator.h
   launcher/ios_document_import_coordinator.mm
+  launcher/ios_external_folders_view_controller.h
+  launcher/ios_external_folders_view_controller.mm
   launcher/ios_external_url.h
   launcher/ios_external_url.mm
   launcher/ios_game_art.h
@@ -84,6 +86,8 @@ target_sources(xenia-ui-ios PRIVATE
   launcher/ios_game_tile_cell.mm
   launcher/ios_launcher_overlay_view.h
   launcher/ios_launcher_overlay_view.mm
+  launcher/ios_zar_conversion_coordinator.h
+  launcher/ios_zar_conversion_coordinator.mm
   settings/ios_choice_list_view_controller.h
   settings/ios_choice_list_view_controller.mm
   settings/ios_config_builder.h
@@ -113,6 +117,8 @@ target_sources(xenia-ui-ios PRIVATE
   shared/ios_system_utils.mm
   shared/ios_status_toast.h
   shared/ios_status_toast.mm
+  shared/ios_update_check.h
+  shared/ios_update_check.mm
   shared/ios_hero_glow_palette.h
   shared/ios_hero_glow_palette.mm
   shared/ios_theme.h

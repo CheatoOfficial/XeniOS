@@ -87,10 +87,12 @@ if(XE_PLATFORM_IOS)
     "-framework UniformTypeIdentifiers"
   )
   if(XENIA_ENABLE_IOS_MOLTENVK)
+    target_compile_definitions(xenia-app PRIVATE
+      XE_IOS_MOLTENVK_ENABLED=1
+    )
     target_link_libraries(xenia-app PRIVATE
       xenia-gpu-vulkan
       xenia-ui-vulkan
-      xenia-third-party-moltenvk
       glslang-spirv
     )
   endif()
@@ -100,21 +102,6 @@ if(XE_PLATFORM_IOS)
     "-Wl,-rpath,@loader_path/Frameworks"
   )
   set(_xe_ios_embedded_dylibs)
-  if(XENIA_ENABLE_IOS_MOLTENVK)
-    set(_xe_moltenvk_ios_framework
-        "${PROJECT_SOURCE_DIR}/third_party/MoltenVK/ios/MoltenVK.framework")
-    if(XCODE)
-      list(APPEND _xe_ios_embedded_dylibs "${_xe_moltenvk_ios_framework}")
-    else()
-      add_custom_command(TARGET xenia-app POST_BUILD
-        COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "$<TARGET_BUNDLE_DIR:xenia-app>/Frameworks"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                "${_xe_moltenvk_ios_framework}"
-                "$<TARGET_BUNDLE_DIR:xenia-app>/Frameworks/MoltenVK.framework"
-        VERBATIM)
-    endif()
-  endif()
   foreach(_xe_app_dylib xenia-third-party-metal-shader-converter
                         xenia-third-party-dxilconv)
     if(TARGET ${_xe_app_dylib})

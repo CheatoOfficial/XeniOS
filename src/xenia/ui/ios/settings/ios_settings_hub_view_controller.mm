@@ -15,6 +15,7 @@
 #import "xenia/ui/ios/settings/ios_profile_view_controller.h"
 #import "xenia/ui/ios/shared/ios_system_utils.h"
 #import "xenia/ui/ios/shared/ios_theme.h"
+#import "xenia/ui/ios/shared/ios_update_check.h"
 #import "xenia/ui/ios/shared/ios_view_helpers.h"
 
 namespace {
@@ -770,7 +771,10 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
 @interface XeniaSettingsAboutViewController : XESheetTableViewController
 @end
 
-@implementation XeniaSettingsAboutViewController
+@implementation XeniaSettingsAboutViewController {
+  XeniaUpdateInfo* update_info_;
+  BOOL update_checking_;
+}
 
 - (instancetype)init {
   self = [super initWithStyle:UITableViewStyleInsetGrouped];
@@ -780,23 +784,69 @@ static void XeniaAppendCatalogSearchResults(NSMutableArray* results,
   return self;
 }
 
+- (void)dealloc {
+  [update_info_ release];
+  [super dealloc];
+}
+
 - (void)viewDidLoad {
   [super viewDidLoad];
   self.view.backgroundColor = [UIColor systemBackgroundColor];
+  [self refreshUpdateStatusForced:NO];
+}
+
+- (void)refreshUpdateStatusForced:(BOOL)forced {
+  if (update_checking_) {
+    return;
+  }
+  update_checking_ = YES;
+  [self reloadUpdatesSection];
+  // The block retains self while the check is in flight, so the controller
+  // stays alive long enough to render the result.
+  xe_check_for_update(forced, ^(XeniaUpdateInfo* info) {
+    update_checking_ = NO;
+    [update_info_ release];
+    update_info_ = [info retain];
+    [self reloadUpdatesSection];
+  });
+}
+
+- (void)reloadUpdatesSection {
+  // Skip until the table is on screen; cellForRow renders the current state on
+  // first appearance regardless.
+  if (!self.isViewLoaded || !self.tableView.window) {
+    return;
+  }
+  [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1]
+                withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView* __unused)tableView {
-  return 2;
+  return 3;
 }
 
 - (NSInteger)tableView:(UITableView* __unused)tableView
  numberOfRowsInSection:(NSInteger)section {
-  return section == 0 ? 3 : 4;
+  switch (section) {
+    case 0:
+      return 3;  // Build
+    case 1:
+      return 1;  // Updates
+    default:
+      return 4;  // Links
+  }
 }
 
 - (NSString*)tableView:(UITableView* __unused)tableView
 titleForHeaderInSection:(NSInteger)section {
-  return section == 0 ? @"Build" : @"Links";
+  switch (section) {
+    case 0:
+      return @"Build";
+    case 1:
+      return @"Updates";
+    default:
+      return @"Links";
+  }
 }
 
 - (UITableViewCell*)tableView:(UITableView*)tableView
@@ -809,6 +859,7 @@ titleForHeaderInSection:(NSInteger)section {
   }
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
   cell.accessoryType = UITableViewCellAccessoryNone;
+  cell.accessoryView = nil;
   cell.textLabel.textColor = [XeniaTheme textPrimary];
   cell.detailTextLabel.textColor = [XeniaTheme textSecondary];
 
@@ -829,6 +880,42 @@ titleForHeaderInSection:(NSInteger)section {
     return cell;
   }
 
+  if (indexPath.section == 1) {
+    if (update_checking_) {
+      cell.textLabel.text = @"Checking for Updates…";
+      cell.detailTextLabel.text = @"";
+      UIActivityIndicatorView* spinner = [[[UIActivityIndicatorView alloc]
+          initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium] autorelease];
+      [spinner startAnimating];
+      cell.accessoryView = spinner;
+      return cell;
+    }
+    switch (update_info_.status) {
+      case XeniaUpdateStatusUpdateAvailable:
+        cell.textLabel.text = @"Update Available";
+        cell.detailTextLabel.text = update_info_.latestVersionText ?: @"";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        break;
+      case XeniaUpdateStatusUpToDate:
+        cell.textLabel.text = @"Up to Date";
+        cell.detailTextLabel.text = @"Check Now";
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        break;
+      case XeniaUpdateStatusDevelopmentBuild:
+        cell.textLabel.text = @"Development Build";
+        cell.detailTextLabel.text = update_info_.currentVersionText ?: @"";
+        break;
+      case XeniaUpdateStatusUnknown:
+      default:
+        cell.textLabel.text = @"Check for Updates";
+        cell.detailTextLabel.text = @"";
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        break;
+    }
+    return cell;
+  }
+
   NSArray* titles = @[ @"Website", @"GitHub", @"Discord", @"Support" ];
   cell.textLabel.text = [titles objectAtIndex:indexPath.row];
   cell.detailTextLabel.text = @"";
@@ -839,7 +926,20 @@ titleForHeaderInSection:(NSInteger)section {
 
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath {
   [tableView deselectRowAtIndexPath:indexPath animated:YES];
-  if (indexPath.section != 1) {
+  if (indexPath.section == 1) {
+    if (update_checking_ || update_info_.status == XeniaUpdateStatusDevelopmentBuild) {
+      return;
+    }
+    if (update_info_.status == XeniaUpdateStatusUpdateAvailable &&
+        update_info_.downloadURLString.length) {
+      XeniaOpenSettingsURL(update_info_.downloadURLString);
+    } else {
+      // Up to date / unknown: tap re-checks immediately.
+      [self refreshUpdateStatusForced:YES];
+    }
+    return;
+  }
+  if (indexPath.section != 2) {
     return;
   }
   NSArray* urls = @[

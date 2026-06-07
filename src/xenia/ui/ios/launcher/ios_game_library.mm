@@ -22,6 +22,7 @@
 #include "xenia/vfs/iso_metadata.h"
 #include "xenia/vfs/stfs_metadata.h"
 #include "xenia/vfs/xex_metadata.h"
+#include "xenia/vfs/zar_metadata.h"
 #include "xenia/xbox.h"
 
 namespace xe {
@@ -44,6 +45,10 @@ bool LooksLikeHexIdentifier(const std::string& value, size_t min_length = 8,
 
 bool IsISOPath(const std::filesystem::path& path) {
   return ToLowerAsciiCopy(path.extension().string()) == ".iso";
+}
+
+bool IsZarPath(const std::filesystem::path& path) {
+  return ToLowerAsciiCopy(path.extension().string()) == ".zar";
 }
 
 bool IsDefaultXexPath(const std::filesystem::path& path) {
@@ -177,9 +182,29 @@ NSString* NormalizeGameTitleForUI(NSString* title) {
   return [title localizedCapitalizedString];
 }
 
+bool IsUnhelpfulMetadataTitle(const std::string& title) {
+  const std::string title_lower = ToLowerAsciiCopy(title);
+  if (title_lower.empty() || title_lower == "default" || title_lower == "unknown" ||
+      title_lower == "unknown title") {
+    return true;
+  }
+  // XEX/PE metadata "module_name" is usually the raw executable filename
+  // (e.g. "default.xex", "default.pe", "nhlzf.exe") rather than a real title, so
+  // reject any executable/module-style name and fall back to the file name.
+  static const std::string kExecutableSuffixes[] = {".xex", ".xbe", ".exe", ".pe", ".elf", ".dll"};
+  for (const std::string& suffix : kExecutableSuffixes) {
+    if (title_lower.size() >= suffix.size() &&
+        title_lower.compare(title_lower.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string DisplayNameFromXexMetadata(const std::filesystem::path& path,
                                        const std::optional<xe::vfs::XexMetadata>& metadata) {
-  if (metadata.has_value() && !metadata->module_name.empty() && !IsDefaultXexPath(path)) {
+  if (metadata.has_value() && !IsDefaultXexPath(path) &&
+      !IsUnhelpfulMetadataTitle(metadata->module_name)) {
     return metadata->module_name;
   }
   return LibraryFallbackTitleFromPath(path);
@@ -207,21 +232,74 @@ std::string FormatTitleID(uint32_t title_id) {
   return std::string(buffer);
 }
 
-std::string DiscLabelForGame(const IOSDiscoveredGame& game) {
-  if (game.disc_number > 0 && game.disc_count > 1) {
-    return "Disc " + std::to_string(game.disc_number) + " of " + std::to_string(game.disc_count);
+std::string DiscFormatTag(const std::filesystem::path& path) {
+  if (IsZarPath(path)) {
+    return "ZAR";
   }
+  if (IsISOPath(path)) {
+    return "ISO";
+  }
+  if (IsLikelyGodContainerFile(path)) {
+    return "GOD";
+  }
+  if (IsDefaultXexPath(path) || IsDefaultXbePath(path)) {
+    return "Folder";
+  }
+  return "";
+}
+
+std::string DiscLabelForGame(const IOSDiscoveredGame& game) {
+  // Surface the format (ISO/ZAR/GOD/Folder) so that when several copies of the
+  // same title are listed under "Discs" the user can tell them apart and pick
+  // which one to boot.
+  const std::string format = DiscFormatTag(game.path);
   if (game.disc_number > 0) {
-    return "Disc " + std::to_string(game.disc_number);
+    std::string label = game.disc_count > 1 ? "Disc " + std::to_string(game.disc_number) + " of " +
+                                                  std::to_string(game.disc_count)
+                                            : "Disc " + std::to_string(game.disc_number);
+    if (!format.empty()) {
+      label += " - " + format;
+    }
+    return label;
+  }
+  if (!format.empty()) {
+    return format;
   }
   std::string filename = game.path.filename().string();
   return filename.empty() ? "Launch Item" : filename;
+}
+
+std::string DiscSourceLabel(bool has_imported_source, bool has_external_source) {
+  if (has_imported_source && has_external_source) {
+    return "Imported + External";
+  }
+  if (has_external_source) {
+    return "External";
+  }
+  return "Imported";
+}
+
+int IOSDiscFormatPriority(const std::filesystem::path& path) {
+  if (IsZarPath(path)) {
+    return 0;
+  }
+  if (IsLikelyGodContainerFile(path)) {
+    return 1;
+  }
+  if (IsISOPath(path)) {
+    return 2;
+  }
+  return 3;
 }
 
 IOSDiscoveredGame::Disc DiscFromGame(const IOSDiscoveredGame& game) {
   IOSDiscoveredGame::Disc disc;
   disc.path = game.path;
   disc.label = DiscLabelForGame(game);
+  disc.is_external = game.is_external;
+  disc.has_imported_source = !game.is_external;
+  disc.has_external_source = game.is_external;
+  disc.source_label = DiscSourceLabel(disc.has_imported_source, disc.has_external_source);
   disc.media_id = game.media_id;
   disc.disc_number = game.disc_number;
   disc.disc_count = game.disc_count;
@@ -240,7 +318,64 @@ bool DiscSortLess(const IOSDiscoveredGame::Disc& a, const IOSDiscoveredGame::Dis
   if (a.media_id != b.media_id) {
     return a.media_id < b.media_id;
   }
+  if (a.is_external != b.is_external) {
+    return !a.is_external;
+  }
   return a.path.filename().string() < b.path.filename().string();
+}
+
+bool DiscLaunchLess(const IOSDiscoveredGame::Disc& a, const IOSDiscoveredGame::Disc& b) {
+  if (a.disc_number && b.disc_number && a.disc_number != b.disc_number) {
+    return a.disc_number < b.disc_number;
+  }
+  const int a_format_priority = IOSDiscFormatPriority(a.path);
+  const int b_format_priority = IOSDiscFormatPriority(b.path);
+  if (a_format_priority != b_format_priority) {
+    return a_format_priority < b_format_priority;
+  }
+  if (a.is_external != b.is_external) {
+    return !a.is_external;
+  }
+  return DiscSortLess(a, b);
+}
+
+void ApplyPreferredLaunchDiscToGame(IOSDiscoveredGame* game) {
+  if (!game || game->discs.empty()) {
+    return;
+  }
+  auto preferred = std::min_element(game->discs.begin(), game->discs.end(), DiscLaunchLess);
+  if (preferred == game->discs.end()) {
+    return;
+  }
+  game->path = preferred->path;
+  game->media_id = preferred->media_id;
+  game->disc_number = preferred->disc_number;
+  game->disc_count = preferred->disc_count;
+  game->is_external = preferred->is_external;
+}
+
+void MergeDiscSourceAndPreferredLaunch(IOSDiscoveredGame::Disc* target,
+                                       const IOSDiscoveredGame::Disc& incoming) {
+  if (!target) {
+    return;
+  }
+  const bool has_imported_source = target->has_imported_source || incoming.has_imported_source ||
+                                   (!target->is_external && target->source_label.empty()) ||
+                                   (!incoming.is_external && incoming.source_label.empty());
+  const bool has_external_source = target->has_external_source || incoming.has_external_source ||
+                                   (target->is_external && target->source_label.empty()) ||
+                                   (incoming.is_external && incoming.source_label.empty());
+  if (DiscLaunchLess(incoming, *target)) {
+    const bool preserved_imported_source = has_imported_source;
+    const bool preserved_external_source = has_external_source;
+    *target = incoming;
+    target->has_imported_source = preserved_imported_source;
+    target->has_external_source = preserved_external_source;
+  } else {
+    target->has_imported_source = has_imported_source;
+    target->has_external_source = has_external_source;
+  }
+  target->source_label = DiscSourceLabel(target->has_imported_source, target->has_external_source);
 }
 
 void EnsureDiscoveredGameDiscList(IOSDiscoveredGame* game) {
@@ -251,6 +386,7 @@ void EnsureDiscoveredGameDiscList(IOSDiscoveredGame* game) {
     game->discs.push_back(DiscFromGame(*game));
   }
   std::sort(game->discs.begin(), game->discs.end(), DiscSortLess);
+  ApplyPreferredLaunchDiscToGame(game);
 }
 
 void MergeDiscoveredGameDisc(IOSDiscoveredGame* game, const IOSDiscoveredGame& disc_game) {
@@ -263,14 +399,20 @@ void MergeDiscoveredGameDisc(IOSDiscoveredGame* game, const IOSDiscoveredGame& d
     incoming.push_back(DiscFromGame(disc_game));
   }
   for (IOSDiscoveredGame::Disc& disc : incoming) {
+    // Keep every distinct copy (a different format or a genuinely different
+    // disc) as its own selectable entry; only fold in exact-path duplicates so
+    // the user can boot whichever ISO/ZAR/disc they want.
     auto existing = std::find_if(
         game->discs.begin(), game->discs.end(),
         [&](const IOSDiscoveredGame::Disc& candidate) { return candidate.path == disc.path; });
     if (existing == game->discs.end()) {
       game->discs.push_back(std::move(disc));
+    } else {
+      MergeDiscSourceAndPreferredLaunch(&*existing, disc);
     }
   }
   std::sort(game->discs.begin(), game->discs.end(), DiscSortLess);
+  ApplyPreferredLaunchDiscToGame(game);
 }
 
 std::string NormalizeGameTitleForUI(const std::string& title) {
@@ -287,6 +429,27 @@ bool BuildDiscoveredGameFromPath(const std::filesystem::path& path, IOSDiscovere
   game.path = path;
   if (IsISOPath(path)) {
     auto metadata = xe::vfs::ExtractIsoMetadata(path);
+    if (metadata.has_value()) {
+      game.system = IOSGameSystem::kXbox360;
+      game.title_id = metadata->title_id;
+      game.media_id = metadata->media_id;
+      game.disc_number = metadata->disc_number;
+      game.disc_count = metadata->disc_count;
+      game.title = NormalizeGameTitleForUI(DisplayNameFromXexMetadata(path, metadata));
+      EnsureDiscoveredGameDiscList(&game);
+      *game_out = std::move(game);
+      return true;
+    }
+
+    game.system = IOSGameSystem::kXbox360;
+    game.title = NormalizeGameTitleForUI(LibraryFallbackTitleFromPath(path));
+    EnsureDiscoveredGameDiscList(&game);
+    *game_out = std::move(game);
+    return true;
+  }
+
+  if (IsZarPath(path)) {
+    auto metadata = xe::vfs::ExtractZarMetadata(path);
     if (metadata.has_value()) {
       game.system = IOSGameSystem::kXbox360;
       game.title_id = metadata->title_id;

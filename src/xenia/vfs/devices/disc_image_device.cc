@@ -60,8 +60,8 @@ bool DiscImageDevice::Initialize() {
   state.size = image_size_;
   auto result = Verify(&state);
   if (result != Error::kSuccess) {
-    XELOGE("Failed to verify disc image header: {}",
-           static_cast<int32_t>(result));
+    XELOGE("Failed to verify disc image header: {} ({})",
+           static_cast<int32_t>(result), host_path_.string());
     return false;
   }
 
@@ -87,7 +87,8 @@ bool DiscImageDevice::Initialize() {
 
   result = ReadAllEntries(&state, root_buffer);
   if (result != Error::kSuccess) {
-    XELOGE("Failed to read all GDFX entries: {}", static_cast<int32_t>(result));
+    XELOGE("Failed to read all GDFX entries: {} ({})",
+           static_cast<int32_t>(result), host_path_.string());
     return false;
   }
 

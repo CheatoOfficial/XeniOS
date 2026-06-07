@@ -15,11 +15,18 @@ namespace {
 
 NSString* DetailForDisc(const xe::ui::IOSDiscoveredGame::Disc& disc) {
   NSString* filename = ToNSString(disc.path.filename().string());
-  if (disc.media_id) {
-    return [NSString stringWithFormat:@"%@ - Media %08X", filename,
-                                      disc.media_id];
+  NSString* source = nil;
+  if (!disc.source_label.empty()) {
+    source = ToNSString(disc.source_label);
+  } else if (disc.has_imported_source && disc.has_external_source) {
+    source = @"Imported + External";
+  } else {
+    source = disc.is_external || disc.has_external_source ? @"External" : @"Imported";
   }
-  return filename;
+  if (disc.media_id) {
+    return [NSString stringWithFormat:@"%@ - %@ - Media %08X", source, filename, disc.media_id];
+  }
+  return [NSString stringWithFormat:@"%@ - %@", source, filename];
 }
 
 }  // namespace

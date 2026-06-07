@@ -169,28 +169,6 @@ add_library(fmt STATIC
 target_include_directories(fmt PUBLIC fmt/include)
 
 # ==============================================================================
-# MoltenVK (iOS Vulkan backend)
-# ==============================================================================
-if(XE_PLATFORM_IOS AND XENIA_ENABLE_IOS_MOLTENVK)
-  set(_xe_moltenvk_ios_framework
-      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/ios/MoltenVK.framework")
-  set(_xe_moltenvk_ios_binary "${_xe_moltenvk_ios_framework}/MoltenVK")
-  if(NOT EXISTS "${_xe_moltenvk_ios_binary}")
-    message(FATAL_ERROR
-      "MoltenVK iOS framework not found at ${_xe_moltenvk_ios_binary}. "
-      "Run tools/fetch_moltenvk.py --platform ios before configuring.")
-  endif()
-  add_library(xenia-third-party-moltenvk SHARED IMPORTED GLOBAL)
-  set_target_properties(xenia-third-party-moltenvk PROPERTIES
-    FRAMEWORK TRUE
-    IMPORTED_CONFIGURATIONS "Release"
-    IMPORTED_LOCATION "${_xe_moltenvk_ios_binary}"
-    IMPORTED_LOCATION_RELEASE "${_xe_moltenvk_ios_binary}"
-    INTERFACE_INCLUDE_DIRECTORIES
-      "${CMAKE_CURRENT_SOURCE_DIR}/MoltenVK/include")
-endif()
-
-# ==============================================================================
 # glslang-spirv (runtime: SPIR-V emission primitives for Xenia's own
 # SpirvShaderTranslator; used by the Vulkan backend and by the Metal backend's
 # SPIRV-Cross path)
@@ -220,7 +198,12 @@ elseif(WIN32 AND CMAKE_CROSSCOMPILING AND XE_TARGET_AARCH64
   set(_xe_use_host_shader_cc TRUE)
 endif()
 
-if(NOT _xe_use_host_shader_cc)
+set(_xe_build_spirv_tools FALSE)
+if(NOT _xe_use_host_shader_cc OR (XE_PLATFORM_IOS AND XENIA_ENABLE_IOS_MOLTENVK))
+  set(_xe_build_spirv_tools TRUE)
+endif()
+
+if(_xe_build_spirv_tools)
 
 # ==============================================================================
 # SPIRV-Headers + SPIRV-Tools (host: SPIR-V optimization + disassembly
@@ -254,6 +237,10 @@ if(MSVC)
     endif()
   endforeach()
 endif()
+
+endif()  # _xe_build_spirv_tools
+
+if(NOT _xe_use_host_shader_cc)
 
 # ==============================================================================
 # glslang (host: full frontend + SPIR-V emission for the xenia-shader-cc
@@ -305,13 +292,13 @@ if(NOT WIN32)
   endif()
 endif()
 
-endif()  # NOT _xe_use_host_shader_cc (SPIRV-Tools + glslang block)
+endif()  # NOT _xe_use_host_shader_cc (glslang block)
 
 # ==============================================================================
 # SPIRV-Cross (Apple only — used at runtime by xenia-gpu-metal for SPIR-V → MSL
 # via MslShader, and by MoltenVKShaderConverter below)
 # ==============================================================================
-if(XE_PLATFORM_MACOS)
+if(APPLE)
   add_library(spirv-cross STATIC
     SPIRV-Cross/spirv_cross.cpp
     SPIRV-Cross/spirv_cross_parsed_ir.cpp
@@ -339,7 +326,7 @@ endif()
 # own copies via CPM.cmake. The SPIRV-Cross and cereal submodules are pinned to
 # the revisions MoltenVK expects (see MoltenVK/ExternalRevisions/*) so the
 # spirv_msl ABI and pipeline-cache serialization format match.
-if(APPLE)
+if(XE_PLATFORM_MACOS OR (XE_PLATFORM_IOS AND XENIA_ENABLE_IOS_MOLTENVK))
   # Record the MoltenVK submodule revision for MVKDevice's identification
   # string (MoltenVK's own CMake runs `git rev-parse` here; we just shell
   # out once at configure time and bake the string into a generated header).
@@ -418,11 +405,17 @@ if(APPLE)
     MoltenVK::ShaderConverter
     "-framework Foundation"
     "-framework Metal"
-    "-framework AppKit"
-    "-framework IOKit"
     "-framework IOSurface"
     "-framework QuartzCore"
     "-framework CoreGraphics")
+  if(XE_PLATFORM_IOS)
+    target_link_libraries(MoltenVK PUBLIC
+      "-framework UIKit")
+  else()
+    target_link_libraries(MoltenVK PUBLIC
+      "-framework AppKit"
+      "-framework IOKit")
+  endif()
   # MoltenVK's OS/ TUs define Objective-C categories on MTLSamplerDescriptor,
   # MTLRenderPipelineDescriptor, CAMetalLayer, and NSString. Static archive
   # members that only contribute categories are dropped by ld (no external
@@ -767,7 +760,9 @@ add_library(zarchive STATIC
   zarchive/src/sha_256.h
 )
 target_include_directories(zarchive PUBLIC zarchive/include PRIVATE zstd/lib)
-target_link_libraries(zarchive PUBLIC zstd)
+# zarchivewriter uses std::thread for its optional parallel block compressor.
+find_package(Threads REQUIRED)
+target_link_libraries(zarchive PUBLIC zstd Threads::Threads)
 
 # ==============================================================================
 # zlib-ng

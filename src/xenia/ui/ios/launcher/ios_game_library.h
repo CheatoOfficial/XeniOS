@@ -37,9 +37,15 @@ struct IOSDiscoveredGame {
   std::string compat_perf;
   std::string compat_notes;
   bool has_installed_content = false;
+  bool is_external = false;
+  std::string external_location_name;
   struct Disc {
     std::filesystem::path path;
     std::string label;
+    bool is_external = false;
+    bool has_imported_source = false;
+    bool has_external_source = false;
+    std::string source_label;
     uint32_t media_id = 0;
     uint8_t disc_number = 0;
     uint8_t disc_count = 0;
@@ -49,9 +55,14 @@ struct IOSDiscoveredGame {
 
 std::string ToLowerAsciiCopy(std::string value);
 bool IsISOPath(const std::filesystem::path& path);
+bool IsZarPath(const std::filesystem::path& path);
 bool IsDefaultXexPath(const std::filesystem::path& path);
 bool IsDefaultXbePath(const std::filesystem::path& path);
 bool IsLikelyGodContainerFile(const std::filesystem::path& path);
+// Ranks a game container by preferred format (lower = preferred): ZAR, GOD,
+// ISO, then folder/loose. Single source of truth for both the library merge
+// (pick the best copy to keep) and the disc list sort.
+int IOSDiscFormatPriority(const std::filesystem::path& path);
 bool IsIOSLaunchableContentType(XContentType content_type);
 std::string IOSContentTypeDisplayName(XContentType content_type);
 void SortDiscoveredGames(std::vector<IOSDiscoveredGame>* games);

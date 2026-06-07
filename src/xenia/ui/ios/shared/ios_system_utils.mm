@@ -17,6 +17,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include "xenia/base/logging.h"
 
@@ -28,6 +29,70 @@ extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersiz
 #ifndef CS_DEBUGGED
 #define CS_DEBUGGED 0x10000000
 #endif
+#ifndef CS_OPS_ENTITLEMENTS_BLOB
+#define CS_OPS_ENTITLEMENTS_BLOB 7
+#endif
+
+namespace {
+
+NSString* const kXeniaIOSIncreasedMemoryLimitEntitlement =
+    @"com.apple.developer.kernel.increased-memory-limit";
+
+constexpr uint32_t kCodeSigningEntitlementsMagic = 0xFADE7171u;
+constexpr uint32_t kCodeSigningDerEntitlementsMagic = 0xFADE7172u;
+
+uint32_t ReadBigEndianU32(const uint8_t* bytes) {
+  return (static_cast<uint32_t>(bytes[0]) << 24) | (static_cast<uint32_t>(bytes[1]) << 16) |
+         (static_cast<uint32_t>(bytes[2]) << 8) | static_cast<uint32_t>(bytes[3]);
+}
+
+NSData* ExtractEntitlementsPlistData(const std::vector<uint8_t>& blob) {
+  if (blob.size() < 8) {
+    return nil;
+  }
+
+  const uint32_t magic = ReadBigEndianU32(blob.data());
+  if (magic != kCodeSigningEntitlementsMagic && magic != kCodeSigningDerEntitlementsMagic) {
+    return [NSData dataWithBytes:blob.data() length:blob.size()];
+  }
+
+  const uint32_t length = ReadBigEndianU32(blob.data() + 4);
+  if (length <= 8 || length > blob.size()) {
+    return nil;
+  }
+
+  return [NSData dataWithBytes:blob.data() + 8 length:length - 8];
+}
+
+BOOL EntitlementsBlobContainsKey(const std::vector<uint8_t>& blob, NSString* key) {
+  if (!key.length || blob.empty()) {
+    return NO;
+  }
+  NSData* plist_data = ExtractEntitlementsPlistData(blob);
+  if (plist_data.length > 0) {
+    NSError* error = nil;
+    id plist = [NSPropertyListSerialization propertyListWithData:plist_data
+                                                         options:0
+                                                          format:nil
+                                                           error:&error];
+    if ([plist isKindOfClass:[NSDictionary class]]) {
+      id value = [(NSDictionary*)plist objectForKey:key];
+      if ([value respondsToSelector:@selector(boolValue)]) {
+        return [value boolValue] ? YES : NO;
+      }
+      return value != nil ? YES : NO;
+    }
+  }
+
+  const char* key_utf8 = [key UTF8String];
+  if (!key_utf8 || !key_utf8[0]) {
+    return NO;
+  }
+  std::string haystack(reinterpret_cast<const char*>(blob.data()), blob.size());
+  return haystack.find(key_utf8) != std::string::npos ? YES : NO;
+}
+
+}  // namespace
 
 BOOL xe_is_cs_debugged(void) {
   int flags = 0;
@@ -128,6 +193,25 @@ BOOL xe_check_jit_available(void) { return xe_is_cs_debugged() && xe_can_mmap_ex
 uint32_t xe_ios_code_sign_flags(void) {
   int flags = 0;
   return !csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) ? static_cast<uint32_t>(flags) : 0u;
+}
+
+BOOL xe_has_increased_memory_limit_entitlement(void) {
+  std::vector<uint8_t> blob(256 * 1024);
+  if (csops(getpid(), CS_OPS_ENTITLEMENTS_BLOB, blob.data(), blob.size()) != 0) {
+    return NO;
+  }
+  return EntitlementsBlobContainsKey(blob, kXeniaIOSIncreasedMemoryLimitEntitlement);
+}
+
+NSString* xe_memory_entitlement_missing_status_message(void) {
+  return @"Memory entitlement missing. Games will likely crash. Enable Get More RAM, then refresh "
+         @"XeniOS.";
+}
+
+NSString* xe_memory_entitlement_not_detected_guidance_message(void) {
+  return @"The increased-memory entitlement is not enabled in the installed app. Most games will "
+         @"likely crash without it.\n\nEnable Get More RAM for XeniOS, then refresh or reinstall "
+         @"the app so it is signed with increased memory.";
 }
 
 std::filesystem::path xe_get_ios_documents_path(void) {

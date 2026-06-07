@@ -13,7 +13,7 @@ Builds and packages Apple release artifacts:
 Options:
   --out DIR            Output directory (default: scratch/artifacts)
   --config NAME        checked|debug|release|valgrind (default: release)
-  --version VERSION    Marketing version override (defaults to latest vX.Y.Z tag, then 1.0.1)
+  --version VERSION    Marketing version override (defaults to latest vX.Y.Z tag, then 2.0.1)
   --build-number NUM   Build number override (defaults to git commit count)
   --channel NAME       release|preview (default: release)
   --stage NAME         alpha|beta|rc|stable (default: stable)
@@ -38,7 +38,7 @@ Notes:
 - iOS packaging creates an ad-hoc-signed .ipa suitable for re-signing.
 - This script expects Xcode command line tools (xcodebuild, codesign, hdiutil).
 - Marketing version defaults to the latest reachable vX.Y.Z git tag.
-- If no matching tag is available, the marketing version falls back to 1.0.1.
+- If no matching tag is available, the marketing version falls back to 2.0.1.
 - Public release stage defaults to stable.
 - Official build numbers default to git rev-list --count HEAD.
 EOF

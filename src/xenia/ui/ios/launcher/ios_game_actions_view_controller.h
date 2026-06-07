@@ -27,6 +27,7 @@ typedef NS_ENUM(NSInteger, XeniaIOSGameAction) {
   XeniaIOSGameActionManageContent,
   XeniaIOSGameActionLaunchDisc,
   XeniaIOSGameActionPatches,
+  XeniaIOSGameActionConvertToZar,
   XeniaIOSGameActionCopyLaunchURL,
 };
 
@@ -39,7 +40,8 @@ typedef NS_ENUM(NSInteger, XeniaIOSGameAction) {
             supportsCompatibility:(BOOL)supportsCompatibility
             supportsManageContent:(BOOL)supportsManageContent
             supportsDiscSelection:(BOOL)supportsDiscSelection
-                  supportsPatches:(BOOL)supportsPatches;
+                  supportsPatches:(BOOL)supportsPatches
+            supportsZarConversion:(BOOL)supportsZarConversion;
 
 @end
 

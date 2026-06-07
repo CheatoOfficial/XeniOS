@@ -307,7 +307,15 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream,
     driver->frames_played_.fetch_add(1, std::memory_order_relaxed);
     if (driver->semaphore_) {
       auto ret = driver->semaphore_->Release(1, nullptr);
+#if XE_PLATFORM_IOS
+      // Releasing can fail on iOS; log rather than abort so audio keeps
+      // flowing.
+      if (!ret) {
+        XELOGW("SDLAudioDriver: failed to release audio frame semaphore");
+      }
+#else
       assert_true(ret);
+#endif  // XE_PLATFORM_IOS
     }
   }
 }
