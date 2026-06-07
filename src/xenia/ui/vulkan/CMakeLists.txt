@@ -7,7 +7,7 @@ target_include_directories(xenia-ui-vulkan PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party/glslang
 )
 target_link_libraries(xenia-ui-vulkan PUBLIC xenia-base xenia-ui)
-if(APPLE)
+if(TARGET MoltenVK)
   target_link_libraries(xenia-ui-vulkan PUBLIC MoltenVK)
 endif()
 xe_target_defaults(xenia-ui-vulkan)

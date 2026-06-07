@@ -27,7 +27,7 @@
 #include "xenia/base/platform_win.h"
 #endif
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 // MoltenVK is statically linked; declare the two entry points we resolve at
 // load time (vulkan_api.h sets VK_NO_PROTOTYPES, so the prototypes from
 // vulkan.h aren't visible).
@@ -78,7 +78,7 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(
   functions_loaded &=                                                    \
       (ifn.name = PFN_##name(dlsym(vulkan_instance->loader_, #name))) != \
       nullptr;
-#elif XE_PLATFORM_MAC
+#elif XE_PLATFORM_APPLE
   // MoltenVK is statically linked; the vk* entry points are real symbols.
 #define XE_VULKAN_LOAD_LOADER_FUNCTION(name) ifn.name = &::name;
 #elif XE_PLATFORM_WIN32

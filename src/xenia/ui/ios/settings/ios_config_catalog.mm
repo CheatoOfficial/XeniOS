@@ -16,6 +16,7 @@
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "xenia/base/cvar.h"
 #include "xenia/ui/config_helpers.h"
@@ -276,13 +277,11 @@ static std::vector<IOSConfigSection> BuildGraphicsSections() {
 
   IOSConfigSection backend;
   backend.title = "Graphics Backend";
-#if defined(XE_IOS_MOLTENVK_ENABLED)
   AddStringChoiceSetting(backend.items, "gpu", "Graphics Backend",
                          "Select the renderer used after the next full relaunch. Metal is the "
-                         "primary iOS backend; Vulkan runs through the bundled MoltenVK "
-                         "translation layer for comparison and compatibility testing.",
+                         "primary iOS backend; Vulkan uses the bundled MoltenVK path when "
+                         "that backend is compiled into the app.",
                          "metal", {{"Metal", "metal"}, {"Vulkan (MoltenVK)", "vulkan"}});
-#endif
   AddIntegerSetting(backend.items, "anisotropic_override", "Anisotropic Override",
                     "Override anisotropic filtering level (-1 = auto, 0 = off, 1-5).");
   AddEnumSetting(backend.items, "render_target_path", "Render Target Path",
@@ -929,6 +928,7 @@ std::vector<IOSConfigSection> BuildIOSConfigSectionsForKind(IOSConfigCatalogKind
       }
       PushFilteredSection(sections, all_sections, "Display",
                           {"present_letterbox", "guest_display_refresh_cap", "use_50Hz_mode"});
+      PushFilteredSection(sections, all_sections, "Graphics Backend", {"gpu"});
       PushWholeSection(sections, all_sections, "GPU Workarounds");
       PushWholeSection(sections, all_sections, "Memory & Boot");
       PushWholeSection(sections, all_sections, "JIT & Codegen");

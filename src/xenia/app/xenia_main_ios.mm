@@ -80,11 +80,7 @@ DEFINE_path(cache_root, "",
             "root will be used.",
             "Storage");
 DEFINE_string(apu, "sdl", "Audio system. Use: [sdl, nop]", "APU");
-#if defined(XE_IOS_MOLTENVK_ENABLED)
 DEFINE_string(gpu, "metal", "Graphics system. Use: [metal, vulkan]", "GPU");
-#else
-DEFINE_string(gpu, "metal", "Graphics system. Use: [metal]", "GPU");
-#endif
 DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 DEFINE_bool(mount_cache, true, "Enable cache mount", "Storage");
 DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount", "Storage");

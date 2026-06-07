@@ -664,6 +664,7 @@ def run_cmake_configure(cc=None, generator=None, build_tests=False,
             "-DCMAKE_OSX_SYSROOT=iphoneos",
             "-DCMAKE_OSX_ARCHITECTURES=arm64",
             "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY",
+            "-DXENIA_ENABLE_IOS_MOLTENVK=ON",
         ]
     elif sys.platform == "darwin" and target_arch is not None:
         # Apple clang is universal; CMAKE_OSX_ARCHITECTURES drives -arch.

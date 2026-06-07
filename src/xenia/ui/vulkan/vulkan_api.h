@@ -27,7 +27,7 @@
 #endif
 #endif
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_MAC || XE_PLATFORM_IOS
 #ifndef VK_USE_PLATFORM_METAL_EXT
 #define VK_USE_PLATFORM_METAL_EXT
 #endif
