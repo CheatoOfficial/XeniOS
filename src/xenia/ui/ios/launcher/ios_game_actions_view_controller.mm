@@ -30,6 +30,7 @@ struct XeniaIOSGameActionRow {
   BOOL supports_manage_content_;
   BOOL supports_disc_selection_;
   BOOL supports_patches_;
+  BOOL supports_zar_conversion_;
   NSArray<NSValue*>* rows_;
   void (^action_handler_)(XeniaIOSGameAction action);
 }
@@ -39,9 +40,10 @@ struct XeniaIOSGameActionRow {
 - (instancetype)initWithGameTitle:(NSString*)gameTitle
                           titleID:(uint32_t)titleID
             supportsCompatibility:(BOOL)supportsCompatibility
-             supportsManageContent:(BOOL)supportsManageContent
-             supportsDiscSelection:(BOOL)supportsDiscSelection
-                  supportsPatches:(BOOL)supportsPatches {
+            supportsManageContent:(BOOL)supportsManageContent
+            supportsDiscSelection:(BOOL)supportsDiscSelection
+                  supportsPatches:(BOOL)supportsPatches
+            supportsZarConversion:(BOOL)supportsZarConversion {
   self = [super initWithStyle:UITableViewStyleInsetGrouped];
   if (self) {
     game_title_ = [gameTitle copy];
@@ -50,6 +52,7 @@ struct XeniaIOSGameActionRow {
     supports_manage_content_ = supportsManageContent;
     supports_disc_selection_ = supportsDiscSelection;
     supports_patches_ = supportsPatches;
+    supports_zar_conversion_ = supportsZarConversion;
   }
   return self;
 }
@@ -65,11 +68,11 @@ struct XeniaIOSGameActionRow {
   XeniaIOSGameActionRow rows[] = {
       {XeniaIOSGameActionPlay, @"Play", @"Launch the selected title.", @"play.fill", YES},
       {XeniaIOSGameActionGameSettings, @"Game Settings",
-       @"Save display, compatibility, and cvar overrides for this title.",
-       @"slider.horizontal.3", title_id_ != 0},
+       @"Save display, compatibility, and cvar overrides for this title.", @"slider.horizontal.3",
+       title_id_ != 0},
       {XeniaIOSGameActionResetGameSettings, @"Reset Game Settings",
-       @"Delete saved overrides for this title and return to defaults.",
-       @"arrow.counterclockwise", title_id_ != 0},
+       @"Delete saved overrides for this title and return to defaults.", @"arrow.counterclockwise",
+       title_id_ != 0},
       {XeniaIOSGameActionTouchLayout, @"Touch Layout",
        @"Edit or assign the touch controls used by this title.", @"hand.tap", title_id_ != 0},
       {XeniaIOSGameActionCompatibility, @"Compatibility",
@@ -79,10 +82,12 @@ struct XeniaIOSGameActionRow {
        @"Manage installed title updates and related content.", @"square.stack.3d.up",
        supports_manage_content_},
       {XeniaIOSGameActionLaunchDisc, @"Launch Disc",
-       @"Pick which disc to start for multi-disc games.", @"opticaldisc",
-       supports_disc_selection_},
+       @"Pick which disc to start for multi-disc games.", @"opticaldisc", supports_disc_selection_},
       {XeniaIOSGameActionPatches, @"Patches", @"View and manage title patches.",
        @"puzzlepiece.extension", supports_patches_},
+      {XeniaIOSGameActionConvertToZar, @"Convert to ZAR",
+       @"Create a compressed .zar copy in the XeniOS library.", @"opticaldisc",
+       supports_zar_conversion_},
       {XeniaIOSGameActionCopyLaunchURL, @"Copy Launch URL",
        @"Copy the xenia:// URL for this title.", @"link", title_id_ != 0},
   };

@@ -760,7 +760,9 @@ add_library(zarchive STATIC
   zarchive/src/sha_256.h
 )
 target_include_directories(zarchive PUBLIC zarchive/include PRIVATE zstd/lib)
-target_link_libraries(zarchive PUBLIC zstd)
+# zarchivewriter uses std::thread for its optional parallel block compressor.
+find_package(Threads REQUIRED)
+target_link_libraries(zarchive PUBLIC zstd Threads::Threads)
 
 # ==============================================================================
 # zlib-ng
