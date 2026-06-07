@@ -54,6 +54,8 @@ target_sources(xenia-ui-ios PRIVATE
   launcher/ios_content_management.mm
   launcher/ios_document_import_coordinator.h
   launcher/ios_document_import_coordinator.mm
+  launcher/ios_external_folders_view_controller.h
+  launcher/ios_external_folders_view_controller.mm
   launcher/ios_external_url.h
   launcher/ios_external_url.mm
   launcher/ios_game_art.h
@@ -115,6 +117,8 @@ target_sources(xenia-ui-ios PRIVATE
   shared/ios_system_utils.mm
   shared/ios_status_toast.h
   shared/ios_status_toast.mm
+  shared/ios_update_check.h
+  shared/ios_update_check.mm
   shared/ios_hero_glow_palette.h
   shared/ios_hero_glow_palette.mm
   shared/ios_theme.h

@@ -34,6 +34,7 @@
                                            UICollectionViewDelegateFlowLayout>
 @property(nonatomic, strong) NSArray<XeniaIOSLauncherGameSnapshot*>* games;
 @property(nonatomic, assign) BOOL jitAcquired;
+@property(nonatomic, assign) BOOL memoryEntitlementEnabled;
 @end
 
 @implementation XeniaIOSLauncherOverlayView {
@@ -42,10 +43,14 @@
   UIButton* _settingsButton;
   UIButton* _profileButton;
   UIButton* _openGameButton;
+  UIButton* _convertLibraryButton;
   UIView* _jitWarningCard;
   UIView* _jitStatusDot;
   UIView* _jitStatusRing;
   UILabel* _jitStatusLabel;
+  UIView* _memoryWarningCard;
+  UIImageView* _memoryStatusIcon;
+  UILabel* _memoryStatusLabel;
   UIView* _jitReadyDot;
   UIView* _jitReadyRing;
   UILabel* _jitReadyLabel;
@@ -66,6 +71,7 @@
   }
   _focusedGameIndex = -1;
   _jitAcquired = NO;
+  _memoryEntitlementEnabled = YES;
   _actionsEnabled = YES;
   _controllerNavigationEnabled = NO;
   _libraryFocusActive = NO;
@@ -202,7 +208,37 @@
   XEApplyAccessibility(_jitWarningCard, @"JIT status", _jitStatusLabel.text, nil,
                        UIAccessibilityTraitStaticText);
 
-  // ── Library header: "Library" (left) + "+" (right) ─────────────────────
+  // Compact memory-entitlement notice shown when the installed signature lacks
+  // com.apple.developer.kernel.increased-memory-limit.
+  _memoryWarningCard = [[UIView alloc] init];
+  _memoryWarningCard.translatesAutoresizingMaskIntoConstraints = NO;
+  _memoryWarningCard.backgroundColor = [XeniaTheme bgSurface];
+  _memoryWarningCard.layer.cornerRadius = XeniaRadiusLg;
+  _memoryWarningCard.layer.borderWidth = 0.5;
+  _memoryWarningCard.layer.borderColor = [XeniaTheme border].CGColor;
+  _memoryWarningCard.hidden = YES;
+
+  UIImageSymbolConfiguration* memoryIconConfig =
+      [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+  UIImage* memoryIconImage = [UIImage systemImageNamed:@"exclamationmark.triangle.fill"
+                                     withConfiguration:memoryIconConfig];
+  _memoryStatusIcon = [[UIImageView alloc] initWithImage:memoryIconImage];
+  _memoryStatusIcon.translatesAutoresizingMaskIntoConstraints = NO;
+  _memoryStatusIcon.tintColor = [XeniaTheme statusWarning];
+  _memoryStatusIcon.contentMode = UIViewContentModeScaleAspectFit;
+  [_memoryWarningCard addSubview:_memoryStatusIcon];
+
+  _memoryStatusLabel = [[UILabel alloc] init];
+  _memoryStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+  _memoryStatusLabel.text = xe_memory_entitlement_missing_status_message();
+  _memoryStatusLabel.textColor = [XeniaTheme textPrimary];
+  xe_apply_label_font(_memoryStatusLabel, UIFontTextStyleFootnote, 13.0, UIFontWeightMedium);
+  _memoryStatusLabel.numberOfLines = 0;
+  [_memoryWarningCard addSubview:_memoryStatusLabel];
+  XEApplyAccessibility(_memoryWarningCard, @"Memory entitlement status", _memoryStatusLabel.text,
+                       nil, UIAccessibilityTraitStaticText);
+
+  // ── Library header: "Library" (left) + convert + "+" (right) ───────────
 
   UIView* libraryRow = [[UIView alloc] init];
   libraryRow.translatesAutoresizingMaskIntoConstraints = NO;
@@ -214,6 +250,23 @@
   xe_apply_label_font(_libraryLabel, UIFontTextStyleTitle3, 20.0, UIFontWeightSemibold);
   _libraryLabel.accessibilityTraits = UIAccessibilityTraitHeader;
   [libraryRow addSubview:_libraryLabel];
+
+  UIButtonConfiguration* convertCfg = [UIButtonConfiguration plainButtonConfiguration];
+  convertCfg.image =
+      [UIImage systemImageNamed:@"opticaldisc"
+              withConfiguration:[UIImageSymbolConfiguration
+                                    configurationWithPointSize:20
+                                                        weight:UIImageSymbolWeightMedium]];
+  convertCfg.baseForegroundColor = [XeniaTheme accent];
+  convertCfg.contentInsets = NSDirectionalEdgeInsetsMake(6, 6, 6, 6);
+  _convertLibraryButton = [[UIButton buttonWithConfiguration:convertCfg primaryAction:nil] retain];
+  _convertLibraryButton.translatesAutoresizingMaskIntoConstraints = NO;
+  _convertLibraryButton.hidden = YES;
+  [_convertLibraryButton addTarget:self
+                            action:@selector(convertLibraryTapped:)
+                  forControlEvents:UIControlEventTouchUpInside];
+  XEApplyAccessibility(_convertLibraryButton, @"Convert library to ZAR", nil,
+                       @"Converts non-ZAR games in the library.", UIAccessibilityTraitButton);
 
   UIButtonConfiguration* importCfg = [UIButtonConfiguration plainButtonConfiguration];
   importCfg.image =
@@ -230,11 +283,19 @@
             forControlEvents:UIControlEventTouchUpInside];
   XEApplyAccessibility(_openGameButton, @"Import game", nil,
                        @"Opens the document picker to import a game.", UIAccessibilityTraitButton);
-  [libraryRow addSubview:_openGameButton];
 
-  // ── Collapsible stack: JIT banner → library header ─────────────────────
+  UIStackView* libraryActionsStack =
+      [[UIStackView alloc] initWithArrangedSubviews:@[ _convertLibraryButton, _openGameButton ]];
+  libraryActionsStack.axis = UILayoutConstraintAxisHorizontal;
+  libraryActionsStack.alignment = UIStackViewAlignmentCenter;
+  libraryActionsStack.spacing = 4.0;
+  libraryActionsStack.translatesAutoresizingMaskIntoConstraints = NO;
+  [libraryRow addSubview:libraryActionsStack];
 
-  _topInfoStack = [[UIStackView alloc] initWithArrangedSubviews:@[ _jitWarningCard, libraryRow ]];
+  // ── Collapsible stack: warnings → library header ───────────────────────
+
+  _topInfoStack = [[UIStackView alloc]
+      initWithArrangedSubviews:@[ _jitWarningCard, _memoryWarningCard, libraryRow ]];
   _topInfoStack.axis = UILayoutConstraintAxisVertical;
   _topInfoStack.spacing = 12;
   _topInfoStack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -354,11 +415,28 @@
     [_jitStatusLabel.bottomAnchor constraintEqualToAnchor:_jitWarningCard.bottomAnchor
                                                  constant:-10],
 
+    // Memory entitlement banner internals.
+    [_memoryStatusIcon.leadingAnchor constraintEqualToAnchor:_memoryWarningCard.leadingAnchor
+                                                    constant:14],
+    [_memoryStatusIcon.centerYAnchor constraintEqualToAnchor:_memoryWarningCard.centerYAnchor],
+    [_memoryStatusIcon.widthAnchor constraintEqualToConstant:18],
+    [_memoryStatusIcon.heightAnchor constraintEqualToConstant:18],
+    [_memoryStatusLabel.leadingAnchor constraintEqualToAnchor:_memoryStatusIcon.trailingAnchor
+                                                     constant:10],
+    [_memoryStatusLabel.trailingAnchor constraintEqualToAnchor:_memoryWarningCard.trailingAnchor
+                                                      constant:-14],
+    [_memoryStatusLabel.topAnchor constraintEqualToAnchor:_memoryWarningCard.topAnchor constant:10],
+    [_memoryStatusLabel.bottomAnchor constraintEqualToAnchor:_memoryWarningCard.bottomAnchor
+                                                    constant:-10],
+
     // Library row internals.
     [_libraryLabel.leadingAnchor constraintEqualToAnchor:libraryRow.leadingAnchor],
     [_libraryLabel.centerYAnchor constraintEqualToAnchor:libraryRow.centerYAnchor],
-    [_openGameButton.trailingAnchor constraintEqualToAnchor:libraryRow.trailingAnchor],
-    [_openGameButton.centerYAnchor constraintEqualToAnchor:libraryRow.centerYAnchor],
+    [_libraryLabel.trailingAnchor
+        constraintLessThanOrEqualToAnchor:libraryActionsStack.leadingAnchor
+                                 constant:-8],
+    [libraryActionsStack.trailingAnchor constraintEqualToAnchor:libraryRow.trailingAnchor],
+    [libraryActionsStack.centerYAnchor constraintEqualToAnchor:libraryRow.centerYAnchor],
     [libraryRow.heightAnchor constraintEqualToConstant:34],
 
     // Games grid.
@@ -374,8 +452,10 @@
   ]];
 
   [gridLayout release];
+  [libraryActionsStack release];
   [libraryRow release];
   [self setJITAcquired:NO];
+  [self setMemoryEntitlementEnabled:YES];
   [self applyActionsEnabledState];
   return self;
 }
@@ -387,6 +467,7 @@
   [_settingsHandler release];
   [_profileHandler release];
   [_importHandler release];
+  [_bulkZarConversionHandler release];
   [_gameLaunchedHandler release];
   [_copyLaunchURLHandler release];
   [_gameSettingsHandler release];
@@ -395,14 +476,19 @@
   [_manageContentHandler release];
   [_discSelectionHandler release];
   [_patchesHandler release];
+  [_zarConversionHandler release];
   [_titleLabel release];
   [_settingsButton release];
   [_profileButton release];
   [_openGameButton release];
+  [_convertLibraryButton release];
   [_jitWarningCard release];
   [_jitStatusDot release];
   [_jitStatusRing release];
   [_jitStatusLabel release];
+  [_memoryWarningCard release];
+  [_memoryStatusIcon release];
+  [_memoryStatusLabel release];
   [_jitReadyDot release];
   [_jitReadyRing release];
   [_jitReadyLabel release];
@@ -433,17 +519,25 @@
   }
 }
 
+- (void)convertLibraryTapped:(UIButton*)__unused sender {
+  if (_bulkZarConversionHandler) {
+    _bulkZarConversionHandler();
+  }
+}
+
 #pragma mark - Focus visuals
 
 - (void)applyActionsEnabledState {
   _settingsButton.enabled = _actionsEnabled;
   _profileButton.enabled = _actionsEnabled;
   _openGameButton.enabled = _actionsEnabled;
+  _convertLibraryButton.enabled = _actionsEnabled && !_convertLibraryButton.hidden;
 
   CGFloat actionAlpha = _actionsEnabled ? 1.0 : 0.5;
   _settingsButton.alpha = actionAlpha;
   _profileButton.alpha = actionAlpha;
   _openGameButton.alpha = actionAlpha;
+  _convertLibraryButton.alpha = _convertLibraryButton.hidden ? 0.0 : actionAlpha;
 }
 
 - (void)setActionsEnabled:(BOOL)actionsEnabled {
@@ -497,6 +591,7 @@
     [self clearButtonFocusChrome:_settingsButton];
     [self clearButtonFocusChrome:_profileButton];
     [self clearButtonFocusChrome:_openGameButton];
+    [self clearButtonFocusChrome:_convertLibraryButton];
     if (_focusedGameIndex >= 0 && _focusedGameIndex < static_cast<NSInteger>(_games.count)) {
       NSIndexPath* focusedPath = [NSIndexPath indexPathForItem:_focusedGameIndex inSection:0];
       [_gamesCollectionView reloadItemsAtIndexPaths:@[ focusedPath ]];
@@ -507,6 +602,7 @@
   [self setButton:_settingsButton controllerFocused:settingsFocused];
   [self setButton:_profileButton controllerFocused:profileFocused];
   [self setButton:_openGameButton controllerFocused:importFocused];
+  [self clearButtonFocusChrome:_convertLibraryButton];
 
   if (_libraryFocusActive && _focusedGameIndex < 0 && _games.count > 0) {
     [self setFocusedGameIndex:0 scroll:NO];
@@ -525,11 +621,20 @@
   [_games release];
   _games = [games copy];
   _emptyLabel.hidden = _games.count > 0;
+  BOOL hasConvertibleGames = NO;
+  for (XeniaIOSLauncherGameSnapshot* game in _games) {
+    if (game.supportsZarConversion) {
+      hasConvertibleGames = YES;
+      break;
+    }
+  }
+  _convertLibraryButton.hidden = !hasConvertibleGames;
   if (_games.count == 0) {
     _focusedGameIndex = -1;
   } else if (_focusedGameIndex < 0 || _focusedGameIndex >= static_cast<NSInteger>(_games.count)) {
     _focusedGameIndex = 0;
   }
+  [self applyActionsEnabledState];
   [_gamesCollectionView reloadData];
 }
 
@@ -571,6 +676,33 @@
 - (void)setJITStatusText:(NSString*)text {
   _jitStatusLabel.text = text ?: @"";
   _jitWarningCard.accessibilityValue = _jitStatusLabel.text;
+}
+
+- (void)setMemoryEntitlementEnabled:(BOOL)enabled {
+  BOOL previous_enabled = _memoryEntitlementEnabled;
+  _memoryEntitlementEnabled = enabled;
+
+  BOOL previous_hidden = _memoryWarningCard.hidden;
+  _memoryWarningCard.hidden = enabled;
+  if (previous_hidden != _memoryWarningCard.hidden) {
+    [_gamesCollectionView.collectionViewLayout invalidateLayout];
+  }
+
+  if (!enabled && !_memoryStatusLabel.text.length) {
+    _memoryStatusLabel.text = xe_memory_entitlement_missing_status_message();
+  }
+  _memoryWarningCard.accessibilityValue =
+      enabled ? @"Increased memory entitlement is enabled" : _memoryStatusLabel.text;
+  if (previous_enabled != enabled) {
+    UIAccessibilityPostNotification(
+        UIAccessibilityAnnouncementNotification,
+        enabled ? @"Increased memory entitlement is enabled" : _memoryStatusLabel.text);
+  }
+}
+
+- (void)setMemoryEntitlementStatusText:(NSString*)text {
+  _memoryStatusLabel.text = text ?: @"";
+  _memoryWarningCard.accessibilityValue = _memoryStatusLabel.text;
 }
 
 - (void)setFocusedGameIndex:(NSInteger)index scroll:(BOOL)scroll {
@@ -640,6 +772,8 @@
 - (void)refreshChromeForCurrentTraits {
   _jitReadyRing.layer.borderColor = [XeniaTheme accent].CGColor;
   _jitWarningCard.layer.borderColor = [XeniaTheme border].CGColor;
+  _memoryWarningCard.layer.borderColor = [XeniaTheme border].CGColor;
+  _memoryStatusIcon.tintColor = [XeniaTheme statusWarning];
   _jitStatusRing.layer.borderColor = _jitStatusDot.backgroundColor
                                          ? _jitStatusDot.backgroundColor.CGColor
                                          : [XeniaTheme statusError].CGColor;
@@ -766,12 +900,8 @@
     cell.compatPill.layer.borderColor = [UIColor clearColor].CGColor;
     cell.compatPill.hidden = NO;
   } else {
-    cell.compatPill.text = @"Unknown";
-    cell.compatPill.textColor = [XeniaTheme textMuted];
-    cell.compatPill.backgroundColor = [UIColor clearColor];
-    cell.compatPill.layer.borderWidth = 0.0;
-    cell.compatPill.layer.borderColor = [UIColor clearColor].CGColor;
-    cell.compatPill.hidden = NO;
+    cell.compatPill.text = @"";
+    cell.compatPill.hidden = YES;
   }
   cell.controllerFocused =
       _controllerNavigationEnabled && _libraryFocusActive && _focusedGameIndex == indexPath.item;
@@ -781,8 +911,6 @@
   }
   if (game.hasCompatInfo) {
     [accessibility_values addObject:xe_compat_status_label(game.compatStatus)];
-  } else {
-    [accessibility_values addObject:@"Unknown compatibility"];
   }
   cell.accessibilityLabel = game.title.length ? game.title : @"Untitled game";
   cell.accessibilityValue = [accessibility_values componentsJoinedByString:@", "];
@@ -960,6 +1088,15 @@
                                      unsafeSelf->_patchesHandler(gameIndex);
                                    }
                                  }];
+                     UIAction* zarConversionAction =
+                         [UIAction actionWithTitle:@"Convert to ZAR"
+                                             image:[UIImage systemImageNamed:@"opticaldisc"]
+                                        identifier:nil
+                                           handler:^(__unused UIAction* action) {
+                                             if (unsafeSelf->_zarConversionHandler) {
+                                               unsafeSelf->_zarConversionHandler(gameIndex);
+                                             }
+                                           }];
                      UIAction* copyURLAction =
                          [UIAction actionWithTitle:@"Copy Launch URL"
                                              image:[UIImage systemImageNamed:@"link"]
@@ -981,6 +1118,9 @@
                      if (!game.supportsPatches) {
                        patchesAction.attributes = UIMenuElementAttributesDisabled;
                      }
+                     if (!game.supportsZarConversion) {
+                       zarConversionAction.attributes = UIMenuElementAttributesDisabled;
+                     }
                      if (!game.titleId) {
                        gameSettingsAction.attributes = UIMenuElementAttributesDisabled;
                        touchLayoutAction.attributes = UIMenuElementAttributesDisabled;
@@ -990,7 +1130,7 @@
                                          children:@[
                                            playAction, gameSettingsAction, touchLayoutAction,
                                            discAction, compatAction, contentAction, patchesAction,
-                                           copyURLAction
+                                           zarConversionAction, copyURLAction
                                          ]];
                    }];
 }

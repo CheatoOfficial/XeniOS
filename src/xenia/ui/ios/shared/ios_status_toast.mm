@@ -46,6 +46,7 @@ NSString* SymbolForStyle(XeniaIOSStatusToastStyle style) {
 
 @implementation XeniaIOSStatusToastPresenter {
   UIView* toast_;
+  UILabel* label_;
   NSTimer* timer_;
 }
 
@@ -62,6 +63,7 @@ NSString* SymbolForStyle(XeniaIOSStatusToastStyle style) {
   [toast_ removeFromSuperview];
   [toast_ release];
   toast_ = nil;
+  label_ = nil;
 }
 
 - (void)timerFired:(NSTimer*)timer {
@@ -91,6 +93,13 @@ NSString* SymbolForStyle(XeniaIOSStatusToastStyle style) {
 - (void)presentMessage:(NSString*)message
                  style:(XeniaIOSStatusToastStyle)style
                 inView:(UIView*)view {
+  [self presentMessage:message style:style inView:view duration:3.4];
+}
+
+- (void)presentMessage:(NSString*)message
+                 style:(XeniaIOSStatusToastStyle)style
+                inView:(UIView*)view
+              duration:(NSTimeInterval)duration {
   if (!view || message.length == 0) {
     return;
   }
@@ -121,6 +130,7 @@ NSString* SymbolForStyle(XeniaIOSStatusToastStyle style) {
   label.textColor = [XeniaTheme textPrimary];
   label.numberOfLines = 2;
   xe_apply_label_font(label, UIFontTextStyleFootnote, 13.0, UIFontWeightSemibold);
+  label_ = label;
 
   UIStackView* row = [[[UIStackView alloc] initWithArrangedSubviews:@[ icon, label ]] autorelease];
   row.translatesAutoresizingMaskIntoConstraints = NO;
@@ -160,11 +170,21 @@ NSString* SymbolForStyle(XeniaIOSStatusToastStyle style) {
                      toast.alpha = 1.0;
                      toast.transform = CGAffineTransformIdentity;
                    }];
-  timer_ = [[NSTimer scheduledTimerWithTimeInterval:3.4
-                                             target:self
-                                           selector:@selector(timerFired:)
-                                           userInfo:nil
-                                            repeats:NO] retain];
+  if (duration > 0.0) {
+    timer_ = [[NSTimer scheduledTimerWithTimeInterval:duration
+                                               target:self
+                                             selector:@selector(timerFired:)
+                                             userInfo:nil
+                                              repeats:NO] retain];
+  }
+}
+
+- (void)updateMessage:(NSString*)message {
+  if (!toast_ || !label_ || message.length == 0) {
+    return;
+  }
+  label_.text = message;
+  XEApplyAccessibility(toast_, message, nil, nil, UIAccessibilityTraitStaticText);
 }
 
 @end

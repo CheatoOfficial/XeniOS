@@ -25,6 +25,9 @@ BOOL xe_can_mmap_exec_page(void);
 BOOL xe_check_jit_available(void);
 uint32_t xe_ios_code_sign_flags(void);
 
+// Runtime signing entitlement readiness.
+BOOL xe_has_increased_memory_limit_entitlement(void);
+
 // iOS major-version reporting (returns -1 if unavailable, e.g. tvOS).
 int xe_ios_product_major_version(void);
 BOOL xe_ios_requires_debugger_broker(void);
@@ -32,6 +35,8 @@ BOOL xe_ios_requires_debugger_broker(void);
 // User-visible JIT status copy.
 NSString* xe_jit_waiting_status_message(void);
 NSString* xe_jit_not_detected_guidance_message(void);
+NSString* xe_memory_entitlement_missing_status_message(void);
+NSString* xe_memory_entitlement_not_detected_guidance_message(void);
 
 // Decorates a CALayer with a pulsing radial ring for the JIT status indicator.
 void xe_add_jit_ring_pulse(CALayer* layer, NSString* key, CGFloat end_scale, CGFloat peak_opacity,

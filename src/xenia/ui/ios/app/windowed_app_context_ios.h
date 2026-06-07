@@ -132,6 +132,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   using TitleUpdateInstallCallback = std::function<bool(const std::string&, std::string*, bool*)>;
   using GameExitedCallback = std::function<void()>;
   using ProfileServicesReadyCallback = std::function<void()>;
+  using ProfileServicesPrepareCallback = std::function<void()>;
   using SignInUIPromptCallback = std::function<bool(uint32_t, uint32_t)>;
   using AchievementsSnapshotCallback = std::function<IOSAchievementsSnapshot(uint32_t, uint32_t)>;
   using AchievementsUIPromptCallback = std::function<bool(uint32_t, uint32_t)>;
@@ -190,6 +191,18 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   void NotifyProfileServicesReady() const {
     if (profile_services_ready_callback_) {
       profile_services_ready_callback_();
+    }
+  }
+
+  // Asks the app to begin bringing up profile/content services (a lightweight
+  // headless emulator init) without blocking, so they are ready by the time the
+  // user acts -- e.g. opening Manage Content well before picking a package.
+  void set_profile_services_prepare_callback(ProfileServicesPrepareCallback callback) {
+    profile_services_prepare_callback_ = std::move(callback);
+  }
+  void PrepareProfileServices() const {
+    if (profile_services_prepare_callback_) {
+      profile_services_prepare_callback_();
     }
   }
 
@@ -424,6 +437,7 @@ class IOSWindowedAppContext final : public WindowedAppContext {
   PatchSetEnabledCallback patch_set_enabled_callback_;
   ControllerStateCallback controller_state_callback_;
   ProfileServicesReadyCallback profile_services_ready_callback_;
+  ProfileServicesPrepareCallback profile_services_prepare_callback_;
   MessageBoxPromptCallback message_box_prompt_callback_;
   KeyboardPromptCallback keyboard_prompt_callback_;
   GameplayInputBlockedCallback gameplay_input_blocked_callback_;

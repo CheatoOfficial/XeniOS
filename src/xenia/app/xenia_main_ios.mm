@@ -819,6 +819,11 @@ bool EmulatorAppIOS::OnInitialize() {
   ios_context.set_game_terminate_callback(
       [this]() { return RequestGameStop("TerminateCurrentGame"); });
 
+  // Kick off profile/content services init in the background ahead of time so a
+  // title-update install does not fail its first attempt with "still
+  // initializing". Non-blocking: it just starts the headless emulator thread.
+  ios_context.set_profile_services_prepare_callback([this]() { EnsureProfileServicesReady(); });
+
   ios_context.set_title_update_install_callback([this](const std::string& package_path,
                                                        std::string* status_out,
                                                        bool* not_title_update_out) {

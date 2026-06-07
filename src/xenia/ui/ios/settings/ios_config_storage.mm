@@ -70,10 +70,39 @@ bool IOSConfigHasConfigVar(const std::string& key) { return GetConfigVar(key) !=
 
 std::string StripTomlQuotes(std::string value) {
   value = TrimAscii(std::move(value));
-  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+  if (value.size() >= 6 &&
+      ((value.rfind("\"\"\"", 0) == 0 && value.compare(value.size() - 3, 3, "\"\"\"") == 0) ||
+       (value.rfind("'''", 0) == 0 && value.compare(value.size() - 3, 3, "'''") == 0))) {
+    value = value.substr(3, value.size() - 6);
+    if (!value.empty() && value.front() == '\n') {
+      value.erase(0, 1);
+    }
+  } else if (value.size() >= 2 && ((value.front() == '"' && value.back() == '"') ||
+                                   (value.front() == '\'' && value.back() == '\''))) {
     value = value.substr(1, value.size() - 2);
   }
   return value;
+}
+
+std::string IOSConfigDecodeTomlStringValue(const std::string& value) {
+  std::string trimmed = TrimAscii(value);
+  if (trimmed.empty()) {
+    return std::string();
+  }
+
+  try {
+    toml::parse_result parsed = toml::parse("value = " + trimmed);
+    if (const toml::value<std::string>* string_value = parsed["value"].as_string()) {
+      return string_value->get();
+    }
+  } catch (const toml::parse_error&) {
+  }
+
+  return StripTomlQuotes(std::move(trimmed));
+}
+
+std::string IOSConfigNormalizeEditableStringLikeValue(const std::string& value) {
+  return IOSConfigDecodeTomlStringValue(value);
 }
 
 std::string IOSConfigGetConfigVarString(const std::string& key, const std::string& fallback) {
@@ -81,7 +110,7 @@ std::string IOSConfigGetConfigVarString(const std::string& key, const std::strin
   if (!var) {
     return fallback;
   }
-  return StripTomlQuotes(var->config_value());
+  return IOSConfigDecodeTomlStringValue(var->config_value());
 }
 
 bool IOSConfigParseBoolString(const std::string& text, bool* value_out) {
@@ -160,7 +189,7 @@ bool ApplyTomlNodeToConfigItem(const toml::node* node, IOSConfigItem* item) {
 
   void* saved_state = var->SaveConfigValueState();
   var->LoadConfigValue(node);
-  const std::string normalized_value = StripTomlQuotes(var->config_value());
+  const std::string normalized_value = IOSConfigDecodeTomlStringValue(var->config_value());
   var->RestoreConfigValueState(saved_state);
 
   switch (item->control_type) {
@@ -233,7 +262,7 @@ int64_t IntegerValueForConfigItem(const IOSConfigItem& item) {
 }
 
 std::string StringValueForConfigItem(const IOSConfigItem& item) {
-  return StripTomlQuotes(item.string_value);
+  return IOSConfigNormalizeEditableStringLikeValue(item.string_value);
 }
 
 bool InsertGameConfigValue(toml::table* config_table, const IOSConfigItem& item) {
@@ -464,7 +493,7 @@ static bool SetConfigVarStringLikeValue(const std::string& key, const std::strin
   }
   if (dynamic_cast<cvar::ConfigVar<std::string>*>(var) ||
       dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(var)) {
-    return LoadConfigVarValue(var, value);
+    return LoadConfigVarValue(var, IOSConfigNormalizeEditableStringLikeValue(value));
   }
   XELOGW("iOS settings: config var '{}' is not a string/path type", key);
   return false;

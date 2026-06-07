@@ -20,12 +20,13 @@
 #include "xenia/config.h"
 #include "xenia/ui/config_helpers.h"
 
+#import "xenia/ui/ios/app/ios_landscape_navigation_controller.h"
 #import "xenia/ui/ios/app/ios_window_layout.h"
-#import "xenia/ui/ios/settings/ios_choice_list_view_controller.h"
 #import "xenia/ui/ios/launcher/ios_compat_data.h"
+#import "xenia/ui/ios/launcher/ios_external_folders_view_controller.h"
+#import "xenia/ui/ios/settings/ios_choice_list_view_controller.h"
 #import "xenia/ui/ios/settings/ios_config_builder.h"
 #import "xenia/ui/ios/settings/ios_config_models.h"
-#import "xenia/ui/ios/app/ios_landscape_navigation_controller.h"
 #import "xenia/ui/ios/settings/ios_debug_settings_view_controller.h"
 #import "xenia/ui/ios/settings/ios_log_view_controller.h"
 #import "xenia/ui/ios/shared/ios_system_utils.h"
@@ -788,6 +789,9 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     [field addTarget:self
                   action:@selector(integerFieldChanged:)
         forControlEvents:UIControlEventEditingDidEnd];
+    [field addTarget:self
+                  action:@selector(textFieldEditingChanged:)
+        forControlEvents:UIControlEventEditingChanged];
     cell.contentConfiguration = content;
     cell.accessoryView = field;
     cell.accessoryType = UITableViewCellAccessoryNone;
@@ -805,6 +809,9 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     [field addTarget:self
                   action:@selector(doubleFieldChanged:)
         forControlEvents:UIControlEventEditingDidEnd];
+    [field addTarget:self
+                  action:@selector(textFieldEditingChanged:)
+        forControlEvents:UIControlEventEditingChanged];
     cell.contentConfiguration = content;
     cell.accessoryView = field;
     cell.accessoryType = UITableViewCellAccessoryNone;
@@ -824,6 +831,9 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     [field addTarget:self
                   action:@selector(stringFieldChanged:)
         forControlEvents:UIControlEventEditingDidEnd];
+    [field addTarget:self
+                  action:@selector(textFieldEditingChanged:)
+        forControlEvents:UIControlEventEditingChanged];
     cell.contentConfiguration = content;
     cell.accessoryView = field;
     cell.accessoryType = UITableViewCellAccessoryNone;
@@ -896,6 +906,49 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
     [self applyLiveOverrideForItem:item];
   }
   [self configItemDidChange:item];
+}
+
+- (void)textFieldEditingChanged:(UITextField*)sender {
+  CGPoint point = [sender convertPoint:CGPointZero toView:self.tableView];
+  NSIndexPath* indexPath = [self.tableView indexPathForRowAtPoint:point];
+  if (!indexPath) {
+    return;
+  }
+  IOSConfigItem* item = [self itemAtIndexPath:indexPath];
+  if (!item) {
+    return;
+  }
+  const char* utf8 = [sender.text UTF8String];
+  switch (item->control_type) {
+    case IOSConfigControlType::kInteger: {
+      if (utf8) {
+        char* end = nullptr;
+        long long parsed = std::strtoll(utf8, &end, 10);
+        if (end != utf8 && *end == '\0') {
+          item->integer_value = static_cast<int64_t>(parsed);
+          [self configItemDidChange:item];
+        }
+      }
+    } break;
+    case IOSConfigControlType::kDouble: {
+      if (utf8) {
+        char* end = nullptr;
+        double parsed = std::strtod(utf8, &end);
+        if (end != utf8 && *end == '\0') {
+          item->double_value = parsed;
+          [self configItemDidChange:item];
+        }
+      }
+    } break;
+    case IOSConfigControlType::kString:
+    case IOSConfigControlType::kPath:
+      item->string_value = utf8 ? utf8 : "";
+      [self configItemDidChange:item];
+      break;
+    default:
+      return;
+  }
+  [self markPendingChangesForItem:item];
 }
 
 - (void)integerFieldChanged:(UITextField*)sender {
@@ -1061,6 +1114,12 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
         [self.navigationController pushViewController:log_vc animated:YES];
         [log_vc release];
       } break;
+      case IOSConfigAction::kManageExternalFolders: {
+        XeniaIOSExternalFoldersViewController* folders_vc =
+            [[XeniaIOSExternalFoldersViewController alloc] init];
+        [self.navigationController pushViewController:folders_vc animated:YES];
+        [folders_vc release];
+      } break;
       case IOSConfigAction::kResetGameSettings:
         [self confirmResetGameSettings];
         break;
@@ -1219,6 +1278,8 @@ bool OverrideStringLikeCvarByName(const std::string& key, const std::string& val
   if (live_override_) {
     return;
   }
+  [self.view endEditing:YES];
+  [self.tableView endEditing:YES];
   const std::vector<IOSConfigSection> sections_for_save = [self sectionsForSaving];
   BOOL saved = game_title_id_
                    ? (ApplyIOSConfigSectionsToGameConfig(sections_for_save, game_title_id_,

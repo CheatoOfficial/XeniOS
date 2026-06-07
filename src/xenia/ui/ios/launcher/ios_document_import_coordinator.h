@@ -25,7 +25,15 @@
 - (void)documentImportCoordinatorSetStatusText:(NSString*)text;
 - (std::filesystem::path)documentImportCoordinatorImportGameAtURL:(NSURL*)sourceURL
                                                             error:(NSError**)error;
+- (BOOL)documentImportCoordinatorLinkExternalLibraryAtURL:(NSURL*)folderURL error:(NSError**)error;
 - (void)documentImportCoordinatorRefreshImportedGames;
+- (void)documentImportCoordinatorRefreshImportedGamesWithCompletion:(void (^)(void))completion;
+- (void)documentImportCoordinatorPromptForZarConversionAfterAddingPath:
+            (const std::filesystem::path&)path
+                                                       externalLibrary:(BOOL)externalLibrary
+                                                            completion:
+                                                                (void (^)(BOOL conversionChosen))
+                                                                    completion;
 - (void)documentImportCoordinatorLaunchGameAtPath:(const std::filesystem::path&)gamePath
                                       displayName:(NSString*)displayName;
 - (BOOL)documentImportCoordinatorCanInstallTitleUpdates;
@@ -42,6 +50,7 @@
 
 - (instancetype)initWithHost:(id<XeniaIOSDocumentImportCoordinatorHost>)host;
 - (void)presentGameImportPicker;
+- (void)presentExternalLibraryFolderPicker;
 - (void)presentTouchLayoutImportPickerFromViewController:(UIViewController*)presenter;
 
 @end

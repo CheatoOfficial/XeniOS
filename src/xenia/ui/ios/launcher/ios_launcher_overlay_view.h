@@ -26,6 +26,7 @@
 @property(nonatomic, assign) BOOL supportsManageContent;
 @property(nonatomic, assign) BOOL supportsDiscSelection;
 @property(nonatomic, assign) BOOL supportsPatches;
+@property(nonatomic, assign) BOOL supportsZarConversion;
 @property(nonatomic, assign) BOOL supportsRemoteArt;
 @property(nonatomic, assign) NSUInteger discCount;
 @property(nonatomic, strong) NSData* iconData;
@@ -42,6 +43,7 @@
 @property(nonatomic, copy) void (^settingsHandler)(void);
 @property(nonatomic, copy) void (^profileHandler)(void);
 @property(nonatomic, copy) void (^importHandler)(void);
+@property(nonatomic, copy) void (^bulkZarConversionHandler)(void);
 @property(nonatomic, copy) void (^gameLaunchedHandler)(NSUInteger gameIndex);
 @property(nonatomic, copy) void (^copyLaunchURLHandler)(NSUInteger gameIndex);
 @property(nonatomic, copy) void (^gameSettingsHandler)(NSUInteger gameIndex);
@@ -50,12 +52,15 @@
 @property(nonatomic, copy) void (^manageContentHandler)(NSUInteger gameIndex);
 @property(nonatomic, copy) void (^discSelectionHandler)(NSUInteger gameIndex);
 @property(nonatomic, copy) void (^patchesHandler)(NSUInteger gameIndex);
+@property(nonatomic, copy) void (^zarConversionHandler)(NSUInteger gameIndex);
 
 #pragma mark - Data ingestion
 
 - (void)setGames:(NSArray<XeniaIOSLauncherGameSnapshot*>*)games;
 - (void)setJITAcquired:(BOOL)acquired;
 - (void)setJITStatusText:(NSString*)text;
+- (void)setMemoryEntitlementEnabled:(BOOL)enabled;
+- (void)setMemoryEntitlementStatusText:(NSString*)text;
 - (void)setFocusedGameIndex:(NSInteger)index scroll:(BOOL)scroll;
 - (NSInteger)focusedGameIndex;
 - (void)reloadGames;

@@ -9,6 +9,10 @@
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>iso</string>
+      </array>
       <key>CFBundleTypeName</key>
       <string>Xbox 360 Disc Image</string>
       <key>CFBundleTypeRole</key>

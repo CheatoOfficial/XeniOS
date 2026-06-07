@@ -489,6 +489,17 @@ static std::vector<IOSConfigSection> BuildSystemSections() {
       "setup.",
       false);
   PushIfNotEmpty(sections, std::move(automation));
+
+  IOSConfigSection library;
+  library.title = "Library";
+  library.footer =
+      "Link folders from Files, USB drives, or network shares to play games without copying "
+      "them into XeniOS.";
+  AddActionSetting(library.items, IOSConfigAction::kManageExternalFolders,
+                   "Manage External Folders",
+                   "Review, add, or unlink the external folders scanned for games.");
+  PushIfNotEmpty(sections, std::move(library));
+
   return sections;
 }
 
@@ -762,7 +773,7 @@ std::vector<IOSConfigSection> BuildAllCvarSections() {
       if (enum_it != enum_opts.end() && !enum_it->second.empty()) {
         item.control_type = IOSConfigControlType::kEnum;
         item.enum_key = name;
-        item.string_value = TrimAscii(var->config_value());
+        item.string_value = IOSConfigGetConfigVarString(name, "");
         for (size_t i = 0; i < enum_it->second.size(); ++i) {
           item.choices.push_back({enum_it->second[i], static_cast<int64_t>(i)});
           item.choice_string_values.push_back(enum_it->second[i]);
@@ -772,11 +783,11 @@ std::vector<IOSConfigSection> BuildAllCvarSections() {
         }
       } else {
         item.control_type = IOSConfigControlType::kString;
-        item.string_value = TrimAscii(var->config_value());
+        item.string_value = IOSConfigGetConfigVarString(name, "");
       }
     } else if (dynamic_cast<cvar::ConfigVar<std::filesystem::path>*>(var)) {
       item.control_type = IOSConfigControlType::kPath;
-      item.string_value = TrimAscii(var->config_value());
+      item.string_value = IOSConfigGetConfigVarString(name, "");
     } else {
       // Unknown type — fall back to string display.
       item.control_type = IOSConfigControlType::kString;

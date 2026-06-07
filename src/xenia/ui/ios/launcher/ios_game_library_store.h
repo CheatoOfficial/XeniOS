@@ -17,12 +17,43 @@
 
 #include "xenia/ui/ios/launcher/ios_game_library.h"
 
+#ifdef __OBJC__
+
+@interface XeniaIOSExternalLibraryAccess : NSObject
+@property(nonatomic, readonly) NSURL* url;
+@property(nonatomic, readonly, getter=isAccessGranted) BOOL accessGranted;
+- (instancetype)initWithURL:(NSURL*)url;
+@end
+
+#endif  // __OBJC__
+
 namespace xe {
 namespace ui {
 
 std::filesystem::path IOSImportedGamesDirectory();
 
 std::filesystem::path ImportGameIntoIOSLibrary(NSURL* source_url, NSError** error);
+bool IsPathInIOSImportedGamesDirectory(const std::filesystem::path& path);
+
+// One linked external library folder, for the management UI.
+struct IOSExternalLibraryLocation {
+  std::string name;            // Display name (folder name, or stored name).
+  std::filesystem::path path;  // Folder path (resolved bookmark, or stored path).
+  bool available = false;      // Bookmark resolved without going stale.
+};
+std::vector<IOSExternalLibraryLocation> ListIOSExternalLibraryLocations();
+
+#ifdef __OBJC__
+
+BOOL SaveIOSExternalLibraryLocation(NSURL* folder_url, NSError** error);
+BOOL HideIOSExternalLibraryGameAtPath(const std::filesystem::path& path, NSString** hiddenName,
+                                      NSError** error);
+BOOL RemoveIOSExternalLibraryLocationForPath(const std::filesystem::path& path,
+                                             NSString** removedName, NSError** error);
+XeniaIOSExternalLibraryAccess* StartIOSExternalLibraryAccessForPath(
+    const std::filesystem::path& path, BOOL* matchedExternalLocation, NSError** error);
+
+#endif  // __OBJC__
 
 std::vector<IOSDiscoveredGame> ScanIOSGameLibrary(NSDictionary* title_name_cache);
 

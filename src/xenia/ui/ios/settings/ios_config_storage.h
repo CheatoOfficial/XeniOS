@@ -45,6 +45,8 @@ std::filesystem::path TakePendingExternalLaunchPathPreference(void);
 // Storage helpers used by the settings catalog builder.
 bool IOSConfigHasConfigVar(const std::string& key);
 std::string IOSConfigGetConfigVarString(const std::string& key, const std::string& fallback);
+std::string IOSConfigDecodeTomlStringValue(const std::string& value);
+std::string IOSConfigNormalizeEditableStringLikeValue(const std::string& value);
 bool IOSConfigParseBoolString(const std::string& text, bool* value_out);
 bool IOSConfigParseInt64String(const std::string& text, int64_t* value_out);
 
