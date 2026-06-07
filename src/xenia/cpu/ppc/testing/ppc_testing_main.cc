@@ -39,10 +39,9 @@ DEFINE_bool(mount_cache, false, "Enable cache mount", "Storage");
 DEFINE_bool(mount_memory_unit, false, "Enable memory unit (MU) mount",
             "Storage");
 
-// xenia-core's Emulator::SetupSubsystems pulls in these cvars; provide stubs
-// so the test runner links without depending on xenia_main.cc.
-DEFINE_string(apu, "nop", "Audio system stub for tests.", "APU");
-DEFINE_string(gpu, "null", "Graphics system stub for tests.", "GPU");
+// The apu/gpu backend-selection cvars that Emulator::SetupSubsystems pulls in
+// are defined once in cpu/testing/test_backend_cvars.cc (linked into this
+// target) so the test mains don't collide on duplicate definitions.
 
 DEFINE_path(test_path, "src/xenia/cpu/ppc/testing/",
             "Directory scanned for test files.", "Other");
