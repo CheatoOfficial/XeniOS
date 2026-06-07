@@ -116,7 +116,7 @@ namespace metal {
 namespace {
 
 #if XE_PLATFORM_IOS
-constexpr uint64_t kUploadBufferPoolMaxBytes = 128ull * 1024ull * 1024ull;
+constexpr uint64_t kUploadBufferPoolMaxBytes = 512ull * 1024ull * 1024ull;
 constexpr uint64_t kScaledResolveRetiredMaxBytes = 64ull * 1024ull * 1024ull;
 #else
 constexpr uint64_t kUploadBufferPoolMaxBytes = 512ull * 1024ull * 1024ull;
