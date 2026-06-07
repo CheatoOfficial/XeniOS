@@ -29,7 +29,7 @@ DiscImageDevice::~DiscImageDevice() = default;
 bool DiscImageDevice::Initialize() {
   mmap_ = MappedMemory::Open(host_path_, MappedMemory::Mode::kRead);
   if (!mmap_) {
-    XELOGE("Disc image could not be mapped");
+    XELOGE("Disc image could not be mapped: {}", host_path_.string());
     return false;
   } else {
     XELOGFS("DiscImageDevice::Initialize");
@@ -40,14 +40,15 @@ bool DiscImageDevice::Initialize() {
   state.size = mmap_->size();
   auto result = Verify(&state);
   if (result != Error::kSuccess) {
-    XELOGE("Failed to verify disc image header: {}",
-           static_cast<int32_t>(result));
+    XELOGE("Failed to verify disc image header: {} ({})",
+           static_cast<int32_t>(result), host_path_.string());
     return false;
   }
 
   result = ReadAllEntries(&state, state.ptr + state.root_offset);
   if (result != Error::kSuccess) {
-    XELOGE("Failed to read all GDFX entries: {}", static_cast<int32_t>(result));
+    XELOGE("Failed to read all GDFX entries: {} ({})",
+           static_cast<int32_t>(result), host_path_.string());
     return false;
   }
 
