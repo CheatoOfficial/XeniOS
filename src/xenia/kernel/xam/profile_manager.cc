@@ -7,6 +7,9 @@
  ******************************************************************************
  */
 
+#include <cctype>
+#include <charconv>
+#include <optional>
 #include <regex>
 
 #include "xenia/kernel/xam/profile_manager.h"
@@ -34,6 +37,63 @@ DEFINE_string(logged_profile_slot_3_xuid, "",
 namespace xe {
 namespace kernel {
 namespace xam {
+
+namespace {
+
+std::string TrimAscii(std::string value) {
+  size_t start = 0;
+  while (start < value.size() &&
+         std::isspace(static_cast<unsigned char>(value[start]))) {
+    ++start;
+  }
+  size_t end = value.size();
+  while (end > start &&
+         std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+    --end;
+  }
+  return value.substr(start, end - start);
+}
+
+std::string NormalizeLoggedProfileXuidValue(const std::string& value) {
+  std::string normalized = TrimAscii(value);
+  if (normalized.size() >= 2 &&
+      ((normalized.front() == '"' && normalized.back() == '"') ||
+       (normalized.front() == '\'' && normalized.back() == '\''))) {
+    normalized = TrimAscii(normalized.substr(1, normalized.size() - 2));
+  }
+  if (normalized.rfind("0x", 0) == 0 || normalized.rfind("0X", 0) == 0) {
+    normalized.erase(0, 2);
+  }
+  if (!normalized.empty() &&
+      (normalized.back() == 'h' || normalized.back() == 'H')) {
+    normalized.pop_back();
+  }
+  return normalized;
+}
+
+std::optional<uint64_t> ParseLoggedProfileXuid(const std::string& value,
+                                               uint8_t slot) {
+  std::string normalized = NormalizeLoggedProfileXuidValue(value);
+  if (normalized.empty()) {
+    return std::nullopt;
+  }
+
+  uint64_t xuid = 0;
+  auto [ptr, error] = std::from_chars(
+      normalized.data(), normalized.data() + normalized.size(), xuid, 16);
+  if (error != std::errc() || ptr != normalized.data() + normalized.size()) {
+    XELOGW(
+        "ProfileManager: Ignoring invalid logged profile XUID '{}' in slot {}",
+        value, slot);
+    return std::nullopt;
+  }
+  if (!xuid) {
+    return std::nullopt;
+  }
+  return xuid;
+}
+
+}  // namespace
 
 bool ProfileManager::DecryptAccountFile(const uint8_t* data,
                                         X_XAMACCOUNTINFO* output, bool devkit) {
@@ -109,28 +169,13 @@ ProfileManager::ProfileManager(KernelState* kernel_state,
     LoadAccount(account_xuid);
   }
 
-  if (!cvars::logged_profile_slot_0_xuid.empty()) {
-    Login(xe::string_util::from_string<uint64_t>(
-              cvars::logged_profile_slot_0_xuid, true),
-          0);
-  }
-
-  if (!cvars::logged_profile_slot_1_xuid.empty()) {
-    Login(xe::string_util::from_string<uint64_t>(
-              cvars::logged_profile_slot_1_xuid, true),
-          1);
-  }
-
-  if (!cvars::logged_profile_slot_2_xuid.empty()) {
-    Login(xe::string_util::from_string<uint64_t>(
-              cvars::logged_profile_slot_2_xuid, true),
-          2);
-  }
-
-  if (!cvars::logged_profile_slot_3_xuid.empty()) {
-    Login(xe::string_util::from_string<uint64_t>(
-              cvars::logged_profile_slot_3_xuid, true),
-          3);
+  const std::string* profile_cvars[4] = {
+      &cvars::logged_profile_slot_0_xuid, &cvars::logged_profile_slot_1_xuid,
+      &cvars::logged_profile_slot_2_xuid, &cvars::logged_profile_slot_3_xuid};
+  for (uint8_t slot = 0; slot < 4; ++slot) {
+    if (auto xuid = ParseLoggedProfileXuid(*profile_cvars[slot], slot)) {
+      Login(*xuid, slot);
+    }
   }
 }
 
@@ -174,12 +219,8 @@ void ProfileManager::SyncProfilesWithConfig() {
 
   std::map<uint8_t, uint64_t> desired_profiles;
   for (uint8_t slot = 0; slot < 4; slot++) {
-    if (!profile_cvars[slot]->empty()) {
-      uint64_t xuid =
-          xe::string_util::from_string<uint64_t>(*profile_cvars[slot], true);
-      if (xuid != 0) {
-        desired_profiles[slot] = xuid;
-      }
+    if (auto xuid = ParseLoggedProfileXuid(*profile_cvars[slot], slot)) {
+      desired_profiles[slot] = *xuid;
     }
   }
 
