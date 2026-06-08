@@ -839,7 +839,9 @@ ZarConversionResult ConvertPathToZar(
 
   ZarOutputContext output_context;
   output_context.output_path = output_path;
-  ZArchiveWriter writer(ZarOpenOutputFile, ZarWriteOutputData, &output_context);
+  ZArchiveWriter writer(ZarOpenOutputFile, ZarWriteOutputData, &output_context,
+                        options.compression_thread_count,
+                        options.compression_thread_initializer);
   if (output_context.has_error) {
     result.error_message = output_context.error_message;
     XELOGI("ZAR convert: failed opening output='{}' error='{}'",
@@ -847,12 +849,12 @@ ZarConversionResult ConvertPathToZar(
     return result;
   }
 
-  // The bundled zarchive compresses blocks synchronously on this thread. The
-  // requested compression_thread_count is honored only by the parallel-writer
-  // build of zarchive; the stock submodule ignores it.
-  XELOGI(
-      "ZAR convert: compression=synchronous requested_workers={} output='{}'",
-      options.compression_thread_count, PathForMessage(output_path));
+  const bool parallel_compression = options.compression_thread_count > 1;
+  const unsigned compression_workers =
+      parallel_compression ? options.compression_thread_count : 1u;
+  XELOGI("ZAR convert: compression={} workers={} output='{}'",
+         parallel_compression ? "parallel" : "synchronous", compression_workers,
+         PathForMessage(output_path));
   const auto convert_start = std::chrono::steady_clock::now();
 
   bool packed = false;
@@ -889,9 +891,10 @@ ZarConversionResult ConvertPathToZar(
     }
     CheckCancellation(cancel_callback, &result);
   } else {
-    // Cancelled or failed: skip Finalize() so no archive footer is written.
-    // Compression is synchronous, so nothing is still touching the stream; it
-    // is closed and the partial output is removed below.
+    // Finalize() is skipped on cancel/failure, but it is what drains and joins
+    // the parallel compression pool. Abort here so no serializer thread is
+    // still writing to the stream we are about to close and remove.
+    writer.Abort();
   }
   output_context.stream.close();
 
@@ -933,11 +936,11 @@ ZarConversionResult ConvertPathToZar(
                            : 0.0;
   XELOGI(
       "ZAR convert: success source='{}' output='{}' files={} bytes={} "
-      "total_bytes={} output_bytes={} requested_workers={} elapsed={:.2f}s "
+      "total_bytes={} output_bytes={} workers={} elapsed={:.2f}s "
       "throughput={:.1f} MiB/s ratio={:.3f}",
       PathForMessage(source_path), PathForMessage(output_path),
       result.files_written, result.bytes_written, result.total_bytes,
-      output_size_ec ? 0ull : output_bytes, options.compression_thread_count,
+      output_size_ec ? 0ull : output_bytes, compression_workers,
       elapsed_seconds, throughput_mib_s, ratio);
   return result;
 }

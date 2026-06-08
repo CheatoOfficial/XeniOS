@@ -72,7 +72,7 @@
 	url = https://github.com/facebook/zstd.git
 [submodule "third_party/zarchive"]
 	path = third_party/zarchive
-	url = https://github.com/exzap/ZArchive.git
+	url = https://github.com/xenios-jp/ZArchive.git
 [submodule "third_party/zlib-ng"]
 	path = third_party/zlib-ng
 	url = https://github.com/zlib-ng/zlib-ng.git
