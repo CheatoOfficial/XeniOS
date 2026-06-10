@@ -23,7 +23,7 @@ git submodule update --init --recursive
 
 <p align="center">
   <a href="https://xenios.jp">Website</a> ◦
-  <a href="https://github.com/xenios-jp/XeniOS/releases">Releases</a> ◦
+  <a href="https://github.com/KilIswitch/XeniOS/releases">Releases</a> ◦
   <a href="https://xenios.jp/docs">Docs</a> ◦
   <a href="https://xenios.jp/faq">FAQ</a> ◦
   <a href="https://xenios.jp/compatibility">Compatibility</a> ◦
