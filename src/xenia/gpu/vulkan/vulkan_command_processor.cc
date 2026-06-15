@@ -1651,6 +1651,14 @@ void VulkanCommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
     // staying stale from the first draw of the submission.
     current_constant_buffers_up_to_date_ &=
         ~(UINT32_C(1) << SpirvShaderTranslator::kConstantBufferTessellation);
+  } else if ((index >= XE_GPU_REG_PA_CL_UCP_0_X &&
+              index <= XE_GPU_REG_PA_CL_UCP_5_W) ||
+             index == XE_GPU_REG_PA_CL_CLIP_CNTL) {
+    // Source registers for the user clip plane constant buffer. Invalidate it
+    // so the planes are refreshed per draw instead of staying stale from the
+    // first draw of the submission.
+    current_constant_buffers_up_to_date_ &=
+        ~(UINT32_C(1) << SpirvShaderTranslator::kConstantBufferClipPlanes);
   }
 }
 void VulkanCommandProcessor::WriteRegistersFromMem(uint32_t start_index,
@@ -6030,8 +6038,9 @@ void VulkanCommandProcessor::UpdateDynamicState(
           stencil_ref_mask_back_reg = XE_GPU_REG_RB_STENCILREFMASK_BF;
         } else {
           // Choose the back face values only if drawing only back faces.
+          auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
           stencil_ref_mask_front_reg =
-              regs.Get<reg::PA_SU_SC_MODE_CNTL>().cull_front
+              (pa_su_sc_mode_cntl.cull_front && !pa_su_sc_mode_cntl.cull_back)
                   ? XE_GPU_REG_RB_STENCILREFMASK_BF
                   : XE_GPU_REG_RB_STENCILREFMASK;
           stencil_ref_mask_back_reg = stencil_ref_mask_front_reg;
