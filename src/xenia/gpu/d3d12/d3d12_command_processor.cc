@@ -46,13 +46,13 @@ namespace d3d12 {
 
 // Generated with `xb buildshaders`.
 namespace shaders {
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_pwl_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_pwl_fxaa_luma_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/apply_gamma_table_fxaa_luma_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
-#include "xenia/gpu/shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/apply_gamma_pwl_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/apply_gamma_pwl_fxaa_luma_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/apply_gamma_table_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/apply_gamma_table_fxaa_luma_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/fxaa_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/fxaa_extreme_cs.h"
+#include "xenia/gpu/shaders/bytecode/d3d12_dxil/resolve_downscale_cs.h"
 }  // namespace shaders
 
 D3D12CommandProcessor::D3D12CommandProcessor(
@@ -975,7 +975,10 @@ bool D3D12CommandProcessor::SetupContext() {
     root_signature_bindless_desc.pParameters = root_parameters_bindless;
     root_signature_bindless_desc.NumStaticSamplers = 0;
     root_signature_bindless_desc.pStaticSamplers = nullptr;
-    root_signature_bindless_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+    // For SM 6.6 DXIL with ResourceDescriptorHeap/SamplerDescriptorHeap.
+    root_signature_bindless_desc.Flags =
+        D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED |
+        D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED;
     // Fetch constants.
     {
       auto& parameter =
@@ -2818,34 +2821,43 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   }
 
   if (cvars::async_shader_compilation) {
-    if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
-      if (!zpd_active_segment_.logical_active) {
-        XELOGI(
-            "Skipping draw - pipeline not ready: VS {:016X} mod {:016X}, PS "
-            "{:016X} mod {:016X}",
-            vertex_shader->ucode_data_hash(), vertex_shader_modification.value,
-            pixel_shader ? pixel_shader->ucode_data_hash() : 0,
-            pixel_shader_modification.value);
-        return true;
+    if (zpd_active_segment_.logical_active) {
+      // Occlusion-query draws need the real pixel shader - the no-op
+      // placeholder skips the guest shader's pixel kills and would miscount.
+      // Wait for it.
+      if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) ==
+              nullptr ||
+          pipeline_cache_->IsPlaceholderPipeline(pipeline_handle)) {
+        if (cvars::occlusion_query_log) {
+          XELOGI(
+              "ZPD: Awaiting real D3D12 pipeline for active query draw "
+              "VS={:016X} PS={:016X}",
+              vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+              pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+        }
+        if (pipeline_cache_->AwaitRealD3D12PipelineByHandle(pipeline_handle) ==
+            nullptr) {
+          XELOGE(
+              "IssueDraw: Pipeline unavailable after await for active query "
+              "draw VS={:016X} PS={:016X}",
+              vertex_shader ? vertex_shader->ucode_data_hash() : 0,
+              pixel_shader ? pixel_shader->ucode_data_hash() : 0);
+          return false;
+        }
       }
-      if (cvars::occlusion_query_log) {
-        XELOGI(
-            "ZPD: Awaiting pending D3D12 pipeline for active query draw "
-            "VS={:016X} PS={:016X}",
-            vertex_shader ? vertex_shader->ucode_data_hash() : 0,
-            pixel_shader ? pixel_shader->ucode_data_hash() : 0);
-      }
-      if (pipeline_cache_->AwaitD3D12PipelineByHandle(pipeline_handle) ==
-          nullptr) {
-        XELOGE(
-            "IssueDraw: Pipeline unavailable after await for active query draw "
-            "VS={:016X} PS={:016X}",
-            vertex_shader ? vertex_shader->ucode_data_hash() : 0,
-            pixel_shader ? pixel_shader->ucode_data_hash() : 0);
-        return false;
-      }
+    } else if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) ==
+               nullptr) {
+      // No pipeline and no placeholder available (bindful async, or placeholder
+      // creation failed) - skip the draw until the real pipeline is ready.
+      XELOGI(
+          "Skipping draw - pipeline not ready: VS {:016X} mod {:016X}, PS "
+          "{:016X} mod {:016X}",
+          vertex_shader->ucode_data_hash(), vertex_shader_modification.value,
+          pixel_shader ? pixel_shader->ucode_data_hash() : 0,
+          pixel_shader_modification.value);
+      return true;
     }
-    // Re-fetch root signature now that pipeline is ready.
+    // Re-fetch root signature now that the pipeline (or placeholder) is bound.
     root_signature = pipeline_cache_->GetRootSignatureByHandle(pipeline_handle);
   }
 
@@ -2857,7 +2869,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
         label, sizeof(label), primitive_type, primitive_processing_result,
         vertex_shader ? vertex_shader->ucode_data_hash() : 0,
         pixel_shader ? pixel_shader->ucode_data_hash() : 0);
-    PushDebugMarker("%s", label);
+    PushDebugMarker(memexport_used ? "%s (memexport)" : "%s", label);
   }
 
   // Update the textures - this may bind pipelines.
@@ -3173,6 +3185,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   PopDebugMarker();
 
   if (memexport_used) {
+    InsertDebugMarker("Memexport draw: %zu ranges", memexport_ranges_.size());
     // Make sure this memexporting draw is ordered with other work using shared
     // memory as a UAV.
     // TODO(Triang3l): Find some PM4 command that can be used for indication of
@@ -3713,7 +3726,14 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
   // Copy exported data to current frame's buffer
   shared_memory_->UseAsCopySource();
   SubmitBarriers();
-  InsertDebugMarker("Memexport Readback (async): %u bytes, %zu ranges",
+  // Delayed sync reads the previous frame's buffer; on a cache miss (first use
+  // or buffer resize) it must stall and read this frame's buffer instead. Known
+  // here so the marker reports whether this readback actually stalled.
+  uint32_t read_index = 1 - write_index;
+  bool is_cache_miss = rb.buffers[read_index] == nullptr ||
+                       memexport_total_size > rb.sizes[read_index];
+  InsertDebugMarker("Memexport Readback (async%s): %u bytes, %zu ranges",
+                    is_cache_miss ? ", sync fallback" : "",
                     memexport_total_size, memexport_ranges_.size());
   ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
   uint32_t readback_buffer_offset = 0;
@@ -3725,15 +3745,8 @@ void D3D12CommandProcessor::IssueDraw_MemexportReadbackFastPath(
     readback_buffer_offset += memexport_range_size;
   }
 
-  // Use delayed sync (read from previous frame's buffer)
-  uint32_t read_index = 1 - write_index;
-
-  bool is_cache_miss = false;
-  // If previous buffer doesn't exist or is too small, fall back to sync
-  // This happens on first use or buffer resize - subsequent frames will be fast
-  if (rb.buffers[read_index] == nullptr ||
-      memexport_total_size > rb.sizes[read_index]) {
-    is_cache_miss = true;
+  // On a cache miss, stall and read the buffer just written this frame.
+  if (is_cache_miss) {
     read_index = write_index;
     if (!AwaitAllQueueOperationsCompletion()) {
       return;
@@ -5406,9 +5419,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
       }
       for (size_t i = 0; i < texture_count_pixel; ++i) {
         const D3D12Shader::TextureBinding& texture = (*textures_pixel)[i];
-        descriptor_indices[texture.bindless_descriptor_index] =
+        uint32_t tex_srv_idx =
             texture_cache_->GetActiveTextureBindlessSRVIndex(texture) -
             uint32_t(SystemBindlessView::kUnboundedSRVsStart);
+        descriptor_indices[texture.bindless_descriptor_index] = tex_srv_idx;
       }
       current_texture_layout_uid_pixel_ = texture_layout_uid_pixel;
       if (texture_count_pixel) {
@@ -5421,8 +5435,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
       }
       // Current samplers have already been updated.
       for (size_t i = 0; i < sampler_count_pixel; ++i) {
-        descriptor_indices[(*samplers_pixel)[i].bindless_descriptor_index] =
-            current_sampler_bindless_indices_pixel_[i];
+        uint32_t smp_bindless_idx =
+            (*samplers_pixel)[i].bindless_descriptor_index;
+        uint32_t smp_heap_idx = current_sampler_bindless_indices_pixel_[i];
+        descriptor_indices[smp_bindless_idx] = smp_heap_idx;
       }
       cbuffer_binding_descriptor_indices_pixel_.up_to_date = true;
       current_graphics_root_up_to_date_ &=

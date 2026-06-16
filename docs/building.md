@@ -20,6 +20,13 @@ drivers.
     ```
 * wxWidgets is built from a vendored submodule (`third_party/wxWidgets`).
   No system install needed.
+* The Slang shader compiler (`slangc`) is a build-time dependency, used to
+  compile the emulator's built-in (system) shaders into backend bytecode.
+  `xb slang` downloads the pinned release into `.slang/`. Run it before
+  `xb setup`, as the cmake configure step fails if `slangc` is missing. To
+  point at an existing install instead, set the `SLANGC_PATH` environment
+  variable. See `.github/workflows/build.yml` for the version CI pins and how
+  it caches the download.
 
 ```
 git clone https://github.com/xenios-jp/XeniOS.git
@@ -85,6 +92,13 @@ get helpful spacers/movs in the disassembly.
 The build script uses Clang 21.
 
 * Normal building via `xb build` uses CMake+Ninja.
+* The Slang shader compiler (`slangc`) is a build-time dependency, used to
+  compile the emulator's built-in (system) shaders into backend bytecode.
+  Run `./xb slang` to download the pinned release into `.slang/` before
+  building, as the cmake configure step fails if `slangc` is missing. To point
+  at an existing install instead, set the `SLANGC_PATH` environment variable.
+  See `.github/workflows/build.yml` for the version CI pins and how it caches
+  the download.
 * Environment variables:
   Name  | Default Value
   ----- | -------------
@@ -116,10 +130,21 @@ In addition, you will need up to date Vulkan libraries and drivers for your hard
     ```
 * wxWidgets is built from a vendored submodule (`third_party/wxWidgets`).
   No system install needed.
+* The Slang shader compiler (`slangc`) is a build-time dependency, used to
+  compile the emulator's built-in (system) shaders into backend bytecode.
+  `./xb slang` downloads the pinned release into `.slang/`. Run it before
+  `./xb setup`, as the cmake configure step fails if `slangc` is missing. To
+  point at an existing install instead, set the `SLANGC_PATH` environment
+  variable. See `.github/workflows/build.yml` for the version CI pins and how
+  it caches the download.
 
 ```sh
 git clone https://github.com/has207/xenia-edge.git
 cd xenia-edge
+
+# Download the Slang shader compiler (see the note above):
+./xb slang
+
 ./xb setup
 
 # Build on command line (add --config=release for release):

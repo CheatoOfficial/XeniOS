@@ -83,6 +83,8 @@ DECLARE_int32(anisotropic_override);
 
 DECLARE_bool(ac6_ground_fix);
 
+DECLARE_bool(use_fuzzy_alpha_epsilon);
+
 #define XE_GPU_FINE_GRAINED_DRAW_SCOPES 1
 
 #endif  // XENIA_GPU_GPU_FLAGS_H_

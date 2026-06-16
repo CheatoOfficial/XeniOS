@@ -930,10 +930,6 @@ def fetch_data_repos():
     """
     print("- fetching data repositories...")
 
-    def remove_readonly(func, path, _):
-        os.chmod(path, stat.S_IWRITE)
-        func(path)
-
     # Clean up the legacy in-source location if it's still around.
     legacy_dir = ".data_repos"
     if os.path.exists(legacy_dir):
@@ -1319,6 +1315,7 @@ def discover_commands(subparsers):
     commands = {
         "setup": SetupCommand(subparsers),
         "fetchdata": FetchDataCommand(subparsers),
+        "slang": SlangCommand(subparsers),
         "build": BuildCommand(subparsers),
         "devenv": DevenvCommand(subparsers),
         "gentests": GenTestsCommand(subparsers),

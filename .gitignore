@@ -107,6 +107,9 @@ node_modules/
 /build-ios/
 /build-ios-xcode/
 
+# Downloaded Slang shader compiler (xenia-build.py ensure_slangc)
+/.slang/
+
 # CMake user-specific overrides + compile commands export
 CMakeUserPresets.json
 /compile_commands.json
