@@ -94,6 +94,25 @@ class VulkanTextureCache final : public TextureCache {
                                               xenos::FetchOpDimension dimension,
                                               bool is_signed);
 
+  // Descriptor set (kStorageBufferCompute layout) binding the whole shared
+  // memory buffer for compute load/store, or VK_NULL_HANDLE if the buffer
+  // doesn't fit in maxStorageBufferRange. When valid, the byte offset into the
+  // buffer must be supplied via push constants. Shared with resolve.
+  VkDescriptorSet shared_memory_persistent_descriptor_set() const {
+    return shared_memory_persistent_descriptor_set_;
+  }
+
+  // Fetch constants whose host image views have changed since the bits were
+  // last reset, for reusing texture descriptor sets across draws when bindings
+  // are unchanged. Accumulated whenever UpdateTextureBindingsImpl rewrites
+  // bindings.
+  uint32_t texture_bindings_changed() const {
+    return texture_bindings_changed_;
+  }
+  void ResetTextureBindingsChanged(uint32_t mask) {
+    texture_bindings_changed_ &= ~mask;
+  }
+
   SamplerParameters GetSamplerParameters(
       const VulkanShader::SamplerBinding& binding) const;
 
@@ -436,6 +455,20 @@ class VulkanTextureCache final : public TextureCache {
   VkPipelineLayout load_pipeline_layout_ = VK_NULL_HANDLE;
   std::array<VkPipeline, kLoadShaderCount> load_pipelines_{};
   std::array<VkPipeline, kLoadShaderCount> load_pipelines_scaled_{};
+
+  // Persistent descriptor binding the whole shared memory buffer
+  // (kStorageBufferCompute layout) for compute load/store, so per-operation
+  // transient descriptors don't need to be allocated and written. Only created
+  // when the buffer fits in maxStorageBufferRange; the byte offset into the
+  // buffer is passed via push constants instead. Used as the source of texture
+  // loads here, and shared as the destination of resolves in the render target
+  // cache.
+  VkDescriptorPool shared_memory_persistent_descriptor_pool_ = VK_NULL_HANDLE;
+  VkDescriptorSet shared_memory_persistent_descriptor_set_ = VK_NULL_HANDLE;
+
+  // Accumulated mask of fetch constants whose host image views were rewritten,
+  // consumed by the command processor to decide texture descriptor set reuse.
+  uint32_t texture_bindings_changed_ = 0;
 
   // If both images can be placed in the same allocation, it's one allocation,
   // otherwise it's two separate.
