@@ -9,6 +9,7 @@
 
 #include "xenia/app/emulator_window.h"
 
+#include "xenia/app/game_compat_db.h"
 #include "xenia/ui/advanced_settings_dialog_wx.h"
 #include "xenia/ui/game_list_panel_wx.h"
 #include "xenia/ui/game_scan_progress_dialog_wx.h"
@@ -1970,7 +1971,7 @@ void EmulatorWindow::FileAddGames() {
         continue;
       }
       const auto& primary = group.front().game;
-      const std::string name = app::PreferredName(primary);
+      const std::string name = ResolveImportName(primary);
       bool changed = false;
       for (const auto& pi : group) {
         changed |= library->AddDisc(primary.title_id, name, pi.game.path,

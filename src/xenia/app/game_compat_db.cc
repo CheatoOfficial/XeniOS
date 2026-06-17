@@ -9,11 +9,15 @@
 
 #include "xenia/app/game_compat_db.h"
 
+#include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "rapidjson/document.h"
 
+#include "xenia/app/game_title_db.h"
+#include "xenia/app/title_id_util.h"
 #include "xenia/base/embedded_bundle.h"
 #include "xenia/base/logging.h"
 
@@ -38,28 +42,6 @@ CompatState ParseState(std::string_view s) {
     return CompatState::kUnplayable;
   }
   return CompatState::kUnknown;
-}
-
-uint32_t ParseTitleId(const char* hex, size_t len) {
-  if (len != 8) {
-    return 0;
-  }
-  uint32_t v = 0;
-  for (size_t i = 0; i < len; ++i) {
-    char c = hex[i];
-    uint32_t d;
-    if (c >= '0' && c <= '9') {
-      d = static_cast<uint32_t>(c - '0');
-    } else if (c >= 'a' && c <= 'f') {
-      d = static_cast<uint32_t>(c - 'a' + 10);
-    } else if (c >= 'A' && c <= 'F') {
-      d = static_cast<uint32_t>(c - 'A' + 10);
-    } else {
-      return 0;
-    }
-    v = (v << 4) | d;
-  }
-  return v;
 }
 
 const std::unordered_map<uint32_t, CompatState>& GetCompatIndex() {
@@ -94,8 +76,8 @@ const std::unordered_map<uint32_t, CompatState>& GetCompatIndex() {
         if (!id_it->value.IsString() || !state_it->value.IsString()) {
           continue;
         }
-        uint32_t title_id = ParseTitleId(id_it->value.GetString(),
-                                         id_it->value.GetStringLength());
+        uint32_t title_id = ParseHexTitleId(id_it->value.GetString(),
+                                            id_it->value.GetStringLength());
         if (title_id == 0) {
           continue;
         }
@@ -120,10 +102,42 @@ CompatState GetCompatState(uint32_t title_id) {
   }
   const auto& idx = GetCompatIndex();
   auto it = idx.find(title_id);
-  if (it == idx.end()) {
-    return CompatState::kUnknown;
+  if (it != idx.end()) {
+    return it->second;
   }
-  return it->second;
+  // No direct entry: the game may be tracked under a different release's id.
+  // Fall back to the most optimistic compat state among the x360db sibling
+  // ids of the same game.
+  const std::vector<uint32_t>* group = GetTitleIdGroup(title_id);
+  if (group) {
+    CompatState best = CompatState::kUnknown;
+    for (uint32_t alias : *group) {
+      auto alias_it = idx.find(alias);
+      if (alias_it != idx.end() &&
+          static_cast<uint8_t>(alias_it->second) > static_cast<uint8_t>(best)) {
+        best = alias_it->second;
+      }
+    }
+    return best;
+  }
+  return CompatState::kUnknown;
+}
+
+std::string CompatSearchQuery(uint32_t title_id) {
+  std::string query = fmt::format("{:08X}", title_id);
+  const std::vector<uint32_t>* group = GetTitleIdGroup(title_id);
+  if (group && group->size() > 1) {
+    std::string ids;
+    for (uint32_t id : *group) {
+      if (!ids.empty()) {
+        ids += "+OR+";
+      }
+      ids += fmt::format("{:08X}", id);
+    }
+    // Parenthesize the OR group, percent-encoded for the search URL.
+    query = "%28" + ids + "%29";
+  }
+  return query;
 }
 
 }  // namespace app
