@@ -30,7 +30,11 @@
 #include "xenia/base/platform_win.h"
 
 #include <bcrypt.h>
+#include <shellapi.h>
+#include <softpub.h>
+#include <wincrypt.h>
 #include <winhttp.h>
+#include <wintrust.h>
 
 #include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
@@ -39,6 +43,8 @@
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "wintrust.lib")
 
 #endif  // XE_PLATFORM_WIN32
 
@@ -48,6 +54,20 @@ DEFINE_bool(
     "Agility SDK, or the debug layer) is missing, offer to download it from "
     "Microsoft. Disable to manage the DLLs manually.",
     "D3D12");
+
+DEFINE_bool(
+    update_vc_runtime, true,
+    "When the Microsoft Visual C++ runtime is missing or outdated, offer to "
+    "download it from Microsoft. Disabled when you decline; set false to "
+    "manage "
+    "it manually.",
+    "Win32");
+
+DEFINE_bool(
+    vulkan_install_missing_loader, true,
+    "When the Vulkan loader (vulkan-1.dll) is missing, offer to download it "
+    "from LunarG. Disable to manage it manually.",
+    "Vulkan");
 
 namespace xe {
 namespace ui {
@@ -70,6 +90,18 @@ constexpr wchar_t kAgilityUrl[] =
     L"https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.619.3";
 constexpr char kAgilitySha256[] =
     "43a7d5a3973812eb4b42623fae5275c790a005b8e48b8d7f5bb43cef39e073c5";
+
+// Pinned LunarG Vulkan runtime components (a zip). vulkan-1.dll is the Khronos
+// Vulkan-Loader (Apache-2.0, redistributable). Update the SHA-256 and the
+// kVulkanLoaderEntries zip path together when bumping the URL version. The zip
+// ships only x64 and x86 loaders, no arm64.
+#if !XE_ARCH_ARM64
+constexpr wchar_t kVulkanLoaderUrl[] =
+    L"https://sdk.lunarg.com/sdk/download/1.4.350.0/windows/"
+    L"vulkan-runtime-components.zip";
+constexpr char kVulkanLoaderSha256[] =
+    "23ce69f32cef3e2799617e2b1776cd0c71030d23a91f8375821cc40d76b185b9";
+#endif
 
 // Both archives ship per-arch binaries. Pick the one matching the build target.
 #if XE_ARCH_ARM64
@@ -102,6 +134,42 @@ constexpr RedistEntry kDebugLayerEntries[] = {
 
 #undef XE_D3D12_REDIST_ARCH
 
+#if !XE_ARCH_ARM64
+constexpr RedistEntry kVulkanLoaderEntries[] = {
+    {"VulkanRT-X64-1.4.350.0-Components/x64/vulkan-1.dll", L"vulkan-1.dll"},
+};
+#endif
+
+// Microsoft Visual C++ 2015-2022 redistributable. The aka.ms link always
+// resolves to the latest build, so there's no stable SHA-256 to pin; the
+// download is validated by its Microsoft Authenticode signature instead.
+#if XE_ARCH_ARM64
+constexpr wchar_t kVCRedistUrl[] =
+    L"https://aka.ms/vs/17/release/vc_redist.arm64.exe";
+constexpr wchar_t kVCRuntimeRegKey[] =
+    L"SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\arm64";
+#else
+constexpr wchar_t kVCRedistUrl[] =
+    L"https://aka.ms/vs/17/release/vc_redist.x64.exe";
+constexpr wchar_t kVCRuntimeRegKey[] =
+    L"SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64";
+#endif
+
+// The required runtime is what this binary was built against: the VC runtime
+// ships versioned as 14.<_MSC_VER - 1900>, and an older-but-loadable one can
+// fault deep in the CRT. But a preview/insider toolset can be newer than any
+// redist Microsoft publishes on the release channel we download from, so clamp
+// to the newest installable one: otherwise the check demands a runtime that
+// doesn't exist yet and prompts on every launch. Bump kVCRuntimeLatestMinor
+// when a newer vc_redist ships. Compare Major.Minor only; servicing builds
+// within a minor add no exports.
+constexpr DWORD kVCRuntimeMinMajor = 14;
+constexpr DWORD kVCRuntimeBuiltMinor = DWORD(_MSC_VER - 1900);
+constexpr DWORD kVCRuntimeLatestMinor = 44;  // 14.44.x, newest public vc_redist
+constexpr DWORD kVCRuntimeMinMinor =
+    kVCRuntimeBuiltMinor < kVCRuntimeLatestMinor ? kVCRuntimeBuiltMinor
+                                                 : kVCRuntimeLatestMinor;
+
 // True if both dxcompiler.dll and dxil.dll resolve, either from the D3D12
 // folder or anywhere on the default DLL search path (system-wide or next to the
 // exe).
@@ -123,6 +191,23 @@ bool ShaderCompilerPresent(const std::filesystem::path& d3d12_dir) {
   return present;
 }
 
+#if !XE_ARCH_ARM64
+// True if vulkan-1.dll resolves, either from vulkan_dir or anywhere on the
+// default DLL search path (system-wide or next to the exe).
+bool VulkanLoaderPresent(const std::filesystem::path& vulkan_dir) {
+  std::error_code ec;
+  if (std::filesystem::exists(vulkan_dir / "vulkan-1.dll", ec)) {
+    return true;
+  }
+  HMODULE loader = LoadLibraryW(L"vulkan-1.dll");
+  if (loader) {
+    FreeLibrary(loader);
+    return true;
+  }
+  return false;
+}
+#endif
+
 // Native MessageBox (not wxMessageBox) since the provider may initialize off
 // the GUI thread; only the translated string comes from wx.
 bool AskYesNo(const wxString& message) {
@@ -140,6 +225,21 @@ void RememberDecline() {
   OVERRIDE_PERSIST_bool(d3d12_install_missing_runtime, false);
   config::SaveConfig();
 }
+
+// Same, but for the Visual C++ runtime's own cvar, so declining it doesn't
+// disable the D3D12 DLL prompts (and vice versa).
+void RememberVCDecline() {
+  OVERRIDE_PERSIST_bool(update_vc_runtime, false);
+  config::SaveConfig();
+}
+
+#if !XE_ARCH_ARM64
+// Same, but for the Vulkan loader's own cvar.
+void RememberVulkanDecline() {
+  OVERRIDE_PERSIST_bool(vulkan_install_missing_loader, false);
+  config::SaveConfig();
+}
+#endif
 
 bool DownloadToMemory(const wchar_t* url, std::vector<uint8_t>& out) {
   out.clear();
@@ -262,6 +362,122 @@ bool VerifySha256(const std::vector<uint8_t>& data, const char* expected_hex) {
   }
   hex[sizeof(digest) * 2] = '\0';
   return std::strcmp(hex, expected_hex) == 0;
+}
+
+// The installed Visual C++ runtime as recorded by the redist bootstrapper, plus
+// whether it meets the version Xenia needs. The caller surfaces the numbers in
+// the prompt so the user sees exactly what's outdated.
+struct VCRuntimeStatus {
+  bool installed = false;
+  DWORD major = 0;
+  DWORD minor = 0;
+  DWORD bld = 0;
+  bool up_to_date = false;
+};
+
+VCRuntimeStatus QueryVCRuntime() {
+  VCRuntimeStatus status;
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, kVCRuntimeRegKey, 0,
+                    KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
+    return status;
+  }
+  auto read_dword = [&](const wchar_t* name) -> DWORD {
+    DWORD value = 0;
+    DWORD type = 0;
+    DWORD size = sizeof(value);
+    if (RegQueryValueExW(key, name, nullptr, &type,
+                         reinterpret_cast<LPBYTE>(&value),
+                         &size) != ERROR_SUCCESS ||
+        type != REG_DWORD) {
+      return 0;
+    }
+    return value;
+  };
+  status.installed = read_dword(L"Installed") == 1;
+  status.major = read_dword(L"Major");
+  status.minor = read_dword(L"Minor");
+  status.bld = read_dword(L"Bld");
+  RegCloseKey(key);
+
+  status.up_to_date =
+      status.installed && (status.major > kVCRuntimeMinMajor ||
+                           (status.major == kVCRuntimeMinMajor &&
+                            status.minor >= kVCRuntimeMinMinor));
+  return status;
+}
+
+// Verifies the file carries a valid Authenticode signature chaining to a
+// trusted root AND that the signer is Microsoft. With no SHA-256 to pin for the
+// rolling aka.ms URL, this is what guards against running a tampered binary.
+bool VerifyMicrosoftSignature(const std::wstring& path) {
+  WINTRUST_FILE_INFO file_info = {};
+  file_info.cbStruct = sizeof(file_info);
+  file_info.pcwszFilePath = path.c_str();
+
+  GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+  WINTRUST_DATA trust_data = {};
+  trust_data.cbStruct = sizeof(trust_data);
+  trust_data.dwUIChoice = WTD_UI_NONE;
+  trust_data.fdwRevocationChecks = WTD_REVOKE_NONE;
+  trust_data.dwUnionChoice = WTD_CHOICE_FILE;
+  trust_data.pFile = &file_info;
+  trust_data.dwStateAction = WTD_STATEACTION_VERIFY;
+  LONG status = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action,
+                               &trust_data);
+  trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+  WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &trust_data);
+  if (status != ERROR_SUCCESS) {
+    XELOGE("VC++ runtime: Authenticode verification failed (status 0x{:08X})",
+           static_cast<uint32_t>(status));
+    return false;
+  }
+
+  // A valid chain isn't enough; confirm the signer is Microsoft.
+  HCERTSTORE store = nullptr;
+  HCRYPTMSG message = nullptr;
+  if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, path.c_str(),
+                        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                        CERT_QUERY_FORMAT_FLAG_BINARY, 0, nullptr, nullptr,
+                        nullptr, &store, &message, nullptr)) {
+    return false;
+  }
+  bool is_microsoft = false;
+  DWORD signer_size = 0;
+  if (CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, nullptr,
+                       &signer_size)) {
+    std::vector<uint8_t> signer_buffer(signer_size);
+    if (CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0,
+                         signer_buffer.data(), &signer_size)) {
+      auto* signer = reinterpret_cast<CMSG_SIGNER_INFO*>(signer_buffer.data());
+      CERT_INFO cert_info = {};
+      cert_info.Issuer = signer->Issuer;
+      cert_info.SerialNumber = signer->SerialNumber;
+      PCCERT_CONTEXT cert = CertFindCertificateInStore(
+          store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0,
+          CERT_FIND_SUBJECT_CERT, &cert_info, nullptr);
+      if (cert) {
+        wchar_t name[256];
+        DWORD name_length =
+            CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr,
+                               name, DWORD(xe::countof(name)));
+        if (name_length > 1) {
+          is_microsoft = wcsstr(name, L"Microsoft Corporation") != nullptr;
+        }
+        CertFreeCertificateContext(cert);
+      }
+    }
+  }
+  if (message) {
+    CryptMsgClose(message);
+  }
+  if (store) {
+    CertCloseStore(store, 0);
+  }
+  if (!is_microsoft) {
+    XELOGE("VC++ runtime: downloaded installer is not signed by Microsoft");
+  }
+  return is_microsoft;
 }
 
 bool WriteFileBytes(const std::filesystem::path& path, const void* data,
@@ -505,11 +721,165 @@ bool EnsureDebugLayer(const std::filesystem::path& d3d12_dir) {
   return false;
 }
 
+#if XE_ARCH_ARM64
+// LunarG's runtime components ship only x64/x86 loaders, not arm64.
+bool EnsureVulkanLoader(const std::filesystem::path&) { return false; }
+#else
+bool EnsureVulkanLoader(const std::filesystem::path& vulkan_dir) {
+  if (VulkanLoaderPresent(vulkan_dir)) {
+    return true;
+  }
+  if (!cvars::vulkan_install_missing_loader) {
+    XELOGW(
+        "Vulkan loader (vulkan-1.dll) is missing and auto-install is disabled "
+        "(vulkan_install_missing_loader=false)");
+    return false;
+  }
+
+  static bool prompted = false;
+  if (prompted) {
+    return false;
+  }
+  prompted = true;
+
+  if (!AskYesNo(
+          _("vulkan-1.dll not found, required for the Vulkan graphics backend. "
+            "Download now (~20 MB)?"))) {
+    XELOGW("User declined the Vulkan loader download");
+    RememberVulkanDecline();
+    return false;
+  }
+
+  XELOGI("Downloading the Vulkan loader from LunarG...");
+  if (!DownloadAndExtract(kVulkanLoaderUrl, kVulkanLoaderSha256,
+                          kVulkanLoaderEntries,
+                          xe::countof(kVulkanLoaderEntries), vulkan_dir)) {
+    return false;
+  }
+
+  XELOGI("Vulkan loader installed to {}", xe::path_to_utf8(vulkan_dir));
+  return true;
+}
+#endif
+
+bool EnsureVCRuntime() {
+  VCRuntimeStatus status = QueryVCRuntime();
+  if (status.up_to_date) {
+    return true;
+  }
+  if (!cvars::update_vc_runtime) {
+    return false;
+  }
+
+  static bool prompted = false;
+  if (prompted) {
+    return false;
+  }
+  prompted = true;
+
+  // Put the detected version in the prompt itself, so the user sees exactly
+  // what's outdated rather than just "out of date".
+  wxString message =
+      status.installed
+          ? wxString::Format(
+                _("The installed Microsoft Visual C++ runtime %u.%u.%u is "
+                  "older "
+                  "than the %u.%u this build of Xenia requires. Download the "
+                  "latest from Microsoft now (~25 MB) and install?"),
+                unsigned(status.major), unsigned(status.minor),
+                unsigned(status.bld), unsigned(kVCRuntimeMinMajor),
+                unsigned(kVCRuntimeMinMinor))
+          : wxString::Format(
+                _("The Microsoft Visual C++ runtime (%u.%u or newer) isn't "
+                  "installed. Download it from Microsoft now (~25 MB) and "
+                  "install?"),
+                unsigned(kVCRuntimeMinMajor), unsigned(kVCRuntimeMinMinor));
+  if (!AskYesNo(message)) {
+    RememberVCDecline();
+    return false;
+  }
+
+  XELOGI("Downloading the Microsoft Visual C++ runtime from Microsoft...");
+  std::vector<uint8_t> installer;
+  if (!DownloadToMemory(kVCRedistUrl, installer)) {
+    ShowError(
+        _("Download failed. Check your internet connection and try again."));
+    return false;
+  }
+
+  wchar_t temp_dir[MAX_PATH];
+  DWORD temp_length = GetTempPathW(DWORD(xe::countof(temp_dir)), temp_dir);
+  if (temp_length == 0 || temp_length >= xe::countof(temp_dir)) {
+    ShowError(_("Failed to install the downloaded files."));
+    return false;
+  }
+  std::filesystem::path installer_path =
+      std::filesystem::path(temp_dir) / L"xenia_vc_redist.exe";
+  if (!WriteFileBytes(installer_path, installer.data(), installer.size())) {
+    ShowError(_("Failed to install the downloaded files."));
+    return false;
+  }
+
+  std::wstring installer_path_w = installer_path.wstring();
+  if (!VerifyMicrosoftSignature(installer_path_w)) {
+    DeleteFileW(installer_path_w.c_str());
+    ShowError(
+        _("The downloaded file failed integrity verification and was "
+          "discarded."));
+    return false;
+  }
+
+  // The redist bootstrapper self-elevates; "runas" surfaces the UAC prompt up
+  // front. /passive shows progress without interaction, /norestart leaves the
+  // reboot decision to us.
+  SHELLEXECUTEINFOW execute_info = {};
+  execute_info.cbSize = sizeof(execute_info);
+  execute_info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+  execute_info.lpVerb = L"runas";
+  execute_info.lpFile = installer_path_w.c_str();
+  execute_info.lpParameters = L"/install /passive /norestart";
+  execute_info.nShow = SW_SHOWNORMAL;
+  if (!ShellExecuteExW(&execute_info) || !execute_info.hProcess) {
+    DWORD error = GetLastError();
+    DeleteFileW(installer_path_w.c_str());
+    if (error == ERROR_CANCELLED) {
+      XELOGW("User cancelled the Microsoft Visual C++ runtime installer");
+      return false;
+    }
+    ShowError(_("Failed to install the downloaded files."));
+    return false;
+  }
+  WaitForSingleObject(execute_info.hProcess, INFINITE);
+  DWORD exit_code = 0;
+  GetExitCodeProcess(execute_info.hProcess, &exit_code);
+  CloseHandle(execute_info.hProcess);
+  DeleteFileW(installer_path_w.c_str());
+
+  // 0 installed, 3010 installed (reboot pending), 1638 same or newer already
+  // present. Anything else is a failure.
+  if (exit_code != 0 && exit_code != 3010 && exit_code != 1638) {
+    XELOGE("Microsoft Visual C++ runtime installer failed (exit code {})",
+           exit_code);
+    ShowError(_("Failed to install the downloaded files."));
+    return false;
+  }
+
+  XELOGI("Microsoft Visual C++ runtime installed; restarting");
+  RelaunchAndExit();
+  // Only reached if the relaunch couldn't be started.
+  ShowError(
+      _("Installed the Microsoft Visual C++ runtime, but couldn't restart "
+        "automatically. Please restart Xenia."));
+  return false;
+}
+
 #else
 
 bool EnsureShaderCompilerRuntime(const std::filesystem::path&) { return false; }
 bool EnsureAgilityRuntime(const std::filesystem::path&) { return false; }
 bool EnsureDebugLayer(const std::filesystem::path&) { return false; }
+bool EnsureVulkanLoader(const std::filesystem::path&) { return false; }
+bool EnsureVCRuntime() { return false; }
 
 #endif  // XE_PLATFORM_WIN32
 

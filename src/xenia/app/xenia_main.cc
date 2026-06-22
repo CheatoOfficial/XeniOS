@@ -30,6 +30,7 @@
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/storage_flags.h"
 #include "xenia/ui/file_picker.h"
+#include "xenia/ui/redist_installer_wx.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/window_listener.h"
 #include "xenia/ui/windowed_app.h"
@@ -546,6 +547,12 @@ bool EmulatorApp::OnInitialize() {
 
   // Must follow SetupConfig so cvars::ui_locale from the TOML is visible.
   xe::ui::InitializeWxLocale();
+
+  // A missing/outdated Visual C++ runtime faults deep in the CRT during
+  // startup. Check after config (so the decline cvar is honored) and locale
+  // (for a localized prompt), but before the emulator/network init that trips
+  // it. On a successful install this relaunches and doesn't return.
+  xe::ui::EnsureVCRuntime();
 
   // Load game-specific config if a target is specified.
   if (!cvars::target.empty()) {
