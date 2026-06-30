@@ -670,7 +670,7 @@ TextureCache::Texture::~Texture() {
   texture_cache_.UpdateTexturesTotalHostMemoryUsage(0, host_memory_usage_);
 }
 
-void TextureCache::Texture::MakeUpToDateAndWatch(
+bool TextureCache::Texture::MakeUpToDateAndWatch(
     const global_unique_lock_type& global_lock) {
   MakeLoadedDataUpToDateAndWatch(global_lock, true, true);
 }
@@ -697,6 +697,7 @@ void TextureCache::Texture::MakeLoadedDataUpToDateAndWatch(
     shared_memory.WatchRangeForCpuWrites(key().mip_page << 12,
                                          GetGuestMipsSize());
   }
+  return true;
 }
 
 void TextureCache::Texture::MarkAsUsed() {
@@ -974,7 +975,9 @@ void TextureCache::LoadTexturesData(Texture** textures, uint32_t n_textures) {
       // resolves as well to detect when the CPU wants to reuse the memory for a
       // regular texture or a vertex buffer, and thus the scaled resolve version
       // is not up to date anymore.
-      texture->MakeUpToDateAndWatch(crit);
+      if (!texture->MakeUpToDateAndWatch(crit)) {
+        continue;
+      }
 
       texture->LogAction("Loaded");
     }
@@ -1060,7 +1063,9 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   // resolves as well to detect when the CPU wants to reuse the memory for a
   // regular texture or a vertex buffer, and thus the scaled resolve version is
   // not up to date anymore.
-  texture.MakeUpToDateAndWatch(global_critical_region_.Acquire());
+  if (!texture.MakeUpToDateAndWatch(global_critical_region_.Acquire())) {
+    return false;
+  }
 
   texture.LogAction("Loaded");
 
